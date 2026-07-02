@@ -33,18 +33,24 @@ use anyhow::Result;
 
 /// Parse `argv` and dispatch the requested subcommand.
 pub fn run_cli() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let cmd = args.get(1).map(String::as_str).unwrap_or("run");
+
+    // The screenshot helper streams raw PNG bytes to stdout — do NOT initialize tracing (or
+    // anything else that writes stdout) before handling it, or it would corrupt the stream.
+    if cmd == "helper" {
+        return run_helper(&args);
+    }
+
     init_tracing();
     // rustls 0.23 requires a crypto provider to be installed. We build against the
     // `ring` provider (no C toolchain needed) and install it once at startup.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let args: Vec<String> = std::env::args().collect();
-    let cmd = args.get(1).map(String::as_str).unwrap_or("run");
     match cmd {
         "install" => install::install(),
         "uninstall" => install::uninstall(),
         "run" => run_server(),
-        "helper" => run_helper(&args),
         "service-run" => run_service(),
         "help" | "--help" | "-h" => {
             print_usage();
@@ -58,12 +64,20 @@ pub fn run_cli() -> Result<()> {
     }
 }
 
-/// `helper --capture <path>`: capture a screenshot to a file (runs in the user session).
+/// `helper --capture-stdout` (used by the service) or `helper --capture <path>` (dev):
+/// capture a screenshot in the interactive user session.
 fn run_helper(args: &[String]) -> Result<()> {
-    match (args.get(2).map(String::as_str), args.get(3)) {
-        (Some("--capture"), Some(path)) => helper::capture(path),
+    match args.get(2).map(String::as_str) {
+        Some("--capture-stdout") => helper::capture_to_stdout(),
+        Some("--capture") => match args.get(3) {
+            Some(path) => helper::capture_to_file(path),
+            None => {
+                eprintln!("usage: nestwatch helper --capture <path>");
+                std::process::exit(2);
+            }
+        },
         _ => {
-            eprintln!("usage: nestwatch helper --capture <path>");
+            eprintln!("usage: nestwatch helper --capture-stdout | --capture <path>");
             std::process::exit(2);
         }
     }
