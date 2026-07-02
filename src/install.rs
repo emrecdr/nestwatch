@@ -61,11 +61,16 @@ pub fn install() -> Result<()> {
         curfew: existing.map(|c| c.curfew).unwrap_or_default(),
     };
     cfg.save()?;
-    crate::cert::ensure_cert(&paths.cert, &paths.key)?;
+    // Always (re)generate at install: picks up the current LAN IP as a SAN and yields a
+    // fingerprint to show the operator.
+    let fingerprint = crate::cert::generate(&paths.cert, &paths.key)?;
 
     deploy(cfg.port)?;
 
     println!("\nInstalled. Reach the dashboard at https://<this-pc>:{}", cfg.port);
+    println!("\nTLS cert SHA-256 — verify this the first time your browser warns, so you know");
+    println!("you're trusting THIS machine and not a LAN impostor:");
+    println!("  {fingerprint}");
     Ok(())
 }
 
