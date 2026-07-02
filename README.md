@@ -118,7 +118,8 @@ cargo test              # unit + HTTP integration tests (run on any OS)
 handlers) is unit/integration-tested and verified live on macOS. The Windows-only code
 (SYSTEM service, `CreateProcessAsUser` session helper, ACL hardening) is compile- and
 link-verified via the Windows target, but its **runtime behavior must be verified on an
-actual Windows machine**.
+actual Windows machine** — see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md) for a
+step-by-step on-device checklist.
 
 ## Not included (by design)
 
