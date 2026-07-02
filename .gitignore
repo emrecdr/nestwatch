@@ -1,0 +1,14 @@
+# Rust
+/target
+
+# Node (frontend build tooling)
+/web/node_modules
+
+# Generated CSS (rebuilt from web/src/app.css via `npm run build`)
+/assets/app.css
+
+# Local runtime data if ever created in-tree
+/parental-data
+
+# devt plugin local state/cache
+/.devt

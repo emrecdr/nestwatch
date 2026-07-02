@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dim">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Host Health</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script defer src="/alpine.min.js"></script>
+  </head>
+  <body class="min-h-screen bg-base-200" x-data="app()" x-init="init()" x-cloak>
+    <!-- ── Loading gate ─────────────────────────────────────────────── -->
+    <template x-if="authed === null">
+      <div class="flex min-h-screen items-center justify-center">
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+      </div>
+    </template>
+
+    <!-- ── Login ────────────────────────────────────────────────────── -->
+    <template x-if="authed === false">
+      <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="card w-full max-w-sm bg-base-100 shadow-xl">
+          <form class="card-body" @submit.prevent="login()">
+            <h1 class="card-title justify-center text-2xl">🩺 Host Health</h1>
+            <p class="text-center text-sm opacity-70">Sign in to continue</p>
+
+            <label class="form-control w-full mt-2">
+              <span class="label-text mb-1">Password</span>
+              <input
+                type="password"
+                x-model="password"
+                :disabled="busy"
+                autofocus
+                class="input input-bordered w-full"
+                placeholder="••••••••"
+              />
+            </label>
+
+            <template x-if="loginError">
+              <div class="alert alert-error text-sm py-2" x-text="loginError"></div>
+            </template>
+
+            <button class="btn btn-primary mt-2" :disabled="busy || !password">
+              <span x-show="busy" class="loading loading-spinner loading-sm"></span>
+              Sign in
+            </button>
+          </form>
+        </div>
+      </div>
+    </template>
+
+    <!-- ── Dashboard ────────────────────────────────────────────────── -->
+    <template x-if="authed === true">
+      <div>
+        <div class="navbar bg-base-100 shadow">
+          <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
+          <div class="flex-none gap-2">
+            <button class="btn btn-warning btn-sm" @click="confirmShutdown = true">⏻ Shut down</button>
+            <button class="btn btn-ghost btn-sm" @click="logout()">Log out</button>
+          </div>
+        </div>
+
+        <main class="mx-auto grid max-w-5xl gap-4 p-4 md:grid-cols-2">
+          <!-- Screenshot -->
+          <section class="card bg-base-100 shadow">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Screen</h2>
+                <button class="btn btn-primary btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
+                  <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
+                  Take screenshot
+                </button>
+              </div>
+              <div class="mt-2 flex min-h-48 items-center justify-center rounded-lg bg-base-300">
+                <template x-if="!shotUrl && !loadingShot">
+                  <span class="opacity-50">No screenshot yet</span>
+                </template>
+                <template x-if="shotUrl">
+                  <img :src="shotUrl" alt="screen" class="max-h-96 w-full rounded-lg object-contain" />
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <!-- Processes -->
+          <section class="card bg-base-100 shadow">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Running apps</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadProcesses()" :disabled="loadingProcs">
+                  <span x-show="loadingProcs" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <div class="mt-2 max-h-96 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>App</th><th class="text-right">Memory</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in processes" :key="p.pid">
+                      <tr>
+                        <td class="truncate" x-text="p.name"></td>
+                        <td class="text-right whitespace-nowrap" x-text="fmtBytes(p.memory_bytes)"></td>
+                        <td class="text-right">
+                          <button class="btn btn-error btn-xs" @click="askKill(p)">Kill</button>
+                        </td>
+                      </tr>
+                    </template>
+                    <template x-if="processes.length === 0 && !loadingProcs">
+                      <tr><td colspan="3" class="text-center opacity-50">No processes</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Curfew -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Curfew</h2>
+                <input type="checkbox" class="toggle toggle-warning" x-model="curfew.enabled" />
+              </div>
+              <p class="text-sm opacity-70">
+                When the PC is on during this window, it shuts down (with a warning countdown).
+              </p>
+              <div class="mt-2 flex flex-wrap items-end gap-3">
+                <label class="form-control">
+                  <span class="label-text mb-1">From</span>
+                  <input type="time" x-model="curfew.start" class="input input-bordered" />
+                </label>
+                <label class="form-control">
+                  <span class="label-text mb-1">Until</span>
+                  <input type="time" x-model="curfew.end" class="input input-bordered" />
+                </label>
+                <label class="form-control">
+                  <span class="label-text mb-1">Warning (sec)</span>
+                  <input type="number" min="0" max="600" x-model.number="curfew.warn_secs"
+                         class="input input-bordered w-28" />
+                </label>
+                <button class="btn btn-primary" @click="saveCurfew()" :disabled="savingCurfew">
+                  <span x-show="savingCurfew" class="loading loading-spinner loading-sm"></span>
+                  Save
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </template>
+
+    <!-- ── Confirm: kill ────────────────────────────────────────────── -->
+    <div class="modal" :class="{ 'modal-open': killTarget }">
+      <div class="modal-box">
+        <h3 class="text-lg font-bold">Close app?</h3>
+        <p class="py-2">
+          Terminate <span class="font-semibold" x-text="killTarget?.name"></span>
+          (PID <span x-text="killTarget?.pid"></span>)? Unsaved work may be lost.
+        </p>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="killTarget = null">Cancel</button>
+          <button class="btn btn-error" @click="killProcess()">Kill</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Confirm: shutdown ────────────────────────────────────────── -->
+    <div class="modal" :class="{ 'modal-open': confirmShutdown }">
+      <div class="modal-box">
+        <h3 class="text-lg font-bold">Shut down this PC?</h3>
+        <p class="py-2">The machine will power off in a few seconds.</p>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="confirmShutdown = false">Cancel</button>
+          <button class="btn btn-warning" @click="doShutdown()">Shut down</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Toasts ───────────────────────────────────────────────────── -->
+    <div class="toast toast-end">
+      <template x-for="t in toasts" :key="t.id">
+        <div class="alert" :class="t.cls" x-text="t.msg"></div>
+      </template>
+    </div>
+
+    <style>
+      [x-cloak] { display: none !important; }
+    </style>
+
+    <script>
+      function app() {
+        return {
+          authed: null,
+          busy: false,
+          password: "",
+          loginError: "",
+          processes: [],
+          loadingProcs: false,
+          shotUrl: null,
+          loadingShot: false,
+          killTarget: null,
+          confirmShutdown: false,
+          curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60 },
+          savingCurfew: false,
+          toasts: [],
+
+          async init() {
+            try {
+              const r = await fetch("/session");
+              const j = await r.json();
+              this.authed = !!j.authenticated;
+            } catch {
+              this.authed = false;
+            }
+            if (this.authed) {
+              this.loadProcesses();
+              this.loadCurfew();
+            }
+          },
+
+          async loadCurfew() {
+            try {
+              const r = await fetch("/api/curfew");
+              if (r.ok) this.curfew = await r.json();
+            } catch {}
+          },
+
+          async saveCurfew() {
+            this.savingCurfew = true;
+            try {
+              const r = await fetch("/api/curfew", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(this.curfew),
+              });
+              if (r.ok) {
+                this.toast("Curfew saved", "success");
+              } else if (r.status === 400) {
+                this.toast("Invalid times — use HH:MM", "error");
+              } else {
+                this.toast("Could not save curfew", "error");
+              }
+            } catch {
+              this.toast("Save request failed", "error");
+            } finally {
+              this.savingCurfew = false;
+            }
+          },
+
+          async login() {
+            this.busy = true;
+            this.loginError = "";
+            try {
+              const r = await fetch("/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: this.password }),
+              });
+              if (r.ok) {
+                this.password = "";
+                this.authed = true;
+                this.loadProcesses();
+                this.loadCurfew();
+              } else if (r.status === 429) {
+                this.loginError = "Too many attempts — wait a minute and try again.";
+              } else {
+                this.loginError = "Incorrect password.";
+              }
+            } catch {
+              this.loginError = "Could not reach the server.";
+            } finally {
+              this.busy = false;
+            }
+          },
+
+          async logout() {
+            await fetch("/logout", { method: "POST" });
+            this.authed = false;
+            this.processes = [];
+            if (this.shotUrl) { URL.revokeObjectURL(this.shotUrl); this.shotUrl = null; }
+          },
+
+          async loadProcesses() {
+            this.loadingProcs = true;
+            try {
+              const r = await fetch("/api/processes");
+              if (r.status === 401) { this.authed = false; return; }
+              this.processes = await r.json();
+            } catch {
+              this.toast("Failed to load processes", "error");
+            } finally {
+              this.loadingProcs = false;
+            }
+          },
+
+          async takeScreenshot() {
+            this.loadingShot = true;
+            try {
+              const r = await fetch("/api/screenshot");
+              if (r.status === 401) { this.authed = false; return; }
+              if (!r.ok) throw new Error();
+              const blob = await r.blob();
+              if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
+              this.shotUrl = URL.createObjectURL(blob);
+            } catch {
+              this.toast("Screenshot failed", "error");
+            } finally {
+              this.loadingShot = false;
+            }
+          },
+
+          askKill(p) { this.killTarget = p; },
+
+          async killProcess() {
+            const p = this.killTarget;
+            this.killTarget = null;
+            if (!p) return;
+            try {
+              const r = await fetch(`/api/processes/${p.pid}/kill`, { method: "POST" });
+              if (r.ok) {
+                this.toast(`Closed ${p.name}`, "success");
+                this.loadProcesses();
+              } else {
+                this.toast(`Could not close ${p.name}`, "error");
+              }
+            } catch {
+              this.toast("Kill request failed", "error");
+            }
+          },
+
+          async doShutdown() {
+            this.confirmShutdown = false;
+            try {
+              const r = await fetch("/api/shutdown", { method: "POST" });
+              this.toast(r.ok ? "Shutting down…" : "Shutdown failed", r.ok ? "success" : "error");
+            } catch {
+              this.toast("Shutdown request failed", "error");
+            }
+          },
+
+          toast(msg, kind) {
+            const id = (this._n = (this._n || 0) + 1);
+            const cls = { success: "alert-success", error: "alert-error", info: "alert-info" }[kind] || "alert-info";
+            this.toasts.push({ id, msg, cls });
+            setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, 3500);
+          },
+
+          fmtBytes(b) {
+            if (!b) return "—";
+            const u = ["B", "KB", "MB", "GB"];
+            let i = 0;
+            while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+            return `${b.toFixed(i ? 1 : 0)} ${u[i]}`;
+          },
+        };
+      }
+    </script>
+  </body>
+</html>

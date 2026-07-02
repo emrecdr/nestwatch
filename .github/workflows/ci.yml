@@ -1,0 +1,61 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Cross-platform test: handlers/auth/config all run on the FakeControl path,
+  # so the suite is meaningful on both Linux and Windows.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # `ring` (rustls crypto provider) assembles its primitives with NASM on the
+      # MSVC target; it isn't reliably preinstalled on windows-latest. (Perl is.)
+      - name: Install NASM (Windows, for ring)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+
+  # Produce the shippable Windows .exe (the real target).
+  windows-release:
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install NASM (for ring)
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build release binary
+        run: cargo build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nestwatch-windows-exe
+          path: target/release/nestwatch.exe

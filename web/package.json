@@ -1,0 +1,14 @@
+{
+  "name": "parental-web",
+  "private": true,
+  "description": "Build-time only: compiles Tailwind v4 + daisyUI into assets/app.css. No runtime dependency.",
+  "scripts": {
+    "build": "tailwindcss -i src/app.css -o ../assets/app.css --minify",
+    "watch": "tailwindcss -i src/app.css -o ../assets/app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.2",
+    "daisyui": "5.6.7",
+    "tailwindcss": "4.3.2"
+  }
+}
