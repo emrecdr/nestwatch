@@ -5,7 +5,7 @@
 //! can be unit-tested exhaustively; [`Curfew::is_active_now`] applies it to local time.
 
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{Local, NaiveTime};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,10 @@ fn default_warn_secs() -> u32 {
 
 /// How often the enforcer re-checks the clock.
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Upper bound on the warning countdown (10 min). A too-large value would let the shutdown
+/// fire well outside the window (or effectively never), defeating enforcement.
+const MAX_WARN_SECS: u32 = 600;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Curfew {
@@ -40,20 +44,18 @@ impl Default for Curfew {
 impl Curfew {
     /// Is the *current* local time inside the closed window? `false` if disabled or if the
     /// times are unparseable (fail-open, so a bad config never bricks the machine).
+    /// Invalid times are logged once at config load, not here (this runs every tick).
     pub fn is_active_now(&self) -> bool {
         if !self.enabled {
             return false;
         }
         match (parse_hm(&self.start), parse_hm(&self.end)) {
             (Some(start), Some(end)) => is_within(Local::now().time(), start, end),
-            _ => {
-                tracing::warn!(start = %self.start, end = %self.end, "invalid curfew times; ignoring");
-                false
-            }
+            _ => false,
         }
     }
 
-    /// Validate the `HH:MM` fields (used when accepting settings from the UI).
+    /// Validate the settings (used when accepting them from the UI and at config load).
     pub fn validate(&self) -> Result<(), String> {
         if parse_hm(&self.start).is_none() {
             return Err(format!("invalid start time: {}", self.start));
@@ -61,37 +63,113 @@ impl Curfew {
         if parse_hm(&self.end).is_none() {
             return Err(format!("invalid end time: {}", self.end));
         }
+        if self.warn_secs > MAX_WARN_SECS {
+            return Err(format!("warning seconds must be <= {MAX_WARN_SECS}"));
+        }
         Ok(())
     }
 }
 
-/// Background loop: every [`CHECK_INTERVAL`], if the current time is inside an enabled
-/// window, initiate a warned shutdown exactly once per window entry (`armed`). Leaving the
-/// window disarms, so the next entry fires again. Runs for the life of the server.
+/// What the enforcer decides to do on a given tick.
+#[derive(Debug, PartialEq, Eq)]
+enum Action {
+    /// (Re)issue a warned shutdown.
+    Shutdown,
+    /// Cancel a pending shutdown.
+    Abort,
+    /// Do nothing this tick.
+    None,
+}
+
+/// Deadline-based enforcement state machine, split from the clock/loop so it is fully
+/// unit-testable. `deadline` is when the currently-scheduled shutdown *should* have
+/// completed; `None` means no shutdown is believed pending.
+struct Enforcer {
+    deadline: Option<Instant>,
+}
+
+impl Enforcer {
+    fn new() -> Self {
+        Self { deadline: None }
+    }
+
+    /// Decide the action for this tick.
+    ///
+    /// - Entering the window schedules a shutdown.
+    /// - If we're still on `slack` past the deadline, the shutdown was cancelled (e.g. the
+    ///   child ran `shutdown /a`) or failed, so we re-issue — this is what makes curfew
+    ///   robust rather than a one-shot latch.
+    /// - Leaving the window aborts any pending shutdown.
+    fn tick(&mut self, active: bool, now: Instant, warn: Duration, slack: Duration) -> Action {
+        if active {
+            match self.deadline {
+                None => {
+                    self.deadline = Some(now + warn);
+                    Action::Shutdown
+                }
+                Some(deadline) if now >= deadline + slack => {
+                    self.deadline = Some(now + warn);
+                    Action::Shutdown
+                }
+                Some(_) => Action::None,
+            }
+        } else if self.deadline.take().is_some() {
+            Action::Abort
+        } else {
+            Action::None
+        }
+    }
+
+    /// Clear the armed state so the next active tick re-issues (used when a shutdown call
+    /// failed and nothing is actually pending).
+    fn disarm(&mut self) {
+        self.deadline = None;
+    }
+}
+
+/// Background loop: every [`CHECK_INTERVAL`], enforce the curfew window. Runs for the life
+/// of the server; it never returns (a caller that `spawn`s it should log if it ever does).
 pub async fn run_enforcer(control: Arc<dyn SystemControl>, curfew: Arc<RwLock<Curfew>>) {
-    let mut armed = false;
+    let mut enforcer = Enforcer::new();
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
     loop {
         ticker.tick().await;
 
         let (active, warn_secs) = {
-            let c = curfew.read().unwrap();
-            (c.is_active_now(), c.warn_secs)
+            let guard = curfew.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            (guard.is_active_now(), guard.warn_secs)
         };
+        let warn = Duration::from_secs(warn_secs as u64);
 
-        if active && !armed {
-            armed = true;
-            tracing::warn!("curfew window active — initiating shutdown ({warn_secs}s warning)");
-            let control = control.clone();
-            let msg = "Curfew: this computer is shutting down.".to_string();
-            let result =
-                tokio::task::spawn_blocking(move || control.shutdown(warn_secs, Some(msg))).await;
-            if let Ok(Err(e)) = result {
-                tracing::error!(error = %e, "curfew shutdown failed");
-                armed = false; // allow a retry on the next tick
+        match enforcer.tick(active, Instant::now(), warn, CHECK_INTERVAL) {
+            Action::Shutdown => {
+                tracing::warn!("curfew active — scheduling shutdown ({warn_secs}s warning)");
+                let control = control.clone();
+                let msg = "Curfew: this computer is shutting down.".to_string();
+                match tokio::task::spawn_blocking(move || control.shutdown(warn_secs, Some(msg)))
+                    .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::error!(error = %e, "curfew shutdown failed; will retry");
+                        enforcer.disarm();
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "curfew shutdown task panicked; will retry");
+                        enforcer.disarm();
+                    }
+                }
             }
-        } else if !active {
-            armed = false;
+            Action::Abort => {
+                tracing::info!("curfew window ended — aborting any pending shutdown");
+                let control = control.clone();
+                if let Ok(Err(e)) =
+                    tokio::task::spawn_blocking(move || control.abort_shutdown()).await
+                {
+                    tracing::warn!(error = %e, "failed to abort shutdown");
+                }
+            }
+            Action::None => {}
         }
     }
 }
@@ -154,5 +232,62 @@ mod tests {
         assert!(parse_hm("24:00").is_none());
         assert!(parse_hm("7:5").is_some()); // %H:%M accepts single digits
         assert!(parse_hm("nope").is_none());
+    }
+
+    #[test]
+    fn validate_rejects_bad_times_and_huge_warn() {
+        let ok = Curfew { enabled: true, start: "22:00".into(), end: "07:00".into(), warn_secs: 60 };
+        assert!(ok.validate().is_ok());
+        let bad_time = Curfew { start: "25:00".into(), ..ok.clone() };
+        assert!(bad_time.validate().is_err());
+        let huge_warn = Curfew { warn_secs: MAX_WARN_SECS + 1, ..ok.clone() };
+        assert!(huge_warn.validate().is_err());
+    }
+
+    // ---- Enforcer state machine ----
+
+    const WARN: Duration = Duration::from_secs(60);
+    const SLACK: Duration = Duration::from_secs(30);
+
+    #[test]
+    fn enforcer_arms_once_on_entry_then_stays_quiet() {
+        let base = Instant::now();
+        let mut e = Enforcer::new();
+        // Enter the window → schedule a shutdown.
+        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
+        // Subsequent ticks before the deadline do nothing (countdown in progress).
+        assert_eq!(e.tick(true, base + Duration::from_secs(30), WARN, SLACK), Action::None);
+        assert_eq!(e.tick(true, base + Duration::from_secs(60), WARN, SLACK), Action::None);
+    }
+
+    #[test]
+    fn enforcer_reissues_if_still_on_past_deadline() {
+        // Simulates the child running `shutdown /a`: still active well past when the machine
+        // should have powered off → re-issue.
+        let base = Instant::now();
+        let mut e = Enforcer::new();
+        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown); // deadline = base+60
+        // base+90 = deadline(60) + slack(30) → re-issue.
+        assert_eq!(e.tick(true, base + Duration::from_secs(90), WARN, SLACK), Action::Shutdown);
+    }
+
+    #[test]
+    fn enforcer_aborts_when_window_ends_while_armed() {
+        let base = Instant::now();
+        let mut e = Enforcer::new();
+        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
+        // Window ends (curfew disabled or time passed) → cancel the pending shutdown.
+        assert_eq!(e.tick(false, base + Duration::from_secs(10), WARN, SLACK), Action::Abort);
+        // Nothing pending anymore.
+        assert_eq!(e.tick(false, base + Duration::from_secs(20), WARN, SLACK), Action::None);
+    }
+
+    #[test]
+    fn enforcer_disarm_forces_reissue_next_active_tick() {
+        let base = Instant::now();
+        let mut e = Enforcer::new();
+        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
+        e.disarm(); // simulate a failed shutdown call
+        assert_eq!(e.tick(true, base + Duration::from_secs(5), WARN, SLACK), Action::Shutdown);
     }
 }

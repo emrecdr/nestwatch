@@ -65,4 +65,9 @@ impl SystemControl for FakeControl {
         tracing::warn!(delay_secs, ?message, "[fake] shutdown requested (no-op on this platform)");
         Ok(())
     }
+
+    fn abort_shutdown(&self) -> Result<(), ControlError> {
+        tracing::info!("[fake] abort_shutdown (no-op on this platform)");
+        Ok(())
+    }
 }

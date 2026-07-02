@@ -33,4 +33,8 @@ impl SystemControl for ServiceControl {
     fn shutdown(&self, delay_secs: u32, message: Option<String>) -> Result<(), ControlError> {
         self.inner.shutdown(delay_secs, message)
     }
+
+    fn abort_shutdown(&self) -> Result<(), ControlError> {
+        self.inner.abort_shutdown()
+    }
 }

@@ -96,4 +96,14 @@ impl SystemControl for WindowsControl {
             Err(ControlError::Op(format!("shutdown exited with {status}")))
         }
     }
+
+    fn abort_shutdown(&self) -> Result<(), ControlError> {
+        // `shutdown /a` cancels a pending shutdown; it exits non-zero ("no shutdown in
+        // progress", 1116) when there is nothing to cancel — which is fine, so best-effort.
+        std::process::Command::new("shutdown")
+            .arg("/a")
+            .output()
+            .map_err(|e| ControlError::Op(e.to_string()))?;
+        Ok(())
+    }
 }

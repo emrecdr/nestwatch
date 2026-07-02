@@ -57,6 +57,11 @@ pub trait SystemControl: Send + Sync + 'static {
     /// Begin an orderly shutdown of the machine after `delay_secs`, optionally showing the
     /// user a warning `message` during the countdown.
     fn shutdown(&self, delay_secs: u32, message: Option<String>) -> Result<(), ControlError>;
+
+    /// Cancel a shutdown previously scheduled by [`SystemControl::shutdown`]. Idempotent:
+    /// succeeds even if none is pending. Used by the curfew enforcer to undo a countdown
+    /// when the window ends or curfew is disabled.
+    fn abort_shutdown(&self) -> Result<(), ControlError>;
 }
 
 /// Controller for an **interactive** process (dev `run`, or the session helper): captures
