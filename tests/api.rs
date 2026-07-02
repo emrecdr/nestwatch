@@ -27,6 +27,7 @@ fn test_state() -> AppState {
             curfew: Default::default(),
         }),
         limiter: Arc::new(LoginLimiter::default()),
+        login_lock: Arc::new(tokio::sync::Mutex::new(())),
     }
 }
 

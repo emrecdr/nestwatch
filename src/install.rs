@@ -30,8 +30,8 @@ pub fn install() -> Result<()> {
             pw
         }
     };
-    if password.len() < 6 {
-        bail!("please choose a password of at least 6 characters");
+    if password.chars().count() < 10 {
+        bail!("please choose a password of at least 10 characters (a passphrase is ideal)");
     }
 
     let cfg = Config {

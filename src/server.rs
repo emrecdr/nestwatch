@@ -19,8 +19,9 @@ use anyhow::Result;
 use axum::routing::{get, post};
 use axum::{middleware, Router};
 use axum_server::tls_rustls::RustlsConfig;
+use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::cookie::SameSite;
-use tower_sessions::{MemoryStore, SessionManagerLayer};
+use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
 use crate::state::AppState;
 use crate::{api, auth, cert, config, web};
@@ -34,6 +35,7 @@ pub fn build_router(state: AppState) -> Router {
         .with_secure(true)
         .with_http_only(true)
         .with_same_site(SameSite::Strict)
+        .with_expiry(Expiry::OnInactivity(CookieDuration::hours(12)))
         .with_name("hh_session");
 
     let api = Router::new()

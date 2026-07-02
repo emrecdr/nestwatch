@@ -62,6 +62,7 @@ fn run_service() -> Result<()> {
         curfew: Arc::new(std::sync::RwLock::new(config.curfew.clone())),
         config,
         limiter: Arc::new(crate::auth::LoginLimiter::default()),
+        login_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     // Graceful shutdown: when the SCM asks us to stop, trigger axum-server's handle.

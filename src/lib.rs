@@ -89,6 +89,7 @@ fn run_server() -> Result<()> {
         curfew: Arc::new(std::sync::RwLock::new(config.curfew.clone())),
         config,
         limiter: Arc::new(auth::LoginLimiter::default()),
+        login_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
     // Build the runtime explicitly (rather than `#[tokio::main]`) so the sync
     // subcommands — `install`, `uninstall` — never spin one up needlessly.

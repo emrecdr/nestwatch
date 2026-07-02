@@ -124,10 +124,26 @@ pub async fn login(
     session: Session,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<Value>, AppError> {
+    // Serialize attempts: makes limiter check→verify→record atomic (so concurrent requests
+    // can't all slip past the gate) and ensures only one Argon2 verify runs at a time.
+    let _guard = state.login_lock.lock().await;
+
     state.limiter.check()?;
 
-    if verify_password(&body.password, &state.config.password_hash) {
+    // Argon2 is memory-hard/CPU-heavy — never run it on the async runtime.
+    let hash = state.config.password_hash.clone();
+    let candidate = body.password;
+    let ok = tokio::task::spawn_blocking(move || verify_password(&candidate, &hash))
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("verify task failed: {e}")))?;
+
+    if ok {
         state.limiter.record_success();
+        // Rotate the session id on privilege change (defeats session fixation).
+        session
+            .cycle_id()
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
         session
             .insert(AUTH_KEY, true)
             .await
