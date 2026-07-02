@@ -58,7 +58,7 @@ impl SystemControl for WindowsControl {
             })
             .collect();
         // Heaviest first — the apps a parent most likely wants to see/close.
-        out.sort_by(|a, b| b.memory_bytes.cmp(&a.memory_bytes));
+        out.sort_by_key(|p| std::cmp::Reverse(p.memory_bytes));
         Ok(out)
     }
 
