@@ -172,8 +172,9 @@ fn deploy(port: u16) -> Result<()> {
             .with_context(|| format!("copying binary to {}", target_exe.display()))?;
     }
 
-    // Harden the install dir and (re)create the LAN-scoped firewall rule.
-    harden_acl(&dir)?;
+    // Harden the install dir (Users get read+execute so the helper can run) and (re)create
+    // the LAN-scoped firewall rule.
+    harden_program_dir(&dir)?;
     configure_firewall(port)?;
 
     match existing {
@@ -231,21 +232,51 @@ fn stop_and_wait(service: &windows_service::service::Service) -> Result<()> {
     bail!("service did not stop within 10s")
 }
 
-/// icacls: only SYSTEM + Administrators. Checked — the tamper-resistance guarantee depends
-/// on this actually applying.
+// Well-known SIDs (locale-independent — "Administrators"/"Users" are localized names).
+#[cfg(windows)]
+const SID_SYSTEM: &str = "*S-1-5-18";
+#[cfg(windows)]
+const SID_ADMINS: &str = "*S-1-5-32-544";
+#[cfg(windows)]
+const SID_USERS: &str = "*S-1-5-32-545";
+
+/// Lock the **data** dir (password hash, TLS key) to SYSTEM + Administrators only — a
+/// standard user gets no access at all. Checked; the tamper model depends on it.
 #[cfg(windows)]
 fn harden_acl(path: &Path) -> Result<()> {
-    let status = std::process::Command::new("icacls")
-        .arg(path)
-        .args([
-            "/inheritance:r",
-            "/grant:r",
-            "SYSTEM:(OI)(CI)F",
-            "/grant:r",
-            "Administrators:(OI)(CI)F",
-        ])
-        .status()
-        .context("running icacls")?;
+    run_icacls(
+        path,
+        &[
+            &format!("{SID_SYSTEM}:(OI)(CI)F"),
+            &format!("{SID_ADMINS}:(OI)(CI)F"),
+        ],
+    )
+}
+
+/// Lock the **program** dir (the binary) to SYSTEM + Administrators full, plus Users
+/// read+execute — the child can't modify/delete the binary, but CAN execute it, which is
+/// required because the service launches the screenshot helper as the child via
+/// CreateProcessAsUserW (that access check uses the child's token).
+#[cfg(windows)]
+fn harden_program_dir(path: &Path) -> Result<()> {
+    run_icacls(
+        path,
+        &[
+            &format!("{SID_SYSTEM}:(OI)(CI)F"),
+            &format!("{SID_ADMINS}:(OI)(CI)F"),
+            &format!("{SID_USERS}:(OI)(CI)RX"),
+        ],
+    )
+}
+
+#[cfg(windows)]
+fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
+    let mut cmd = std::process::Command::new("icacls");
+    cmd.arg(path).arg("/inheritance:r");
+    for grant in grants {
+        cmd.arg("/grant:r").arg(grant);
+    }
+    let status = cmd.status().context("running icacls")?;
     if !status.success() {
         bail!(
             "failed to ACL-harden {} (icacls exited {status}); refusing to continue",

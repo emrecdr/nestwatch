@@ -42,6 +42,13 @@ pub fn data_paths() -> DataPaths {
 }
 
 fn data_dir() -> PathBuf {
+    // Explicit override, honored ONLY in debug builds (tests/dev). The shipped release
+    // service deliberately ignores it, so the location it reads the password hash / TLS key
+    // from can't be redirected via an environment variable.
+    #[cfg(debug_assertions)]
+    if let Some(dir) = std::env::var_os("NESTWATCH_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
     #[cfg(windows)]
     {
         // Machine-wide (ProgramData), NOT %APPDATA%: `install` runs as the parent/admin

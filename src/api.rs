@@ -60,7 +60,12 @@ pub async fn shutdown(State(state): State<AppState>) -> Result<Json<Value>, AppE
 
 /// `GET /api/curfew` → the current curfew settings.
 pub async fn get_curfew(State(state): State<AppState>) -> Json<Curfew> {
-    Json(state.curfew.read().unwrap().clone())
+    let curfew = state
+        .curfew
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    Json(curfew)
 }
 
 /// `POST /api/curfew` → validate, persist, and hot-apply new curfew settings.
@@ -70,14 +75,18 @@ pub async fn set_curfew(
 ) -> Result<Json<Value>, AppError> {
     new_curfew.validate().map_err(AppError::BadRequest)?;
 
-    // Persist the whole config (curfew changes; port/password are unchanged).
+    // Persist the whole config (curfew changes; port/password are unchanged). File I/O runs
+    // off the async runtime.
     let persisted = Config {
         port: state.config.port,
         password_hash: state.config.password_hash.clone(),
         curfew: new_curfew.clone(),
     };
-    persisted.save().map_err(AppError::Internal)?;
+    tokio::task::spawn_blocking(move || persisted.save())
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("save task failed: {e}")))?
+        .map_err(AppError::Internal)?;
 
-    *state.curfew.write().unwrap() = new_curfew;
+    *state.curfew.write().unwrap_or_else(|p| p.into_inner()) = new_curfew;
     Ok(Json(json!({ "ok": true })))
 }

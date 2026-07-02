@@ -39,7 +39,11 @@ impl IntoResponse for AppError {
             AppError::Control(ControlError::ProcessNotFound(_)) => {
                 (StatusCode::NOT_FOUND, self.to_string())
             }
-            AppError::Control(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+            AppError::Control(err) => {
+                // Log the OS detail; don't leak it to the client.
+                tracing::error!(error = %err, "control operation failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "operation failed".to_string())
+            }
             AppError::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (
