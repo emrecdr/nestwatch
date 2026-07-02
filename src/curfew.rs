@@ -37,7 +37,12 @@ pub struct Curfew {
 
 impl Default for Curfew {
     fn default() -> Self {
-        Self { enabled: false, start: "22:00".into(), end: "07:00".into(), warn_secs: 60 }
+        Self {
+            enabled: false,
+            start: "22:00".into(),
+            end: "07:00".into(),
+            warn_secs: 60,
+        }
     }
 }
 
@@ -136,7 +141,9 @@ pub async fn run_enforcer(control: Arc<dyn SystemControl>, curfew: Arc<RwLock<Cu
         ticker.tick().await;
 
         let (active, warn_secs) = {
-            let guard = curfew.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = curfew
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             (guard.is_active_now(), guard.warn_secs)
         };
         let warn = Duration::from_secs(warn_secs as u64);
@@ -184,9 +191,9 @@ fn parse_hm(s: &str) -> Option<NaiveTime> {
 fn is_within(now: NaiveTime, start: NaiveTime, end: NaiveTime) -> bool {
     use std::cmp::Ordering;
     match start.cmp(&end) {
-        Ordering::Less => now >= start && now < end,     // same day, e.g. 09:00–17:00
-        Ordering::Greater => now >= start || now < end,  // wraps midnight, e.g. 22:00–07:00
-        Ordering::Equal => false,                        // empty window
+        Ordering::Less => now >= start && now < end, // same day, e.g. 09:00–17:00
+        Ordering::Greater => now >= start || now < end, // wraps midnight, e.g. 22:00–07:00
+        Ordering::Equal => false,                    // empty window
     }
 }
 
@@ -236,11 +243,22 @@ mod tests {
 
     #[test]
     fn validate_rejects_bad_times_and_huge_warn() {
-        let ok = Curfew { enabled: true, start: "22:00".into(), end: "07:00".into(), warn_secs: 60 };
+        let ok = Curfew {
+            enabled: true,
+            start: "22:00".into(),
+            end: "07:00".into(),
+            warn_secs: 60,
+        };
         assert!(ok.validate().is_ok());
-        let bad_time = Curfew { start: "25:00".into(), ..ok.clone() };
+        let bad_time = Curfew {
+            start: "25:00".into(),
+            ..ok.clone()
+        };
         assert!(bad_time.validate().is_err());
-        let huge_warn = Curfew { warn_secs: MAX_WARN_SECS + 1, ..ok.clone() };
+        let huge_warn = Curfew {
+            warn_secs: MAX_WARN_SECS + 1,
+            ..ok.clone()
+        };
         assert!(huge_warn.validate().is_err());
     }
 
@@ -256,8 +274,14 @@ mod tests {
         // Enter the window → schedule a shutdown.
         assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
         // Subsequent ticks before the deadline do nothing (countdown in progress).
-        assert_eq!(e.tick(true, base + Duration::from_secs(30), WARN, SLACK), Action::None);
-        assert_eq!(e.tick(true, base + Duration::from_secs(60), WARN, SLACK), Action::None);
+        assert_eq!(
+            e.tick(true, base + Duration::from_secs(30), WARN, SLACK),
+            Action::None
+        );
+        assert_eq!(
+            e.tick(true, base + Duration::from_secs(60), WARN, SLACK),
+            Action::None
+        );
     }
 
     #[test]
@@ -268,7 +292,10 @@ mod tests {
         let mut e = Enforcer::new();
         assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown); // deadline = base+60
         // base+90 = deadline(60) + slack(30) → re-issue.
-        assert_eq!(e.tick(true, base + Duration::from_secs(90), WARN, SLACK), Action::Shutdown);
+        assert_eq!(
+            e.tick(true, base + Duration::from_secs(90), WARN, SLACK),
+            Action::Shutdown
+        );
     }
 
     #[test]
@@ -277,9 +304,15 @@ mod tests {
         let mut e = Enforcer::new();
         assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
         // Window ends (curfew disabled or time passed) → cancel the pending shutdown.
-        assert_eq!(e.tick(false, base + Duration::from_secs(10), WARN, SLACK), Action::Abort);
+        assert_eq!(
+            e.tick(false, base + Duration::from_secs(10), WARN, SLACK),
+            Action::Abort
+        );
         // Nothing pending anymore.
-        assert_eq!(e.tick(false, base + Duration::from_secs(20), WARN, SLACK), Action::None);
+        assert_eq!(
+            e.tick(false, base + Duration::from_secs(20), WARN, SLACK),
+            Action::None
+        );
     }
 
     #[test]
@@ -288,6 +321,9 @@ mod tests {
         let mut e = Enforcer::new();
         assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
         e.disarm(); // simulate a failed shutdown call
-        assert_eq!(e.tick(true, base + Duration::from_secs(5), WARN, SLACK), Action::Shutdown);
+        assert_eq!(
+            e.tick(true, base + Duration::from_secs(5), WARN, SLACK),
+            Action::Shutdown
+        );
     }
 }

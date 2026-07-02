@@ -7,8 +7,8 @@
 //! Compile-checked via the Windows target; must be runtime-verified on Windows.
 
 use std::ffi::OsString;
-use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -82,9 +82,7 @@ fn run_service() -> Result<()> {
 
 fn status(state: ServiceState) -> ServiceStatus {
     let controls_accepted = match state {
-        ServiceState::Running => {
-            ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN
-        }
+        ServiceState::Running => ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
         _ => ServiceControlAccept::empty(),
     };
     ServiceStatus {

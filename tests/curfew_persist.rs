@@ -5,12 +5,12 @@
 use std::sync::{Arc, RwLock};
 
 use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use axum::http::{Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
-use nestwatch::auth::{hash_password, LoginLimiter};
-use nestwatch::config::{data_paths, Config};
+use nestwatch::auth::{LoginLimiter, hash_password};
+use nestwatch::config::{Config, data_paths};
 use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
 use nestwatch::state::AppState;

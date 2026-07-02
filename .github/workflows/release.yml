@@ -1,0 +1,41 @@
+name: release
+
+# Tag a release: `git tag v0.1.0 && git push --tags`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install NASM (for ring)
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build release binary
+        run: cargo build --release --locked
+      - name: Checksum
+        shell: pwsh
+        run: |
+          (Get-FileHash target/release/nestwatch.exe -Algorithm SHA256).Hash |
+            Out-File -Encoding ascii nestwatch.exe.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/release/nestwatch.exe
+            nestwatch.exe.sha256

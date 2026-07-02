@@ -78,7 +78,9 @@ impl Config {
             )
         })?;
         let cfg: Config = serde_json::from_str(&raw).context("config file is malformed")?;
-        if cfg.curfew.enabled && let Err(e) = cfg.curfew.validate() {
+        if cfg.curfew.enabled
+            && let Err(e) = cfg.curfew.validate()
+        {
             tracing::warn!("curfew is enabled but invalid ({e}); it will not be enforced");
         }
         Ok(cfg)

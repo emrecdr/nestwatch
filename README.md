@@ -79,6 +79,12 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
   cargo build --release --target x86_64-pc-windows-gnu
 ```
 
+You download and run **`nestwatch.exe`** — it's the same binary that `install` copies to
+`C:\Program Files\HostHealth\host-health.exe` (the bland on-disk name) on the target.
+
+**Releases:** push a tag (`git tag v0.1.0 && git push --tags`) and `.github/workflows/release.yml`
+builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release.
+
 ## Use (on the Windows machine, from an elevated/Administrator console)
 
 ```powershell

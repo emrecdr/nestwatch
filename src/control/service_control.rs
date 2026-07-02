@@ -13,7 +13,9 @@ pub struct ServiceControl {
 
 impl ServiceControl {
     pub fn new() -> Self {
-        Self { inner: WindowsControl::new() }
+        Self {
+            inner: WindowsControl::new(),
+        }
     }
 }
 

@@ -4,12 +4,12 @@
 
 use std::sync::{Arc, RwLock};
 
-use axum::body::{to_bytes, Body};
-use axum::http::{header, Request, StatusCode};
-use serde_json::{json, Value};
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode, header};
+use serde_json::{Value, json};
 use tower::ServiceExt; // for `oneshot`
 
-use nestwatch::auth::{hash_password, LoginLimiter};
+use nestwatch::auth::{LoginLimiter, hash_password};
 use nestwatch::config::Config;
 use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
@@ -70,7 +70,12 @@ async fn body_json(res: axum::response::Response) -> Value {
 async fn api_requires_auth() {
     let app = build_router(test_state());
     let res = app
-        .oneshot(Request::builder().uri("/api/processes").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/api/processes")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
@@ -89,7 +94,12 @@ async fn session_endpoint_reflects_auth_state() {
     // Anonymous.
     let res = app
         .clone()
-        .oneshot(Request::builder().uri("/session").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/session")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(body_json(res).await["authenticated"], json!(false));
@@ -126,7 +136,10 @@ async fn screenshot_returns_png() {
         .unwrap();
 
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.headers().get(header::CONTENT_TYPE).unwrap(), "image/png");
+    assert_eq!(
+        res.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/png"
+    );
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[1..4], b"PNG", "PNG magic bytes present");
 }
@@ -189,7 +202,12 @@ async fn processes_list_then_kill() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let list = body_json(res).await;
-    assert!(list.as_array().unwrap().iter().any(|p| p["name"] == "notepad.exe"));
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["name"] == "notepad.exe")
+    );
 
     // Kill an existing PID → 200.
     let res = app

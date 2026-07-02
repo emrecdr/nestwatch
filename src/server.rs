@@ -17,10 +17,10 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 use axum::routing::{get, post};
-use axum::{middleware, Router};
+use axum::{Router, middleware};
 use axum_server::tls_rustls::RustlsConfig;
-use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::cookie::SameSite;
+use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
 use crate::state::AppState;

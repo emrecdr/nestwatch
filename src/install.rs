@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::auth;
 use crate::config::{self, Config, DEFAULT_PORT};
@@ -67,7 +67,10 @@ pub fn install() -> Result<()> {
 
     deploy(cfg.port)?;
 
-    println!("\nInstalled. Reach the dashboard at https://<this-pc>:{}", cfg.port);
+    println!(
+        "\nInstalled. Reach the dashboard at https://<this-pc>:{}",
+        cfg.port
+    );
     println!("\nTLS cert SHA-256 — verify this the first time your browser warns, so you know");
     println!("you're trusting THIS machine and not a LAN impostor:");
     println!("  {fingerprint}");
@@ -179,7 +182,8 @@ fn deploy(port: u16) -> Result<()> {
 
     match existing {
         Some(svc) => {
-            svc.start(&[] as &[&OsStr]).context("starting existing service")?;
+            svc.start(&[] as &[&OsStr])
+                .context("starting existing service")?;
             println!("Updated and restarted service '{SERVICE_NAME}'.");
         }
         None => {
@@ -307,7 +311,9 @@ fn configure_firewall(port: u16) -> Result<()> {
         .context("running netsh")?;
     if !status.success() {
         // Non-fatal: warn loudly rather than abort, since the app still runs locally.
-        println!("WARNING: could not add firewall rule (netsh exited {status}); remote access may be blocked.");
+        println!(
+            "WARNING: could not add firewall rule (netsh exited {status}); remote access may be blocked."
+        );
     }
     Ok(())
 }
@@ -338,8 +344,7 @@ fn remove_service() -> Result<()> {
 
     use crate::service::SERVICE_NAME;
 
-    let manager =
-        ServiceManager::local_computer(None::<&OsStr>, ServiceManagerAccess::CONNECT)?;
+    let manager = ServiceManager::local_computer(None::<&OsStr>, ServiceManagerAccess::CONNECT)?;
     if let Ok(service) = manager.open_service(
         SERVICE_NAME,
         ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
@@ -357,7 +362,9 @@ fn remove_service() -> Result<()> {
         .arg(format!("name={FIREWALL_RULE}"))
         .status();
     let dir = install_dir();
-    if dir.exists() && let Err(e) = std::fs::remove_dir_all(&dir) {
+    if dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&dir)
+    {
         println!("(could not remove {}: {e})", dir.display());
     }
     Ok(())

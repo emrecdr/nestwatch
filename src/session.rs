@@ -17,20 +17,20 @@ use std::io::Read;
 use std::os::windows::io::FromRawHandle;
 use std::time::Duration;
 
-use windows::core::PWSTR;
 use windows::Win32::Foundation::{
-    CloseHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, WAIT_TIMEOUT,
+    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation, WAIT_TIMEOUT,
 };
 use windows::Win32::Security::{
-    DuplicateTokenEx, SecurityImpersonation, TokenPrimary, SECURITY_ATTRIBUTES, TOKEN_ALL_ACCESS,
+    DuplicateTokenEx, SECURITY_ATTRIBUTES, SecurityImpersonation, TOKEN_ALL_ACCESS, TokenPrimary,
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
 use windows::Win32::System::Threading::{
-    CreateProcessAsUserW, TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW,
-    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, PROCESS_INFORMATION,
+    STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
+use windows::core::PWSTR;
 
 use crate::control::ControlError;
 

@@ -3,9 +3,9 @@
 //! Handlers return `Result<_, AppError>`; the mapping from a typed error to an HTTP
 //! status code + JSON body happens here, in exactly one place, via `IntoResponse`.
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde_json::json;
 
 use crate::control::ControlError;
@@ -42,7 +42,10 @@ impl IntoResponse for AppError {
             AppError::Control(err) => {
                 // Log the OS detail; don't leak it to the client.
                 tracing::error!(error = %err, "control operation failed");
-                (StatusCode::INTERNAL_SERVER_ERROR, "operation failed".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "operation failed".to_string(),
+                )
             }
             AppError::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");

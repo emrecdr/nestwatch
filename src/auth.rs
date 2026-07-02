@@ -4,12 +4,12 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use axum::Json;
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::Json;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower_sessions::Session;
 
 use crate::error::AppError;
@@ -24,8 +24,8 @@ const AUTH_KEY: &str = "authenticated";
 
 /// Hash a plaintext password into a PHC string for storage (used at install time).
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
-    use argon2::password_hash::rand_core::OsRng;
     use argon2::password_hash::SaltString;
+    use argon2::password_hash::rand_core::OsRng;
     use argon2::{Argon2, PasswordHasher};
 
     let salt = SaltString::generate(&mut OsRng);
@@ -71,7 +71,10 @@ struct LimiterState {
 impl LoginLimiter {
     pub fn new(max_failures: u32, lockout: Duration) -> Self {
         Self {
-            inner: Mutex::new(LimiterState { consecutive_failures: 0, locked_until: None }),
+            inner: Mutex::new(LimiterState {
+                consecutive_failures: 0,
+                locked_until: None,
+            }),
             max_failures,
             lockout,
         }

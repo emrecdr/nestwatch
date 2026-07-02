@@ -16,11 +16,31 @@ impl FakeControl {
     pub fn new() -> Self {
         Self {
             processes: Mutex::new(vec![
-                ProcessInfo { pid: 1001, name: "explorer.exe".into(), memory_bytes: 45_000_000 },
-                ProcessInfo { pid: 1002, name: "chrome.exe".into(), memory_bytes: 512_000_000 },
-                ProcessInfo { pid: 1003, name: "Minecraft.exe".into(), memory_bytes: 1_200_000_000 },
-                ProcessInfo { pid: 1004, name: "Discord.exe".into(), memory_bytes: 210_000_000 },
-                ProcessInfo { pid: 1005, name: "notepad.exe".into(), memory_bytes: 8_000_000 },
+                ProcessInfo {
+                    pid: 1001,
+                    name: "explorer.exe".into(),
+                    memory_bytes: 45_000_000,
+                },
+                ProcessInfo {
+                    pid: 1002,
+                    name: "chrome.exe".into(),
+                    memory_bytes: 512_000_000,
+                },
+                ProcessInfo {
+                    pid: 1003,
+                    name: "Minecraft.exe".into(),
+                    memory_bytes: 1_200_000_000,
+                },
+                ProcessInfo {
+                    pid: 1004,
+                    name: "Discord.exe".into(),
+                    memory_bytes: 210_000_000,
+                },
+                ProcessInfo {
+                    pid: 1005,
+                    name: "notepad.exe".into(),
+                    memory_bytes: 8_000_000,
+                },
             ]),
         }
     }
@@ -62,7 +82,11 @@ impl SystemControl for FakeControl {
     }
 
     fn shutdown(&self, delay_secs: u32, message: Option<String>) -> Result<(), ControlError> {
-        tracing::warn!(delay_secs, ?message, "[fake] shutdown requested (no-op on this platform)");
+        tracing::warn!(
+            delay_secs,
+            ?message,
+            "[fake] shutdown requested (no-op on this platform)"
+        );
         Ok(())
     }
 

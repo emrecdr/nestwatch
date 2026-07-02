@@ -4,7 +4,7 @@
 //! (in debug builds they're read from disk, so edits show up on refresh). This keeps the
 //! shipped artifact a single self-contained `.exe` with no loose files or CDN dependency.
 
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 

@@ -21,7 +21,8 @@ fn capture_png() -> Result<Vec<u8>> {
 pub fn capture_to_stdout() -> Result<()> {
     let png = capture_png()?;
     let mut out = std::io::stdout().lock();
-    out.write_all(&png).context("writing screenshot to stdout")?;
+    out.write_all(&png)
+        .context("writing screenshot to stdout")?;
     out.flush().context("flushing stdout")?;
     Ok(())
 }

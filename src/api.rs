@@ -2,11 +2,11 @@
 //! worker so the async runtime stays responsive, then maps the result into a response.
 //! All routes here sit behind the `require_auth` middleware.
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config::Config;
 use crate::control::{ProcessInfo, SystemControl};

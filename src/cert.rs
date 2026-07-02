@@ -51,7 +51,10 @@ pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
 
     std::fs::write(cert_path, cert.pem())?;
     std::fs::write(key_path, key_pair.serialize_pem())?;
-    tracing::info!("generated self-signed certificate at {}", cert_path.display());
+    tracing::info!(
+        "generated self-signed certificate at {}",
+        cert_path.display()
+    );
 
     Ok(fingerprint(cert.der()))
 }
