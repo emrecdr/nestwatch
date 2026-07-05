@@ -60,11 +60,7 @@ impl SystemControl for FakeControl {
         for (x, y, px) in img.enumerate_pixels_mut() {
             *px = image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 128]);
         }
-        let mut buf = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(img)
-            .write_to(&mut buf, image::ImageFormat::Png)
-            .map_err(|e| ControlError::Capture(e.to_string()))?;
-        Ok(buf.into_inner())
+        super::encode_png(image::DynamicImage::ImageRgb8(img))
     }
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {

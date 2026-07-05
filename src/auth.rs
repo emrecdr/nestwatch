@@ -136,21 +136,13 @@ pub async fn login(
     // Argon2 is memory-hard/CPU-heavy — never run it on the async runtime.
     let hash = state.config.password_hash.clone();
     let candidate = body.password;
-    let ok = tokio::task::spawn_blocking(move || verify_password(&candidate, &hash))
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("verify task failed: {e}")))?;
+    let ok = tokio::task::spawn_blocking(move || verify_password(&candidate, &hash)).await?;
 
     if ok {
         state.limiter.record_success();
         // Rotate the session id on privilege change (defeats session fixation).
-        session
-            .cycle_id()
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
-        session
-            .insert(AUTH_KEY, true)
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+        session.cycle_id().await?;
+        session.insert(AUTH_KEY, true).await?;
         Ok(Json(json!({ "ok": true })))
     } else {
         state.limiter.record_failure();
@@ -160,10 +152,7 @@ pub async fn login(
 
 /// `POST /logout` — clear the session.
 pub async fn logout(session: Session) -> Result<Json<Value>, AppError> {
-    session
-        .flush()
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?;
+    session.flush().await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -184,11 +173,7 @@ pub async fn require_auth(
     request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
-    let authenticated = session
-        .get::<bool>(AUTH_KEY)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e)))?
-        .unwrap_or(false);
+    let authenticated = session.get::<bool>(AUTH_KEY).await?.unwrap_or(false);
 
     if authenticated {
         Ok(next.run(request).await)

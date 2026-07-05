@@ -2,14 +2,14 @@
 //! backed by `FakeControl`, so they run on any OS with no real side effects — this is the
 //! payoff of the `SystemControl` abstraction.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 use tower::ServiceExt; // for `oneshot`
 
-use nestwatch::auth::{LoginLimiter, hash_password};
+use nestwatch::auth::hash_password;
 use nestwatch::config::Config;
 use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
@@ -18,17 +18,14 @@ use nestwatch::state::AppState;
 const PASSWORD: &str = "test-password";
 
 fn test_state() -> AppState {
-    AppState {
-        control: Arc::new(FakeControl::new()),
-        curfew: Arc::new(RwLock::new(Default::default())),
-        config: Arc::new(Config {
+    AppState::new(
+        Arc::new(FakeControl::new()),
+        Config {
             port: 8443,
             password_hash: hash_password(PASSWORD).unwrap(),
             curfew: Default::default(),
-        }),
-        limiter: Arc::new(LoginLimiter::default()),
-        login_lock: Arc::new(tokio::sync::Mutex::new(())),
-    }
+        },
+    )
 }
 
 /// POST /login and return the session cookie (`name=value`) on success.

@@ -30,6 +30,20 @@ pub enum AppError {
     Internal(#[from] anyhow::Error),
 }
 
+/// A panicked/cancelled `spawn_blocking` worker maps to a generic 500 (detail is logged).
+impl From<tokio::task::JoinError> for AppError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        AppError::Internal(anyhow::anyhow!("blocking task failed: {e}"))
+    }
+}
+
+/// Session-store failures (cookie read/write/flush) are internal errors, never client-facing.
+impl From<tower_sessions::session::Error> for AppError {
+    fn from(e: tower_sessions::session::Error) -> Self {
+        AppError::Internal(anyhow::anyhow!(e))
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {

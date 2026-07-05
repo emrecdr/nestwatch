@@ -41,7 +41,7 @@ impl Default for Curfew {
             enabled: false,
             start: "22:00".into(),
             end: "07:00".into(),
-            warn_secs: 60,
+            warn_secs: default_warn_secs(),
         }
     }
 }
@@ -141,9 +141,7 @@ pub async fn run_enforcer(control: Arc<dyn SystemControl>, curfew: Arc<RwLock<Cu
         ticker.tick().await;
 
         let (active, warn_secs) = {
-            let guard = curfew
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = crate::state::recover_read(&curfew);
             (guard.is_active_now(), guard.warn_secs)
         };
         let warn = Duration::from_secs(warn_secs as u64);

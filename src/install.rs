@@ -113,6 +113,10 @@ fn parse_port_flag(args: &[String]) -> Result<Option<u16>> {
 // Windows: install/protect the SYSTEM service
 // ---------------------------------------------------------------------------
 
+/// Filename the binary is installed and registered under (low-profile, matches the service).
+#[cfg(windows)]
+const INSTALL_EXE_NAME: &str = "host-health.exe";
+
 #[cfg(windows)]
 fn install_dir() -> std::path::PathBuf {
     use std::path::PathBuf;
@@ -147,7 +151,7 @@ fn deploy(port: u16) -> Result<()> {
 
     let dir = install_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let target_exe = dir.join("host-health.exe");
+    let target_exe = dir.join(INSTALL_EXE_NAME);
     let current_exe = std::env::current_exe()?;
 
     let manager = ServiceManager::local_computer(
@@ -213,7 +217,7 @@ fn deploy(port: u16) -> Result<()> {
         }
     }
 
-    println!("Binary: {}", dir.join("host-health.exe").display());
+    println!("Binary: {}", dir.join(INSTALL_EXE_NAME).display());
     println!("Reminder: this resists a STANDARD user — ensure your son is not an administrator,");
     println!("and that this PC's network is set to 'Private' (not 'Public') so the rule applies.");
     Ok(())
@@ -290,16 +294,22 @@ fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Delete the app's firewall rule if present (best-effort; used on (re)install and uninstall).
+#[cfg(windows)]
+fn delete_firewall_rule() {
+    let _ = std::process::Command::new("netsh")
+        .args(["advfirewall", "firewall", "delete", "rule"])
+        .arg(format!("name={FIREWALL_RULE}"))
+        .status();
+}
+
 /// Recreate an inbound TCP rule scoped to the local subnet on Private/Domain networks.
 #[cfg(windows)]
 fn configure_firewall(port: u16) -> Result<()> {
     use std::process::Command;
 
     // Idempotent: delete any stale rule (possibly on an old port) first.
-    let _ = Command::new("netsh")
-        .args(["advfirewall", "firewall", "delete", "rule"])
-        .arg(format!("name={FIREWALL_RULE}"))
-        .status();
+    delete_firewall_rule();
 
     let status = Command::new("netsh")
         .args(["advfirewall", "firewall", "add", "rule"])
@@ -337,7 +347,6 @@ fn configure_recovery() {
 #[cfg(windows)]
 fn remove_service() -> Result<()> {
     use std::ffi::OsStr;
-    use std::process::Command;
 
     use windows_service::service::ServiceAccess;
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
@@ -357,10 +366,7 @@ fn remove_service() -> Result<()> {
     }
 
     // Remove the firewall rule and the installed binary directory.
-    let _ = Command::new("netsh")
-        .args(["advfirewall", "firewall", "delete", "rule"])
-        .arg(format!("name={FIREWALL_RULE}"))
-        .status();
+    delete_firewall_rule();
     let dir = install_dir();
     if dir.exists()
         && let Err(e) = std::fs::remove_dir_all(&dir)

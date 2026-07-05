@@ -64,6 +64,15 @@ pub trait SystemControl: Send + Sync + 'static {
     fn abort_shutdown(&self) -> Result<(), ControlError>;
 }
 
+/// Encode a decoded image as PNG bytes. Shared by the real and fake controllers so the
+/// buffer/format/error-mapping lives in one place (child modules see this private helper).
+fn encode_png(img: image::DynamicImage) -> Result<Vec<u8>, ControlError> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| ControlError::Capture(e.to_string()))?;
+    Ok(buf.into_inner())
+}
+
 /// Controller for an **interactive** process (dev `run`, or the session helper): captures
 /// the screen directly. On non-Windows this is the fake.
 pub fn interactive_control() -> Arc<dyn SystemControl> {

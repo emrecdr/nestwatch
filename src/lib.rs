@@ -27,8 +27,6 @@ pub mod service;
 #[cfg(windows)]
 pub mod session;
 
-use std::sync::Arc;
-
 use anyhow::Result;
 
 /// Parse `argv` and dispatch the requested subcommand.
@@ -97,14 +95,8 @@ fn run_service() -> Result<()> {
 
 /// Load config, assemble [`state::AppState`], and serve until shutdown.
 fn run_server() -> Result<()> {
-    let config = Arc::new(config::Config::load()?);
-    let state = state::AppState {
-        control: control::interactive_control(),
-        curfew: Arc::new(std::sync::RwLock::new(config.curfew.clone())),
-        config,
-        limiter: Arc::new(auth::LoginLimiter::default()),
-        login_lock: Arc::new(tokio::sync::Mutex::new(())),
-    };
+    let config = config::Config::load()?;
+    let state = state::AppState::new(control::interactive_control(), config);
     // Build the runtime explicitly (rather than `#[tokio::main]`) so the sync
     // subcommands — `install`, `uninstall` — never spin one up needlessly.
     let rt = tokio::runtime::Runtime::new()?;

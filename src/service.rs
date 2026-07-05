@@ -7,7 +7,6 @@
 //! Compile-checked via the Windows target; must be runtime-verified on Windows.
 
 use std::ffi::OsString;
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -56,14 +55,8 @@ fn run_service() -> Result<()> {
     status_handle.set_service_status(status(ServiceState::Running))?;
 
     // Build state with the service controller (screenshots via session helper).
-    let config = Arc::new(crate::config::Config::load()?);
-    let state = crate::state::AppState {
-        control: crate::control::service_control(),
-        curfew: Arc::new(std::sync::RwLock::new(config.curfew.clone())),
-        config,
-        limiter: Arc::new(crate::auth::LoginLimiter::default()),
-        login_lock: Arc::new(tokio::sync::Mutex::new(())),
-    };
+    let config = crate::config::Config::load()?;
+    let state = crate::state::AppState::new(crate::control::service_control(), config);
 
     // Graceful shutdown: when the SCM asks us to stop, trigger axum-server's handle.
     let handle = axum_server::Handle::new();

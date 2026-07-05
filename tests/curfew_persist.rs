@@ -2,14 +2,14 @@
 //! to disk. This lives in its own test binary so its `NESTWATCH_DATA_DIR` override runs in a
 //! separate process and can't affect (or be affected by) the other integration tests.
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
-use nestwatch::auth::{LoginLimiter, hash_password};
+use nestwatch::auth::hash_password;
 use nestwatch::config::{Config, data_paths};
 use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
@@ -24,17 +24,14 @@ async fn valid_curfew_persists_and_updates_state() {
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", &tmp) };
 
-    let state = AppState {
-        control: Arc::new(FakeControl::new()),
-        curfew: Arc::new(RwLock::new(Default::default())),
-        config: Arc::new(Config {
+    let state = AppState::new(
+        Arc::new(FakeControl::new()),
+        Config {
             port: 8443,
             password_hash: hash_password(PASSWORD).unwrap(),
             curfew: Default::default(),
-        }),
-        limiter: Arc::new(LoginLimiter::default()),
-        login_lock: Arc::new(tokio::sync::Mutex::new(())),
-    };
+        },
+    );
     let curfew_handle = state.curfew.clone();
     let app = build_router(state);
 

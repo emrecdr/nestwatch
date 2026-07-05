@@ -8,7 +8,6 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
-use crate::config::Config;
 use crate::control::{ProcessInfo, SystemControl};
 use crate::curfew::Curfew;
 use crate::error::AppError;
@@ -21,8 +20,7 @@ where
     F: FnOnce(&dyn SystemControl) -> Result<T, crate::control::ControlError> + Send + 'static,
 {
     tokio::task::spawn_blocking(move || f(control.as_ref()))
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("worker task failed: {e}")))?
+        .await?
         .map_err(AppError::from)
 }
 
@@ -60,12 +58,7 @@ pub async fn shutdown(State(state): State<AppState>) -> Result<Json<Value>, AppE
 
 /// `GET /api/curfew` → the current curfew settings.
 pub async fn get_curfew(State(state): State<AppState>) -> Json<Curfew> {
-    let curfew = state
-        .curfew
-        .read()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone();
-    Json(curfew)
+    Json(crate::state::recover_read(&state.curfew).clone())
 }
 
 /// `POST /api/curfew` → validate, persist, and hot-apply new curfew settings.
@@ -75,18 +68,14 @@ pub async fn set_curfew(
 ) -> Result<Json<Value>, AppError> {
     new_curfew.validate().map_err(AppError::BadRequest)?;
 
-    // Persist the whole config (curfew changes; port/password are unchanged). File I/O runs
-    // off the async runtime.
-    let persisted = Config {
-        port: state.config.port,
-        password_hash: state.config.password_hash.clone(),
-        curfew: new_curfew.clone(),
-    };
+    // Persist the whole config (only curfew changes; port/password carry over). Cloning the
+    // existing config picks up any future fields automatically. File I/O runs off the runtime.
+    let mut persisted = (*state.config).clone();
+    persisted.curfew = new_curfew.clone();
     tokio::task::spawn_blocking(move || persisted.save())
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("save task failed: {e}")))?
+        .await?
         .map_err(AppError::Internal)?;
 
-    *state.curfew.write().unwrap_or_else(|p| p.into_inner()) = new_curfew;
+    *crate::state::recover_write(&state.curfew) = new_curfew;
     Ok(Json(json!({ "ok": true })))
 }

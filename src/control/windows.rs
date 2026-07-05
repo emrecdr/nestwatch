@@ -35,11 +35,7 @@ impl SystemControl for WindowsControl {
         let rgba = image::RgbaImage::from_raw(width, height, raw)
             .ok_or_else(|| ControlError::Capture("unexpected frame buffer size".into()))?;
 
-        let mut buf = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgba8(rgba)
-            .write_to(&mut buf, image::ImageFormat::Png)
-            .map_err(|e| ControlError::Capture(e.to_string()))?;
-        Ok(buf.into_inner())
+        super::encode_png(image::DynamicImage::ImageRgba8(rgba))
     }
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {
@@ -65,18 +61,18 @@ impl SystemControl for WindowsControl {
     fn kill_process(&self, pid: u32) -> Result<(), ControlError> {
         use sysinfo::{Pid, ProcessesToUpdate, System};
 
+        // Refresh only the target PID rather than walking the whole process table.
+        let target = Pid::from_u32(pid);
         let mut sys = System::new();
-        sys.refresh_processes(ProcessesToUpdate::All, true);
+        sys.refresh_processes(ProcessesToUpdate::Some(&[target]), true);
 
-        match sys.process(Pid::from_u32(pid)) {
-            Some(proc_) => {
-                if proc_.kill() {
-                    Ok(())
-                } else {
-                    Err(ControlError::Op(format!("failed to kill pid {pid}")))
-                }
-            }
-            None => Err(ControlError::ProcessNotFound(pid)),
+        let Some(proc_) = sys.process(target) else {
+            return Err(ControlError::ProcessNotFound(pid));
+        };
+        if proc_.kill() {
+            Ok(())
+        } else {
+            Err(ControlError::Op(format!("failed to kill pid {pid}")))
         }
     }
 

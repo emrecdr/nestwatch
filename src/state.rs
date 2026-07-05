@@ -3,7 +3,7 @@
 //! Each field is an `Arc` so cloning the state (which axum does per request) is cheap and
 //! all handlers share the same controller, config, and login limiter.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::auth::LoginLimiter;
 use crate::config::Config;
@@ -23,4 +23,33 @@ pub struct AppState {
     pub login_lock: Arc<tokio::sync::Mutex<()>>,
     /// Curfew settings, editable at runtime from the dashboard and read by the enforcer.
     pub curfew: Arc<RwLock<Curfew>>,
+}
+
+impl AppState {
+    /// Assemble the shared state from a loaded [`Config`] and a chosen controller. Seeds the
+    /// runtime-editable curfew from the config and installs default login-protection. This is
+    /// the single place the aggregate is built, so `run`, the service, and tests can't drift.
+    pub fn new(control: Arc<dyn SystemControl>, config: Config) -> Self {
+        let curfew = Arc::new(RwLock::new(config.curfew.clone()));
+        Self {
+            control,
+            config: Arc::new(config),
+            limiter: Arc::new(LoginLimiter::default()),
+            login_lock: Arc::new(tokio::sync::Mutex::new(())),
+            curfew,
+        }
+    }
+}
+
+/// Read-lock a curfew (or any) `RwLock`, recovering the inner value if a writer panicked.
+/// The guarded data is always internally consistent, so a poisoned lock is safe to reuse
+/// rather than propagate — a panicked writer must not permanently wedge curfew reads.
+pub fn recover_read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Write-lock counterpart of [`recover_read`].
+pub fn recover_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

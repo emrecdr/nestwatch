@@ -102,16 +102,15 @@ fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
         let have_env = CreateEnvironmentBlock(&mut env_block, Some(primary), false).is_ok();
 
         let mut desktop = to_wide(r"winsta0\default");
-        let mut startup = STARTUPINFOW {
+        // hStdError/hStdInput are left null by `..Default::default()`: the helper writes only
+        // the PNG to stdout, so nothing can corrupt the byte stream.
+        let startup = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
             lpDesktop: PWSTR(desktop.as_mut_ptr()),
             dwFlags: STARTF_USESTDHANDLES,
             hStdOutput: write,
             ..Default::default()
         };
-        // hStdError/hStdInput deliberately left null: the helper writes only the PNG to
-        // stdout, so nothing can corrupt the byte stream.
-        startup.hStdError = HANDLE::default();
 
         let mut cmdline = to_wide(&format!("\"{exe}\" helper --capture-stdout"));
         let mut proc_info = PROCESS_INFORMATION::default();
