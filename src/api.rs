@@ -27,6 +27,7 @@ where
 /// `GET /api/screenshot` → PNG image of the primary monitor.
 pub async fn screenshot(State(state): State<AppState>) -> Result<Response, AppError> {
     let png = blocking(state.control.clone(), |c| c.screenshot_png()).await?;
+    state.audit.record("screenshot_taken", json!({}));
     Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response())
 }
 
@@ -44,6 +45,7 @@ pub async fn kill_process(
     Path(pid): Path<u32>,
 ) -> Result<Json<Value>, AppError> {
     blocking(state.control.clone(), move |c| c.kill_process(pid)).await?;
+    state.audit.record("process_kill", json!({ "pid": pid }));
     Ok(Json(json!({ "ok": true, "pid": pid })))
 }
 
@@ -53,6 +55,7 @@ pub async fn shutdown(State(state): State<AppState>) -> Result<Json<Value>, AppE
         c.shutdown(5, Some("Shutting down (remote request)".into()))
     })
     .await?;
+    state.audit.record("shutdown_issued", json!({}));
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -76,6 +79,18 @@ pub async fn set_curfew(
         .await?
         .map_err(AppError::Internal)?;
 
+    state.audit.record(
+        "curfew_change",
+        json!({ "enabled": new_curfew.enabled, "start": new_curfew.start, "end": new_curfew.end }),
+    );
     *crate::state::recover_write(&state.curfew) = new_curfew;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /api/audit` → the most recent security-audit events (newest first), so the parent can
+/// see logins and their source IP. Read-only; behind `require_auth` like the rest of `/api`.
+pub async fn audit(State(state): State<AppState>) -> Result<Json<Vec<Value>>, AppError> {
+    let audit = state.audit.clone();
+    let events = tokio::task::spawn_blocking(move || audit.recent(200)).await?;
+    Ok(Json(events))
 }

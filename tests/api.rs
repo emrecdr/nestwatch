@@ -2,13 +2,17 @@
 //! backed by `FakeControl`, so they run on any OS with no real side effects — this is the
 //! payoff of the `SystemControl` abstraction.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::{Body, to_bytes};
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 use tower::ServiceExt; // for `oneshot`
 
+use nestwatch::audit::AuditLog;
 use nestwatch::auth::hash_password;
 use nestwatch::config::Config;
 use nestwatch::control::FakeControl;
@@ -18,14 +22,24 @@ use nestwatch::state::AppState;
 const PASSWORD: &str = "test-password";
 
 fn test_state() -> AppState {
-    AppState::new(
+    let mut state = AppState::new(
         Arc::new(FakeControl::new()),
         Config {
             port: 8443,
             password_hash: hash_password(PASSWORD).unwrap(),
             curfew: Default::default(),
         },
-    )
+    );
+    // Tests must never touch the real data dir; keep auditing off.
+    state.audit = Arc::new(AuditLog::disabled());
+    state
+}
+
+/// The router wired with a mock loopback peer, so the LAN-scope gate admits `oneshot`
+/// requests (which carry no real socket). Loopback is on the allowlist.
+fn test_app() -> Router {
+    let state = test_state();
+    build_router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))))
 }
 
 /// POST /login and return the session cookie (`name=value`) on success.
@@ -65,7 +79,7 @@ async fn body_json(res: axum::response::Response) -> Value {
 
 #[tokio::test]
 async fn api_requires_auth() {
-    let app = build_router(test_state());
+    let app = test_app();
     let res = app
         .oneshot(
             Request::builder()
@@ -80,13 +94,13 @@ async fn api_requires_auth() {
 
 #[tokio::test]
 async fn wrong_password_is_rejected() {
-    let app = build_router(test_state());
+    let app = test_app();
     assert!(login(&app, "not-the-password").await.is_none());
 }
 
 #[tokio::test]
 async fn session_endpoint_reflects_auth_state() {
-    let app = build_router(test_state());
+    let app = test_app();
 
     // Anonymous.
     let res = app
@@ -118,7 +132,7 @@ async fn session_endpoint_reflects_auth_state() {
 
 #[tokio::test]
 async fn screenshot_returns_png() {
-    let app = build_router(test_state());
+    let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();
 
     let res = app
@@ -143,7 +157,7 @@ async fn screenshot_returns_png() {
 
 #[tokio::test]
 async fn curfew_get_and_validation() {
-    let app = build_router(test_state());
+    let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();
 
     // GET returns the default (disabled) curfew.
@@ -182,7 +196,7 @@ async fn curfew_get_and_validation() {
 
 #[tokio::test]
 async fn processes_list_then_kill() {
-    let app = build_router(test_state());
+    let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();
 
     // List includes a known fake process.
@@ -234,4 +248,32 @@ async fn processes_list_then_kill() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn off_lan_client_is_forbidden() {
+    // A public source IP must be rejected by the app itself, before auth — even for the
+    // login page — so a missing firewall rule doesn't equal exposure.
+    let app = build_router(test_state())
+        .layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 5555))));
+    let res = app
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn security_headers_are_present() {
+    let res = test_app()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let h = res.headers();
+    assert!(
+        h.get(header::CONTENT_SECURITY_POLICY).is_some(),
+        "CSP present"
+    );
+    assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
+    assert_eq!(h.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
 }

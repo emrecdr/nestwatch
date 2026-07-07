@@ -147,6 +147,41 @@
               </div>
             </div>
           </section>
+
+          <!-- Recent access -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Recent access</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadAudit()" :disabled="loadingAudit">
+                  <span x-show="loadingAudit" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Logins and actions on this PC, newest first. Watch for a sign-in you don't recognise.
+              </p>
+              <div class="mt-2 max-h-72 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Time</th><th>Event</th><th>Source</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(e, i) in audit" :key="i">
+                      <tr :class="e.event === 'auth_failure' ? 'text-error' : ''">
+                        <td class="whitespace-nowrap" x-text="fmtTime(e.ts)"></td>
+                        <td x-text="e.event"></td>
+                        <td class="whitespace-nowrap" x-text="e.src_ip || '—'"></td>
+                      </tr>
+                    </template>
+                    <template x-if="audit.length === 0 && !loadingAudit">
+                      <tr><td colspan="3" class="text-center opacity-50">No events yet</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
         </main>
       </div>
     </template>
@@ -204,6 +239,8 @@
           confirmShutdown: false,
           curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60 },
           savingCurfew: false,
+          audit: [],
+          loadingAudit: false,
           toasts: [],
 
           async init() {
@@ -217,6 +254,7 @@
             if (this.authed) {
               this.loadProcesses();
               this.loadCurfew();
+              this.loadAudit();
             }
           },
 
@@ -263,6 +301,7 @@
                 this.authed = true;
                 this.loadProcesses();
                 this.loadCurfew();
+                this.loadAudit();
               } else if (r.status === 429) {
                 this.loginError = "Too many attempts — wait a minute and try again.";
               } else {
@@ -345,6 +384,25 @@
             const cls = { success: "alert-success", error: "alert-error", info: "alert-info" }[kind] || "alert-info";
             this.toasts.push({ id, msg, cls });
             setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, 3500);
+          },
+
+          async loadAudit() {
+            this.loadingAudit = true;
+            try {
+              const r = await fetch("/api/audit");
+              if (r.status === 401) { this.authed = false; return; }
+              if (r.ok) this.audit = await r.json();
+            } catch {
+              this.toast("Failed to load access log", "error");
+            } finally {
+              this.loadingAudit = false;
+            }
+          },
+
+          fmtTime(ts) {
+            if (!ts) return "—";
+            const d = new Date(ts);
+            return isNaN(d.getTime()) ? ts : d.toLocaleString();
           },
 
           fmtBytes(b) {

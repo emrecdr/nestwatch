@@ -63,6 +63,24 @@ to work:
   antivirus and destabilize the machine. The service is visible in Task Manager; it just
   can't be stopped without admin rights.
 
+## Security
+
+The goal is simple: **only the parent, from a device on the home LAN, can reach the controls,
+and every access is logged.** In addition to the tamper-resistance above, that means:
+
+- **Two network gates** — the Windows Firewall rule (LocalSubnet only, checked at install)
+  *and* an app-layer allowlist that rejects any off-LAN client, so a missing firewall rule
+  doesn't equal exposure.
+- **Per-IP login throttling** — a stranger spamming wrong passwords throttles only themselves,
+  never locks the parent out.
+- **HTTPS with a verifiable fingerprint**, strict browser security headers, and Argon2id
+  password hashing.
+- **An access log** — logins (with source IP) and sensitive actions are recorded and shown in
+  the dashboard's *Recent access* panel, so an unfamiliar sign-in is visible.
+
+See [`docs/SECURITY.md`](docs/SECURITY.md) for the full threat model, the trust boundaries, and
+how to verify your install.
+
 ## Build
 
 ```bash
@@ -123,5 +141,5 @@ step-by-step on-device checklist.
 
 ## Not included (by design)
 
-Live screen streaming, keylogging/covert monitoring, multi-machine hub, audit logs. The
-`SystemControl` trait leaves room to add live streaming later without touching the web layer.
+Live screen streaming, keylogging/covert monitoring, multi-machine hub. The `SystemControl`
+trait leaves room to add live streaming later without touching the web layer.

@@ -24,7 +24,7 @@ use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
 use crate::state::AppState;
-use crate::{api, auth, cert, config, web};
+use crate::{api, auth, cert, config, security, web};
 
 /// Build the full application router. Kept separate from [`serve`] so tests can drive it
 /// directly without binding a socket or setting up TLS.
@@ -44,6 +44,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/processes/{pid}/kill", post(api::kill_process))
         .route("/shutdown", post(api::shutdown))
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
+        .route("/audit", get(api::audit))
         .route_layer(middleware::from_fn(auth::require_auth));
 
     Router::new()
@@ -54,6 +55,11 @@ pub fn build_router(state: AppState) -> Router {
         .nest("/api", api)
         .fallback(web::static_handler)
         .layer(session_layer)
+        // Reject off-LAN clients before any session/auth work…
+        .layer(middleware::from_fn(security::require_lan_peer))
+        // …and stamp security headers on every response (outermost, so even the 403 above
+        // and 404s carry them).
+        .layer(middleware::map_response(security::set_security_headers))
         .with_state(state)
 }
 
@@ -91,7 +97,10 @@ pub async fn serve_with_handle(
     tracing::info!("listening on https://0.0.0.0:{port} (reach it at https://<this-pc>:{port})");
     axum_server::bind_rustls(addr, tls)
         .handle(handle)
-        .serve(router.into_make_service())
+        // `_with_connect_info` populates `ConnectInfo<SocketAddr>` so the LAN gate, per-IP
+        // login limiter, and audit log can see the true peer address. `Handle<SocketAddr>`
+        // is unchanged.
+        .serve(router.into_make_service_with_connect_info::<SocketAddr>())
         .await?;
     Ok(())
 }

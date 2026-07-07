@@ -10,6 +10,7 @@
 //! Everything above `control` is OS-agnostic and runs (and is tested) on any platform.
 
 pub mod api;
+pub mod audit;
 pub mod auth;
 pub mod cert;
 pub mod config;
@@ -18,6 +19,7 @@ pub mod curfew;
 pub mod error;
 pub mod helper;
 pub mod install;
+pub mod security;
 pub mod server;
 pub mod state;
 pub mod web;

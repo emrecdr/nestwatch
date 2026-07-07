@@ -303,7 +303,11 @@ fn delete_firewall_rule() {
         .status();
 }
 
-/// Recreate an inbound TCP rule scoped to the local subnet on Private/Domain networks.
+/// Recreate an inbound TCP rule scoped to the local subnet on Private/Domain networks, then
+/// read it back to confirm it applied. Non-fatal: the app-layer LAN allowlist
+/// (`security::require_lan_peer`) is the actual guarantee that off-LAN clients are rejected, so
+/// a firewall hiccup degrades defense-in-depth but never leaves the controls exposed. We still
+/// warn loudly so the parent can fix it.
 #[cfg(windows)]
 fn configure_firewall(port: u16) -> Result<()> {
     use std::process::Command;
@@ -320,9 +324,25 @@ fn configure_firewall(port: u16) -> Result<()> {
         .status()
         .context("running netsh")?;
     if !status.success() {
-        // Non-fatal: warn loudly rather than abort, since the app still runs locally.
         println!(
-            "WARNING: could not add firewall rule (netsh exited {status}); remote access may be blocked."
+            "WARNING: could not add firewall rule (netsh exited {status}); the app-layer LAN \
+             allowlist still applies, but remote access may be blocked."
+        );
+        return Ok(());
+    }
+
+    // Read the rule back and confirm it carries the LocalSubnet scope. `LocalSubnet` is a value
+    // token, not a localized label, so this check is locale-independent.
+    let shown = Command::new("netsh")
+        .args(["advfirewall", "firewall", "show", "rule"])
+        .arg(format!("name={FIREWALL_RULE}"))
+        .output();
+    let scoped =
+        matches!(shown, Ok(out) if String::from_utf8_lossy(&out.stdout).contains("LocalSubnet"));
+    if !scoped {
+        println!(
+            "WARNING: firewall rule '{FIREWALL_RULE}' did not read back with a LocalSubnet \
+             scope; verify it in 'Windows Defender Firewall with Advanced Security'."
         );
     }
     Ok(())

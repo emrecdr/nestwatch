@@ -2,9 +2,11 @@
 //! to disk. This lives in its own test binary so its `NESTWATCH_DATA_DIR` override runs in a
 //! separate process and can't affect (or be affected by) the other integration tests.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Body;
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
@@ -33,7 +35,8 @@ async fn valid_curfew_persists_and_updates_state() {
         },
     );
     let curfew_handle = state.curfew.clone();
-    let app = build_router(state);
+    // Mock loopback peer so the LAN-scope gate admits the oneshot request.
+    let app = build_router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))));
 
     // Log in.
     let res = app

@@ -6,14 +6,16 @@
 //! fingerprint so you can verify it once (trust-on-first-use).
 //!
 //! Certs include the machine hostname and its primary LAN IP as SANs (so connecting by IP
-//! doesn't add a name-mismatch error on top of the trust warning) and are valid for ~10
-//! years (so they don't silently expire).
+//! doesn't add a name-mismatch error on top of the trust warning). Validity is capped at
+//! 825 days: Apple (Safari/iOS) hard-rejects any server cert with a longer lifetime — even
+//! a manually trusted one — with no click-through, so a longer cert would be unusable on an
+//! iPhone/Mac. `install` regenerates the cert, so this window is refreshed on every reinstall.
 
 use std::net::UdpSocket;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rcgen::{CertificateParams, KeyPair};
+use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair};
 use sha2::{Digest, Sha256};
 
 /// Ensure a cert/key pair exists, generating one if absent. Used by the server at startup.
@@ -42,8 +44,10 @@ pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
 
     let key_pair = KeyPair::generate().context("generating key pair")?;
     let mut params = CertificateParams::new(sans).context("building certificate params")?;
-    // ~10 years, so the cert doesn't silently expire on a long-lived install.
-    params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(3650);
+    // 825-day cap — the longest Apple will accept for a TLS server cert (see module docs).
+    params.not_after = time::OffsetDateTime::now_utc() + time::Duration::days(825);
+    // Apple also requires the serverAuth EKU on TLS server certs; rcgen omits it by default.
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
 
     let cert = params
         .self_signed(&key_pair)

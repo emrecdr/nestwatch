@@ -5,6 +5,7 @@
 
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+use crate::audit::AuditLog;
 use crate::auth::LoginLimiter;
 use crate::config::Config;
 use crate::control::SystemControl;
@@ -23,6 +24,8 @@ pub struct AppState {
     pub login_lock: Arc<tokio::sync::Mutex<()>>,
     /// Curfew settings, editable at runtime from the dashboard and read by the enforcer.
     pub curfew: Arc<RwLock<Curfew>>,
+    /// Append-only security audit log (login attempts + sensitive actions).
+    pub audit: Arc<AuditLog>,
 }
 
 impl AppState {
@@ -31,12 +34,16 @@ impl AppState {
     /// the single place the aggregate is built, so `run`, the service, and tests can't drift.
     pub fn new(control: Arc<dyn SystemControl>, config: Config) -> Self {
         let curfew = Arc::new(RwLock::new(config.curfew.clone()));
+        let audit = Arc::new(AuditLog::new(
+            crate::config::data_paths().dir.join("audit.jsonl"),
+        ));
         Self {
             control,
             config: Arc::new(config),
             limiter: Arc::new(LoginLimiter::default()),
             login_lock: Arc::new(tokio::sync::Mutex::new(())),
             curfew,
+            audit,
         }
     }
 }
