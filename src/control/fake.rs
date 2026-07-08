@@ -90,4 +90,9 @@ impl SystemControl for FakeControl {
         tracing::info!("[fake] abort_shutdown (no-op on this platform)");
         Ok(())
     }
+
+    fn lock_workstation(&self) -> Result<(), ControlError> {
+        tracing::info!("[fake] lock_workstation (no-op on this platform)");
+        Ok(())
+    }
 }

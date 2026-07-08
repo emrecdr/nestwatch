@@ -54,6 +54,10 @@ pub trait SystemControl: Send + Sync + 'static {
     /// Terminate the process with the given PID.
     fn kill_process(&self, pid: u32) -> Result<(), ControlError>;
 
+    /// Lock the interactive session (require the user's password to resume). Softer than a
+    /// shutdown: nothing is powered off and no work is lost.
+    fn lock_workstation(&self) -> Result<(), ControlError>;
+
     /// Begin an orderly shutdown of the machine after `delay_secs`, optionally showing the
     /// user a warning `message` during the countdown.
     fn shutdown(&self, delay_secs: u32, message: Option<String>) -> Result<(), ControlError>;

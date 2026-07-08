@@ -10,6 +10,10 @@
 //!     GET  /api/processes
 //!     POST /api/processes/{pid}/kill
 //!     POST /api/shutdown
+//!     POST /api/lock
+//!     GET  POST /api/curfew
+//!     GET  /api/audit
+//!     POST /api/password
 //!   *                           embedded static assets (fallback)
 //! ```
 
@@ -43,8 +47,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/processes", get(api::list_processes))
         .route("/processes/{pid}/kill", post(api::kill_process))
         .route("/shutdown", post(api::shutdown))
+        .route("/lock", post(api::lock))
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
         .route("/audit", get(api::audit))
+        .route("/password", post(api::change_password))
         .route_layer(middleware::from_fn(auth::require_auth));
 
     Router::new()

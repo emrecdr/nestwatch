@@ -57,6 +57,11 @@ Run through it once on his PC after installing.
       problem (see Troubleshooting).
 - [ ] **Running apps** lists real processes, heaviest first.
 - [ ] Open Notepad on his PC → Refresh → it appears → **Kill** it → it closes; the row disappears.
+- [ ] **Lock** (navbar 🔒) → his screen locks to the sign-in prompt (password to resume). This
+      exercises the session-helper lock (`helper --lock` launched into his session) — a Session-0
+      service can't lock the desktop directly, so if nothing happens see Troubleshooting.
+- [ ] **Live** toggle on the Screen card → the screenshot refreshes every few seconds without
+      clicking; toggling it off (or logging out) stops the refresh.
 - [ ] **Shut down** → Windows shows a countdown notification, then the PC powers off.
 
 ## E. Curfew (the enforcement feature)
@@ -94,6 +99,9 @@ Run through it once on his PC after installing.
   both devices are on the same subnet (the rule is `remoteip=LocalSubnet`).
 - **Screenshot is black / "no active console session"** → no user is logged in at the physical
   console (RDP / fast-user-switching / lock screen aren't captured). Log in at the machine.
+- **Lock does nothing under the service** → same root cause as a black screenshot: the lock is
+  launched into the active console session via the helper, so it needs a user logged in at the
+  physical console. (In dev `run` mode it locks directly.)
 - **Install fails "icacls … refusing to continue"** → run from an elevated console; the ACL step
   is intentionally fatal so a half-hardened install never claims success.
 - **`sc stop` works as him** → his account is an administrator. Make it a standard user

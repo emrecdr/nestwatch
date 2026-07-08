@@ -33,3 +33,12 @@ pub fn capture_to_file(path: &str) -> Result<()> {
     std::fs::write(path, png).with_context(|| format!("writing screenshot to {path}"))?;
     Ok(())
 }
+
+/// Lock the interactive session. Launched by the service as `helper --lock` inside the user's
+/// session (see `crate::session::lock_active_session`), so `LockWorkStation` locks that desktop.
+pub fn lock() -> Result<()> {
+    crate::control::interactive_control()
+        .lock_workstation()
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
+        .context("lock failed")
+}

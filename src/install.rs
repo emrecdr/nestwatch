@@ -46,8 +46,11 @@ pub fn install() -> Result<()> {
             pw
         }
     };
-    if password.chars().count() < 10 {
-        bail!("please choose a password of at least 10 characters (a passphrase is ideal)");
+    if password.chars().count() < auth::MIN_PASSWORD_LEN {
+        bail!(
+            "please choose a password of at least {} characters (a passphrase is ideal)",
+            auth::MIN_PASSWORD_LEN
+        );
     }
 
     let paths = config::data_paths();

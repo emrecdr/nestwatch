@@ -32,6 +32,12 @@ impl SystemControl for ServiceControl {
         self.inner.kill_process(pid)
     }
 
+    fn lock_workstation(&self) -> Result<(), ControlError> {
+        // A Session-0 process can't lock the interactive desktop directly (same reason
+        // screenshots need the helper), so launch the lock inside the user's session.
+        crate::session::lock_active_session()
+    }
+
     fn shutdown(&self, delay_secs: u32, message: Option<String>) -> Result<(), ControlError> {
         self.inner.shutdown(delay_secs, message)
     }

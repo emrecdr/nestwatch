@@ -76,8 +76,9 @@ fn run_helper(args: &[String]) -> Result<()> {
                 std::process::exit(2);
             }
         },
+        Some("--lock") => helper::lock(),
         _ => {
-            eprintln!("usage: nestwatch helper --capture-stdout | --capture <path>");
+            eprintln!("usage: nestwatch helper --capture-stdout | --capture <path> | --lock");
             std::process::exit(2);
         }
     }

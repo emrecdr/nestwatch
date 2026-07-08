@@ -76,6 +76,22 @@ impl SystemControl for WindowsControl {
         }
     }
 
+    fn lock_workstation(&self) -> Result<(), ControlError> {
+        // Shell out (dependency-free, no FFI) — this locks the session of the *calling*
+        // process. When invoked directly it locks the current desktop; under the SYSTEM
+        // service it is launched inside the user's session by the helper (see
+        // `service_control` + `session::lock_active_session`).
+        let status = std::process::Command::new("rundll32")
+            .arg("user32.dll,LockWorkStation")
+            .status()
+            .map_err(|e| ControlError::Op(e.to_string()))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(ControlError::Op(format!("lock exited with {status}")))
+        }
+    }
+
     fn shutdown(&self, delay_secs: u32, message: Option<String>) -> Result<(), ControlError> {
         // `/t N` gives Windows' own countdown; `/c "msg"` shows the user a reason.
         let delay = delay_secs.to_string();

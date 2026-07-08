@@ -6,7 +6,9 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 use serde_json::{Value, json};
+use tower_sessions::Session;
 
 use crate::config::Config;
 use crate::control::{ProcessInfo, SystemControl};
@@ -81,6 +83,13 @@ pub async fn shutdown(State(state): State<AppState>) -> Result<Json<Value>, AppE
     Ok(Json(json!({ "ok": true })))
 }
 
+/// `POST /api/lock` → lock the screen (softer than shutdown; password to resume).
+pub async fn lock(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    blocking(state.control.clone(), |c| c.lock_workstation()).await?;
+    state.audit.record("lock_issued", json!({}));
+    Ok(Json(json!({ "ok": true })))
+}
+
 /// `GET /api/curfew` → the current curfew settings.
 pub async fn get_curfew(State(state): State<AppState>) -> Json<Curfew> {
     Json(crate::state::recover_read(&state.config).curfew.clone())
@@ -105,4 +114,57 @@ pub async fn audit(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Ap
     let audit = state.audit.clone();
     let events = tokio::task::spawn_blocking(move || audit.recent(200)).await?;
     Ok(Json(events))
+}
+
+#[derive(Deserialize)]
+pub struct PasswordChange {
+    current: String,
+    new: String,
+}
+
+/// `POST /api/password` → verify the current password, then set a new one (Argon2id re-hash,
+/// persisted). Lets the parent rotate the password without re-running `install`.
+///
+/// Session policy: the current session stays valid (its id is rotated defensively); other
+/// sessions are not revoked — `MemoryStore` has no principal-scoped revocation and there is a
+/// single parent, so global revocation buys nothing here.
+pub async fn change_password(
+    State(state): State<AppState>,
+    session: Session,
+    Json(body): Json<PasswordChange>,
+) -> Result<Json<Value>, AppError> {
+    if body.new.chars().count() < crate::auth::MIN_PASSWORD_LEN {
+        return Err(AppError::BadRequest(format!(
+            "new password must be at least {} characters",
+            crate::auth::MIN_PASSWORD_LEN
+        )));
+    }
+
+    // Verify the current password off the async runtime (Argon2 is memory-hard).
+    let current_hash = crate::state::recover_read(&state.config)
+        .password_hash
+        .clone();
+    let candidate = body.current;
+    let ok = tokio::task::spawn_blocking(move || {
+        crate::auth::verify_password(&candidate, &current_hash)
+    })
+    .await?;
+    if !ok {
+        state
+            .audit
+            .record("password_change_failed", json!({ "reason": "bad_current" }));
+        return Err(AppError::Unauthorized);
+    }
+
+    // Hash the new password off the runtime, then persist via the single-source helper.
+    let new_pw = body.new;
+    let new_hash = tokio::task::spawn_blocking(move || crate::auth::hash_password(&new_pw))
+        .await?
+        .map_err(AppError::Internal)?;
+    update_config(&state, |c| c.password_hash = new_hash).await?;
+
+    // Rotate this session's id (defensive), keeping the parent logged in.
+    session.cycle_id().await?;
+    state.audit.record("password_changed", json!({}));
+    Ok(Json(json!({ "ok": true })))
 }

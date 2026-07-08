@@ -57,20 +57,21 @@ fn cap(context: &str, e: impl std::fmt::Display) -> ControlError {
     ControlError::Capture(format!("{context}: {e}"))
 }
 
-/// Launch `<exe> helper --capture-stdout` in the active console session with stdout wired to
-/// a pipe, and return the PNG bytes it writes.
-fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
-    // SAFETY: Win32 token/pipe/process FFI. Every handle acquired is released on all paths
-    // (the read end is handed to a File which closes it on drop).
+/// Acquire a **primary token** for the user in the active console session, so a Session-0
+/// process can `CreateProcessAsUserW` into their desktop. The caller owns the returned handle
+/// and must `CloseHandle` it. Errors are returned as plain strings so each caller can wrap
+/// them in the right [`ControlError`] variant.
+///
+/// SAFETY: Win32 token FFI; the intermediate `user_token` is always closed before returning.
+unsafe fn active_session_token() -> Result<HANDLE, String> {
     unsafe {
         let session_id = WTSGetActiveConsoleSessionId();
         if session_id == u32::MAX {
-            return Err(ControlError::Capture("no active console session".into()));
+            return Err("no active console session".into());
         }
-
-        // Token of the user in the console session, duplicated to a primary token.
         let mut user_token = HANDLE::default();
-        WTSQueryUserToken(session_id, &mut user_token).map_err(|e| cap("WTSQueryUserToken", e))?;
+        WTSQueryUserToken(session_id, &mut user_token)
+            .map_err(|e| format!("WTSQueryUserToken: {e}"))?;
         let mut primary = HANDLE::default();
         let dup = DuplicateTokenEx(
             user_token,
@@ -81,7 +82,70 @@ fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
             &mut primary,
         );
         let _ = CloseHandle(user_token);
-        dup.map_err(|e| cap("DuplicateTokenEx", e))?;
+        dup.map_err(|e| format!("DuplicateTokenEx: {e}"))?;
+        Ok(primary)
+    }
+}
+
+/// Lock the interactive session from the SYSTEM service by launching `<exe> helper --lock`
+/// inside the active console session (a Session-0 process can't lock the user's desktop
+/// directly). Fire-and-forget: the helper runs `LockWorkStation` and exits.
+pub fn lock_active_session() -> Result<(), ControlError> {
+    let exe = std::env::current_exe().map_err(|e| ControlError::Op(e.to_string()))?;
+    spawn_lock(&exe.to_string_lossy())
+}
+
+fn spawn_lock(exe: &str) -> Result<(), ControlError> {
+    // SAFETY: Win32 token/process FFI; every handle acquired is released on all paths.
+    unsafe {
+        let primary = active_session_token().map_err(ControlError::Op)?;
+
+        let mut env_block: *mut core::ffi::c_void = std::ptr::null_mut();
+        let have_env = CreateEnvironmentBlock(&mut env_block, Some(primary), false).is_ok();
+
+        let mut desktop = to_wide(r"winsta0\default");
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            lpDesktop: PWSTR(desktop.as_mut_ptr()),
+            ..Default::default()
+        };
+
+        let mut cmdline = to_wide(&format!("\"{exe}\" helper --lock"));
+        let mut proc_info = PROCESS_INFORMATION::default();
+        let spawn = CreateProcessAsUserW(
+            Some(primary),
+            None,
+            Some(PWSTR(cmdline.as_mut_ptr())),
+            None::<*const SECURITY_ATTRIBUTES>,
+            None::<*const SECURITY_ATTRIBUTES>,
+            false, // no inherited handles (no pipe)
+            CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            if have_env { Some(env_block) } else { None },
+            None,
+            &startup,
+            &mut proc_info,
+        );
+
+        if have_env {
+            let _ = DestroyEnvironmentBlock(env_block);
+        }
+        let _ = CloseHandle(primary);
+
+        spawn.map_err(|e| ControlError::Op(format!("CreateProcessAsUserW: {e}")))?;
+        // The helper is short-lived; we don't wait on it. Closing our handles doesn't stop it.
+        let _ = CloseHandle(proc_info.hProcess);
+        let _ = CloseHandle(proc_info.hThread);
+        Ok(())
+    }
+}
+
+/// Launch `<exe> helper --capture-stdout` in the active console session with stdout wired to
+/// a pipe, and return the PNG bytes it writes.
+fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
+    // SAFETY: Win32 token/pipe/process FFI. Every handle acquired is released on all paths
+    // (the read end is handed to a File which closes it on drop).
+    unsafe {
+        let primary = active_session_token().map_err(ControlError::Capture)?;
 
         // Pipe: child inherits the write end; parent keeps the (non-inheritable) read end.
         let sa = SECURITY_ATTRIBUTES {

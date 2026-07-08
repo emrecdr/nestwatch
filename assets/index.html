@@ -55,6 +55,7 @@
         <div class="navbar bg-base-100 shadow">
           <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
           <div class="flex-none gap-2">
+            <button class="btn btn-info btn-sm" @click="doLock()">🔒 Lock</button>
             <button class="btn btn-warning btn-sm" @click="confirmShutdown = true">⏻ Shut down</button>
             <button class="btn btn-ghost btn-sm" @click="logout()">Log out</button>
           </div>
@@ -66,10 +67,17 @@
             <div class="card-body">
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">Screen</h2>
-                <button class="btn btn-primary btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
-                  <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
-                  Take screenshot
-                </button>
+                <div class="flex items-center gap-2">
+                  <label class="label cursor-pointer gap-2 py-0">
+                    <span class="label-text text-xs">Live</span>
+                    <input type="checkbox" class="toggle toggle-primary toggle-sm"
+                           x-model="autoRefresh" @change="toggleAutoRefresh()" />
+                  </label>
+                  <button class="btn btn-primary btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
+                    <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
+                    Take screenshot
+                  </button>
+                </div>
               </div>
               <div class="mt-2 flex min-h-48 items-center justify-center rounded-lg bg-base-300">
                 <template x-if="!shotUrl && !loadingShot">
@@ -182,6 +190,29 @@
               </div>
             </div>
           </section>
+
+          <!-- Change password -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <h2 class="card-title text-base">Change password</h2>
+              <p class="text-sm opacity-70">Update the control password without reinstalling.</p>
+              <div class="mt-2 flex flex-wrap items-end gap-3">
+                <label class="form-control">
+                  <span class="label-text mb-1">Current</span>
+                  <input type="password" x-model="pwCurrent" class="input input-bordered" placeholder="••••••••" />
+                </label>
+                <label class="form-control">
+                  <span class="label-text mb-1">New</span>
+                  <input type="password" x-model="pwNew" class="input input-bordered" placeholder="at least 10 chars" />
+                </label>
+                <button class="btn btn-primary" @click="changePassword()"
+                        :disabled="savingPw || !pwCurrent || !pwNew">
+                  <span x-show="savingPw" class="loading loading-spinner loading-sm"></span>
+                  Update
+                </button>
+              </div>
+            </div>
+          </section>
         </main>
       </div>
     </template>
@@ -235,12 +266,18 @@
           loadingProcs: false,
           shotUrl: null,
           loadingShot: false,
+          autoRefresh: false,
+          _shotTimer: null,
+          _refreshMs: 3000,
           killTarget: null,
           confirmShutdown: false,
           curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60 },
           savingCurfew: false,
           audit: [],
           loadingAudit: false,
+          pwCurrent: "",
+          pwNew: "",
+          savingPw: false,
           toasts: [],
 
           async init() {
@@ -315,6 +352,7 @@
           },
 
           async logout() {
+            this.stopAutoRefresh();
             await fetch("/logout", { method: "POST" });
             this.authed = false;
             this.processes = [];
@@ -334,20 +372,34 @@
             }
           },
 
-          async takeScreenshot() {
-            this.loadingShot = true;
+          async takeScreenshot(silent = false) {
+            if (!silent) this.loadingShot = true;
             try {
               const r = await fetch("/api/screenshot");
-              if (r.status === 401) { this.authed = false; return; }
+              if (r.status === 401) { this.authed = false; this.stopAutoRefresh(); return; }
               if (!r.ok) throw new Error();
               const blob = await r.blob();
               if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
               this.shotUrl = URL.createObjectURL(blob);
             } catch {
-              this.toast("Screenshot failed", "error");
+              if (!silent) this.toast("Screenshot failed", "error");
             } finally {
-              this.loadingShot = false;
+              if (!silent) this.loadingShot = false;
             }
+          },
+
+          toggleAutoRefresh() {
+            if (this.autoRefresh) {
+              this.takeScreenshot();
+              this._shotTimer = setInterval(() => this.takeScreenshot(true), this._refreshMs);
+            } else {
+              this.stopAutoRefresh();
+            }
+          },
+
+          stopAutoRefresh() {
+            if (this._shotTimer) { clearInterval(this._shotTimer); this._shotTimer = null; }
+            this.autoRefresh = false;
           },
 
           askKill(p) { this.killTarget = p; },
@@ -376,6 +428,41 @@
               this.toast(r.ok ? "Shutting down…" : "Shutdown failed", r.ok ? "success" : "error");
             } catch {
               this.toast("Shutdown request failed", "error");
+            }
+          },
+
+          async doLock() {
+            try {
+              const r = await fetch("/api/lock", { method: "POST" });
+              this.toast(r.ok ? "Screen locked" : "Lock failed", r.ok ? "success" : "error");
+            } catch {
+              this.toast("Lock request failed", "error");
+            }
+          },
+
+          async changePassword() {
+            this.savingPw = true;
+            try {
+              const r = await fetch("/api/password", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ current: this.pwCurrent, new: this.pwNew }),
+              });
+              if (r.ok) {
+                this.toast("Password changed", "success");
+                this.pwCurrent = "";
+                this.pwNew = "";
+              } else if (r.status === 401) {
+                this.toast("Current password is wrong", "error");
+              } else if (r.status === 400) {
+                this.toast("New password too short (min 10)", "error");
+              } else {
+                this.toast("Could not change password", "error");
+              }
+            } catch {
+              this.toast("Password request failed", "error");
+            } finally {
+              this.savingPw = false;
             }
           },
 

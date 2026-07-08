@@ -277,3 +277,83 @@ async fn security_headers_are_present() {
     assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
     assert_eq!(h.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
 }
+
+#[tokio::test]
+async fn lock_endpoint_ok() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/lock")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["ok"], json!(true));
+}
+
+// Helper: POST /api/password with the given body, returning the response.
+async fn post_password(app: &Router, cookie: &str, body: Value) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/password")
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn password_change_requires_auth() {
+    // No cookie → blocked by require_auth before the handler runs.
+    let res = test_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/password")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "current": PASSWORD, "new": "a-brand-new-pass" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn password_change_rejects_wrong_current() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let res = post_password(
+        &app,
+        &cookie,
+        json!({ "current": "not-the-password", "new": "a-brand-new-pass" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn password_change_rejects_short_new() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let res = post_password(
+        &app,
+        &cookie,
+        json!({ "current": PASSWORD, "new": "short" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}

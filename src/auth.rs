@@ -22,6 +22,9 @@ use crate::state::AppState;
 /// Session key holding the "logged in" flag.
 const AUTH_KEY: &str = "authenticated";
 
+/// Minimum control-password length, enforced at install and on password change.
+pub const MIN_PASSWORD_LEN: usize = 10;
+
 // ---------------------------------------------------------------------------
 // Password hashing (Argon2id)
 // ---------------------------------------------------------------------------
