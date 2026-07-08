@@ -67,7 +67,13 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
-      - run: cargo audit
+      # Assessed-and-accepted transitive advisories: quick-xml RUSTSEC-2026-0194/-0195
+      # (DoS parsing untrusted XML) are reachable only through xcap's Linux/Wayland backend,
+      # which is never compiled — xcap is a Windows-only dependency and its Windows backend
+      # doesn't use quick-xml, so quick-xml only appears in Cargo.lock, never in a build. The
+      # app also parses no untrusted XML. Everything else (incl. the paste "unmaintained"
+      # warning) is still reported.
+      - run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
 
   # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push).
   windows-release:
