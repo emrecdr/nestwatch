@@ -132,17 +132,53 @@
                 <input type="checkbox" class="toggle toggle-warning" x-model="curfew.enabled" />
               </div>
               <p class="text-sm opacity-70">
-                When the PC is on during this window, it shuts down (with a warning countdown).
+                When the PC is on during a closed window, it shuts down (with a warning countdown).
               </p>
-              <div class="mt-2 flex flex-wrap items-end gap-3">
-                <label class="form-control">
-                  <span class="label-text mb-1">From</span>
-                  <input type="time" x-model="curfew.start" class="input input-bordered" />
-                </label>
-                <label class="form-control">
-                  <span class="label-text mb-1">Until</span>
-                  <input type="time" x-model="curfew.end" class="input input-bordered" />
-                </label>
+
+              <!-- Simple single window (shown until you add day-specific schedules) -->
+              <template x-if="!curfew.windows || curfew.windows.length === 0">
+                <div class="mt-2 flex flex-wrap items-end gap-3">
+                  <label class="form-control">
+                    <span class="label-text mb-1">From</span>
+                    <input type="time" x-model="curfew.start" class="input input-bordered" />
+                  </label>
+                  <label class="form-control">
+                    <span class="label-text mb-1">Until</span>
+                    <input type="time" x-model="curfew.end" class="input input-bordered" />
+                  </label>
+                </div>
+              </template>
+
+              <!-- Per-day schedules (authoritative when present) -->
+              <template x-if="curfew.windows && curfew.windows.length > 0">
+                <div class="mt-2 flex flex-col gap-3">
+                  <template x-for="(w, i) in curfew.windows" :key="i">
+                    <div class="flex flex-wrap items-end gap-2 rounded-lg bg-base-200 p-2">
+                      <label class="form-control">
+                        <span class="label-text mb-1 text-xs">From</span>
+                        <input type="time" x-model="w.start" class="input input-bordered input-sm" />
+                      </label>
+                      <label class="form-control">
+                        <span class="label-text mb-1 text-xs">Until</span>
+                        <input type="time" x-model="w.end" class="input input-bordered input-sm" />
+                      </label>
+                      <div class="flex items-end gap-1">
+                        <template x-for="d in ['mon','tue','wed','thu','fri','sat','sun']" :key="d">
+                          <label class="flex flex-col items-center text-xs">
+                            <span class="uppercase opacity-70" x-text="d[0]"></span>
+                            <input type="checkbox" class="checkbox checkbox-xs" x-model="w.days[d]" />
+                          </label>
+                        </template>
+                      </div>
+                      <button class="btn btn-ghost btn-xs" @click="removeWindow(i)">✕</button>
+                    </div>
+                  </template>
+                  <p class="text-xs opacity-60">No day selected = every day.</p>
+                </div>
+              </template>
+
+              <div class="mt-3 flex flex-wrap items-end gap-3">
+                <button class="btn btn-ghost btn-sm" @click="addWindow()">+ Add day schedule</button>
                 <label class="form-control">
                   <span class="label-text mb-1">Warning (sec)</span>
                   <input type="number" min="0" max="600" x-model.number="curfew.warn_secs"
@@ -271,7 +307,7 @@
           _refreshMs: 3000,
           killTarget: null,
           confirmShutdown: false,
-          curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60 },
+          curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60, windows: [] },
           savingCurfew: false,
           audit: [],
           loadingAudit: false,
@@ -298,8 +334,23 @@
           async loadCurfew() {
             try {
               const r = await fetch("/api/curfew");
-              if (r.ok) this.curfew = await r.json();
+              if (r.ok) {
+                this.curfew = await r.json();
+                if (!this.curfew.windows) this.curfew.windows = [];
+              }
             } catch {}
+          },
+
+          addWindow() {
+            this.curfew.windows.push({
+              start: "22:00",
+              end: "07:00",
+              days: { mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false },
+            });
+          },
+
+          removeWindow(i) {
+            this.curfew.windows.splice(i, 1);
           },
 
           async saveCurfew() {

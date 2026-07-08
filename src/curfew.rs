@@ -7,7 +7,7 @@
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveTime};
+use chrono::{Datelike, Local, NaiveTime, Weekday};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -24,16 +24,72 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 /// fire well outside the window (or effectively never), defeating enforcement.
 const MAX_WARN_SECS: u32 = 600;
 
+/// Which weekdays a [`Window`] applies to. An all-false selector means **every day** — that's
+/// the common case and also what an omitted `days` deserializes to.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Days {
+    #[serde(default)]
+    pub mon: bool,
+    #[serde(default)]
+    pub tue: bool,
+    #[serde(default)]
+    pub wed: bool,
+    #[serde(default)]
+    pub thu: bool,
+    #[serde(default)]
+    pub fri: bool,
+    #[serde(default)]
+    pub sat: bool,
+    #[serde(default)]
+    pub sun: bool,
+}
+
+impl Days {
+    fn any(&self) -> bool {
+        self.mon || self.tue || self.wed || self.thu || self.fri || self.sat || self.sun
+    }
+
+    /// Whether `wd` is selected. An empty selector matches every day.
+    fn includes(&self, wd: Weekday) -> bool {
+        if !self.any() {
+            return true;
+        }
+        match wd {
+            Weekday::Mon => self.mon,
+            Weekday::Tue => self.tue,
+            Weekday::Wed => self.wed,
+            Weekday::Thu => self.thu,
+            Weekday::Fri => self.fri,
+            Weekday::Sat => self.sat,
+            Weekday::Sun => self.sun,
+        }
+    }
+}
+
+/// A single closed window: `[start, end)` local time (may wrap midnight) on the selected days.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Window {
+    pub start: String,
+    pub end: String,
+    #[serde(default)]
+    pub days: Days,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Curfew {
     pub enabled: bool,
-    /// Window start, `HH:MM` local time.
+    /// Legacy single-window start, `HH:MM` local time. Used only when `windows` is empty.
     pub start: String,
-    /// Window end, `HH:MM` local time.
+    /// Legacy single-window end, `HH:MM` local time. Used only when `windows` is empty.
     pub end: String,
     /// Grace period (Windows shows a countdown + message) before power-off.
     #[serde(default = "default_warn_secs")]
     pub warn_secs: u32,
+    /// Per-day windows. When non-empty these are authoritative and the legacy `start`/`end`
+    /// above are ignored; when empty, the legacy single window is used. Kept as a separate
+    /// field (rather than a breaking rename) so existing `config.json` files still load.
+    #[serde(default)]
+    pub windows: Vec<Window>,
 }
 
 impl Default for Curfew {
@@ -43,6 +99,7 @@ impl Default for Curfew {
             start: "22:00".into(),
             end: "07:00".into(),
             warn_secs: default_warn_secs(),
+            windows: Vec::new(),
         }
     }
 }
@@ -55,22 +112,38 @@ impl Curfew {
         if !self.enabled {
             return false;
         }
+        let now = Local::now();
+        if !self.windows.is_empty() {
+            return any_window_active(&self.windows, now.time(), now.weekday());
+        }
         match (parse_hm(&self.start), parse_hm(&self.end)) {
-            (Some(start), Some(end)) => is_within(Local::now().time(), start, end),
+            (Some(start), Some(end)) => is_within(now.time(), start, end),
             _ => false,
         }
     }
 
-    /// Validate the settings (used when accepting them from the UI and at config load).
+    /// Validate the settings (used when accepting them from the UI and at config load). When
+    /// `windows` is non-empty each window is checked; otherwise the legacy `start`/`end` are.
     pub fn validate(&self) -> Result<(), String> {
-        if parse_hm(&self.start).is_none() {
-            return Err(format!("invalid start time: {}", self.start));
-        }
-        if parse_hm(&self.end).is_none() {
-            return Err(format!("invalid end time: {}", self.end));
-        }
         if self.warn_secs > MAX_WARN_SECS {
             return Err(format!("warning seconds must be <= {MAX_WARN_SECS}"));
+        }
+        if self.windows.is_empty() {
+            if parse_hm(&self.start).is_none() {
+                return Err(format!("invalid start time: {}", self.start));
+            }
+            if parse_hm(&self.end).is_none() {
+                return Err(format!("invalid end time: {}", self.end));
+            }
+        } else {
+            for (i, w) in self.windows.iter().enumerate() {
+                if parse_hm(&w.start).is_none() {
+                    return Err(format!("window {}: invalid start time: {}", i + 1, w.start));
+                }
+                if parse_hm(&w.end).is_none() {
+                    return Err(format!("window {}: invalid end time: {}", i + 1, w.end));
+                }
+            }
         }
         Ok(())
     }
@@ -185,6 +258,19 @@ fn parse_hm(s: &str) -> Option<NaiveTime> {
     NaiveTime::parse_from_str(s.trim(), "%H:%M").ok()
 }
 
+/// Whether any window covers `now` on `today` — the multi-window evaluator. Pure/testable:
+/// a window matches when its `days` selector includes `today` and `now` is within its
+/// `[start, end)` range. Unparseable times in a window are treated as non-matching (fail-open).
+fn any_window_active(windows: &[Window], now: NaiveTime, today: Weekday) -> bool {
+    windows.iter().any(|w| {
+        w.days.includes(today)
+            && matches!(
+                (parse_hm(&w.start), parse_hm(&w.end)),
+                (Some(s), Some(e)) if is_within(now, s, e)
+            )
+    })
+}
+
 /// Whether `now` falls in `[start, end)`, treating `start > end` as a window that wraps
 /// midnight. An empty window (`start == end`) is never active.
 fn is_within(now: NaiveTime, start: NaiveTime, end: NaiveTime) -> bool {
@@ -247,6 +333,7 @@ mod tests {
             start: "22:00".into(),
             end: "07:00".into(),
             warn_secs: 60,
+            windows: Vec::new(),
         };
         assert!(ok.validate().is_ok());
         let bad_time = Curfew {
@@ -259,6 +346,78 @@ mod tests {
             ..ok.clone()
         };
         assert!(huge_warn.validate().is_err());
+    }
+
+    // ---- Multi-window + per-day-of-week ----
+
+    fn win(start: &str, end: &str, days: Days) -> Window {
+        Window {
+            start: start.into(),
+            end: end.into(),
+            days,
+        }
+    }
+
+    fn only(day: Weekday) -> Days {
+        let mut d = Days::default();
+        match day {
+            Weekday::Mon => d.mon = true,
+            Weekday::Tue => d.tue = true,
+            Weekday::Wed => d.wed = true,
+            Weekday::Thu => d.thu = true,
+            Weekday::Fri => d.fri = true,
+            Weekday::Sat => d.sat = true,
+            Weekday::Sun => d.sun = true,
+        }
+        d
+    }
+
+    #[test]
+    fn empty_days_selector_matches_every_day() {
+        let ws = vec![win("22:00", "07:00", Days::default())];
+        assert!(any_window_active(&ws, t(23, 0), Weekday::Mon));
+        assert!(any_window_active(&ws, t(23, 0), Weekday::Sun));
+        assert!(!any_window_active(&ws, t(12, 0), Weekday::Mon)); // outside the time range
+    }
+
+    #[test]
+    fn window_respects_weekday_selection() {
+        let ws = vec![win("22:00", "23:59", only(Weekday::Fri))];
+        assert!(any_window_active(&ws, t(22, 30), Weekday::Fri));
+        assert!(!any_window_active(&ws, t(22, 30), Weekday::Sat)); // wrong day
+    }
+
+    #[test]
+    fn any_of_several_windows_can_match() {
+        let ws = vec![
+            win("09:00", "12:00", only(Weekday::Mon)),
+            win("20:00", "22:00", only(Weekday::Wed)),
+        ];
+        assert!(any_window_active(&ws, t(21, 0), Weekday::Wed));
+        assert!(any_window_active(&ws, t(10, 0), Weekday::Mon));
+        assert!(!any_window_active(&ws, t(21, 0), Weekday::Mon)); // Mon window is 09–12
+    }
+
+    #[test]
+    fn windows_authoritative_and_legacy_json_still_loads() {
+        // A legacy config with no `windows` key deserializes with an empty vec (legacy path).
+        let legacy = r#"{"enabled":true,"start":"22:00","end":"07:00","warn_secs":45}"#;
+        let c: Curfew = serde_json::from_str(legacy).unwrap();
+        assert!(c.windows.is_empty());
+        assert_eq!(c.warn_secs, 45);
+        assert!(c.validate().is_ok());
+
+        // A windowed config validates per-window and rejects a bad one.
+        let windowed = Curfew {
+            windows: vec![win("21:00", "06:00", only(Weekday::Fri))],
+            ..Curfew::default()
+        };
+        assert!(windowed.validate().is_ok());
+        let bad = Curfew {
+            windows: vec![win("99:99", "06:00", Days::default())],
+            ..Curfew::default()
+        };
+        assert!(bad.validate().is_err());
     }
 
     // ---- Enforcer state machine ----
