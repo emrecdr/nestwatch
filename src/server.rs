@@ -78,16 +78,16 @@ pub async fn serve_with_handle(
     cert::ensure_cert(&paths.cert, &paths.key)?;
     let tls = RustlsConfig::from_pem_file(&paths.cert, &paths.key).await?;
 
-    let port = state.config.port;
+    let port = crate::state::recover_read(&state.config).port;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     // Curfew enforcement runs alongside the server for the whole process lifetime.
     // run_enforcer loops forever; if it ever returns, surface that loudly.
     {
         let control = state.control.clone();
-        let curfew = state.curfew.clone();
+        let config = state.config.clone();
         tokio::spawn(async move {
-            crate::curfew::run_enforcer(control, curfew).await;
+            crate::curfew::run_enforcer(control, config).await;
             tracing::error!("curfew enforcer exited unexpectedly — curfew is no longer enforced");
         });
     }

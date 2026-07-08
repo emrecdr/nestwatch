@@ -34,7 +34,7 @@ async fn valid_curfew_persists_and_updates_state() {
             curfew: Default::default(),
         },
     );
-    let curfew_handle = state.curfew.clone();
+    let config_handle = state.config.clone();
     // Mock loopback peer so the LAN-scope gate admits the oneshot request.
     let app = build_router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))));
 
@@ -82,8 +82,15 @@ async fn valid_curfew_persists_and_updates_state() {
     assert_eq!(res.status(), StatusCode::OK);
 
     // In-memory state updated...
-    assert!(curfew_handle.read().unwrap().enabled);
-    assert_eq!(curfew_handle.read().unwrap().start, "21:00");
+    assert!(
+        nestwatch::state::recover_read(&config_handle)
+            .curfew
+            .enabled
+    );
+    assert_eq!(
+        nestwatch::state::recover_read(&config_handle).curfew.start,
+        "21:00"
+    );
 
     // ...and persisted to disk.
     let saved = std::fs::read_to_string(data_paths().config).unwrap();

@@ -8,6 +8,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
+use crate::config::Config;
 use crate::control::{ProcessInfo, SystemControl};
 use crate::curfew::Curfew;
 use crate::error::AppError;
@@ -22,6 +23,27 @@ where
     tokio::task::spawn_blocking(move || f(control.as_ref()))
         .await?
         .map_err(AppError::from)
+}
+
+/// Mutate the single-source [`Config`] and persist it off the async runtime.
+///
+/// SAFETY/ORDERING: the std `RwLock` write guard is dropped at the end of the inner block —
+/// BEFORE any `.await` — so it never crosses an await point (which would trip clippy's
+/// `await_holding_lock` and make the future `!Send`). We apply `mutate`, clone the whole
+/// `Config` out under the guard, release the lock, then save the owned snapshot on a blocking
+/// thread. Callers should `validate()` before calling.
+async fn update_config<F>(state: &AppState, mutate: F) -> Result<(), AppError>
+where
+    F: FnOnce(&mut Config),
+{
+    let snapshot = {
+        let mut guard = crate::state::recover_write(&state.config);
+        mutate(&mut guard);
+        guard.clone()
+    };
+    tokio::task::spawn_blocking(move || snapshot.save())
+        .await?
+        .map_err(AppError::Internal)
 }
 
 /// `GET /api/screenshot` → PNG image of the primary monitor.
@@ -61,7 +83,7 @@ pub async fn shutdown(State(state): State<AppState>) -> Result<Json<Value>, AppE
 
 /// `GET /api/curfew` → the current curfew settings.
 pub async fn get_curfew(State(state): State<AppState>) -> Json<Curfew> {
-    Json(crate::state::recover_read(&state.curfew).clone())
+    Json(crate::state::recover_read(&state.config).curfew.clone())
 }
 
 /// `POST /api/curfew` → validate, persist, and hot-apply new curfew settings.
@@ -70,20 +92,10 @@ pub async fn set_curfew(
     Json(new_curfew): Json<Curfew>,
 ) -> Result<Json<Value>, AppError> {
     new_curfew.validate().map_err(AppError::BadRequest)?;
-
-    // Persist the whole config (only curfew changes; port/password carry over). Cloning the
-    // existing config picks up any future fields automatically. File I/O runs off the runtime.
-    let mut persisted = (*state.config).clone();
-    persisted.curfew = new_curfew.clone();
-    tokio::task::spawn_blocking(move || persisted.save())
-        .await?
-        .map_err(AppError::Internal)?;
-
-    state.audit.record(
-        "curfew_change",
-        json!({ "enabled": new_curfew.enabled, "start": new_curfew.start, "end": new_curfew.end }),
-    );
-    *crate::state::recover_write(&state.curfew) = new_curfew;
+    let audit_fields =
+        json!({ "enabled": new_curfew.enabled, "start": new_curfew.start, "end": new_curfew.end });
+    update_config(&state, |c| c.curfew = new_curfew).await?;
+    state.audit.record("curfew_change", audit_fields);
     Ok(Json(json!({ "ok": true })))
 }
 

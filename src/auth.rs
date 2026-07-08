@@ -165,7 +165,9 @@ pub async fn login(
     }
 
     // Argon2 is memory-hard/CPU-heavy — never run it on the async runtime.
-    let hash = state.config.password_hash.clone();
+    let hash = crate::state::recover_read(&state.config)
+        .password_hash
+        .clone();
     let candidate = body.password;
     let ok = tokio::task::spawn_blocking(move || verify_password(&candidate, &hash)).await?;
 

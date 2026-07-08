@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use chrono::{Local, NaiveTime};
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use crate::control::SystemControl;
 
 fn default_warn_secs() -> u32 {
@@ -134,15 +135,15 @@ impl Enforcer {
 
 /// Background loop: every [`CHECK_INTERVAL`], enforce the curfew window. Runs for the life
 /// of the server; it never returns (a caller that `spawn`s it should log if it ever does).
-pub async fn run_enforcer(control: Arc<dyn SystemControl>, curfew: Arc<RwLock<Curfew>>) {
+pub async fn run_enforcer(control: Arc<dyn SystemControl>, config: Arc<RwLock<Config>>) {
     let mut enforcer = Enforcer::new();
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
     loop {
         ticker.tick().await;
 
         let (active, warn_secs) = {
-            let guard = crate::state::recover_read(&curfew);
-            (guard.is_active_now(), guard.warn_secs)
+            let guard = crate::state::recover_read(&config);
+            (guard.curfew.is_active_now(), guard.curfew.warn_secs)
         };
         let warn = Duration::from_secs(warn_secs as u64);
 
