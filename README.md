@@ -22,18 +22,20 @@ Single-user, LAN-only. No keylogging or covert data collection.
 ## How it works
 
 One binary. On Windows it installs as a **SYSTEM service** (Session 0) that serves the web
-UI + JSON API over self-signed HTTPS and runs the enforcement (curfew, process kill,
-shutdown). Because Session 0 has no desktop, **screenshots are delegated to a short-lived
-helper** launched into the interactive user session. All OS access sits behind a
-`SystemControl` trait, so the whole app also builds, runs, and is tested on macOS/Linux via
-a `FakeControl`.
+UI + JSON API over self-signed HTTPS and runs two background enforcers — **curfew** and the
+**usage rules** (screen-time budget, app blocklist, per-app limits). Because Session 0 has no
+desktop, **screenshots and screen-lock are delegated to a short-lived helper** launched into
+the interactive user session. All OS access sits behind a `SystemControl` trait, so the whole
+app also builds, runs, and is tested on macOS/Linux via a `FakeControl`.
 
 ```
 Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── auth (argon2 + session)
-                          │  ├─ curfew enforcer (local-time window → warned shutdown)
-                          │  ├─ processes / kill / shutdown        [direct, Session 0 OK]
-                          │  └─ screenshot ─→ helper in user session (WTSQueryUserToken +
-                          │                    CreateProcessAsUserW) ─→ xcap ─→ PNG
+                          │  ├─ curfew enforcer  (window/day → warned shutdown)
+                          │  ├─ rules enforcer   (screen-time budget / blocklist / app limits
+                          │  │                     → kill · lock · shutdown)
+                          │  ├─ processes / kill / shutdown         [direct, Session 0 OK]
+                          │  └─ screenshot + lock ─→ helper in user session (WTSQueryUserToken +
+                          │                           CreateProcessAsUserW) ─→ xcap ─→ PNG
                           └─ SystemControl trait ─→ ServiceControl │ WindowsControl │ FakeControl
 ```
 
@@ -42,9 +44,9 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
 | Web / TLS | axum 0.8, axum-server 0.8, rustls 0.23 (**ring** provider), tower-sessions 0.15 |
 | Assets | rust-embed 8 (embeds `assets/`) |
 | Auth | argon2 0.5 (Argon2id) |
-| OS ops | xcap 0.9 (screen), sysinfo 0.39 (processes), `shutdown /s` (power) |
+| OS ops | xcap 0.9 (screen, Windows-only dep), sysinfo 0.39 (processes), `shutdown /s` (power), `rundll32 …LockWorkStation` (lock) |
 | Service / FFI | windows-service 0.8, windows 0.62 (WTS + CreateProcessAsUser) |
-| Time | chrono 0.4 (local-time curfew window) |
+| Time | chrono 0.4 (local-time curfew windows + daily screen-time reset) |
 | Cert | rcgen 0.14 |
 | UI | Alpine.js 3.15, Tailwind CSS v4.3, daisyUI 5.6 (built to `assets/app.css`) |
 
@@ -55,9 +57,9 @@ to work:
 
 - The SYSTEM service can't be stopped or deleted by a standard user (Task Manager shows
   "Access Denied"); it auto-restarts on failure.
-- The binary lives in `C:\Program Files\HostHealth\` and the config/cert in
+- The binary lives in `C:\Program Files\HostHealth\` and the config, cert, and logs in
   `C:\ProgramData\HostHealth\`, both ACL-hardened to SYSTEM + Administrators only — a standard
-  user can't read the password hash or delete the files.
+  user can't read the password hash / TLS key / audit + usage logs, or delete the files.
 - Low-profile service name; no window or tray icon.
 
 **Hard limits (stated honestly):**
@@ -104,8 +106,9 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
 You download and run **`nestwatch.exe`** — it's the same binary that `install` copies to
 `C:\Program Files\HostHealth\host-health.exe` (the bland on-disk name) on the target.
 
-**Releases:** push a tag (`git tag v0.1.0 && git push --tags`) and `.github/workflows/release.yml`
-builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release.
+**Releases:** push a tag (`git tag v0.2.0 && git push --tags`) and `.github/workflows/release.yml`
+builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release. See
+[`CHANGELOG.md`](CHANGELOG.md) for what's in each version.
 
 ## Use (on the Windows machine, from an elevated/Administrator console)
 

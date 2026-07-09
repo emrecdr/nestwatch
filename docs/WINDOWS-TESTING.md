@@ -34,8 +34,11 @@ Run through it once on his PC after installing.
 
 - [ ] Cannot stop the service: `sc stop HostHealthService` → **Access is denied (5)**.
 - [ ] Cannot delete it: `sc delete HostHealthService` → **Access is denied (5)**.
-- [ ] Cannot read secrets: `type C:\ProgramData\HostHealth\config.json` → **Access is denied**
-      (so the password hash / TLS key are unreadable).
+- [ ] Cannot read the data dir at all: `dir C:\ProgramData\HostHealth` and
+      `type C:\ProgramData\HostHealth\config.json` → **Access is denied**. The whole folder is
+      ACL-locked to SYSTEM + Administrators, so the password hash, TLS key, **and every log**
+      (`audit.jsonl`, `usage.jsonl`, `time_requests.jsonl`, `usage_state.json`, plus `.jsonl.1`
+      rotation backups) are unreadable and undeletable by the child.
 - [ ] Cannot modify/delete the binary: `del "C:\Program Files\HostHealth\host-health.exe"`
       → **Access is denied**.
 - [ ] In Task Manager → Details, `host-health.exe` runs as **SYSTEM**; "End task" → Access denied.
@@ -82,6 +85,11 @@ Run through it once on his PC after installing.
       unlocks). Set it back to 0 (off) afterwards.
 - [ ] Add a **Blocked app** (e.g. `notepad.exe`), Save; launch Notepad → within ~30s it's
       **killed**. Remove it afterwards.
+- [ ] Add a **Per-app limit** (e.g. `notepad.exe` = 1 min), Save; run Notepad → after ~1 min
+      it's killed on sight, while other apps keep running. Remove it afterwards.
+- [ ] **Budget survives a restart:** with a small daily limit set, accrue a little usage, then
+      `taskkill /f /im host-health.exe` (it auto-restarts) → the used-minutes tally is **not**
+      reset (it's persisted in `usage_state.json`); enforcement resumes from where it was.
 - [ ] From his browser, open `https://<his-pc-ip>:<port>/ask`, request e.g. 15 minutes →
       you see it under **More-time requests** in the dashboard → **Approve** → the granted
       minutes are added to today's budget (and appear in **Usage history**).
@@ -96,10 +104,11 @@ Run through it once on his PC after installing.
 ## G. Update & uninstall
 
 - [ ] Re-run `nestwatch.exe install` (as admin) → it stops the service, updates the binary,
-      restarts; your **port and curfew are preserved**, you set the password again.
+      restarts; your **port, curfew, and rules are preserved**, you set the password again.
 - [ ] `nestwatch.exe uninstall` → service gone (`sc query` → 1060 does not exist), firewall rule
-      removed, `C:\Program Files\HostHealth` removed. Config/cert remain.
-- [ ] `nestwatch.exe uninstall --purge` → also removes `C:\ProgramData\HostHealth`.
+      removed, `C:\Program Files\HostHealth` removed. The data dir remains (config, cert, and the
+      usage/time-request/budget-state files).
+- [ ] `nestwatch.exe uninstall --purge` → also removes `C:\ProgramData\HostHealth` (all of it).
 
 ---
 
