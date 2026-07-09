@@ -18,6 +18,7 @@ use nestwatch::config::Config;
 use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
 use nestwatch::state::AppState;
+use nestwatch::usage::UsageLog;
 
 const PASSWORD: &str = "test-password";
 
@@ -30,8 +31,9 @@ fn test_state() -> AppState {
             curfew: Default::default(),
         },
     );
-    // Tests must never touch the real data dir; keep auditing off.
+    // Tests must never touch the real data dir; keep the logs off.
     state.audit = Arc::new(AuditLog::disabled());
+    state.usage = Arc::new(UsageLog::disabled());
     state
 }
 
@@ -276,6 +278,38 @@ async fn security_headers_are_present() {
     );
     assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
     assert_eq!(h.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
+}
+
+#[tokio::test]
+async fn usage_requires_auth_and_returns_array() {
+    let app = test_app();
+    // Unauthenticated → 401.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/usage")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Authenticated → 200 with an array (empty, since the log is disabled in tests).
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/usage")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(body_json(res).await.is_array());
 }
 
 #[tokio::test]

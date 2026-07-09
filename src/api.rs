@@ -116,6 +116,14 @@ pub async fn audit(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Ap
     Ok(Json(events))
 }
 
+/// `GET /api/usage` → the most recent usage-history events (newest first): daily screen-time,
+/// sessions, and enforcement actions. Read-only; behind `require_auth`.
+pub async fn usage(State(state): State<AppState>) -> Result<Json<Vec<Value>>, AppError> {
+    let usage = state.usage.clone();
+    let events = tokio::task::spawn_blocking(move || usage.recent(200)).await?;
+    Ok(Json(events))
+}
+
 #[derive(Deserialize)]
 pub struct PasswordChange {
     current: String,

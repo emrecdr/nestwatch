@@ -19,9 +19,11 @@ pub mod curfew;
 pub mod error;
 pub mod helper;
 pub mod install;
+pub mod jsonl;
 pub mod security;
 pub mod server;
 pub mod state;
+pub mod usage;
 pub mod web;
 
 #[cfg(windows)]

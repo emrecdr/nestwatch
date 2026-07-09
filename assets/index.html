@@ -227,6 +227,39 @@
             </div>
           </section>
 
+          <!-- Usage history -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Usage history</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadUsage()" :disabled="loadingUsage">
+                  <span x-show="loadingUsage" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">Screen-time and enforcement events, newest first.</p>
+              <div class="mt-2 max-h-72 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Time</th><th>Event</th><th>Detail</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(e, i) in usage" :key="i">
+                      <tr>
+                        <td class="whitespace-nowrap" x-text="fmtTime(e.ts)"></td>
+                        <td x-text="e.event"></td>
+                        <td x-text="usageDetail(e)"></td>
+                      </tr>
+                    </template>
+                    <template x-if="usage.length === 0 && !loadingUsage">
+                      <tr><td colspan="3" class="text-center opacity-50">No events yet</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
           <!-- Change password -->
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
@@ -311,6 +344,8 @@
           savingCurfew: false,
           audit: [],
           loadingAudit: false,
+          usage: [],
+          loadingUsage: false,
           pwCurrent: "",
           pwNew: "",
           savingPw: false,
@@ -328,6 +363,7 @@
               this.loadProcesses();
               this.loadCurfew();
               this.loadAudit();
+              this.loadUsage();
             }
           },
 
@@ -390,6 +426,7 @@
                 this.loadProcesses();
                 this.loadCurfew();
                 this.loadAudit();
+                this.loadUsage();
               } else if (r.status === 429) {
                 this.loginError = "Too many attempts — wait a minute and try again.";
               } else {
@@ -535,6 +572,27 @@
             } finally {
               this.loadingAudit = false;
             }
+          },
+
+          async loadUsage() {
+            this.loadingUsage = true;
+            try {
+              const r = await fetch("/api/usage");
+              if (r.status === 401) { this.authed = false; return; }
+              if (r.ok) this.usage = await r.json();
+            } catch {
+              this.toast("Failed to load usage history", "error");
+            } finally {
+              this.loadingUsage = false;
+            }
+          },
+
+          usageDetail(e) {
+            if (e.event === "screentime_daily")
+              return `${e.minutes_used ?? "?"}/${e.budget ?? "?"} min`;
+            if (e.reason) return e.reason;
+            if (e.minutes != null) return `${e.minutes} min`;
+            return "—";
           },
 
           fmtTime(ts) {

@@ -13,6 +13,7 @@
 //!     POST /api/lock
 //!     GET  POST /api/curfew
 //!     GET  /api/audit
+//!     GET  /api/usage
 //!     POST /api/password
 //!   *                           embedded static assets (fallback)
 //! ```
@@ -50,6 +51,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/lock", post(api::lock))
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
         .route("/audit", get(api::audit))
+        .route("/usage", get(api::usage))
         .route("/password", post(api::change_password))
         .route_layer(middleware::from_fn(auth::require_auth));
 

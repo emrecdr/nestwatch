@@ -9,6 +9,7 @@ use crate::audit::AuditLog;
 use crate::auth::LoginLimiter;
 use crate::config::Config;
 use crate::control::SystemControl;
+use crate::usage::UsageLog;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +27,8 @@ pub struct AppState {
     pub login_lock: Arc<tokio::sync::Mutex<()>>,
     /// Append-only security audit log (login attempts + sensitive actions).
     pub audit: Arc<AuditLog>,
+    /// Append-only usage-history log (daily screen-time, sessions, enforcement events).
+    pub usage: Arc<UsageLog>,
 }
 
 impl AppState {
@@ -34,15 +37,16 @@ impl AppState {
     /// installed. This is the single place the aggregate is built, so `run`, the service, and
     /// tests can't drift.
     pub fn new(control: Arc<dyn SystemControl>, config: Config) -> Self {
-        let audit = Arc::new(AuditLog::new(
-            crate::config::data_paths().dir.join("audit.jsonl"),
-        ));
+        let dir = crate::config::data_paths().dir;
+        let audit = Arc::new(AuditLog::new(dir.join("audit.jsonl")));
+        let usage = Arc::new(UsageLog::new(dir.join("usage.jsonl")));
         Self {
             control,
             config: Arc::new(RwLock::new(config)),
             limiter: Arc::new(LoginLimiter::default()),
             login_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
+            usage,
         }
     }
 }

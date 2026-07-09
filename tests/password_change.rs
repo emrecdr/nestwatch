@@ -48,6 +48,7 @@ async fn password_change_end_to_end() {
         },
     );
     state.audit = Arc::new(AuditLog::disabled());
+    state.usage = Arc::new(nestwatch::usage::UsageLog::disabled());
     let app = build_router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))));
 
     // Log in with the original password.
