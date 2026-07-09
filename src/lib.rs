@@ -20,6 +20,7 @@ pub mod error;
 pub mod helper;
 pub mod install;
 pub mod jsonl;
+pub mod rules;
 pub mod security;
 pub mod server;
 pub mod state;

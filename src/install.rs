@@ -60,8 +60,8 @@ pub fn install() -> Result<()> {
     let cfg = Config {
         port,
         password_hash: auth::hash_password(&password)?,
-        // Preserve an existing curfew across reinstalls.
-        curfew: existing.map(|c| c.curfew).unwrap_or_default(),
+        // Preserve existing settings (curfew, rules, granted extra) across reinstalls.
+        ..existing.unwrap_or_default()
     };
     cfg.save()?;
     // Always (re)generate at install: picks up the current LAN IP as a SAN and yields a

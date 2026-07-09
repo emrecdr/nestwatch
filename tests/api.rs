@@ -28,7 +28,7 @@ fn test_state() -> AppState {
         Config {
             port: 8443,
             password_hash: hash_password(PASSWORD).unwrap(),
-            curfew: Default::default(),
+            ..Default::default()
         },
     );
     // Tests must never touch the real data dir; keep the logs off.
@@ -310,6 +310,44 @@ async fn usage_requires_auth_and_returns_array() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert!(body_json(res).await.is_array());
+}
+
+#[tokio::test]
+async fn rules_get_and_validation() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    // GET returns the default rules (no budget).
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/rules")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["daily_budget_mins"], json!(0));
+
+    // POST with an over-large warn is rejected (400).
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/rules")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "daily_budget_mins": 120, "warn_secs": 9999 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

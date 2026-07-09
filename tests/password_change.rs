@@ -44,7 +44,7 @@ async fn password_change_end_to_end() {
         Config {
             port: 8443,
             password_hash: hash_password(PASSWORD).unwrap(),
-            curfew: Default::default(),
+            ..Default::default()
         },
     );
     state.audit = Arc::new(AuditLog::disabled());

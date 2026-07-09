@@ -13,7 +13,7 @@ use crate::curfew::Curfew;
 
 pub const DEFAULT_PORT: u16 = 8443;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub port: u16,
     /// Argon2 PHC string (`$argon2id$v=19$...`). Verified against on login.
@@ -21,6 +21,16 @@ pub struct Config {
     /// Closed time window enforcement. Defaulted so pre-existing configs still load.
     #[serde(default)]
     pub curfew: Curfew,
+    /// Screen-time budget, app blocklist, and per-app limits.
+    #[serde(default)]
+    pub rules: crate::rules::Rules,
+    /// Extra minutes granted to *today's* budget (via an approved time request). Reset when
+    /// `extra_minutes_date` no longer matches today.
+    #[serde(default)]
+    pub extra_minutes_today: u32,
+    /// The local date (`YYYY-MM-DD`) that `extra_minutes_today` applies to.
+    #[serde(default)]
+    pub extra_minutes_date: String,
 }
 
 /// Resolved on-disk locations, derived from [`data_dir`].
@@ -83,6 +93,9 @@ impl Config {
         {
             tracing::warn!("curfew is enabled but invalid ({e}); it will not be enforced");
         }
+        if let Err(e) = cfg.rules.validate() {
+            tracing::warn!("usage rules are invalid ({e}); they will not be enforced");
+        }
         Ok(cfg)
     }
 
@@ -106,7 +119,7 @@ mod tests {
         let cfg = Config {
             port: 8443,
             password_hash: "$argon2id$abc".into(),
-            curfew: Curfew::default(),
+            ..Default::default()
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
@@ -115,10 +128,12 @@ mod tests {
     }
 
     #[test]
-    fn config_without_curfew_field_still_loads() {
-        // Simulates a config.json written before the curfew feature existed.
+    fn config_without_new_fields_still_loads() {
+        // Simulates a config.json written before curfew/rules existed.
         let legacy = r#"{"port":8443,"password_hash":"$argon2id$abc"}"#;
         let cfg: Config = serde_json::from_str(legacy).unwrap();
         assert!(!cfg.curfew.enabled);
+        assert_eq!(cfg.rules.daily_budget_mins, 0);
+        assert_eq!(cfg.extra_minutes_today, 0);
     }
 }

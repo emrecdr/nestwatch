@@ -14,6 +14,7 @@
 //!     GET  POST /api/curfew
 //!     GET  /api/audit
 //!     GET  /api/usage
+//!     GET  POST /api/rules
 //!     POST /api/password
 //!   *                           embedded static assets (fallback)
 //! ```
@@ -52,6 +53,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
         .route("/audit", get(api::audit))
         .route("/usage", get(api::usage))
+        .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/password", post(api::change_password))
         .route_layer(middleware::from_fn(auth::require_auth));
 
@@ -97,6 +99,19 @@ pub async fn serve_with_handle(
         tokio::spawn(async move {
             crate::curfew::run_enforcer(control, config).await;
             tracing::error!("curfew enforcer exited unexpectedly — curfew is no longer enforced");
+        });
+    }
+
+    // Usage-rules enforcement (screen-time budget, blocklist, per-app limits) runs in parallel.
+    {
+        let control = state.control.clone();
+        let config = state.config.clone();
+        let usage = state.usage.clone();
+        tokio::spawn(async move {
+            crate::rules::run_rules_enforcer(control, config, usage).await;
+            tracing::error!(
+                "rules enforcer exited unexpectedly — usage rules are no longer enforced"
+            );
         });
     }
 

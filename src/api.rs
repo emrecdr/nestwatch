@@ -124,6 +124,28 @@ pub async fn usage(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Ap
     Ok(Json(events))
 }
 
+/// `GET /api/rules` → the current usage rules (budget, blocklist, per-app limits).
+pub async fn get_rules(State(state): State<AppState>) -> Json<crate::rules::Rules> {
+    Json(crate::state::recover_read(&state.config).rules.clone())
+}
+
+/// `POST /api/rules` → validate, persist, and hot-apply new usage rules.
+pub async fn set_rules(
+    State(state): State<AppState>,
+    Json(new_rules): Json<crate::rules::Rules>,
+) -> Result<Json<Value>, AppError> {
+    new_rules.validate().map_err(AppError::BadRequest)?;
+    let audit_fields = json!({
+        "daily_budget_mins": new_rules.daily_budget_mins,
+        "blocklist_count": new_rules.blocklist.len(),
+        "app_limits_count": new_rules.app_limits.len(),
+        "budget_action": new_rules.budget_action,
+    });
+    update_config(&state, |c| c.rules = new_rules).await?;
+    state.audit.record("rules_change", audit_fields);
+    Ok(Json(json!({ "ok": true })))
+}
+
 #[derive(Deserialize)]
 pub struct PasswordChange {
     current: String,

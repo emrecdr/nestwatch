@@ -21,8 +21,9 @@ fn default_warn_secs() -> u32 {
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Upper bound on the warning countdown (10 min). A too-large value would let the shutdown
-/// fire well outside the window (or effectively never), defeating enforcement.
-const MAX_WARN_SECS: u32 = 600;
+/// fire well outside the window (or effectively never), defeating enforcement. Shared with the
+/// rules enforcer, which bounds its budget warning the same way.
+pub const MAX_WARN_SECS: u32 = 600;
 
 /// Which weekdays a [`Window`] applies to. An all-false selector means **every day** — that's
 /// the common case and also what an omitted `days` deserializes to.

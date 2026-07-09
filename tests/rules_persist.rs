@@ -1,6 +1,5 @@
-//! A valid `POST /api/curfew` round-trip: it should update the in-memory state AND persist
-//! to disk. This lives in its own test binary so its `NESTWATCH_DATA_DIR` override runs in a
-//! separate process and can't affect (or be affected by) the other integration tests.
+//! A valid `POST /api/rules` round-trip updates in-memory state AND persists to disk. Its own
+//! test binary so the `NESTWATCH_DATA_DIR` override is isolated from the other integration tests.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -11,22 +10,23 @@ use axum::http::{Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
+use nestwatch::audit::AuditLog;
 use nestwatch::auth::hash_password;
 use nestwatch::config::{Config, data_paths};
 use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
 use nestwatch::state::AppState;
+use nestwatch::usage::UsageLog;
 
 const PASSWORD: &str = "test-password";
 
 #[tokio::test]
-async fn valid_curfew_persists_and_updates_state() {
-    // Redirect the data dir to a temp location so we never touch the real config.
-    let tmp = std::env::temp_dir().join(format!("nw-curfew-{}", std::process::id()));
+async fn valid_rules_persist_and_update_state() {
+    let tmp = std::env::temp_dir().join(format!("nw-rules-{}", std::process::id()));
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", &tmp) };
 
-    let state = AppState::new(
+    let mut state = AppState::new(
         Arc::new(FakeControl::new()),
         Config {
             port: 8443,
@@ -34,8 +34,9 @@ async fn valid_curfew_persists_and_updates_state() {
             ..Default::default()
         },
     );
+    state.audit = Arc::new(AuditLog::disabled());
+    state.usage = Arc::new(UsageLog::disabled());
     let config_handle = state.config.clone();
-    // Mock loopback peer so the LAN-scope gate admits the oneshot request.
     let app = build_router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))));
 
     // Log in.
@@ -63,17 +64,23 @@ async fn valid_curfew_persists_and_updates_state() {
         .unwrap()
         .to_string();
 
-    // POST a valid curfew.
+    // POST valid rules.
     let res = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/curfew")
+                .uri("/api/rules")
                 .header(header::COOKIE, &cookie)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    json!({"enabled": true, "start": "21:00", "end": "06:30", "warn_secs": 30})
-                        .to_string(),
+                    json!({
+                        "daily_budget_mins": 90,
+                        "blocklist": ["game.exe"],
+                        "app_limits": { "chrome.exe": 60 },
+                        "budget_action": "lock",
+                        "warn_secs": 30
+                    })
+                    .to_string(),
                 ))
                 .unwrap(),
         )
@@ -82,19 +89,14 @@ async fn valid_curfew_persists_and_updates_state() {
     assert_eq!(res.status(), StatusCode::OK);
 
     // In-memory state updated...
-    assert!(
-        nestwatch::state::recover_read(&config_handle)
-            .curfew
-            .enabled
-    );
-    assert_eq!(
-        nestwatch::state::recover_read(&config_handle).curfew.start,
-        "21:00"
-    );
+    let cfg = nestwatch::state::recover_read(&config_handle);
+    assert_eq!(cfg.rules.daily_budget_mins, 90);
+    assert_eq!(cfg.rules.blocklist, vec!["game.exe".to_string()]);
+    drop(cfg);
 
     // ...and persisted to disk.
     let saved = std::fs::read_to_string(data_paths().config).unwrap();
-    assert!(saved.contains("21:00"), "curfew persisted to config.json");
+    assert!(saved.contains("game.exe"), "rules persisted to config.json");
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
