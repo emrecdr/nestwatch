@@ -31,6 +31,17 @@ where
         .map_err(AppError::from)
 }
 
+/// Offload a blocking closure (file I/O, password hashing, log reads) to the blocking pool.
+/// Sibling of [`blocking`] for work that doesn't take a `SystemControl`; a `JoinError` maps to
+/// `AppError` via its `From` impl.
+async fn spawn<T, F>(f: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(f).await.map_err(AppError::from)
+}
+
 /// Mutate the single-source [`Config`] and persist it off the async runtime.
 ///
 /// SAFETY/ORDERING: the std `RwLock` write guard is dropped at the end of the inner block —
@@ -47,7 +58,7 @@ where
         mutate(&mut guard);
         guard.clone()
     };
-    tokio::task::spawn_blocking(move || snapshot.save())
+    spawn(move || snapshot.save())
         .await?
         .map_err(AppError::Internal)
 }
@@ -116,7 +127,7 @@ pub async fn set_curfew(
 /// see logins and their source IP. Read-only; behind `require_auth` like the rest of `/api`.
 pub async fn audit(State(state): State<AppState>) -> Result<Json<Vec<Value>>, AppError> {
     let audit = state.audit.clone();
-    let events = tokio::task::spawn_blocking(move || audit.recent(200)).await?;
+    let events = spawn(move || audit.recent(200)).await?;
     Ok(Json(events))
 }
 
@@ -124,7 +135,7 @@ pub async fn audit(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Ap
 /// sessions, and enforcement actions. Read-only; behind `require_auth`.
 pub async fn usage(State(state): State<AppState>) -> Result<Json<Vec<Value>>, AppError> {
     let usage = state.usage.clone();
-    let events = tokio::task::spawn_blocking(move || usage.recent(200)).await?;
+    let events = spawn(move || usage.recent(200)).await?;
     Ok(Json(events))
 }
 
@@ -171,8 +182,7 @@ pub async fn time_request(
         return Err(AppError::BadRequest("minutes out of range".into()));
     }
     let requests = state.time_requests.clone();
-    let accepted =
-        tokio::task::spawn_blocking(move || requests.submit(body.minutes, &body.reason)).await?;
+    let accepted = spawn(move || requests.submit(body.minutes, &body.reason)).await?;
     state.audit.record(
         "time_request_submitted",
         json!({ "src_ip": ip, "minutes": body.minutes, "accepted": accepted.is_some() }),
@@ -185,7 +195,7 @@ pub async fn list_time_requests(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<PendingRequest>>, AppError> {
     let requests = state.time_requests.clone();
-    let pending = tokio::task::spawn_blocking(move || requests.pending()).await?;
+    let pending = spawn(move || requests.pending()).await?;
     Ok(Json(pending))
 }
 
@@ -195,13 +205,13 @@ pub async fn approve_time_request(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let requests = state.time_requests.clone();
-    let resolved = tokio::task::spawn_blocking(move || requests.resolve(&id, true)).await?;
+    let resolved = spawn(move || requests.resolve(&id, true)).await?;
     let Some(req) = resolved else {
         return Err(AppError::BadRequest("no such pending request".into()));
     };
 
     // Add the minutes to today's grant (the reset-if-not-today rule lives in DailyGrant).
-    let today = chrono::Local::now().date_naive();
+    let today = crate::config::today();
     let minutes = req.minutes;
     update_config(&state, |c| c.extra.add(today, minutes)).await?;
 
@@ -220,7 +230,7 @@ pub async fn deny_time_request(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     let requests = state.time_requests.clone();
-    let resolved = tokio::task::spawn_blocking(move || requests.resolve(&id, false)).await?;
+    let resolved = spawn(move || requests.resolve(&id, false)).await?;
     if resolved.is_none() {
         return Err(AppError::BadRequest("no such pending request".into()));
     }
@@ -257,10 +267,7 @@ pub async fn change_password(
         .password_hash
         .clone();
     let candidate = body.current;
-    let ok = tokio::task::spawn_blocking(move || {
-        crate::auth::verify_password(&candidate, &current_hash)
-    })
-    .await?;
+    let ok = spawn(move || crate::auth::verify_password(&candidate, &current_hash)).await?;
     if !ok {
         state
             .audit
@@ -270,7 +277,7 @@ pub async fn change_password(
 
     // Hash the new password off the runtime, then persist via the single-source helper.
     let new_pw = body.new;
-    let new_hash = tokio::task::spawn_blocking(move || crate::auth::hash_password(&new_pw))
+    let new_hash = spawn(move || crate::auth::hash_password(&new_pw))
         .await?
         .map_err(AppError::Internal)?;
     update_config(&state, |c| c.password_hash = new_hash).await?;

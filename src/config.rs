@@ -14,6 +14,12 @@ use crate::curfew::Curfew;
 
 pub const DEFAULT_PORT: u16 = 8443;
 
+/// The current local calendar day — the single key the grant writer (approve handler) and
+/// reader (rules enforcer) both use, so a future clock/timezone policy lives in one place.
+pub fn today() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
 /// Extra screen-time minutes granted for a single day (via an approved time request). The
 /// "only counts today" rule lives here, in one place, so the approve handler (writer) and the
 /// rules enforcer (reader) can't drift.

@@ -465,14 +465,18 @@
             } catch {
               this.authed = false;
             }
-            if (this.authed) {
-              this.loadProcesses();
-              this.loadCurfew();
-              this.loadRules();
-              this.loadAudit();
-              this.loadUsage();
-              this.loadTimeRequests();
-            }
+            if (this.authed) this.loadAll();
+          },
+
+          // Load every dashboard panel — used by both init() and a fresh login() so the two
+          // entry points can't drift.
+          loadAll() {
+            this.loadProcesses();
+            this.loadCurfew();
+            this.loadRules();
+            this.loadAudit();
+            this.loadUsage();
+            this.loadTimeRequests();
           },
 
           async loadCurfew() {
@@ -562,10 +566,7 @@
               if (r.ok) {
                 this.password = "";
                 this.authed = true;
-                this.loadProcesses();
-                this.loadCurfew();
-                this.loadAudit();
-                this.loadUsage();
+                this.loadAll();
               } else if (r.status === 429) {
                 this.loginError = "Too many attempts — wait a minute and try again.";
               } else {
@@ -705,30 +706,24 @@
             });
           },
 
-          // GET a list into `this[field]`, toggling `this[flag]`; logs out on 401.
+          // GET a list into `this[field]`. `flag` (optional) toggles a loading spinner; `errMsg`
+          // (optional) toasts on failure. Logs out on 401.
           async loadList(url, field, flag, errMsg) {
-            this[flag] = true;
+            if (flag) this[flag] = true;
             try {
               const r = await fetch(url);
               if (r.status === 401) { this.authed = false; return; }
               if (r.ok) this[field] = await r.json();
             } catch {
-              this.toast(errMsg, "error");
+              if (errMsg) this.toast(errMsg, "error");
             } finally {
-              this[flag] = false;
+              if (flag) this[flag] = false;
             }
           },
 
           loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", "Failed to load access log"); },
           loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", "Failed to load usage history"); },
-
-          async loadTimeRequests() {
-            try {
-              const r = await fetch("/api/time-requests");
-              if (r.status === 401) { this.authed = false; return; }
-              if (r.ok) this.timeRequests = await r.json();
-            } catch {}
-          },
+          loadTimeRequests() { return this.loadList("/api/time-requests", "timeRequests"); },
 
           async resolveTimeRequest(id, approve) {
             const verb = approve ? "approve" : "deny";

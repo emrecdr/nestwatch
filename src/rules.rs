@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use chrono::{Local, NaiveDate};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -70,6 +70,12 @@ impl Rules {
             return Err(format!("warning seconds must be <= {MAX_WARN_SECS}"));
         }
         Ok(())
+    }
+
+    /// Today's effective daily budget in minutes: the base plus any granted extra. One home for
+    /// the "base + extra" formula so the enforcer and its logging can't drift.
+    pub fn effective_budget_mins(&self, extra: u32) -> u32 {
+        self.daily_budget_mins + extra
     }
 }
 
@@ -141,6 +147,9 @@ pub struct Tick {
 }
 
 /// An action the enforcer decided on for this tick.
+/// The rules enforcer deliberately has **no `Abort` variant**: only the curfew enforcer issues
+/// `abort_shutdown`, so it stays authoritative over the single OS pending-shutdown slot (two
+/// writers would fight). Don't add one here — when back under budget, just stop re-issuing.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RuleAction {
     /// Terminate this PID (blocklisted, or an app over its per-app limit).
@@ -203,7 +212,7 @@ impl RulesEnforcer {
 
         // Total daily budget with warn-then-act.
         if rules.daily_budget_mins > 0 {
-            let budget_secs = (rules.daily_budget_mins as u64 + t.extra_minutes as u64) * 60;
+            let budget_secs = rules.effective_budget_mins(t.extra_minutes) as u64 * 60;
             if self.usage.total_secs >= budget_secs {
                 match rules.budget_action {
                     EnforceAction::Warn => {
@@ -260,7 +269,7 @@ pub async fn run_rules_enforcer(
     loop {
         ticker.tick().await;
 
-        let today = Local::now().date_naive();
+        let today = crate::config::today();
         // Snapshot the config under the lock, then drop the guard before any await.
         let (rules, extra) = {
             let guard = crate::state::recover_read(&config);
@@ -295,17 +304,22 @@ pub async fn run_rules_enforcer(
         );
         enforcer.usage.save(&tally_path);
 
+        let budget = rules.effective_budget_mins(extra);
+
         // Log the previous day's total once, on rollover.
         if let Some(pd) = prev_day
             && pd != today
         {
             usage_log.record(
                 "screentime_daily",
-                serde_json::json!({ "date": pd.to_string(), "minutes_used": prev_total / 60 }),
+                serde_json::json!({
+                    "date": pd.to_string(),
+                    "minutes_used": prev_total / 60,
+                    "budget": budget,
+                }),
             );
         }
 
-        let budget = rules.daily_budget_mins + extra;
         let used_mins = enforcer.usage.total_secs / 60;
         let mut has_lock = false;
         let mut has_shutdown = false;
