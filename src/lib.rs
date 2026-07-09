@@ -1,16 +1,16 @@
 //! Home remote-control server for a child's Windows PC.
 //!
 //! The crate is organised in layers:
-//! - `web` / `api` / `auth` / `security` — HTTP presentation (handlers, middleware, LAN gate)
-//! - `state` / `error`                   — shared application state and the single error type
-//! - `curfew` / `rules`                  — the two background enforcers (curfew window; usage
-//!                                         rules: screen-time budget, blocklist, per-app limits)
+//! - `web` / `api` / `auth` / `security` — HTTP presentation (handlers, middleware, LAN gate).
+//! - `state` / `error` — shared application state and the single error type.
+//! - `curfew` / `rules` — the two background enforcers (curfew window; usage rules: screen-time
+//!   budget, app blocklist, per-app limits).
 //! - `audit` / `usage` / `timereq` / `jsonl` — append-only JSONL logs (security audit, usage
-//!                                         history, the request-more-time queue) over a shared store
-//! - `control` / `session` / `helper`    — `SystemControl`: the OS abstraction (real Windows +
-//!                                         fake), plus the interactive-session helper (screenshot/lock)
-//! - `config` / `cert`                   — persisted configuration and the self-signed TLS cert
-//! - `install`                           — one-time setup (password, cert, service, ACLs, firewall)
+//!   history, the request-more-time queue) over a shared store.
+//! - `control` / `session` / `helper` — `SystemControl`, the OS abstraction (real Windows +
+//!   fake), plus the interactive-session helper (screenshot / lock).
+//! - `config` / `cert` — persisted configuration and the self-signed TLS cert.
+//! - `install` — one-time setup (password, cert, service, ACLs, firewall).
 //!
 //! Everything above `control` is OS-agnostic and runs (and is tested) on any platform.
 
