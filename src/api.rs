@@ -200,17 +200,10 @@ pub async fn approve_time_request(
         return Err(AppError::BadRequest("no such pending request".into()));
     };
 
-    // Add the minutes to today's grant (resetting if the stored date isn't today).
-    let today = chrono::Local::now().date_naive().to_string();
+    // Add the minutes to today's grant (the reset-if-not-today rule lives in DailyGrant).
+    let today = chrono::Local::now().date_naive();
     let minutes = req.minutes;
-    update_config(&state, |c| {
-        if c.extra_minutes_date != today {
-            c.extra_minutes_today = 0;
-            c.extra_minutes_date = today.clone();
-        }
-        c.extra_minutes_today += minutes;
-    })
-    .await?;
+    update_config(&state, |c| c.extra.add(today, minutes)).await?;
 
     state
         .audit

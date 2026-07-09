@@ -7,11 +7,45 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::curfew::Curfew;
 
 pub const DEFAULT_PORT: u16 = 8443;
+
+/// Extra screen-time minutes granted for a single day (via an approved time request). The
+/// "only counts today" rule lives here, in one place, so the approve handler (writer) and the
+/// rules enforcer (reader) can't drift.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DailyGrant {
+    /// The local day the grant applies to (`None` = nothing granted yet).
+    #[serde(default)]
+    pub date: Option<NaiveDate>,
+    /// Minutes granted for `date`.
+    #[serde(default)]
+    pub minutes: u32,
+}
+
+impl DailyGrant {
+    /// Minutes granted for `today` — `0` unless the stored grant is for today.
+    pub fn for_day(&self, today: NaiveDate) -> u32 {
+        if self.date == Some(today) {
+            self.minutes
+        } else {
+            0
+        }
+    }
+
+    /// Add `minutes` to today's grant, resetting first if the stored grant is for another day.
+    pub fn add(&mut self, today: NaiveDate, minutes: u32) {
+        if self.date != Some(today) {
+            self.date = Some(today);
+            self.minutes = 0;
+        }
+        self.minutes += minutes;
+    }
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -24,13 +58,9 @@ pub struct Config {
     /// Screen-time budget, app blocklist, and per-app limits.
     #[serde(default)]
     pub rules: crate::rules::Rules,
-    /// Extra minutes granted to *today's* budget (via an approved time request). Reset when
-    /// `extra_minutes_date` no longer matches today.
+    /// Extra minutes granted to *today's* budget (via an approved time request).
     #[serde(default)]
-    pub extra_minutes_today: u32,
-    /// The local date (`YYYY-MM-DD`) that `extra_minutes_today` applies to.
-    #[serde(default)]
-    pub extra_minutes_date: String,
+    pub extra: DailyGrant,
 }
 
 /// Resolved on-disk locations, derived from [`data_dir`].
@@ -134,6 +164,6 @@ mod tests {
         let cfg: Config = serde_json::from_str(legacy).unwrap();
         assert!(!cfg.curfew.enabled);
         assert_eq!(cfg.rules.daily_budget_mins, 0);
-        assert_eq!(cfg.extra_minutes_today, 0);
+        assert_eq!(cfg.extra.minutes, 0);
     }
 }

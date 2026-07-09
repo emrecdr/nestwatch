@@ -500,11 +500,7 @@
           async saveCurfew() {
             this.savingCurfew = true;
             try {
-              const r = await fetch("/api/curfew", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(this.curfew),
-              });
+              const r = await this.postJSON("/api/curfew", this.curfew);
               if (r.ok) {
                 this.toast("Curfew saved", "success");
               } else if (r.status === 400) {
@@ -543,11 +539,7 @@
             }
             this.rules.blocklist = this.rules.blocklist.map((b) => b.trim()).filter(Boolean);
             try {
-              const r = await fetch("/api/rules", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(this.rules),
-              });
+              const r = await this.postJSON("/api/rules", this.rules);
               if (r.ok) {
                 this.toast("Rules saved", "success");
               } else if (r.status === 400) {
@@ -566,11 +558,7 @@
             this.busy = true;
             this.loginError = "";
             try {
-              const r = await fetch("/login", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ password: this.password }),
-              });
+              const r = await this.postJSON("/login", { password: this.password });
               if (r.ok) {
                 this.password = "";
                 this.authed = true;
@@ -682,11 +670,7 @@
           async changePassword() {
             this.savingPw = true;
             try {
-              const r = await fetch("/api/password", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ current: this.pwCurrent, new: this.pwNew }),
-              });
+              const r = await this.postJSON("/api/password", { current: this.pwCurrent, new: this.pwNew });
               if (r.ok) {
                 this.toast("Password changed", "success");
                 this.pwCurrent = "";
@@ -712,31 +696,31 @@
             setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, 3500);
           },
 
-          async loadAudit() {
-            this.loadingAudit = true;
+          // POST a JSON body; the caller inspects the returned Response for status handling.
+          postJSON(url, body) {
+            return fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+          },
+
+          // GET a list into `this[field]`, toggling `this[flag]`; logs out on 401.
+          async loadList(url, field, flag, errMsg) {
+            this[flag] = true;
             try {
-              const r = await fetch("/api/audit");
+              const r = await fetch(url);
               if (r.status === 401) { this.authed = false; return; }
-              if (r.ok) this.audit = await r.json();
+              if (r.ok) this[field] = await r.json();
             } catch {
-              this.toast("Failed to load access log", "error");
+              this.toast(errMsg, "error");
             } finally {
-              this.loadingAudit = false;
+              this[flag] = false;
             }
           },
 
-          async loadUsage() {
-            this.loadingUsage = true;
-            try {
-              const r = await fetch("/api/usage");
-              if (r.status === 401) { this.authed = false; return; }
-              if (r.ok) this.usage = await r.json();
-            } catch {
-              this.toast("Failed to load usage history", "error");
-            } finally {
-              this.loadingUsage = false;
-            }
-          },
+          loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", "Failed to load access log"); },
+          loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", "Failed to load usage history"); },
 
           async loadTimeRequests() {
             try {

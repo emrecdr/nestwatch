@@ -20,14 +20,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::control::{ProcessInfo, SystemControl};
-use crate::curfew::MAX_WARN_SECS;
+use crate::curfew::{MAX_WARN_SECS, default_warn_secs};
 
 /// How often the enforcer re-checks (matches the curfew enforcer).
 const CHECK_INTERVAL: Duration = Duration::from_secs(30);
-
-fn default_warn_secs() -> u32 {
-    60
-}
 
 /// What to do when the daily budget is exhausted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -268,12 +264,7 @@ pub async fn run_rules_enforcer(
         // Snapshot the config under the lock, then drop the guard before any await.
         let (rules, extra) = {
             let guard = crate::state::recover_read(&config);
-            let extra = if guard.extra_minutes_date == today.to_string() {
-                guard.extra_minutes_today
-            } else {
-                0
-            };
-            (guard.rules.clone(), extra)
+            (guard.rules.clone(), guard.extra.for_day(today))
         };
 
         if !rules.any_configured() {

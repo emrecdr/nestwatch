@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::control::SystemControl;
 
-fn default_warn_secs() -> u32 {
+/// Default warning countdown (seconds). Shared with the rules enforcer's serde default.
+pub fn default_warn_secs() -> u32 {
     60
 }
 
