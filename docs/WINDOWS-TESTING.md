@@ -75,6 +75,17 @@ Run through it once on his PC after installing.
       the anti-bypass behavior.
 - [ ] Set a normal bedtime window (e.g. 22:00→07:00) and leave it for real use.
 
+## E2. Screen-time rules & time requests
+
+- [ ] In **Screen-time & app limits**, set a tiny **Daily limit** (e.g. 1 min), action **Lock
+      screen**, warn 30s, Save. After ~1–2 min of use the screen **locks** (and re-locks if he
+      unlocks). Set it back to 0 (off) afterwards.
+- [ ] Add a **Blocked app** (e.g. `notepad.exe`), Save; launch Notepad → within ~30s it's
+      **killed**. Remove it afterwards.
+- [ ] From his browser, open `https://<his-pc-ip>:<port>/ask`, request e.g. 15 minutes →
+      you see it under **More-time requests** in the dashboard → **Approve** → the granted
+      minutes are added to today's budget (and appear in **Usage history**).
+
 ## F. Resilience
 
 - [ ] Auto-restart: as admin, `taskkill /f /im host-health.exe` → within a few seconds

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dim">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Ask for more time</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body class="min-h-screen bg-base-200">
+    <div class="flex min-h-screen items-center justify-center p-4">
+      <div class="card w-full max-w-sm bg-base-100 shadow-xl">
+        <form class="card-body" id="form">
+          <h1 class="card-title justify-center text-xl">Ask for more time</h1>
+          <p class="text-center text-sm opacity-70">Your request goes to a parent to approve.</p>
+
+          <label class="form-control mt-2">
+            <span class="label-text mb-1">Minutes</span>
+            <input id="minutes" type="number" min="1" max="240" value="30"
+                   class="input input-bordered" />
+          </label>
+          <label class="form-control mt-1">
+            <span class="label-text mb-1">Why? (optional)</span>
+            <input id="reason" type="text" maxlength="200" placeholder="finished my homework"
+                   class="input input-bordered" />
+          </label>
+
+          <button id="btn" type="submit" class="btn btn-primary mt-2">Send request</button>
+          <p id="msg" class="mt-1 text-center text-sm"></p>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("form");
+      const msg = document.getElementById("msg");
+      const btn = document.getElementById("btn");
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        btn.disabled = true;
+        msg.textContent = "";
+        const minutes = parseInt(document.getElementById("minutes").value, 10) || 0;
+        const reason = document.getElementById("reason").value;
+        try {
+          const r = await fetch("/time-request", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ minutes, reason }),
+          });
+          if (r.ok) {
+            msg.textContent = "Sent! Ask a parent to check the dashboard.";
+            msg.className = "mt-1 text-center text-sm text-success";
+            form.reset();
+          } else if (r.status === 429) {
+            msg.textContent = "Too many requests — wait a bit and try again.";
+            msg.className = "mt-1 text-center text-sm text-error";
+          } else {
+            msg.textContent = "Couldn't send (check the minutes).";
+            msg.className = "mt-1 text-center text-sm text-error";
+          }
+        } catch {
+          msg.textContent = "Couldn't reach the server.";
+          msg.className = "mt-1 text-center text-sm text-error";
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

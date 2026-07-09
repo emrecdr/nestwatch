@@ -8,9 +8,13 @@
 A single self-contained Rust app that lets a parent, from any device on the **same home
 network**, log into a web page and control a child's Windows PC:
 
-- take a screenshot, see running apps, close a specific app, shut the machine down;
-- enforce a **curfew** — a closed time window during which the PC auto-shuts-down (with a
-  warning countdown);
+- take a screenshot (with an optional near-live auto-refresh), see running apps, close a
+  specific app, **lock** the screen, or shut the machine down;
+- enforce a **curfew** (multiple windows, per-day-of-week) during which the PC auto-shuts-down,
+  a **daily screen-time budget**, an **app blocklist**, and **per-app time limits**;
+- review a **usage history** and an **access log**, and change the password from the dashboard;
+- let the child **request more time** at `https://<this-pc>:8443/ask` — the parent approves or
+  denies it in the dashboard (an approval adds minutes to today's budget);
 - run as a **tamper-resistant SYSTEM service** a standard (non-admin) user can't stop.
 
 Single-user, LAN-only. No keylogging or covert data collection.

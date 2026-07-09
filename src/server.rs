@@ -5,6 +5,8 @@
 //!   GET  /                      app shell (unauthenticated)
 //!   GET  /session               is the caller logged in? (drives the UI)
 //!   POST /login   POST /logout  auth endpoints
+//!   GET  /ask                   child "request more time" page (unauthenticated, LAN-gated)
+//!   POST /time-request          child submits a request (unauthenticated, LAN-gated, throttled)
 //!   /api/*                      guarded by `require_auth`:
 //!     GET  /api/screenshot
 //!     GET  /api/processes
@@ -15,6 +17,8 @@
 //!     GET  /api/audit
 //!     GET  /api/usage
 //!     GET  POST /api/rules
+//!     GET  /api/time-requests
+//!     POST /api/time-requests/{id}/approve  POST /api/time-requests/{id}/deny
 //!     POST /api/password
 //!   *                           embedded static assets (fallback)
 //! ```
@@ -54,6 +58,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/audit", get(api::audit))
         .route("/usage", get(api::usage))
         .route("/rules", get(api::get_rules).post(api::set_rules))
+        .route("/time-requests", get(api::list_time_requests))
+        .route(
+            "/time-requests/{id}/approve",
+            post(api::approve_time_request),
+        )
+        .route("/time-requests/{id}/deny", post(api::deny_time_request))
         .route("/password", post(api::change_password))
         .route_layer(middleware::from_fn(auth::require_auth));
 
@@ -62,6 +72,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/session", get(auth::me))
         .route("/login", post(auth::login))
         .route("/logout", post(auth::logout))
+        // Child-facing, unauthenticated but LAN-gated (see the outer layers below).
+        .route("/ask", get(web::ask))
+        .route("/time-request", post(api::time_request))
         .nest("/api", api)
         .fallback(web::static_handler)
         .layer(session_layer)

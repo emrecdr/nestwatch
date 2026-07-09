@@ -20,6 +20,11 @@ pub async fn index() -> Response {
     serve_asset("index.html")
 }
 
+/// `GET /ask` → the child's "request more time" page (unauthenticated, LAN-gated).
+pub async fn ask() -> Response {
+    serve_asset("ask.html")
+}
+
 /// Fallback → serve any other embedded asset by path (e.g. `/app.css`, `/alpine.min.js`).
 /// `/` is handled by [`index`], so this never sees an empty path.
 pub async fn static_handler(uri: Uri) -> Response {

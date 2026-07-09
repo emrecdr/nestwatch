@@ -2,13 +2,17 @@
 //! worker so the async runtime stays responsive, then maps the result into a response.
 //! All routes here sit behind the `require_auth` middleware.
 
+use std::net::SocketAddr;
+
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tower_sessions::Session;
+
+use crate::timereq::{MAX_REQUEST_MINUTES, PendingRequest};
 
 use crate::config::Config;
 use crate::control::{ProcessInfo, SystemControl};
@@ -143,6 +147,91 @@ pub async fn set_rules(
     });
     update_config(&state, |c| c.rules = new_rules).await?;
     state.audit.record("rules_change", audit_fields);
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+pub struct TimeReqBody {
+    minutes: u32,
+    #[serde(default)]
+    reason: String,
+}
+
+/// `POST /time-request` — the child asks for extra minutes. **Unauthenticated** (the child
+/// isn't logged in) but LAN-gated (outer router → `require_lan_peer`) and per-IP rate-limited.
+/// Returns only `{ok:true}` regardless of accept/reject, so it leaks nothing about the queue.
+pub async fn time_request(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(body): Json<TimeReqBody>,
+) -> Result<Json<Value>, AppError> {
+    let ip = peer.ip();
+    state.time_req_limiter.count_and_check(ip)?;
+    if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
+        return Err(AppError::BadRequest("minutes out of range".into()));
+    }
+    let requests = state.time_requests.clone();
+    let accepted =
+        tokio::task::spawn_blocking(move || requests.submit(body.minutes, &body.reason)).await?;
+    state.audit.record(
+        "time_request_submitted",
+        json!({ "src_ip": ip, "minutes": body.minutes, "accepted": accepted.is_some() }),
+    );
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /api/time-requests` → the pending requests, newest first (parent-facing).
+pub async fn list_time_requests(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<PendingRequest>>, AppError> {
+    let requests = state.time_requests.clone();
+    let pending = tokio::task::spawn_blocking(move || requests.pending()).await?;
+    Ok(Json(pending))
+}
+
+/// `POST /api/time-requests/{id}/approve` → grant the requested minutes to today's budget.
+pub async fn approve_time_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let requests = state.time_requests.clone();
+    let resolved = tokio::task::spawn_blocking(move || requests.resolve(&id, true)).await?;
+    let Some(req) = resolved else {
+        return Err(AppError::BadRequest("no such pending request".into()));
+    };
+
+    // Add the minutes to today's grant (resetting if the stored date isn't today).
+    let today = chrono::Local::now().date_naive().to_string();
+    let minutes = req.minutes;
+    update_config(&state, |c| {
+        if c.extra_minutes_date != today {
+            c.extra_minutes_today = 0;
+            c.extra_minutes_date = today.clone();
+        }
+        c.extra_minutes_today += minutes;
+    })
+    .await?;
+
+    state
+        .audit
+        .record("time_request_approved", json!({ "minutes": minutes }));
+    state
+        .usage
+        .record("extra_time_granted", json!({ "minutes": minutes }));
+    Ok(Json(json!({ "ok": true, "minutes": minutes })))
+}
+
+/// `POST /api/time-requests/{id}/deny` → reject a pending request.
+pub async fn deny_time_request(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let requests = state.time_requests.clone();
+    let resolved = tokio::task::spawn_blocking(move || requests.resolve(&id, false)).await?;
+    if resolved.is_none() {
+        return Err(AppError::BadRequest("no such pending request".into()));
+    }
+    state.audit.record("time_request_denied", json!({}));
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -261,6 +261,39 @@
             </div>
           </section>
 
+          <!-- More-time requests -->
+          <section class="card bg-base-100 shadow md:col-span-2" x-show="timeRequests.length > 0">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">
+                  More-time requests
+                  <span class="badge badge-primary" x-text="timeRequests.length"></span>
+                </h2>
+                <button class="btn btn-ghost btn-sm" @click="loadTimeRequests()">Refresh</button>
+              </div>
+              <div class="mt-2 max-h-72 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Time</th><th>Minutes</th><th>Reason</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="r in timeRequests" :key="r.id">
+                      <tr>
+                        <td class="whitespace-nowrap" x-text="fmtTime(r.ts)"></td>
+                        <td x-text="r.minutes"></td>
+                        <td class="truncate" x-text="r.reason || '—'"></td>
+                        <td class="text-right whitespace-nowrap">
+                          <button class="btn btn-success btn-xs" @click="resolveTimeRequest(r.id, true)">Approve</button>
+                          <button class="btn btn-error btn-xs" @click="resolveTimeRequest(r.id, false)">Deny</button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
           <!-- Recent access -->
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
@@ -418,6 +451,7 @@
           loadingAudit: false,
           usage: [],
           loadingUsage: false,
+          timeRequests: [],
           pwCurrent: "",
           pwNew: "",
           savingPw: false,
@@ -437,6 +471,7 @@
               this.loadRules();
               this.loadAudit();
               this.loadUsage();
+              this.loadTimeRequests();
             }
           },
 
@@ -700,6 +735,31 @@
               this.toast("Failed to load usage history", "error");
             } finally {
               this.loadingUsage = false;
+            }
+          },
+
+          async loadTimeRequests() {
+            try {
+              const r = await fetch("/api/time-requests");
+              if (r.status === 401) { this.authed = false; return; }
+              if (r.ok) this.timeRequests = await r.json();
+            } catch {}
+          },
+
+          async resolveTimeRequest(id, approve) {
+            const verb = approve ? "approve" : "deny";
+            try {
+              const r = await fetch(`/api/time-requests/${id}/${verb}`, { method: "POST" });
+              if (r.ok) {
+                const j = await r.json().catch(() => ({}));
+                this.toast(approve ? `Granted ${j.minutes ?? ""} min` : "Denied", "success");
+                this.loadTimeRequests();
+                if (approve) this.loadUsage();
+              } else {
+                this.toast("Could not update the request", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
             }
           },
 

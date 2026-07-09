@@ -9,6 +9,7 @@ use crate::audit::AuditLog;
 use crate::auth::LoginLimiter;
 use crate::config::Config;
 use crate::control::SystemControl;
+use crate::timereq::{SubmitLimiter, TimeRequests};
 use crate::usage::UsageLog;
 
 #[derive(Clone)]
@@ -29,6 +30,10 @@ pub struct AppState {
     pub audit: Arc<AuditLog>,
     /// Append-only usage-history log (daily screen-time, sessions, enforcement events).
     pub usage: Arc<UsageLog>,
+    /// The child's "request more time" queue (parent approves/denies in the dashboard).
+    pub time_requests: Arc<TimeRequests>,
+    /// Per-IP throttle for the unauthenticated child request endpoint.
+    pub time_req_limiter: Arc<SubmitLimiter>,
 }
 
 impl AppState {
@@ -40,6 +45,7 @@ impl AppState {
         let dir = crate::config::data_paths().dir;
         let audit = Arc::new(AuditLog::new(dir.join("audit.jsonl")));
         let usage = Arc::new(UsageLog::new(dir.join("usage.jsonl")));
+        let time_requests = Arc::new(TimeRequests::new(dir.join("time_requests.jsonl")));
         Self {
             control,
             config: Arc::new(RwLock::new(config)),
@@ -47,6 +53,8 @@ impl AppState {
             login_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
             usage,
+            time_requests,
+            time_req_limiter: Arc::new(SubmitLimiter::default()),
         }
     }
 }

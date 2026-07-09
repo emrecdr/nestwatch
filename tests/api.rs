@@ -34,6 +34,7 @@ fn test_state() -> AppState {
     // Tests must never touch the real data dir; keep the logs off.
     state.audit = Arc::new(AuditLog::disabled());
     state.usage = Arc::new(UsageLog::disabled());
+    state.time_requests = Arc::new(nestwatch::timereq::TimeRequests::disabled());
     state
 }
 
@@ -428,4 +429,93 @@ async fn password_change_rejects_short_new() {
     )
     .await;
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+// Helper: POST /time-request from a given mock peer IP.
+async fn post_time_request(app: &Router, body: Value) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/time-request")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn time_request_is_lan_gated_but_not_auth_gated() {
+    // No cookie, loopback peer → accepted (proves it's outside require_auth).
+    let app = test_app();
+    let res = post_time_request(&app, json!({ "minutes": 30, "reason": "homework" })).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["ok"], json!(true));
+}
+
+#[tokio::test]
+async fn time_request_rejected_off_lan() {
+    let app = build_router(test_state())
+        .layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 5555))));
+    let res = post_time_request(&app, json!({ "minutes": 30 })).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn time_request_validates_minutes() {
+    let app = test_app();
+    let res = post_time_request(&app, json!({ "minutes": 0 })).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn time_request_is_rate_limited() {
+    // The default SubmitLimiter allows 5/min per IP; the 6th from the same mock peer → 429.
+    let app = test_app();
+    for _ in 0..5 {
+        let res = post_time_request(&app, json!({ "minutes": 10 })).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+    let res = post_time_request(&app, json!({ "minutes": 10 })).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn parent_time_request_endpoints_require_auth() {
+    let app = test_app();
+    for (method, uri) in [
+        ("GET", "/api/time-requests"),
+        ("POST", "/api/time-requests/abc/approve"),
+        ("POST", "/api/time-requests/abc/deny"),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{method} {uri}");
+    }
+
+    // Authenticated GET returns an (empty) array.
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/time-requests")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(body_json(res).await.is_array());
 }
