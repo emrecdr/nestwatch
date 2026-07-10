@@ -2,7 +2,7 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
-## [Unreleased]
+## [0.2.2] — 2026-07-11
 
 ### Added
 - **Service diagnostic logging.** The SYSTEM service (Session 0, no console) now writes its
