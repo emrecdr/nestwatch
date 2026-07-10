@@ -2,6 +2,23 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.1] — 2026-07-10
+
+Quality/cleanup release — no new features. Two small user-visible fixes plus internal dedup.
+
+### Fixed
+- The dashboard loaded only four of six panels after a fresh login (Rules and pending
+  time-requests were stale until a manual refresh); both `init()` and `login()` now share one
+  `loadAll()`.
+- The Usage-history "screen-time" row showed `N/? min` because the `screentime_daily` event
+  didn't carry the budget; it now includes `budget`.
+
+### Changed
+- Internal simplification (no behavior change): a typed `DailyGrant` centralizes the daily
+  extra-minutes reset rule; shared `default_warn_secs`; an `api::spawn` helper and frontend
+  `postJSON`/`loadList`/`loadAll` helpers remove duplicated offload/fetch/loader code;
+  `Rules::effective_budget_mins` and `config::today()` fold twice-open-coded logic.
+
 ## [0.2.0] — 2026-07-09
 
 A large parental-control feature batch, plus a foundation refactor. All phases were shipped
