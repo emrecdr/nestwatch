@@ -51,7 +51,7 @@ pub fn run_cli() -> Result<()> {
         return run_helper(&args);
     }
 
-    init_tracing();
+    init_tracing(cmd);
     // rustls 0.23 requires a crypto provider to be installed. We build against the
     // `ring` provider (no C toolchain needed) and install it once at startup.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -115,10 +115,52 @@ fn run_server() -> Result<()> {
     rt.block_on(server::serve(state))
 }
 
-fn init_tracing() {
+/// Initialize logging. The interactive subcommands (`run`, `install`, `uninstall`) log to
+/// **stdout** where a console exists. The `service-run` subcommand runs as the SYSTEM service
+/// in Session 0 — which has **no console** — so its diagnostics would otherwise vanish; it logs
+/// to a daily-rotated file in the ACL-hardened data dir instead, where a standard user can't
+/// read them. Never called for `helper` (that path streams raw PNG to stdout).
+fn init_tracing(cmd: &str) {
     use tracing_subscriber::{EnvFilter, fmt};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    if cmd == "service-run" {
+        match service_log_appender() {
+            // Blocking appender (no `WorkerGuard`): the release build aborts on panic, which
+            // skips destructors — so a non-blocking guard's flush-on-drop wouldn't run exactly
+            // when we most want the log. Diagnostics are low-volume, so blocking is fine.
+            Ok(appender) => {
+                fmt()
+                    .with_env_filter(filter)
+                    .with_writer(appender)
+                    .with_ansi(false)
+                    .init();
+                return;
+            }
+            Err(e) => {
+                // Log-file setup failed; fall back to stdout (invisible under the service, but
+                // init must never abort the service) and record why.
+                fmt().with_env_filter(filter).init();
+                tracing::error!(error = %e, "could not open service log file; using stdout");
+                return;
+            }
+        }
+    }
+
     fmt().with_env_filter(filter).init();
+}
+
+/// A daily-rotated `service.<date>.log` in the data dir (retained ~2 weeks, best-effort).
+fn service_log_appender() -> Result<tracing_appender::rolling::RollingFileAppender> {
+    use tracing_appender::rolling::{Builder, Rotation};
+    let dir = config::data_paths().dir;
+    Builder::new()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("service")
+        .filename_suffix("log")
+        .max_log_files(14)
+        .build(&dir)
+        .map_err(|e| anyhow::anyhow!("building log appender in {}: {e}", dir.display()))
 }
 
 fn print_usage() {

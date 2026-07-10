@@ -2,6 +2,15 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Added
+- **Service diagnostic logging.** The SYSTEM service (Session 0, no console) now writes its
+  `tracing` diagnostics — startup, enforcer failures/retries, cert and control errors — to a
+  daily-rotated `service.<date>.log` in the ACL-hardened data dir (retained ~2 weeks). Dev `run`
+  still logs to the console; the screenshot `helper` path is untouched. Uses a blocking appender
+  (no `WorkerGuard`) so logs aren't lost on a `panic = "abort"`.
+
 ## [0.2.1] — 2026-07-10
 
 Quality/cleanup release — no new features. Two small user-visible fixes plus internal dedup.

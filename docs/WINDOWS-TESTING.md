@@ -29,6 +29,11 @@ Run through it once on his PC after installing.
 - [ ] Binary in place: `C:\Program Files\HostHealth\host-health.exe` exists.
 - [ ] Firewall rule present: `netsh advfirewall firewall show rule name=HostHealthService`
       → LocalPort = your port, Profiles = Domain,Private.
+- [ ] **Service diagnostics are written:** `dir C:\ProgramData\HostHealth\service.*.log` shows a
+      dated `service.<YYYY-MM-DD>.log`, and (as admin) `type` it → the "listening on…" startup
+      line is there. This is your debugging trail if anything below misbehaves — the SYSTEM
+      service has no console, so this file is where its errors/warnings go. It's ACL-locked like
+      the rest of the dir, so as HIM `type` should say Access denied.
 
 ## B. Tamper-resistance (the key differentiator — do these while logged in as HIM)
 
