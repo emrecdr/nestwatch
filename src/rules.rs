@@ -45,6 +45,19 @@ fn default_true() -> bool {
     true
 }
 
+/// A named set of apps that share one daily time pool.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppGroup {
+    /// Display/label name, also the key the running tally is stored under.
+    pub name: String,
+    /// Member process names (case-insensitive), e.g. `["minecraft.exe", "roblox.exe"]`.
+    #[serde(default)]
+    pub apps: Vec<String>,
+    /// Shared daily budget for the whole group, in minutes (`0` = no limit).
+    #[serde(default)]
+    pub limit_mins: u32,
+}
+
 /// Persisted rule settings (a `Config` field). All defaulted so legacy configs still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rules {
@@ -69,6 +82,11 @@ pub struct Rules {
     /// Per-app daily minute limits, keyed by process name.
     #[serde(default)]
     pub app_limits: BTreeMap<String, u32>,
+    /// App groups with a **shared** daily pool: e.g. all games share 90 min. Time accrues to the
+    /// group whenever any member is running; when the pool is spent, every running member is
+    /// killed on sight (like a per-app limit, but pooled across the group).
+    #[serde(default)]
+    pub app_groups: Vec<AppGroup>,
     /// Grace/warning countdown before the budget action fires.
     #[serde(default = "default_warn_secs")]
     pub warn_secs: u32,
@@ -87,6 +105,7 @@ impl Default for Rules {
             budget_by_weekday: None,
             blocklist: Vec::new(),
             app_limits: BTreeMap::new(),
+            app_groups: Vec::new(),
             warn_secs: 0,
             budget_action: EnforceAction::Lock,
         }
@@ -120,7 +139,13 @@ impl Rules {
     /// session/process scan entirely.
     pub fn any_configured(&self) -> bool {
         self.enabled
-            && (self.has_any_budget() || !self.blocklist.is_empty() || !self.app_limits.is_empty())
+            && (self.has_any_budget()
+                || !self.blocklist.is_empty()
+                || !self.app_limits.is_empty()
+                || self
+                    .app_groups
+                    .iter()
+                    .any(|g| g.limit_mins > 0 && !g.apps.is_empty()))
     }
 
     /// Validate (at config load and on POST). Fail-open like curfew: only the warning bound.
@@ -152,27 +177,72 @@ pub struct Usage {
     pub total_secs: u64,
     /// Per-app seconds today (only for apps that have a limit), keyed by normalized name.
     pub per_app_secs: BTreeMap<String, u64>,
+    /// Per-group seconds today (only for groups with a limit), keyed by group name.
+    #[serde(default)]
+    pub per_group_secs: BTreeMap<String, u64>,
+}
+
+/// Rule-derived, normalized enforcement targets for one tick — built once by `decide` and shared
+/// by accrual and the kill checks so the two can't disagree on what's tracked.
+#[derive(Default)]
+pub(crate) struct Targets {
+    /// Per-app limits (minutes), keyed by normalized process name (zero-limit apps dropped).
+    app_limits: BTreeMap<String, u32>,
+    /// App groups with a shared pool: (name, normalized member set, limit minutes). Only groups
+    /// with a positive limit and at least one member are included.
+    groups: Vec<(String, BTreeSet<String>, u32)>,
+}
+
+impl Targets {
+    fn from_rules(rules: &Rules) -> Self {
+        let app_limits = rules
+            .app_limits
+            .iter()
+            .filter(|(_, v)| **v > 0)
+            .map(|(k, &v)| (norm(k), v))
+            .collect();
+        let groups = rules
+            .app_groups
+            .iter()
+            .filter(|g| g.limit_mins > 0 && !g.apps.is_empty())
+            .map(|g| {
+                (
+                    g.name.clone(),
+                    g.apps.iter().map(|a| norm(a)).collect(),
+                    g.limit_mins,
+                )
+            })
+            .collect();
+        Self { app_limits, groups }
+    }
 }
 
 impl Usage {
-    /// Add `delta_secs` to the total and to each tracked app currently running, resetting first
-    /// if the local day changed. `running` and `limits` keys are already normalized. Pure.
-    pub fn accrue(
+    /// Add `delta_secs` to the total, to each tracked app running, and to each group with a
+    /// member running — resetting first if the local day changed. `running` and all `targets`
+    /// keys are already normalized. Pure.
+    pub(crate) fn accrue(
         &mut self,
         today: NaiveDate,
         delta_secs: u64,
         running: &BTreeSet<String>,
-        limits: &BTreeMap<String, u32>,
+        targets: &Targets,
     ) {
         if self.day != Some(today) {
             self.day = Some(today);
             self.total_secs = 0;
             self.per_app_secs.clear();
+            self.per_group_secs.clear();
         }
         self.total_secs += delta_secs;
         for name in running {
-            if limits.contains_key(name) {
+            if targets.app_limits.contains_key(name) {
                 *self.per_app_secs.entry(name.clone()).or_insert(0) += delta_secs;
+            }
+        }
+        for (gname, members, _limit) in &targets.groups {
+            if running.iter().any(|r| members.contains(r)) {
+                *self.per_group_secs.entry(gname.clone()).or_insert(0) += delta_secs;
             }
         }
     }
@@ -195,8 +265,7 @@ impl Usage {
         } else {
             Self {
                 day: Some(today),
-                total_secs: 0,
-                per_app_secs: BTreeMap::new(),
+                ..Default::default()
             }
         }
     }
@@ -238,6 +307,15 @@ pub fn today_summary(
             serde_json::json!({ "name": name, "used_mins": used, "limit_mins": lim })
         })
         .collect();
+    let groups: Vec<serde_json::Value> = rules
+        .app_groups
+        .iter()
+        .filter(|g| g.limit_mins > 0 && !g.apps.is_empty())
+        .map(|g| {
+            let used = usage.per_group_secs.get(&g.name).copied().unwrap_or(0) / 60;
+            serde_json::json!({ "name": g.name, "used_mins": used, "limit_mins": g.limit_mins })
+        })
+        .collect();
     serde_json::json!({
         "day": usage.day.map(|d| d.to_string()),
         "enabled": rules.enabled,
@@ -246,6 +324,7 @@ pub fn today_summary(
         "remaining_mins": remaining_mins,
         "extra_mins": extra,
         "per_app": per_app,
+        "groups": groups,
     })
 }
 
@@ -308,27 +387,25 @@ impl RulesEnforcer {
     pub fn decide(&mut self, rules: &Rules, procs: &[ProcessInfo], t: Tick) -> Vec<RuleAction> {
         let mut actions = Vec::new();
 
-        // Normalized per-app limits (drop zero limits) and running names.
-        let limits: BTreeMap<String, u32> = rules
-            .app_limits
-            .iter()
-            .filter(|(_, v)| **v > 0)
-            .map(|(k, &v)| (norm(k), v))
-            .collect();
+        let targets = Targets::from_rules(rules);
         let running: BTreeSet<String> = procs.iter().map(|p| norm(&p.name)).collect();
 
         // Only charge screen time while the machine is actively in use. A locked screen or a
         // logged-out console still resets on a new day (accrue handles the rollover), but adds
         // no seconds — so overnight idle time and the budget-lock's own locked screen don't
         // count against the budget.
-        if t.active {
-            self.usage
-                .accrue(t.today, t.interval.as_secs(), &running, &limits);
-        } else {
-            self.usage.accrue(t.today, 0, &running, &limits);
+        let delta = if t.active { t.interval.as_secs() } else { 0 };
+        self.usage.accrue(t.today, delta, &running, &targets);
+
+        // Members of any group whose shared pool is spent → killed on sight.
+        let mut group_over: BTreeSet<String> = BTreeSet::new();
+        for (name, members, limit) in &targets.groups {
+            if self.usage.per_group_secs.get(name).copied().unwrap_or(0) >= *limit as u64 * 60 {
+                group_over.extend(members.iter().cloned());
+            }
         }
 
-        // Blocklist (kill on sight) + per-app over-limit → kill those PIDs.
+        // Blocklist (kill on sight) + per-app over-limit + over-pool group members → kill.
         let blocked: BTreeSet<String> = rules.blocklist.iter().map(|b| norm(b)).collect();
         for p in procs {
             let n = norm(&p.name);
@@ -336,9 +413,13 @@ impl RulesEnforcer {
                 actions.push(RuleAction::Kill(p.pid));
                 continue;
             }
-            if let Some(&lim) = limits.get(&n)
+            if let Some(&lim) = targets.app_limits.get(&n)
                 && self.usage.per_app_secs.get(&n).copied().unwrap_or(0) >= lim as u64 * 60
             {
+                actions.push(RuleAction::Kill(p.pid));
+                continue;
+            }
+            if group_over.contains(&n) {
                 actions.push(RuleAction::Kill(p.pid));
             }
         }
@@ -708,17 +789,64 @@ mod tests {
     #[test]
     fn accrue_adds_and_resets_on_new_day() {
         let mut u = Usage::default();
-        let limits: BTreeMap<String, u32> = [("game.exe".into(), 30)].into();
+        let targets = Targets {
+            app_limits: [("game.exe".into(), 30)].into(),
+            ..Default::default()
+        };
         let running: BTreeSet<String> = ["game.exe".into()].into();
-        u.accrue(day(), 30, &running, &limits);
-        u.accrue(day(), 30, &running, &limits);
+        u.accrue(day(), 30, &running, &targets);
+        u.accrue(day(), 30, &running, &targets);
         assert_eq!(u.total_secs, 60);
         assert_eq!(u.per_app_secs["game.exe"], 60);
         // New day → reset.
         let next = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
-        u.accrue(next, 30, &running, &limits);
+        u.accrue(next, 30, &running, &targets);
         assert_eq!(u.total_secs, 30);
         assert_eq!(u.per_app_secs["game.exe"], 30);
+    }
+
+    #[test]
+    fn group_pool_kills_all_members_when_spent() {
+        // A 1-minute pool shared by two games. Running either accrues to the pool; once spent,
+        // every running member is killed.
+        let rules = Rules {
+            app_groups: vec![AppGroup {
+                name: "Games".into(),
+                apps: vec!["Minecraft.exe".into(), "roblox.exe".into()],
+                limit_mins: 1,
+            }],
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "minecraft.exe"), proc(11, "roblox.exe")];
+        let now = Instant::now();
+        // First 30s tick: under the pool, no kills.
+        assert!(e.decide(&rules, &procs, tk(now, 0)).is_empty());
+        // Second 30s tick reaches the 60s pool → both members killed.
+        let a = e.decide(&rules, &procs, tk(now, 0));
+        assert_eq!(a, vec![RuleAction::Kill(10), RuleAction::Kill(11)]);
+        // A non-member is untouched.
+        let with_other = [proc(10, "minecraft.exe"), proc(12, "notepad.exe")];
+        let a2 = e.decide(&rules, &with_other, tk(now, 0));
+        assert_eq!(a2, vec![RuleAction::Kill(10)]);
+    }
+
+    #[test]
+    fn group_pool_shared_across_members() {
+        // The pool is shared: alternating between two members still drains the one pool.
+        let rules = Rules {
+            app_groups: vec![AppGroup {
+                name: "Games".into(),
+                apps: vec!["a.exe".into(), "b.exe".into()],
+                limit_mins: 1,
+            }],
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let now = Instant::now();
+        e.decide(&rules, &[proc(1, "a.exe")], tk(now, 0)); // 30s on a
+        let a = e.decide(&rules, &[proc(2, "b.exe")], tk(now, 0)); // 30s on b → pool spent
+        assert_eq!(a, vec![RuleAction::Kill(2)]);
     }
 
     #[test]
@@ -930,6 +1058,7 @@ mod tests {
             day: Some(day()),
             total_secs: 47 * 60,
             per_app_secs: Default::default(),
+            per_group_secs: Default::default(),
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
@@ -954,6 +1083,7 @@ mod tests {
             day: Some(day()),
             total_secs: 90 * 60,
             per_app_secs: Default::default(),
+            per_group_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage);
         assert_eq!(s["budget_mins"], 0);
@@ -970,6 +1100,7 @@ mod tests {
             day: Some(day()),
             total_secs: 10 * 60,
             per_app_secs: Default::default(),
+            per_group_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 30, &usage); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
@@ -987,6 +1118,7 @@ mod tests {
             day: Some(day()),
             total_secs: 30 * 60,
             per_app_secs: Default::default(),
+            per_group_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage);
         assert_eq!(s["budget_mins"], 90);
