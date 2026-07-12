@@ -206,6 +206,89 @@ pub async fn set_rules(
 }
 
 #[derive(Deserialize)]
+pub struct SaveRoutineBody {
+    name: String,
+    rules: crate::rules::Rules,
+}
+
+/// `GET /api/routines` → the saved routine names (newest-last, as stored).
+pub async fn list_routines(State(state): State<AppState>) -> Json<Vec<String>> {
+    let names = crate::state::recover_read(&state.config)
+        .routines
+        .iter()
+        .map(|r| r.name.clone())
+        .collect();
+    Json(names)
+}
+
+/// `POST /api/routines` → save (upsert) a named preset of the given rules.
+pub async fn save_routine(
+    State(state): State<AppState>,
+    Json(body): Json<SaveRoutineBody>,
+) -> Result<Json<Value>, AppError> {
+    let name = body.name.trim().to_string();
+    if name.is_empty() || name.chars().count() > crate::config::MAX_ROUTINE_NAME {
+        return Err(AppError::BadRequest("invalid routine name".into()));
+    }
+    body.rules.validate().map_err(AppError::BadRequest)?;
+    let rules = body.rules;
+    // Reject a brand-new routine past the cap, but always allow updating an existing one.
+    {
+        let cfg = crate::state::recover_read(&state.config);
+        let exists = cfg.routines.iter().any(|r| r.name == name);
+        if !exists && cfg.routines.len() >= crate::config::MAX_ROUTINES {
+            return Err(AppError::BadRequest("too many routines".into()));
+        }
+    }
+    let audit_name = name.clone();
+    update_config(&state, move |c| {
+        if let Some(existing) = c.routines.iter_mut().find(|r| r.name == name) {
+            existing.rules = rules;
+        } else {
+            c.routines.push(crate::config::Routine { name, rules });
+        }
+    })
+    .await?;
+    state
+        .audit
+        .record("routine_saved", json!({ "name": audit_name }));
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `POST /api/routines/{name}/apply` → copy the routine's rules into the live rules (hot-applied
+/// by the enforcer next tick).
+pub async fn apply_routine(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let rules = crate::state::recover_read(&state.config)
+        .routines
+        .iter()
+        .find(|r| r.name == name)
+        .map(|r| r.rules.clone());
+    let Some(rules) = rules else {
+        return Err(AppError::BadRequest("no such routine".into()));
+    };
+    update_config(&state, |c| c.rules = rules).await?;
+    state
+        .audit
+        .record("routine_applied", json!({ "name": name }));
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `POST /api/routines/{name}/delete` → remove a saved routine (does not touch the live rules).
+pub async fn delete_routine(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    update_config(&state, |c| c.routines.retain(|r| r.name != name)).await?;
+    state
+        .audit
+        .record("routine_deleted", json!({ "name": name }));
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 pub struct TimeReqBody {
     minutes: u32,
     #[serde(default)]

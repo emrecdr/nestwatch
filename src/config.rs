@@ -54,6 +54,19 @@ impl DailyGrant {
     }
 }
 
+/// Largest number of saved routines we keep (bounds the config).
+pub const MAX_ROUTINES: usize = 20;
+/// Longest routine name we accept.
+pub const MAX_ROUTINE_NAME: usize = 40;
+
+/// A saved, named preset of usage [`Rules`](crate::rules::Rules) — e.g. "Homework", "Weekend" —
+/// that the parent can apply to the live rules with one click.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Routine {
+    pub name: String,
+    pub rules: crate::rules::Rules,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub port: u16,
@@ -68,6 +81,9 @@ pub struct Config {
     /// Extra minutes granted to *today's* budget (via an approved time request).
     #[serde(default)]
     pub extra: DailyGrant,
+    /// Saved rule presets the parent can switch between (Homework / Bedtime / Weekend …).
+    #[serde(default)]
+    pub routines: Vec<Routine>,
 }
 
 /// Resolved on-disk locations, derived from [`data_dir`].
@@ -210,5 +226,25 @@ mod tests {
         // Upgrade safety: a config predating the `enabled` field must load as *enabled*, so an
         // upgrade never silently pauses screen-time enforcement.
         assert!(cfg.rules.enabled);
+        assert!(cfg.routines.is_empty());
+    }
+
+    #[test]
+    fn routines_round_trip_through_json() {
+        let cfg = Config {
+            routines: vec![Routine {
+                name: "Homework".into(),
+                rules: crate::rules::Rules {
+                    daily_budget_mins: 30,
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.routines.len(), 1);
+        assert_eq!(back.routines[0].name, "Homework");
+        assert_eq!(back.routines[0].rules.daily_budget_mins, 30);
     }
 }

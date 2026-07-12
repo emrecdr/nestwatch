@@ -466,6 +466,31 @@ async fn redeem_code_is_lan_gated_not_auth_gated() {
 }
 
 #[tokio::test]
+async fn routines_require_auth() {
+    let app = test_app();
+    for (method, uri) in [
+        ("GET", "/api/routines"),
+        ("POST", "/api/routines"),
+        ("POST", "/api/routines/Homework/apply"),
+        ("POST", "/api/routines/Homework/delete"),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
 async fn rules_get_and_validation() {
     let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();

@@ -395,6 +395,43 @@
             </div>
           </section>
 
+          <!-- Routines (saved rule presets) -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Routines</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadRoutines()" :disabled="loadingRoutines">
+                  <span x-show="loadingRoutines" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Save the current screen-time settings above as a named preset, then switch with one
+                click (e.g. Homework, Weekend). Applying a routine replaces the live settings.
+              </p>
+              <div class="mt-1 flex flex-wrap items-end gap-2">
+                <input type="text" x-model="newRoutineName" maxlength="40" placeholder="Homework"
+                       class="input input-bordered input-sm w-48" />
+                <button class="btn btn-primary btn-sm" @click="saveRoutine()" :disabled="savingRoutine">
+                  <span x-show="savingRoutine" class="loading loading-spinner loading-xs"></span>
+                  Save current as routine
+                </button>
+              </div>
+              <div class="mt-2 flex flex-col gap-1" x-show="routines.length > 0">
+                <template x-for="name in routines" :key="name">
+                  <div class="flex items-center gap-2">
+                    <span class="flex-1 truncate" x-text="name"></span>
+                    <button class="btn btn-success btn-xs" @click="applyRoutine(name)">Apply</button>
+                    <button class="btn btn-ghost btn-xs" @click="deleteRoutine(name)">Delete</button>
+                  </div>
+                </template>
+              </div>
+              <p class="text-sm opacity-50" x-show="routines.length === 0 && !loadingRoutines">
+                No saved routines.
+              </p>
+            </div>
+          </section>
+
           <!-- More-time requests -->
           <section class="card bg-base-100 shadow md:col-span-2" x-show="timeRequests.length > 0">
             <div class="card-body">
@@ -632,6 +669,10 @@
           appLimitRows: [],
           groupRows: [],
           savingRules: false,
+          routines: [],
+          loadingRoutines: false,
+          newRoutineName: "",
+          savingRoutine: false,
           today: { day: null, enabled: true, budget_mins: 0, used_mins: 0, remaining_mins: null, extra_mins: 0, per_app: [], groups: [] },
           loadingToday: false,
           grantingExtra: false,
@@ -667,6 +708,7 @@
             this.loadProcesses();
             this.loadCurfew();
             this.loadRules();
+            this.loadRoutines();
             this.loadToday();
             this.loadAudit();
             this.loadUsage();
@@ -746,16 +788,16 @@
             }
           },
 
-          async saveRules() {
-            this.savingRules = true;
-            // Collapse editable rows back into the app_limits map (skip blank names).
+          // Fold the editable rows (per-app limits, blocklist, groups) back into `this.rules`.
+          // Shared by Save and Save-as-routine so both capture exactly the on-screen settings.
+          collapseRules() {
             this.rules.app_limits = {};
             for (const row of this.appLimitRows) {
               const name = (row.name || "").trim();
               if (name) this.rules.app_limits[name] = row.mins || 0;
             }
             this.rules.blocklist = this.rules.blocklist.map((b) => b.trim()).filter(Boolean);
-            // Collapse group rows: split the apps text on commas/whitespace, drop empty groups.
+            // Split each group's apps text on commas/whitespace; drop empty groups.
             this.rules.app_groups = this.groupRows
               .map((g) => ({
                 name: (g.name || "").trim(),
@@ -763,6 +805,11 @@
                 limit_mins: g.limit_mins || 0,
               }))
               .filter((g) => g.name && g.apps.length);
+          },
+
+          async saveRules() {
+            this.savingRules = true;
+            this.collapseRules();
             try {
               const r = await this.postJSON("/api/rules", this.rules);
               if (r.ok) {
@@ -777,6 +824,60 @@
               this.toast("Save request failed", "error");
             } finally {
               this.savingRules = false;
+            }
+          },
+
+          loadRoutines() { return this.loadList("/api/routines", "routines", "loadingRoutines"); },
+
+          async saveRoutine() {
+            const name = (this.newRoutineName || "").trim();
+            if (!name) { this.toast("Enter a routine name", "error"); return; }
+            this.savingRoutine = true;
+            this.collapseRules();
+            try {
+              const r = await this.postJSON("/api/routines", { name, rules: this.rules });
+              if (r.ok) {
+                this.toast(`Saved routine "${name}"`, "success");
+                this.newRoutineName = "";
+                this.loadRoutines();
+              } else if (r.status === 400) {
+                this.toast("Invalid name, or too many routines (max 20)", "error");
+              } else {
+                this.toast("Could not save routine", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            } finally {
+              this.savingRoutine = false;
+            }
+          },
+
+          async applyRoutine(name) {
+            try {
+              const r = await fetch(`/api/routines/${encodeURIComponent(name)}/apply`, { method: "POST" });
+              if (r.ok) {
+                this.toast(`Applied "${name}"`, "success");
+                this.loadRules();
+                this.loadToday();
+              } else {
+                this.toast("Could not apply routine", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            }
+          },
+
+          async deleteRoutine(name) {
+            try {
+              const r = await fetch(`/api/routines/${encodeURIComponent(name)}/delete`, { method: "POST" });
+              if (r.ok) {
+                this.toast(`Deleted "${name}"`, "success");
+                this.loadRoutines();
+              } else {
+                this.toast("Could not delete routine", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
             }
           },
 

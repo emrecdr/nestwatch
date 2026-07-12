@@ -20,6 +20,8 @@
 //!     GET  /api/usage/today
 //!     POST /api/extra-time
 //!     GET  POST /api/rules
+//!     GET  POST /api/routines
+//!     POST /api/routines/{name}/apply  POST /api/routines/{name}/delete
 //!     GET  /api/time-requests
 //!     POST /api/time-requests/{id}/approve  POST /api/time-requests/{id}/deny
 //!     GET  POST /api/time-codes
@@ -64,6 +66,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/usage/today", get(api::usage_today))
         .route("/extra-time", post(api::extra_time))
         .route("/rules", get(api::get_rules).post(api::set_rules))
+        .route("/routines", get(api::list_routines).post(api::save_routine))
+        .route("/routines/{name}/apply", post(api::apply_routine))
+        .route("/routines/{name}/delete", post(api::delete_routine))
         .route("/time-requests", get(api::list_time_requests))
         .route(
             "/time-requests/{id}/approve",
