@@ -9,6 +9,7 @@ use crate::audit::AuditLog;
 use crate::auth::LoginLimiter;
 use crate::config::Config;
 use crate::control::SystemControl;
+use crate::timecode::TimeCodes;
 use crate::timereq::{SubmitLimiter, TimeRequests};
 use crate::usage::UsageLog;
 
@@ -34,6 +35,10 @@ pub struct AppState {
     pub time_requests: Arc<TimeRequests>,
     /// Per-IP throttle for the unauthenticated child request endpoint.
     pub time_req_limiter: Arc<SubmitLimiter>,
+    /// Parent-minted, single-use redeemable time codes the child can cash in on the LAN page.
+    pub time_codes: Arc<TimeCodes>,
+    /// Per-IP throttle for the unauthenticated code-redeem endpoint (also blunts brute-forcing).
+    pub code_limiter: Arc<SubmitLimiter>,
 }
 
 impl AppState {
@@ -46,6 +51,7 @@ impl AppState {
         let audit = Arc::new(AuditLog::new(dir.join("audit.jsonl")));
         let usage = Arc::new(UsageLog::new(dir.join("usage.jsonl")));
         let time_requests = Arc::new(TimeRequests::new(dir.join("time_requests.jsonl")));
+        let time_codes = Arc::new(TimeCodes::new(dir.join("time_codes.jsonl")));
         Self {
             control,
             config: Arc::new(RwLock::new(config)),
@@ -55,6 +61,8 @@ impl AppState {
             usage,
             time_requests,
             time_req_limiter: Arc::new(SubmitLimiter::default()),
+            time_codes,
+            code_limiter: Arc::new(SubmitLimiter::default()),
         }
     }
 }

@@ -29,6 +29,7 @@ pub mod rules;
 pub mod security;
 pub mod server;
 pub mod state;
+pub mod timecode;
 pub mod timereq;
 pub mod usage;
 pub mod web;

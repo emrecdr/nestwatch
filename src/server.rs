@@ -7,6 +7,7 @@
 //!   POST /login   POST /logout  auth endpoints
 //!   GET  /ask                   child "request more time" page (unauthenticated, LAN-gated)
 //!   POST /time-request          child submits a request (unauthenticated, LAN-gated, throttled)
+//!   POST /redeem-code           child redeems a time code (unauthenticated, LAN-gated, throttled)
 //!   /api/*                      guarded by `require_auth`:
 //!     GET  /api/screenshot
 //!     GET  /api/processes
@@ -21,6 +22,7 @@
 //!     GET  POST /api/rules
 //!     GET  /api/time-requests
 //!     POST /api/time-requests/{id}/approve  POST /api/time-requests/{id}/deny
+//!     GET  POST /api/time-codes
 //!     POST /api/password
 //!   *                           embedded static assets (fallback)
 //! ```
@@ -68,6 +70,10 @@ pub fn build_router(state: AppState) -> Router {
             post(api::approve_time_request),
         )
         .route("/time-requests/{id}/deny", post(api::deny_time_request))
+        .route(
+            "/time-codes",
+            get(api::list_time_codes).post(api::issue_time_code),
+        )
         .route("/password", post(api::change_password))
         .route_layer(middleware::from_fn(auth::require_auth));
 
@@ -79,6 +85,7 @@ pub fn build_router(state: AppState) -> Router {
         // Child-facing, unauthenticated but LAN-gated (see the outer layers below).
         .route("/ask", get(web::ask))
         .route("/time-request", post(api::time_request))
+        .route("/redeem-code", post(api::redeem_code))
         .nest("/api", api)
         .fallback(web::static_handler)
         .layer(session_layer)

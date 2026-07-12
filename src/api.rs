@@ -284,6 +284,78 @@ pub async fn deny_time_request(
 }
 
 #[derive(Deserialize)]
+pub struct IssueCodeBody {
+    minutes: u32,
+}
+
+/// `POST /api/time-codes` → mint a single-use time code worth `minutes`, returned to the parent
+/// to write down / hand to the child. Authenticated (parent-facing).
+pub async fn issue_time_code(
+    State(state): State<AppState>,
+    Json(body): Json<IssueCodeBody>,
+) -> Result<Json<Value>, AppError> {
+    if body.minutes == 0 || body.minutes > crate::timecode::MAX_CODE_MINUTES {
+        return Err(AppError::BadRequest("minutes out of range".into()));
+    }
+    let codes = state.time_codes.clone();
+    let minutes = body.minutes;
+    let code = spawn(move || codes.issue(minutes)).await?;
+    let Some(code) = code else {
+        return Err(AppError::BadRequest("too many active codes".into()));
+    };
+    // The code itself is a secret (it grants time), so it is NOT written to the audit log.
+    state
+        .audit
+        .record("time_code_issued", json!({ "minutes": minutes }));
+    Ok(Json(
+        json!({ "ok": true, "code": code, "minutes": minutes }),
+    ))
+}
+
+/// `GET /api/time-codes` → the active (unredeemed) codes, newest first. Authenticated.
+pub async fn list_time_codes(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::timecode::ActiveCode>>, AppError> {
+    let codes = state.time_codes.clone();
+    let active = spawn(move || codes.active()).await?;
+    Ok(Json(active))
+}
+
+#[derive(Deserialize)]
+pub struct RedeemBody {
+    code: String,
+}
+
+/// `POST /redeem-code` — the child cashes in a time code. **Unauthenticated** (the child isn't
+/// logged in) but LAN-gated (outer router → `require_lan_peer`) and per-IP rate-limited (which
+/// also blunts brute-forcing). On a valid code the minutes are added to today's budget; the
+/// response reveals only whether it worked (and how many minutes), never anything else.
+pub async fn redeem_code(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(body): Json<RedeemBody>,
+) -> Result<Json<Value>, AppError> {
+    state.code_limiter.count_and_check(peer.ip())?;
+    let codes = state.time_codes.clone();
+    let input = body.code;
+    let granted = spawn(move || codes.redeem(&input)).await?;
+    let Some(minutes) = granted else {
+        return Ok(Json(json!({ "ok": false })));
+    };
+    let today = crate::config::today();
+    update_config(&state, |c| c.extra.add(today, minutes)).await?;
+    state.audit.record(
+        "time_code_redeemed",
+        json!({ "src_ip": peer.ip(), "minutes": minutes }),
+    );
+    state.usage.record(
+        "extra_time_granted",
+        json!({ "minutes": minutes, "source": "code" }),
+    );
+    Ok(Json(json!({ "ok": true, "minutes": minutes })))
+}
+
+#[derive(Deserialize)]
 pub struct PasswordChange {
     current: String,
     new: String,

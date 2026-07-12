@@ -389,6 +389,56 @@
             </div>
           </section>
 
+          <!-- Time codes -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Time codes</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadCodes()" :disabled="loadingCodes">
+                  <span x-show="loadingCodes" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Generate a one-time code worth N minutes and hand it to him — he redeems it on the
+                <span class="font-mono">/ask</span> page, even while you're away.
+              </p>
+              <div class="mt-1 flex flex-wrap items-end gap-2">
+                <label class="form-control">
+                  <span class="label-text mb-1">Minutes</span>
+                  <input type="number" min="1" max="240" x-model.number="newCodeMins"
+                         class="input input-bordered w-28" />
+                </label>
+                <button class="btn btn-primary" @click="issueCode()" :disabled="issuingCode">
+                  <span x-show="issuingCode" class="loading loading-spinner loading-sm"></span>
+                  Generate code
+                </button>
+              </div>
+              <div class="mt-2 max-h-60 overflow-y-auto" x-show="codes.length > 0">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Code</th><th>Minutes</th><th>Created</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="c in codes" :key="c.code">
+                      <tr>
+                        <td class="font-mono text-base tracking-widest" x-text="c.code"></td>
+                        <td x-text="c.minutes"></td>
+                        <td class="whitespace-nowrap" x-text="fmtTime(c.ts)"></td>
+                        <td class="text-right">
+                          <button class="btn btn-ghost btn-xs" @click="copyCode(c.code)">Copy</button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <p class="text-sm opacity-50" x-show="codes.length === 0 && !loadingCodes">
+                No active codes.
+              </p>
+            </div>
+          </section>
+
           <!-- Recent access -->
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
@@ -551,6 +601,10 @@
           usage: [],
           loadingUsage: false,
           timeRequests: [],
+          codes: [],
+          loadingCodes: false,
+          newCodeMins: 30,
+          issuingCode: false,
           pwCurrent: "",
           pwNew: "",
           savingPw: false,
@@ -577,6 +631,7 @@
             this.loadAudit();
             this.loadUsage();
             this.loadTimeRequests();
+            this.loadCodes();
           },
 
           async loadCurfew() {
@@ -859,6 +914,36 @@
             }
           },
           loadTimeRequests() { return this.loadList("/api/time-requests", "timeRequests"); },
+          loadCodes() { return this.loadList("/api/time-codes", "codes", "loadingCodes"); },
+
+          async issueCode() {
+            this.issuingCode = true;
+            try {
+              const r = await this.postJSON("/api/time-codes", { minutes: this.newCodeMins });
+              if (r.ok) {
+                const j = await r.json().catch(() => ({}));
+                this.toast(`Code ${j.code} = ${j.minutes} min`, "success");
+                this.loadCodes();
+              } else if (r.status === 400) {
+                this.toast("Minutes 1–240, and at most 50 active codes", "error");
+              } else {
+                this.toast("Could not generate a code", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            } finally {
+              this.issuingCode = false;
+            }
+          },
+
+          async copyCode(code) {
+            try {
+              await navigator.clipboard.writeText(code);
+              this.toast("Code copied", "success");
+            } catch {
+              this.toast("Copy failed — select it manually", "error");
+            }
+          },
 
           async resolveTimeRequest(id, approve) {
             const verb = approve ? "approve" : "deny";

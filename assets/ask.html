@@ -28,6 +28,20 @@
           <button id="btn" type="submit" class="btn btn-primary mt-2">Send request</button>
           <p id="msg" class="mt-1 text-center text-sm"></p>
         </form>
+
+        <div class="divider my-0">or</div>
+
+        <form class="card-body pt-2" id="codeForm">
+          <h2 class="text-center text-base font-semibold">Have a code?</h2>
+          <p class="text-center text-sm opacity-70">Enter a time code to add minutes now.</p>
+          <label class="form-control mt-1">
+            <span class="label-text mb-1">Time code</span>
+            <input id="code" type="text" maxlength="12" autocomplete="off"
+                   placeholder="ABCD-1234" class="input input-bordered uppercase tracking-widest" />
+          </label>
+          <button id="codeBtn" type="submit" class="btn btn-secondary mt-2">Redeem</button>
+          <p id="codeMsg" class="mt-1 text-center text-sm"></p>
+        </form>
       </div>
     </div>
 
@@ -63,6 +77,40 @@
           msg.className = "mt-1 text-center text-sm text-error";
         } finally {
           btn.disabled = false;
+        }
+      });
+
+      const codeForm = document.getElementById("codeForm");
+      const codeMsg = document.getElementById("codeMsg");
+      const codeBtn = document.getElementById("codeBtn");
+      codeForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        codeBtn.disabled = true;
+        codeMsg.textContent = "";
+        const code = document.getElementById("code").value;
+        try {
+          const r = await fetch("/redeem-code", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (r.ok && j.ok) {
+            codeMsg.textContent = `Added ${j.minutes} minutes!`;
+            codeMsg.className = "mt-1 text-center text-sm text-success";
+            codeForm.reset();
+          } else if (r.status === 429) {
+            codeMsg.textContent = "Too many tries — wait a bit and try again.";
+            codeMsg.className = "mt-1 text-center text-sm text-error";
+          } else {
+            codeMsg.textContent = "That code isn't valid.";
+            codeMsg.className = "mt-1 text-center text-sm text-error";
+          }
+        } catch {
+          codeMsg.textContent = "Couldn't reach the server.";
+          codeMsg.className = "mt-1 text-center text-sm text-error";
+        } finally {
+          codeBtn.disabled = false;
         }
       });
     </script>

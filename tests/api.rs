@@ -35,6 +35,7 @@ fn test_state() -> AppState {
     state.audit = Arc::new(AuditLog::disabled());
     state.usage = Arc::new(UsageLog::disabled());
     state.time_requests = Arc::new(nestwatch::timereq::TimeRequests::disabled());
+    state.time_codes = Arc::new(nestwatch::timecode::TimeCodes::disabled());
     state
 }
 
@@ -388,6 +389,80 @@ async fn extra_time_requires_auth_and_validates_range() {
             .unwrap();
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     }
+}
+
+#[tokio::test]
+async fn time_codes_parent_endpoints_require_auth_and_issue() {
+    let app = test_app();
+
+    // Parent list/issue require auth.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/time-codes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    // Issue returns an 8-char code (the disabled store still mints one, just doesn't persist).
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/time-codes")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"minutes":30}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    assert_eq!(body["minutes"], 30);
+    assert_eq!(body["code"].as_str().unwrap().len(), 8);
+
+    // Out-of-range minutes → 400.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/time-codes")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"minutes":0}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn redeem_code_is_lan_gated_not_auth_gated() {
+    // The child redeem endpoint takes no cookie (loopback is on the LAN allowlist). With the
+    // disabled store no code is active, so it answers 200 {ok:false} — leaking nothing and never
+    // touching the real config.
+    let res = test_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/redeem-code")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"code":"ABCD1234"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["ok"], json!(false));
 }
 
 #[tokio::test]
