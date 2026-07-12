@@ -38,9 +38,20 @@ pub enum EnforceAction {
     Warn,
 }
 
+/// Serde/`Default` value for [`Rules::enabled`] — enforcement is on unless explicitly paused.
+/// A free fn (not `Default`) so a legacy `config.json` with no `enabled` field upgrades to
+/// *enabled*, never silently paused.
+fn default_true() -> bool {
+    true
+}
+
 /// Persisted rule settings (a `Config` field). All defaulted so legacy configs still load.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rules {
+    /// Master switch: when `false`, the whole rules enforcer is paused (no budget, blocklist, or
+    /// per-app limits) — a one-toggle "free evening". Curfew is separate and still applies.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     /// Minutes of allowed use per day (`0` = no budget).
     #[serde(default)]
     pub daily_budget_mins: u32,
@@ -58,10 +69,29 @@ pub struct Rules {
     pub budget_action: EnforceAction,
 }
 
+impl Default for Rules {
+    /// A default `Rules` is **enabled** with nothing configured. Hand-written (rather than
+    /// derived) so `enabled` defaults to `true`, not `bool`'s `false`.
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            daily_budget_mins: 0,
+            blocklist: Vec::new(),
+            app_limits: BTreeMap::new(),
+            warn_secs: 0,
+            budget_action: EnforceAction::Lock,
+        }
+    }
+}
+
 impl Rules {
-    /// Whether anything is configured — lets the loop skip the process scan when idle.
+    /// Whether the enforcer has any work this tick — false when paused, letting the loop skip the
+    /// session/process scan entirely.
     pub fn any_configured(&self) -> bool {
-        self.daily_budget_mins > 0 || !self.blocklist.is_empty() || !self.app_limits.is_empty()
+        self.enabled
+            && (self.daily_budget_mins > 0
+                || !self.blocklist.is_empty()
+                || !self.app_limits.is_empty())
     }
 
     /// Validate (at config load and on POST). Fail-open like curfew: only the warning bound.
@@ -171,6 +201,7 @@ pub fn today_summary(rules: &Rules, extra: u32, usage: &Usage) -> serde_json::Va
         .collect();
     serde_json::json!({
         "day": usage.day.map(|d| d.to_string()),
+        "enabled": rules.enabled,
         "budget_mins": budget,
         "used_mins": used_mins,
         "remaining_mins": remaining_mins,
@@ -857,6 +888,24 @@ mod tests {
         assert_eq!(s["budget_mins"], 0);
         assert_eq!(s["used_mins"], 90);
         assert!(s["remaining_mins"].is_null());
+    }
+
+    #[test]
+    fn pausing_disables_all_rules() {
+        let rules = Rules {
+            enabled: false,
+            daily_budget_mins: 60,
+            blocklist: vec!["game.exe".into()],
+            ..Default::default()
+        };
+        // Paused → the loop skips everything, even a configured blocklist.
+        assert!(!rules.any_configured());
+        // Flip it back on → active again.
+        let on = Rules {
+            enabled: true,
+            ..rules
+        };
+        assert!(on.any_configured());
     }
 
     #[test]

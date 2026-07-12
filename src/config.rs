@@ -207,5 +207,8 @@ mod tests {
         assert!(!cfg.curfew.enabled);
         assert_eq!(cfg.rules.daily_budget_mins, 0);
         assert_eq!(cfg.extra.minutes, 0);
+        // Upgrade safety: a config predating the `enabled` field must load as *enabled*, so an
+        // upgrade never silently pauses screen-time enforcement.
+        assert!(cfg.rules.enabled);
     }
 }

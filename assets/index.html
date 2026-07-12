@@ -197,7 +197,10 @@
                    x-show="today.budget_mins > 0 || (today.per_app && today.per_app.length)">
             <div class="card-body">
               <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Today's screen time</h2>
+                <h2 class="card-title text-base">
+                  Today's screen time
+                  <span class="badge badge-warning badge-sm" x-show="today.enabled === false">Paused</span>
+                </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadToday()" :disabled="loadingToday">
                   <span x-show="loadingToday" class="loading loading-spinner loading-xs"></span>
                   Refresh
@@ -251,7 +254,17 @@
           <!-- Usage rules: budget + blocklist + per-app limits -->
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
-              <h2 class="card-title text-base">Screen-time &amp; app limits</h2>
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Screen-time &amp; app limits</h2>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <span class="label-text" x-text="rules.enabled ? 'Enforcing' : 'Paused'"></span>
+                  <input type="checkbox" class="toggle toggle-sm toggle-primary"
+                         x-model="rules.enabled" @change="saveRules()" />
+                </label>
+              </div>
+              <p class="text-sm opacity-70" x-show="!rules.enabled">
+                Paused — screen-time, blocked apps, and per-app limits are not enforced (curfew still applies).
+              </p>
 
               <!-- Daily budget -->
               <div class="mt-1 flex flex-wrap items-end gap-3">
@@ -500,7 +513,7 @@
           confirmShutdown: false,
           curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60, windows: [] },
           savingCurfew: false,
-          rules: { daily_budget_mins: 0, blocklist: [], app_limits: {}, warn_secs: 60, budget_action: "lock" },
+          rules: { enabled: true, daily_budget_mins: 0, blocklist: [], app_limits: {}, warn_secs: 60, budget_action: "lock" },
           appLimitRows: [],
           savingRules: false,
           today: { day: null, budget_mins: 0, used_mins: 0, remaining_mins: null, extra_mins: 0, per_app: [] },
@@ -606,6 +619,7 @@
               const r = await this.postJSON("/api/rules", this.rules);
               if (r.ok) {
                 this.toast("Rules saved", "success");
+                this.loadToday(); // keep the Today card (budget/paused badge) in sync
               } else if (r.status === 400) {
                 this.toast("Warning seconds must be ≤ 600", "error");
               } else {
