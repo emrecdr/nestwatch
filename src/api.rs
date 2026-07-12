@@ -157,12 +157,14 @@ pub async fn extra_time(
     let today = crate::config::today();
     let minutes = body.minutes;
     update_config(&state, |c| c.extra.add(today, minutes)).await?;
-    state
-        .audit
-        .record("extra_time_granted", json!({ "minutes": minutes }));
-    state
-        .usage
-        .record("extra_time_granted", json!({ "minutes": minutes }));
+    state.audit.record(
+        "extra_time_granted",
+        json!({ "minutes": minutes, "source": "parent" }),
+    );
+    state.usage.record(
+        "extra_time_granted",
+        json!({ "minutes": minutes, "source": "parent" }),
+    );
     Ok(Json(json!({ "ok": true, "minutes": minutes })))
 }
 
@@ -260,9 +262,10 @@ pub async fn approve_time_request(
     state
         .audit
         .record("time_request_approved", json!({ "minutes": minutes }));
-    state
-        .usage
-        .record("extra_time_granted", json!({ "minutes": minutes }));
+    state.usage.record(
+        "extra_time_granted",
+        json!({ "minutes": minutes, "source": "request" }),
+    );
     Ok(Json(json!({ "ok": true, "minutes": minutes })))
 }
 

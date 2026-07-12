@@ -56,11 +56,13 @@ pub struct Rules {
     /// unless `budget_by_weekday` overrides it.
     #[serde(default)]
     pub daily_budget_mins: u32,
-    /// Optional per-weekday budgets `[Mon, Tue, Wed, Thu, Fri, Sat, Sun]` (minutes; `0` = that day
-    /// is off). When `Some`, it's authoritative and `daily_budget_mins` is ignored; when `None`
-    /// (the default, and how legacy configs load), every day uses `daily_budget_mins`.
+    /// Optional per-weekday budgets `[Mon, Tue, Wed, Thu, Fri, Sat, Sun]` (minutes; `0` = no limit
+    /// that day). When `Some`, it's authoritative and `daily_budget_mins` is ignored; when `None`
+    /// (the default, and how legacy configs load), every day uses `daily_budget_mins`. A `Vec`
+    /// (not a fixed `[u32; 7]`) on purpose: a wrong-length array in a hand-edited config then falls
+    /// back gracefully per day instead of failing to parse and bricking service startup.
     #[serde(default)]
-    pub budget_by_weekday: Option<[u32; 7]>,
+    pub budget_by_weekday: Option<Vec<u32>>,
     /// Process names killed on sight (case-insensitive, e.g. `"game.exe"`).
     #[serde(default)]
     pub blocklist: Vec<String>,
@@ -97,7 +99,11 @@ impl Rules {
     /// rule so the enforcer, its logging, and the dashboard summary can't drift.
     pub fn base_budget_for(&self, weekday: Weekday) -> u32 {
         match &self.budget_by_weekday {
-            Some(days) => days[weekday.num_days_from_monday() as usize],
+            // `.get` (not index) so a short/malformed vec falls back per day rather than panicking.
+            Some(days) => days
+                .get(weekday.num_days_from_monday() as usize)
+                .copied()
+                .unwrap_or(self.daily_budget_mins),
             None => self.daily_budget_mins,
         }
     }
@@ -126,10 +132,14 @@ impl Rules {
     }
 
     /// The effective budget in minutes for `today`: that day's base budget (per-weekday override
-    /// or the everyday default) plus any granted extra. One home for the "base + extra" formula so
-    /// the enforcer, its logging, and the dashboard summary can't drift.
+    /// or the everyday default) plus any granted extra, or `0` when the day has **no** base budget
+    /// (unlimited). Returning 0 in that case — rather than `extra` — keeps the dashboard card and
+    /// the enforcer in agreement: granted extra on an unlimited day must not display a phantom
+    /// budget the enforcer never applies. The single home for the "budget today" value so
+    /// `decide`, its logging, and the summary can't drift.
     pub fn effective_budget_mins(&self, today: NaiveDate, extra: u32) -> u32 {
-        self.base_budget_for(today.weekday()) + extra
+        let base = self.base_budget_for(today.weekday());
+        if base > 0 { base + extra } else { 0 }
     }
 }
 
@@ -337,8 +347,9 @@ impl RulesEnforcer {
         // use: when inactive we disarm below, so a user who steps away (or is locked out by the
         // budget itself) isn't shut down/re-locked in absentia, and gets a fresh warning grace
         // when they return.
-        if rules.base_budget_for(t.today.weekday()) > 0 && t.active {
-            let budget_secs = rules.effective_budget_mins(t.today, t.extra_minutes) as u64 * 60;
+        let budget_mins = rules.effective_budget_mins(t.today, t.extra_minutes);
+        if budget_mins > 0 && t.active {
+            let budget_secs = budget_mins as u64 * 60;
             if self.usage.total_secs >= budget_secs {
                 match rules.budget_action {
                     EnforceAction::Warn => {
@@ -406,6 +417,19 @@ pub async fn run_rules_enforcer(
         };
 
         if !rules.any_configured() {
+            // Nothing to enforce this tick (paused, or no rules). But if we had a budget shutdown
+            // in flight, cancel it — otherwise pausing (or clearing the budget) mid-countdown
+            // would still power the machine off.
+            prev_shutdown_wanted = maybe_abort_budget_shutdown(
+                &control,
+                &config,
+                &usage_log,
+                prev_shutdown_wanted,
+                false,
+                serde_json::json!({ "reason": "paused" }),
+            )
+            .await;
+            prev_active = None; // resume treats the next active tick as a fresh session_start
             continue;
         }
 
@@ -555,33 +579,22 @@ pub async fn run_rules_enforcer(
         );
 
         // Cancel a budget shutdown we scheduled once it's no longer warranted — chiefly when the
-        // parent grants more time, lifting the child back under budget. The trigger is the
-        // budget itself (`shutdown_wanted`), not the countdown deadline: merely locking the
-        // screen or stepping away while still over budget must NOT rescue an in-flight shutdown.
-        // Curfew is read only on the potential falling edge, and the actual decision goes through
-        // the pure `should_abort_budget_shutdown` so curfew stays the sole authority over its own
-        // shutdowns.
-        let over_budget = rules.base_budget_for(today.weekday()) > 0
-            && enforcer.usage.total_secs >= rules.effective_budget_mins(today, extra) as u64 * 60;
+        // parent grants more time, lifting the child back under budget. The trigger is the budget
+        // itself (`shutdown_wanted`), not the countdown deadline: merely locking the screen or
+        // stepping away while still over budget must NOT rescue an in-flight shutdown.
+        // `budget` (computed above for the rollup) is 0 on an unlimited day, so this also gates
+        // out base-0 days without re-deriving anything.
+        let over_budget = budget > 0 && enforcer.usage.total_secs >= budget as u64 * 60;
         let shutdown_wanted = over_budget && rules.budget_action == EnforceAction::Shutdown;
-        let curfew_active = if prev_shutdown_wanted && !shutdown_wanted {
-            let guard = crate::state::recover_read(&config);
-            guard.curfew.enabled && guard.curfew.is_active_now()
-        } else {
-            false
-        };
-        if should_abort_budget_shutdown(prev_shutdown_wanted, shutdown_wanted, curfew_active) {
-            let control = control.clone();
-            if let Ok(Err(e)) = tokio::task::spawn_blocking(move || control.abort_shutdown()).await
-            {
-                tracing::warn!(error = %e, "failed to abort budget shutdown after budget cleared");
-            }
-            usage_log.record(
-                "budget_shutdown_aborted",
-                serde_json::json!({ "minutes_used": used_mins, "budget": budget }),
-            );
-        }
-        prev_shutdown_wanted = shutdown_wanted;
+        prev_shutdown_wanted = maybe_abort_budget_shutdown(
+            &control,
+            &config,
+            &usage_log,
+            prev_shutdown_wanted,
+            shutdown_wanted,
+            serde_json::json!({ "minutes_used": used_mins, "budget": budget }),
+        )
+        .await;
     }
 }
 
@@ -592,6 +605,35 @@ pub async fn run_rules_enforcer(
 /// [`RuleAction`] has no abort variant). Pure, so the coordination rule is unit-tested.
 fn should_abort_budget_shutdown(prev_wanted: bool, now_wanted: bool, curfew_active: bool) -> bool {
     prev_wanted && !now_wanted && !curfew_active
+}
+
+/// Cancel a budget shutdown the enforcer previously scheduled when it's no longer wanted this
+/// tick (grant lifted the child back under budget, rules paused/cleared, or the action changed)
+/// and curfew isn't itself calling for one. Returns `now_wanted` to carry into the next tick.
+/// Shared by the normal path and the paused/idle path so the abort behavior lives in one place;
+/// curfew is read only on the potential falling edge.
+async fn maybe_abort_budget_shutdown(
+    control: &Arc<dyn SystemControl>,
+    config: &Arc<RwLock<Config>>,
+    usage_log: &crate::usage::UsageLog,
+    prev_wanted: bool,
+    now_wanted: bool,
+    detail: serde_json::Value,
+) -> bool {
+    let curfew_active = if prev_wanted && !now_wanted {
+        let guard = crate::state::recover_read(config);
+        guard.curfew.enabled && guard.curfew.is_active_now()
+    } else {
+        false
+    };
+    if should_abort_budget_shutdown(prev_wanted, now_wanted, curfew_active) {
+        let control = control.clone();
+        if let Ok(Err(e)) = tokio::task::spawn_blocking(move || control.abort_shutdown()).await {
+            tracing::warn!(error = %e, "failed to abort budget shutdown");
+        }
+        usage_log.record("budget_shutdown_aborted", detail);
+    }
+    now_wanted
 }
 
 /// Best-effort child-facing notification (offloaded to the blocking pool; failures are logged
@@ -920,12 +962,44 @@ mod tests {
     }
 
     #[test]
+    fn today_summary_ignores_extra_on_an_unlimited_day() {
+        // No base budget for the day → a stray granted `extra` must NOT show a phantom budget the
+        // enforcer would never apply (card and enforcer must agree).
+        let rules = Rules::default(); // no daily budget
+        let usage = Usage {
+            day: Some(day()),
+            total_secs: 10 * 60,
+            per_app_secs: Default::default(),
+        };
+        let s = today_summary(&rules, day(), 30, &usage); // 30 granted, but base is 0
+        assert_eq!(s["budget_mins"], 0);
+        assert!(s["remaining_mins"].is_null());
+    }
+
+    #[test]
+    fn today_summary_uses_the_weekday_budget() {
+        // day() is Thursday (index 3) → base 90.
+        let rules = Rules {
+            budget_by_weekday: Some(vec![10, 10, 10, 90, 10, 240, 240]),
+            ..Default::default()
+        };
+        let usage = Usage {
+            day: Some(day()),
+            total_secs: 30 * 60,
+            per_app_secs: Default::default(),
+        };
+        let s = today_summary(&rules, day(), 0, &usage);
+        assert_eq!(s["budget_mins"], 90);
+        assert_eq!(s["remaining_mins"], 60);
+    }
+
+    #[test]
     fn per_weekday_budget_overrides_the_default() {
         let thu = day(); // 2026-07-09 is a Thursday
         assert_eq!(thu.weekday(), Weekday::Thu);
         let rules = Rules {
             daily_budget_mins: 60,
-            budget_by_weekday: Some([30, 30, 30, 30, 30, 120, 120]), // Mon..Sun
+            budget_by_weekday: Some(vec![30, 30, 30, 30, 30, 120, 120]), // Mon..Sun
             ..Default::default()
         };
         // Thursday uses its override (30), not the everyday default (60).
@@ -944,7 +1018,7 @@ mod tests {
     fn per_weekday_zero_means_no_budget_that_day() {
         // Weekdays off, weekends 240. day() is a Thursday → 0 → no enforcement.
         let rules = Rules {
-            budget_by_weekday: Some([0, 0, 0, 0, 0, 240, 240]),
+            budget_by_weekday: Some(vec![0, 0, 0, 0, 0, 240, 240]),
             budget_action: EnforceAction::Lock,
             ..Default::default()
         };
