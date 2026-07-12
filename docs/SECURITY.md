@@ -118,10 +118,12 @@ open the door on its own.
   recent events in the dashboard's **Recent access** panel or via `GET /api/audit`. This turns an
   otherwise invisible access into something you can see — a login from an unfamiliar IP at an odd
   hour stands out.
-- Two further append-only logs live beside it with independent retention: `usage.jsonl` (usage
-  history — daily screen-time, enforcement actions — read-only via `GET /api/usage`) and
-  `time_requests.jsonl` (the event-sourced approval queue). A small `usage_state.json` sidecar
-  holds the rules enforcer's running daily tally so a mid-day reboot doesn't reset the budget.
+- Further append-only logs live beside it with independent retention: `usage.jsonl` (usage
+  history — daily screen-time, enforcement actions — read-only via `GET /api/usage`),
+  `time_requests.jsonl` (the event-sourced approval queue), and `time_codes.jsonl` (issued/
+  redeemed time codes). A small `usage_state.json` sidecar holds the rules enforcer's running
+  daily tally so a mid-day reboot doesn't reset the budget. The security audit log records
+  `time_code_issued` (minutes only — never the code) and `time_code_redeemed` (with source IP).
   All of these inherit the data dir's SYSTEM+Administrators-only ACL, and none contains secrets
   (no password, cookie, or hash).
 - **Crash-safe writes.** `config.json` and the `usage_state.json` tally are written atomically
@@ -131,31 +133,47 @@ open the door on its own.
 
 ---
 
-## The child's request-more-time surface (intentionally unauthenticated)
+## The child's unauthenticated surfaces (by design)
 
-Two routes are reachable **without a login**, by design, so the child can ask for more screen
-time from their own (non-parent) session — they sit on the outer router, *before* `require_auth`:
+Three routes are reachable **without a login**, by design, so the child can act from their own
+(non-parent) session — they sit on the outer router, *before* `require_auth`:
 
-- `GET /ask` — a static "request more time" page.
+- `GET /ask` — a static "request more time" / "redeem a code" page.
 - `POST /time-request` — submits `{minutes, reason}` to the parent's approval queue.
+- `POST /redeem-code` — cashes in a parent-issued time code (see below).
 
-This is **not** a hole in the "everything is auth-gated" model, because the surface is bounded
+This is **not** a hole in the "everything is auth-gated" model, because each surface is bounded
 on every axis:
 
 - **LAN-gated** by the same `require_lan_peer` outer layer as the controls (`src/server.rs`) —
   an off-LAN client gets `403` here too.
-- **Rate-limited** by a *separate* per-IP `SubmitLimiter` (`src/timereq.rs`, 5/min/IP) that
-  counts **every** call (unlike the login limiter, which counts only failures), so a child
-  can't flood the parent's queue.
-- **Non-leaking**: `POST /time-request` always answers `{ok:true}` whether the request was
-  accepted, rejected, or dropped for hitting the pending cap, so it reveals nothing about queue
-  state — and it returns no screen/process/config data.
-- **Powerless on its own**: it only *enqueues a request*. No screen time is granted until the
-  **parent approves it** from the authenticated `POST /api/time-requests/{id}/approve`. Input is
-  bounded (1–240 minutes; reason truncated to 200 chars; at most 5 pending requests).
+- **Rate-limited** by *separate* per-IP `SubmitLimiter`s (`src/timereq.rs`, 5/min/IP) — one for
+  requests, one for redemptions — that count **every** call (unlike the login limiter, which
+  counts only failures), so a child can neither flood the parent's queue nor rapidly guess codes.
+- **Request is powerless on its own**: `POST /time-request` only *enqueues a request* (always
+  answering `{ok:true}`, leaking no queue state). No screen time is granted until the **parent
+  approves it** (`POST /api/time-requests/{id}/approve`). Input is bounded (1–240 minutes; reason
+  truncated to 200 chars; at most 5 pending requests).
 
-Net: at worst, any LAN device can add up to 5 pending lines to a queue the parent reviews — it
-cannot see or change anything sensitive.
+### Time codes (`POST /redeem-code`)
+
+A time code *does* grant screen time without a live parent action — that's the point (leave a
+code for when you're away). It's safe because:
+
+- **The code is the capability, and it's unguessable.** Codes are 8 Crockford-base32 characters
+  (~1.1 trillion combinations) from the OS CSPRNG. At the 5/min rate limit, brute-forcing one is
+  infeasible (millennia), and the limiter throttles rapid guessing regardless.
+- **The parent hands the code over deliberately** — there's no interception threat; the parent
+  chooses when and to whom to give it.
+- **Single-use and bounded**: each code is worth 1–240 minutes, is consumed on first redemption
+  (event-sourced `redeemed` line), and at most 50 can be outstanding.
+- **Plaintext codes never leave the ACL'd data dir** (SYSTEM+Administrators only), so the child
+  can't read the list; they're deliberately **not** written to the audit log either.
+- **Minimal feedback**: redemption returns only `{ok, minutes}` on success or `{ok:false}` on a
+  bad code — no other state.
+
+Net: at worst, any LAN device can add up to 5 pending lines to a queue the parent reviews, or
+redeem a code the parent already chose to hand out — it cannot see or change anything sensitive.
 
 ---
 

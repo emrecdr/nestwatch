@@ -109,6 +109,11 @@ Run through it once on his PC after installing.
 - [ ] From his browser, open `https://<his-pc-ip>:<port>/ask`, request e.g. 15 minutes →
       you see it under **More-time requests** in the dashboard → **Approve** → the granted
       minutes are added to today's budget (and appear in **Usage history**).
+- [ ] **Time codes:** in the dashboard **Time codes** card, generate a 20-min code → on `/ask`,
+      enter it under **Have a code?** → "Added 20 minutes!" and today's budget rises; the code
+      disappears from the active list, and re-entering it says "not valid" (single-use). A random
+      wrong code is rejected. (As HIM, `type C:\ProgramData\HostHealth\time_codes.jsonl` →
+      Access denied — he can't read the code list.)
 - [ ] **Today's screen time** card shows minutes used/remaining and a progress bar that grows as
       he uses the PC; a **+30** bonus button raises the remaining figure immediately.
 - [ ] **Per-day budgets:** tick "Different limit each day", set today to 1 min and another day to

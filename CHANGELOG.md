@@ -2,6 +2,26 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.0] — 2026-07-12
+
+First of the "differentiation" features: offline time codes.
+
+### Added
+- **Offline time codes.** The parent generates a single-use code worth N minutes (dashboard
+  **Time codes** card) and hands it to the child, who redeems it on the `/ask` page — no parent
+  action and no internet needed at redemption, so it works while the parent is away or the
+  network is down. Codes are 8 unguessable characters, single-use, and capped at 50 outstanding;
+  a valid redemption adds the minutes to today's budget. New parent endpoints `GET`·`POST
+  /api/time-codes` and the unauthenticated, LAN-gated, rate-limited child endpoint
+  `POST /redeem-code`.
+
+### Security
+- The `/redeem-code` surface grants time without a live parent action but is bounded: codes are
+  drawn from the OS CSPRNG (~1.1 trillion combinations) so brute-forcing the rate-limited
+  endpoint is infeasible; codes are single-use; plaintext codes live only in the ACL-hardened
+  data dir (and are never written to the audit log); redemption reveals only `{ok, minutes}`.
+  See `docs/SECURITY.md` for the full treatment.
+
 ## [0.2.5] — 2026-07-12
 
 Validation pass over the 0.2.4 features — correctness and robustness fixes.
