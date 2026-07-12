@@ -281,6 +281,7 @@ pub async fn run_rules_enforcer(
     let mut shutting = false;
     let mut warning = false;
     let mut prev_active: Option<bool> = None; // last tick's active-session state (for session_* events)
+    let mut prev_shutdown_wanted = false; // did we want a budget shutdown last tick? (to cancel it)
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
 
     loop {
@@ -437,7 +438,45 @@ pub async fn run_rules_enforcer(
             used_mins,
             budget,
         );
+
+        // Cancel a budget shutdown we scheduled once it's no longer warranted — chiefly when the
+        // parent grants more time, lifting the child back under budget. The trigger is the
+        // budget itself (`shutdown_wanted`), not the countdown deadline: merely locking the
+        // screen or stepping away while still over budget must NOT rescue an in-flight shutdown.
+        // Curfew is read only on the potential falling edge, and the actual decision goes through
+        // the pure `should_abort_budget_shutdown` so curfew stays the sole authority over its own
+        // shutdowns.
+        let over_budget = rules.daily_budget_mins > 0
+            && enforcer.usage.total_secs >= rules.effective_budget_mins(extra) as u64 * 60;
+        let shutdown_wanted = over_budget && rules.budget_action == EnforceAction::Shutdown;
+        let curfew_active = if prev_shutdown_wanted && !shutdown_wanted {
+            let guard = crate::state::recover_read(&config);
+            guard.curfew.enabled && guard.curfew.is_active_now()
+        } else {
+            false
+        };
+        if should_abort_budget_shutdown(prev_shutdown_wanted, shutdown_wanted, curfew_active) {
+            let control = control.clone();
+            if let Ok(Err(e)) = tokio::task::spawn_blocking(move || control.abort_shutdown()).await
+            {
+                tracing::warn!(error = %e, "failed to abort budget shutdown after budget cleared");
+            }
+            usage_log.record(
+                "budget_shutdown_aborted",
+                serde_json::json!({ "minutes_used": used_mins, "budget": budget }),
+            );
+        }
+        prev_shutdown_wanted = shutdown_wanted;
     }
+}
+
+/// Whether the rules enforcer should cancel a pending OS shutdown *it* previously scheduled.
+/// True only on the falling edge of "a budget shutdown is wanted" (e.g. a grant lifted the child
+/// back under budget, or the action changed) AND when curfew isn't itself calling for a shutdown
+/// — so curfew remains the sole authority over the single OS pending-shutdown slot (the reason
+/// [`RuleAction`] has no abort variant). Pure, so the coordination rule is unit-tested.
+fn should_abort_budget_shutdown(prev_wanted: bool, now_wanted: bool, curfew_active: bool) -> bool {
+    prev_wanted && !now_wanted && !curfew_active
 }
 
 /// Best-effort child-facing notification (offloaded to the blocking pool; failures are logged
@@ -709,6 +748,18 @@ mod tests {
         // A big grant puts us back under budget → deadline cleared.
         e.decide(&rules, &[], tk(now, 60));
         assert!(e.budget_deadline.is_none());
+    }
+
+    #[test]
+    fn abort_budget_shutdown_only_on_falling_edge_and_off_curfew() {
+        // Still over budget under Shutdown → leave the countdown running.
+        assert!(!should_abort_budget_shutdown(true, true, false));
+        // Grant lifted us back under budget, curfew inactive → cancel the pending shutdown.
+        assert!(should_abort_budget_shutdown(true, false, false));
+        // Back under budget, but curfew is active → it's curfew's shutdown now; don't touch it.
+        assert!(!should_abort_budget_shutdown(true, false, true));
+        // Nothing was pending → nothing to cancel.
+        assert!(!should_abort_budget_shutdown(false, false, false));
     }
 
     #[test]
