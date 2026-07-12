@@ -176,7 +176,9 @@ pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, A
         (cfg.rules.clone(), cfg.extra.for_day(today))
     };
     let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
-    Ok(Json(crate::rules::today_summary(&rules, extra, &usage)))
+    Ok(Json(crate::rules::today_summary(
+        &rules, today, extra, &usage,
+    )))
 }
 
 /// `GET /api/rules` → the current usage rules (budget, blocklist, per-app limits).

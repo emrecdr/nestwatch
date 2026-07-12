@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -52,9 +52,15 @@ pub struct Rules {
     /// per-app limits) — a one-toggle "free evening". Curfew is separate and still applies.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Minutes of allowed use per day (`0` = no budget).
+    /// Minutes of allowed use per day (`0` = no budget). The everyday default, used for all days
+    /// unless `budget_by_weekday` overrides it.
     #[serde(default)]
     pub daily_budget_mins: u32,
+    /// Optional per-weekday budgets `[Mon, Tue, Wed, Thu, Fri, Sat, Sun]` (minutes; `0` = that day
+    /// is off). When `Some`, it's authoritative and `daily_budget_mins` is ignored; when `None`
+    /// (the default, and how legacy configs load), every day uses `daily_budget_mins`.
+    #[serde(default)]
+    pub budget_by_weekday: Option<[u32; 7]>,
     /// Process names killed on sight (case-insensitive, e.g. `"game.exe"`).
     #[serde(default)]
     pub blocklist: Vec<String>,
@@ -76,6 +82,7 @@ impl Default for Rules {
         Self {
             enabled: true,
             daily_budget_mins: 0,
+            budget_by_weekday: None,
             blocklist: Vec::new(),
             app_limits: BTreeMap::new(),
             warn_secs: 0,
@@ -85,13 +92,29 @@ impl Default for Rules {
 }
 
 impl Rules {
+    /// The base daily budget (minutes, before any granted extra) for `weekday`: the per-weekday
+    /// override if set, else the everyday `daily_budget_mins`. One home for the day-selection
+    /// rule so the enforcer, its logging, and the dashboard summary can't drift.
+    pub fn base_budget_for(&self, weekday: Weekday) -> u32 {
+        match &self.budget_by_weekday {
+            Some(days) => days[weekday.num_days_from_monday() as usize],
+            None => self.daily_budget_mins,
+        }
+    }
+
+    /// Whether any day has a budget at all (used to decide if the enforcer has work to do).
+    fn has_any_budget(&self) -> bool {
+        match &self.budget_by_weekday {
+            Some(days) => days.iter().any(|&m| m > 0),
+            None => self.daily_budget_mins > 0,
+        }
+    }
+
     /// Whether the enforcer has any work this tick — false when paused, letting the loop skip the
     /// session/process scan entirely.
     pub fn any_configured(&self) -> bool {
         self.enabled
-            && (self.daily_budget_mins > 0
-                || !self.blocklist.is_empty()
-                || !self.app_limits.is_empty())
+            && (self.has_any_budget() || !self.blocklist.is_empty() || !self.app_limits.is_empty())
     }
 
     /// Validate (at config load and on POST). Fail-open like curfew: only the warning bound.
@@ -102,10 +125,11 @@ impl Rules {
         Ok(())
     }
 
-    /// Today's effective daily budget in minutes: the base plus any granted extra. One home for
-    /// the "base + extra" formula so the enforcer and its logging can't drift.
-    pub fn effective_budget_mins(&self, extra: u32) -> u32 {
-        self.daily_budget_mins + extra
+    /// The effective budget in minutes for `today`: that day's base budget (per-weekday override
+    /// or the everyday default) plus any granted extra. One home for the "base + extra" formula so
+    /// the enforcer, its logging, and the dashboard summary can't drift.
+    pub fn effective_budget_mins(&self, today: NaiveDate, extra: u32) -> u32 {
+        self.base_budget_for(today.weekday()) + extra
     }
 }
 
@@ -186,8 +210,13 @@ pub(crate) fn usage_state_path() -> std::path::PathBuf {
 /// used/remaining against today's effective budget, plus per-app usage for apps that have a
 /// limit. Pure (no I/O) so it's unit-tested; the handler supplies the config snapshot and the
 /// loaded tally. `remaining_mins` is `null` when no budget is set.
-pub fn today_summary(rules: &Rules, extra: u32, usage: &Usage) -> serde_json::Value {
-    let budget = rules.effective_budget_mins(extra);
+pub fn today_summary(
+    rules: &Rules,
+    today: NaiveDate,
+    extra: u32,
+    usage: &Usage,
+) -> serde_json::Value {
+    let budget = rules.effective_budget_mins(today, extra);
     let used_mins = usage.total_secs / 60;
     let remaining_mins = (budget > 0).then(|| budget.saturating_sub(used_mins as u32));
     let per_app: Vec<serde_json::Value> = rules
@@ -308,8 +337,8 @@ impl RulesEnforcer {
         // use: when inactive we disarm below, so a user who steps away (or is locked out by the
         // budget itself) isn't shut down/re-locked in absentia, and gets a fresh warning grace
         // when they return.
-        if rules.daily_budget_mins > 0 && t.active {
-            let budget_secs = rules.effective_budget_mins(t.extra_minutes) as u64 * 60;
+        if rules.base_budget_for(t.today.weekday()) > 0 && t.active {
+            let budget_secs = rules.effective_budget_mins(t.today, t.extra_minutes) as u64 * 60;
             if self.usage.total_secs >= budget_secs {
                 match rules.budget_action {
                     EnforceAction::Warn => {
@@ -416,7 +445,7 @@ pub async fn run_rules_enforcer(
         );
         enforcer.usage.save(&tally_path);
 
-        let budget = rules.effective_budget_mins(extra);
+        let budget = rules.effective_budget_mins(today, extra);
 
         // Log the previous day's total once, on rollover. Report the budget that was in force at
         // the *end of that day* (carried across ticks), not today's — otherwise the fresh day's
@@ -532,8 +561,8 @@ pub async fn run_rules_enforcer(
         // Curfew is read only on the potential falling edge, and the actual decision goes through
         // the pure `should_abort_budget_shutdown` so curfew stays the sole authority over its own
         // shutdowns.
-        let over_budget = rules.daily_budget_mins > 0
-            && enforcer.usage.total_secs >= rules.effective_budget_mins(extra) as u64 * 60;
+        let over_budget = rules.base_budget_for(today.weekday()) > 0
+            && enforcer.usage.total_secs >= rules.effective_budget_mins(today, extra) as u64 * 60;
         let shutdown_wanted = over_budget && rules.budget_action == EnforceAction::Shutdown;
         let curfew_active = if prev_shutdown_wanted && !shutdown_wanted {
             let guard = crate::state::recover_read(&config);
@@ -862,7 +891,7 @@ mod tests {
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
-        let s = today_summary(&rules, 30, &usage);
+        let s = today_summary(&rules, day(), 30, &usage);
         assert_eq!(s["budget_mins"], 150);
         assert_eq!(s["used_mins"], 47);
         assert_eq!(s["remaining_mins"], 103);
@@ -884,10 +913,49 @@ mod tests {
             total_secs: 90 * 60,
             per_app_secs: Default::default(),
         };
-        let s = today_summary(&rules, 0, &usage);
+        let s = today_summary(&rules, day(), 0, &usage);
         assert_eq!(s["budget_mins"], 0);
         assert_eq!(s["used_mins"], 90);
         assert!(s["remaining_mins"].is_null());
+    }
+
+    #[test]
+    fn per_weekday_budget_overrides_the_default() {
+        let thu = day(); // 2026-07-09 is a Thursday
+        assert_eq!(thu.weekday(), Weekday::Thu);
+        let rules = Rules {
+            daily_budget_mins: 60,
+            budget_by_weekday: Some([30, 30, 30, 30, 30, 120, 120]), // Mon..Sun
+            ..Default::default()
+        };
+        // Thursday uses its override (30), not the everyday default (60).
+        assert_eq!(rules.base_budget_for(Weekday::Thu), 30);
+        assert_eq!(rules.base_budget_for(Weekday::Sat), 120);
+        assert_eq!(rules.effective_budget_mins(thu, 15), 45); // 30 + 15 granted
+        // Without the override, the everyday default applies to every day.
+        let plain = Rules {
+            daily_budget_mins: 60,
+            ..Default::default()
+        };
+        assert_eq!(plain.base_budget_for(Weekday::Thu), 60);
+    }
+
+    #[test]
+    fn per_weekday_zero_means_no_budget_that_day() {
+        // Weekdays off, weekends 240. day() is a Thursday → 0 → no enforcement.
+        let rules = Rules {
+            budget_by_weekday: Some([0, 0, 0, 0, 0, 240, 240]),
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let now = Instant::now();
+        e.decide(&rules, &[], tk(now, 0));
+        let a = e.decide(&rules, &[], tk(now, 0));
+        assert!(a.is_empty(), "Thursday has no budget → never locks");
+        assert!(e.budget_deadline.is_none());
+        // But the weekend budgets still make the enforcer active (so it runs on Sat/Sun).
+        assert!(rules.any_configured());
     }
 
     #[test]
