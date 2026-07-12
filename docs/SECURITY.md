@@ -113,8 +113,9 @@ open the door on its own.
 - Security-relevant events are appended as JSON lines to `audit.jsonl` in the ACL-hardened data
   dir (`src/audit.rs`): login success/failure with **source IP**, rate-limited attempts, and
   the sensitive actions — screenshot, process kill, shutdown, **lock**, curfew change, **rules
-  change, password change (and failed attempts), logout, and each time-request
-  submit/approve/deny** (the child submit is logged with its source IP). The parent reviews
+  change, password change (and failed attempts), logout, routine save/apply/delete, and each
+  time-request submit/approve/deny** (the child submit is logged with its source IP). The parent
+  reviews
   recent events in the dashboard's **Recent access** panel or via `GET /api/audit`. This turns an
   otherwise invisible access into something you can see — a login from an unfamiliar IP at an odd
   hour stands out.

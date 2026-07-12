@@ -2,6 +2,15 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.2] — 2026-07-13
+
+### Added
+- **Named routines.** Save the current screen-time settings as a named preset (e.g. Homework,
+  Weekend, Bedtime) and switch between them with one click — a routine is a saved snapshot of the
+  usage rules, and applying one replaces the live rules (hot-applied by the enforcer next tick).
+  Managed from a new dashboard **Routines** card; up to 20 routines. New auth-gated endpoints
+  `GET`·`POST /api/routines`, `POST /api/routines/{name}/apply`, `POST /api/routines/{name}/delete`.
+
 ## [0.3.1] — 2026-07-13
 
 ### Added
