@@ -2,6 +2,14 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.1] — 2026-07-13
+
+### Added
+- **App groups with a shared time pool.** Define a named group of apps (e.g. games) with one
+  daily budget they all draw from — "all games share 90 min", which per-app limits can't express.
+  Time accrues to the group whenever any member is running; once the pool is spent, every running
+  member is killed on sight. Editable in the rules card; per-group usage bars on the today card.
+
 ## [0.3.0] — 2026-07-12
 
 First of the "differentiation" features: offline time codes.
