@@ -42,5 +42,5 @@ panic = "abort"
 # Screen capture is only used on Windows (control/windows.rs); keeping it Windows-only
 # avoids pulling X11/Wayland system deps into Linux/macOS builds and CI.
 xcap = "0.9"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_Security", "Win32_System_Threading", "Win32_System_Environment", "Win32_System_StationsAndDesktops", "Win32_System_Pipes"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_Security", "Win32_System_Threading", "Win32_System_Environment", "Win32_System_StationsAndDesktops", "Win32_System_Pipes", "Win32_UI_WindowsAndMessaging"] }
 windows-service = "0.8.1"

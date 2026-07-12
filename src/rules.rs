@@ -317,6 +317,7 @@ pub async fn run_rules_enforcer(
 
         let prev_day = enforcer.usage.day;
         let prev_total = enforcer.usage.total_secs;
+        let was_armed = enforcer.budget_deadline.is_some(); // for the lock-grace warning below
         let actions = enforcer.decide(
             &rules,
             &procs,
@@ -390,6 +391,27 @@ pub async fn run_rules_enforcer(
             }
         }
 
+        // Warn the child before enforcement bites, so a lock/limit isn't a silent surprise.
+        // Lock: notify the moment the grace period begins (before the screen actually locks),
+        // and again each time it re-arms after they return. Warn action: notify on the rising
+        // edge. Shutdown already shows Windows' own countdown, so it isn't doubled up here.
+        // (Checked before the `log_transition` calls below, which flip `warning`.)
+        let grace_started = !was_armed
+            && enforcer.budget_deadline.is_some()
+            && rules.budget_action == EnforceAction::Lock;
+        if grace_started {
+            notify_child(
+                &control,
+                &format!(
+                    "Screen time is up. This computer will lock in {} seconds.",
+                    rules.warn_secs
+                ),
+            )
+            .await;
+        } else if has_warn && !warning {
+            notify_child(&control, "You've reached today's screen-time limit.").await;
+        }
+
         // Log budget events once per episode (on the transition into enforcement).
         log_transition(
             &usage_log,
@@ -415,6 +437,18 @@ pub async fn run_rules_enforcer(
             used_mins,
             budget,
         );
+    }
+}
+
+/// Best-effort child-facing notification (offloaded to the blocking pool; failures are logged
+/// at debug and swallowed — a missed warning must never stall or crash the enforcer). Title is
+/// fixed so callers only pass the message body.
+async fn notify_child(control: &Arc<dyn SystemControl>, body: &str) {
+    let control = control.clone();
+    let (title, body) = ("Screen time".to_string(), body.to_string());
+    if let Ok(Err(e)) = tokio::task::spawn_blocking(move || control.notify_user(title, body)).await
+    {
+        tracing::debug!(error = %e, "child notification failed");
     }
 }
 

@@ -27,17 +27,24 @@ use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnviron
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::RemoteDesktop::{
     WTS_CURRENT_SERVER_HANDLE, WTS_SESSIONSTATE_LOCK, WTSFreeMemory, WTSGetActiveConsoleSessionId,
-    WTSINFOEXW, WTSQuerySessionInformationW, WTSQueryUserToken, WTSSessionInfoEx,
+    WTSINFOEXW, WTSQuerySessionInformationW, WTSQueryUserToken, WTSSendMessageW, WTSSessionInfoEx,
 };
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
-use windows::core::PWSTR;
+use windows::Win32::UI::WindowsAndMessaging::{
+    MB_ICONWARNING, MB_OK, MB_SYSTEMMODAL, MESSAGEBOX_RESULT,
+};
+use windows::core::{PCWSTR, PWSTR};
 
 use crate::control::{ControlError, SessionState};
 
 const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How long a notification box stays before auto-dismissing (seconds). Long enough to read a
+/// "locking soon" warning, short enough not to linger.
+const NOTIFY_TIMEOUT_SECS: u32 = 30;
 
 /// Capture the screen by delegating to a helper in the interactive session, reading its
 /// PNG output over a pipe.
@@ -147,6 +154,40 @@ pub fn active_session_state() -> Result<SessionState, ControlError> {
 
         WTSFreeMemory(buffer.0 as *mut core::ffi::c_void);
         Ok(state)
+    }
+}
+
+/// Show a brief, non-blocking notification on the active console session's desktop via
+/// `WTSSendMessageW`. Works from the SYSTEM service (Session 0): the message is targeted at the
+/// child's session by id, so it appears on *their* desktop — no user-session helper needed.
+/// `bWait = false` returns immediately (the box auto-dismisses after [`NOTIFY_TIMEOUT_SECS`]),
+/// so the enforcer never blocks waiting for a click.
+///
+/// SAFETY: Win32 WTS FFI. The wide buffers are borrowed for the duration of this synchronous
+/// call only; no handle is retained.
+pub fn notify_active_session(title: &str, body: &str) -> Result<(), ControlError> {
+    unsafe {
+        let session_id = WTSGetActiveConsoleSessionId();
+        if session_id == u32::MAX {
+            return Err(ControlError::Op("no active console session".into()));
+        }
+        let title_w = to_wide(title);
+        let body_w = to_wide(body);
+        let mut response = MESSAGEBOX_RESULT(0);
+        // Lengths are in BYTES and exclude the trailing NUL (`to_wide` appends one).
+        WTSSendMessageW(
+            Some(WTS_CURRENT_SERVER_HANDLE),
+            session_id,
+            PCWSTR(title_w.as_ptr()),
+            ((title_w.len() - 1) * 2) as u32,
+            PCWSTR(body_w.as_ptr()),
+            ((body_w.len() - 1) * 2) as u32,
+            MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL,
+            NOTIFY_TIMEOUT_SECS,
+            &mut response,
+            false, // don't wait for the user to dismiss
+        )
+        .map_err(|e| ControlError::Op(format!("WTSSendMessageW: {e}")))
     }
 }
 

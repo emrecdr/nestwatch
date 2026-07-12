@@ -124,4 +124,8 @@ impl SystemControl for WindowsControl {
         // process (dev `run`) or the SYSTEM service — the same call is used by both.
         crate::session::active_session_state()
     }
+
+    fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
+        crate::session::notify_active_session(&title, &body)
+    }
 }

@@ -101,4 +101,9 @@ impl SystemControl for FakeControl {
         // accrues time exactly as it did before this method existed.
         Ok(SessionState::Active)
     }
+
+    fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
+        tracing::info!(%title, %body, "[fake] notify_user (no-op on this platform)");
+        Ok(())
+    }
 }

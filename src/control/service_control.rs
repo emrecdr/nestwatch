@@ -51,4 +51,10 @@ impl SystemControl for ServiceControl {
         // (the child's) directly via WTS. No helper needed — WTS works from the service.
         self.inner.session_state()
     }
+
+    fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
+        // WTSSendMessageW targets the child's console session by id, so it displays on their
+        // desktop even though we're in Session 0 — no helper needed.
+        self.inner.notify_user(title, body)
+    }
 }

@@ -86,6 +86,12 @@ pub trait SystemControl: Send + Sync + 'static {
     /// nobody is logged in or the screen is locked. Best-effort: the enforcer treats an `Err`
     /// as [`SessionState::Active`] — failing toward enforcement, never toward unlimited time.
     fn session_state(&self) -> Result<SessionState, ControlError>;
+
+    /// Show the interactive user a brief notification — used to warn the child before a
+    /// screen-time lock, or when a Warn-mode limit is reached, so enforcement isn't a silent
+    /// surprise. Best-effort and **non-blocking**: it returns immediately (the message
+    /// auto-dismisses) and never waits for the user to click.
+    fn notify_user(&self, title: String, body: String) -> Result<(), ControlError>;
 }
 
 /// Encode a decoded image as PNG bytes. Shared by the real and fake controllers so the
