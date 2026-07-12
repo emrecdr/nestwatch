@@ -2,6 +2,26 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.4] — 2026-07-12
+
+Parental-control parity pass: the dashboard now shows the day's usage and gives the parent
+direct control over it, plus per-day budgets and a pause switch.
+
+### Added
+- **Today's-screen-time card.** Live minutes used / remaining against the effective budget, a
+  colour-coded progress bar, and per-app usage bars — the data existed in the tally but was
+  never surfaced. New read-only `GET /api/usage/today`.
+- **Parent-initiated bonus time.** +15 / +30 / +60 buttons on the card grant extra minutes to
+  today's budget directly, without waiting for the child to ask. New `POST /api/extra-time`,
+  using the same day-scoped grant mechanism as approving a request (survives a reboot, resets
+  tomorrow), audited and recorded in usage history.
+- **Per-day-of-week budgets.** An optional "different limit each day" mode sets a separate
+  budget for each weekday (e.g. less on school nights, more on weekends); `0` turns a day off.
+  When unset, every day uses the single everyday limit, so existing configs are unchanged.
+- **Master pause/resume toggle.** One switch pauses the whole rules enforcer (budget, blocked
+  apps, per-app limits) for a "free evening" without clearing any settings; curfew is separate
+  and still applies. Defaults to *enabled*, including for configs written before this release.
+
 ## [0.2.3] — 2026-07-12
 
 Accuracy and robustness pass for the screen-time budget, plus child-facing warnings.

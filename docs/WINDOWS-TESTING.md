@@ -109,6 +109,12 @@ Run through it once on his PC after installing.
 - [ ] From his browser, open `https://<his-pc-ip>:<port>/ask`, request e.g. 15 minutes →
       you see it under **More-time requests** in the dashboard → **Approve** → the granted
       minutes are added to today's budget (and appear in **Usage history**).
+- [ ] **Today's screen time** card shows minutes used/remaining and a progress bar that grows as
+      he uses the PC; a **+30** bonus button raises the remaining figure immediately.
+- [ ] **Per-day budgets:** tick "Different limit each day", set today to 1 min and another day to
+      120, Save → enforcement uses today's 1-min value (locks quickly); the card's budget matches.
+- [ ] **Pause toggle:** flip **Enforcing → Paused** → the card shows a "Paused" badge and, with a
+      tiny daily limit set, the screen no longer locks; flip back → enforcement resumes.
 
 ## F. Resilience
 
