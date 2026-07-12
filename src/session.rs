@@ -25,14 +25,17 @@ use windows::Win32::Security::{
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::Pipes::CreatePipe;
-use windows::Win32::System::RemoteDesktop::{WTSGetActiveConsoleSessionId, WTSQueryUserToken};
+use windows::Win32::System::RemoteDesktop::{
+    WTS_CURRENT_SERVER_HANDLE, WTS_SESSIONSTATE_LOCK, WTSFreeMemory, WTSGetActiveConsoleSessionId,
+    WTSINFOEXW, WTSQuerySessionInformationW, WTSQueryUserToken, WTSSessionInfoEx,
+};
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, PROCESS_INFORMATION,
     STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 use windows::core::PWSTR;
 
-use crate::control::ControlError;
+use crate::control::{ControlError, SessionState};
 
 const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -84,6 +87,66 @@ unsafe fn active_session_token() -> Result<HANDLE, String> {
         let _ = CloseHandle(user_token);
         dup.map_err(|e| format!("DuplicateTokenEx: {e}"))?;
         Ok(primary)
+    }
+}
+
+/// Determine whether an interactive user is present at the active console session, and whether
+/// they're actively using it (unlocked) or the screen is locked. Queried directly via WTS, so
+/// it works from the SYSTEM service (Session 0) without a user-session helper.
+///
+/// Maps to [`SessionState`]: no console session or no logged-on user → `NoUser`; a logged-on
+/// user with the workstation locked → `Locked`; otherwise → `Active`. On any query failure the
+/// error is returned so the caller can fail toward enforcement.
+///
+/// SAFETY: Win32 WTS FFI. The buffer returned by `WTSQuerySessionInformationW` is freed with
+/// `WTSFreeMemory` on every path before returning.
+pub fn active_session_state() -> Result<SessionState, ControlError> {
+    unsafe {
+        let session_id = WTSGetActiveConsoleSessionId();
+        if session_id == u32::MAX {
+            // No session attached to the physical console (e.g. the machine is booting or off).
+            return Ok(SessionState::NoUser);
+        }
+
+        let mut buffer = PWSTR::null();
+        let mut bytes: u32 = 0;
+        WTSQuerySessionInformationW(
+            Some(WTS_CURRENT_SERVER_HANDLE),
+            session_id,
+            WTSSessionInfoEx,
+            &mut buffer,
+            &mut bytes,
+        )
+        .map_err(|e| ControlError::Op(format!("WTSQuerySessionInformationW: {e}")))?;
+
+        if buffer.is_null() || (bytes as usize) < std::mem::size_of::<WTSINFOEXW>() {
+            if !buffer.is_null() {
+                WTSFreeMemory(buffer.0 as *mut core::ffi::c_void);
+            }
+            return Err(ControlError::Op("WTSSessionInfoEx returned no data".into()));
+        }
+
+        // The buffer is a `WTSINFOEXW`; interpret the Level-1 payload.
+        let info = &*(buffer.0 as *const WTSINFOEXW);
+        let state = if info.Level != 1 {
+            // Unexpected payload level — can't interpret, so assume in use (fail toward
+            // enforcement rather than handing out unlimited time).
+            SessionState::Active
+        } else {
+            let level1 = &info.Data.WTSInfoExLevel1;
+            if level1.UserName[0] == 0 {
+                // No logged-on user: the session exists but is at the sign-in screen.
+                SessionState::NoUser
+            } else if level1.SessionFlags == WTS_SESSIONSTATE_LOCK as i32 {
+                SessionState::Locked
+            } else {
+                // WTS_SESSIONSTATE_UNLOCK (or UNKNOWN) → treat as actively in use.
+                SessionState::Active
+            }
+        };
+
+        WTSFreeMemory(buffer.0 as *mut core::ffi::c_void);
+        Ok(state)
     }
 }
 

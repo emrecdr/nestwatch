@@ -31,6 +31,20 @@ pub struct ProcessInfo {
     pub memory_bytes: u64,
 }
 
+/// Whether an interactive user is present at the console — drives screen-time accounting so the
+/// budget isn't charged while nobody is using the machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionState {
+    /// No user is logged in at the console (e.g. the machine is at the sign-in screen, or off).
+    /// Nothing to charge time to.
+    NoUser,
+    /// A user is logged in but the workstation is locked (lock screen / screensaver). Present,
+    /// but not actively using the machine.
+    Locked,
+    /// A user is logged in and the session is unlocked — actively usable.
+    Active,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ControlError {
     #[error("no process with pid {0}")]
@@ -66,6 +80,12 @@ pub trait SystemControl: Send + Sync + 'static {
     /// succeeds even if none is pending. Used by the curfew enforcer to undo a countdown
     /// when the window ends or curfew is disabled.
     fn abort_shutdown(&self) -> Result<(), ControlError>;
+
+    /// Report whether an interactive user is present and actively using the console session.
+    /// The screen-time enforcer consults this so it doesn't charge the daily budget while
+    /// nobody is logged in or the screen is locked. Best-effort: the enforcer treats an `Err`
+    /// as [`SessionState::Active`] — failing toward enforcement, never toward unlimited time.
+    fn session_state(&self) -> Result<SessionState, ControlError>;
 }
 
 /// Encode a decoded image as PNG bytes. Shared by the real and fake controllers so the

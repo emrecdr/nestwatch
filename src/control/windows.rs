@@ -4,7 +4,7 @@
 //! for screen capture, `sysinfo` for process enumeration/termination, and shells out to
 //! `shutdown.exe` for power-off (dependency-free, no `unsafe`, no `windows` crate).
 
-use super::{ControlError, ProcessInfo, SystemControl};
+use super::{ControlError, ProcessInfo, SessionState, SystemControl};
 
 pub struct WindowsControl;
 
@@ -117,5 +117,11 @@ impl SystemControl for WindowsControl {
             .output()
             .map_err(|e| ControlError::Op(e.to_string()))?;
         Ok(())
+    }
+
+    fn session_state(&self) -> Result<SessionState, ControlError> {
+        // Queries the active console session via WTS. Works whether we're the interactive
+        // process (dev `run`) or the SYSTEM service — the same call is used by both.
+        crate::session::active_session_state()
     }
 }

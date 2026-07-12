@@ -6,7 +6,7 @@
 
 use std::sync::Mutex;
 
-use super::{ControlError, ProcessInfo, SystemControl};
+use super::{ControlError, ProcessInfo, SessionState, SystemControl};
 
 pub struct FakeControl {
     processes: Mutex<Vec<ProcessInfo>>,
@@ -94,5 +94,11 @@ impl SystemControl for FakeControl {
     fn lock_workstation(&self) -> Result<(), ControlError> {
         tracing::info!("[fake] lock_workstation (no-op on this platform)");
         Ok(())
+    }
+
+    fn session_state(&self) -> Result<SessionState, ControlError> {
+        // Dev/tests: pretend a user is actively at the machine, so the screen-time enforcer
+        // accrues time exactly as it did before this method existed.
+        Ok(SessionState::Active)
     }
 }

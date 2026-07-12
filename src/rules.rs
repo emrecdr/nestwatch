@@ -144,6 +144,11 @@ pub struct Tick {
     pub slack: Duration,
     /// Extra minutes granted to today's budget (0 if none / not for today).
     pub extra_minutes: u32,
+    /// Whether an interactive user is actively using the machine this tick (session unlocked).
+    /// When `false` (nobody logged in, or the screen is locked) the budget neither accrues nor
+    /// enforces — so a PC left on overnight doesn't burn the day's budget, and a budget lock
+    /// isn't re-issued every tick while the screen is already locked.
+    pub active: bool,
 }
 
 /// An action the enforcer decided on for this tick.
@@ -192,8 +197,16 @@ impl RulesEnforcer {
             .collect();
         let running: BTreeSet<String> = procs.iter().map(|p| norm(&p.name)).collect();
 
-        self.usage
-            .accrue(t.today, t.interval.as_secs(), &running, &limits);
+        // Only charge screen time while the machine is actively in use. A locked screen or a
+        // logged-out console still resets on a new day (accrue handles the rollover), but adds
+        // no seconds — so overnight idle time and the budget-lock's own locked screen don't
+        // count against the budget.
+        if t.active {
+            self.usage
+                .accrue(t.today, t.interval.as_secs(), &running, &limits);
+        } else {
+            self.usage.accrue(t.today, 0, &running, &limits);
+        }
 
         // Blocklist (kill on sight) + per-app over-limit → kill those PIDs.
         let blocked: BTreeSet<String> = rules.blocklist.iter().map(|b| norm(b)).collect();
@@ -210,8 +223,11 @@ impl RulesEnforcer {
             }
         }
 
-        // Total daily budget with warn-then-act.
-        if rules.daily_budget_mins > 0 {
+        // Total daily budget with warn-then-act. Enforced only while the machine is actively in
+        // use: when inactive we disarm below, so a user who steps away (or is locked out by the
+        // budget itself) isn't shut down/re-locked in absentia, and gets a fresh warning grace
+        // when they return.
+        if rules.daily_budget_mins > 0 && t.active {
             let budget_secs = rules.effective_budget_mins(t.extra_minutes) as u64 * 60;
             if self.usage.total_secs >= budget_secs {
                 match rules.budget_action {
@@ -264,6 +280,7 @@ pub async fn run_rules_enforcer(
     let mut locking = false; // is a budget lock currently in effect? (for transition logging)
     let mut shutting = false;
     let mut warning = false;
+    let mut prev_active: Option<bool> = None; // last tick's active-session state (for session_* events)
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
 
     loop {
@@ -279,6 +296,16 @@ pub async fn run_rules_enforcer(
         if !rules.any_configured() {
             continue;
         }
+
+        // Is a user actively at the machine this tick? Best-effort: on a query failure assume
+        // active, so a hiccup in the status check never quietly hands out unlimited screen time.
+        let active = {
+            let control = control.clone();
+            match tokio::task::spawn_blocking(move || control.session_state()).await {
+                Ok(Ok(state)) => matches!(state, crate::control::SessionState::Active),
+                _ => true,
+            }
+        };
 
         let procs = {
             let control = control.clone();
@@ -300,6 +327,7 @@ pub async fn run_rules_enforcer(
                 warn: Duration::from_secs(rules.warn_secs as u64),
                 slack: CHECK_INTERVAL,
                 extra_minutes: extra,
+                active,
             },
         );
         enforcer.usage.save(&tally_path);
@@ -321,6 +349,21 @@ pub async fn run_rules_enforcer(
         }
 
         let used_mins = enforcer.usage.total_secs / 60;
+
+        // Record active-use session boundaries in the usage history (rising/falling edge of
+        // `active`). The first observed active tick counts as a session start.
+        if prev_active != Some(active) {
+            if active {
+                usage_log.record("session_start", serde_json::json!({}));
+            } else if prev_active.is_some() {
+                usage_log.record(
+                    "session_stop",
+                    serde_json::json!({ "minutes_used": used_mins, "budget": budget }),
+                );
+            }
+            prev_active = Some(active);
+        }
+
         let mut has_lock = false;
         let mut has_shutdown = false;
         let mut has_warn = false;
@@ -413,8 +456,14 @@ mod tests {
     const SLACK: Duration = Duration::from_secs(30);
     const WARN: Duration = Duration::from_secs(60);
 
-    /// A `Tick` at `now` with `extra` granted minutes and the fixed test day/intervals.
+    /// A `Tick` at `now` with `extra` granted minutes and the fixed test day/intervals. Active
+    /// (a user is at the machine) — the common case for these tests.
     fn tk(now: Instant, extra: u32) -> Tick {
+        tk_active(now, extra, true)
+    }
+
+    /// Like [`tk`], but lets a test set whether the machine is actively in use this tick.
+    fn tk_active(now: Instant, extra: u32, active: bool) -> Tick {
         Tick {
             now,
             today: day(),
@@ -422,6 +471,7 @@ mod tests {
             warn: WARN,
             slack: SLACK,
             extra_minutes: extra,
+            active,
         }
     }
 
@@ -531,6 +581,83 @@ mod tests {
         e.decide(&rules, &[], tk(now, 0));
         let a = e.decide(&rules, &[], tk(now, 0));
         assert_eq!(a, vec![RuleAction::Warn]);
+    }
+
+    #[test]
+    fn inactive_ticks_do_not_accrue_time() {
+        let rules = Rules {
+            daily_budget_mins: 1, // 60s
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let now = Instant::now();
+        // Two inactive ticks (nobody logged in / screen locked) accrue nothing…
+        e.decide(&rules, &[], tk_active(now, 0, false));
+        e.decide(&rules, &[], tk_active(now, 0, false));
+        assert_eq!(e.usage.total_secs, 0, "no time charged while inactive");
+        // …so an active tick afterwards is still well under budget (no lock).
+        let a = e.decide(&rules, &[], tk_active(now, 0, true));
+        assert!(a.is_empty());
+        assert_eq!(e.usage.total_secs, 30);
+    }
+
+    #[test]
+    fn inactive_over_budget_does_not_enforce_and_rearms_on_return() {
+        let rules = Rules {
+            daily_budget_mins: 1, // 60s
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let base = Instant::now();
+        // Spend the budget while active, arming the grace deadline.
+        e.decide(&rules, &[], tk_active(base, 0, true));
+        e.decide(&rules, &[], tk_active(base, 0, true)); // 60s → over, deadline armed
+        assert!(e.budget_deadline.is_some());
+        // The screen locks (our budget lock, or the child): now inactive. Even well past the
+        // old deadline we neither lock nor keep the deadline armed — no in-absentia re-locking.
+        let locked = e.decide(
+            &rules,
+            &[],
+            tk_active(base + Duration::from_secs(90), 0, false),
+        );
+        assert!(locked.is_empty(), "no lock re-issued while inactive");
+        assert!(
+            e.budget_deadline.is_none(),
+            "deadline disarmed while inactive"
+        );
+        // On return (still over budget) a fresh grace is armed — not an instant lock.
+        let back = e.decide(
+            &rules,
+            &[],
+            tk_active(base + Duration::from_secs(95), 0, true),
+        );
+        assert!(
+            back.is_empty(),
+            "fresh warning grace, not an immediate lock"
+        );
+        assert!(e.budget_deadline.is_some());
+        // …and after that grace elapses, it locks.
+        let relock = e.decide(
+            &rules,
+            &[],
+            tk_active(base + Duration::from_secs(160), 0, true),
+        );
+        assert_eq!(relock, vec![RuleAction::LockScreen]);
+    }
+
+    #[test]
+    fn blocklist_kills_even_while_inactive() {
+        // Kill-on-sight isn't time-based, so it fires regardless of session state.
+        let rules = Rules {
+            blocklist: vec!["game.exe".into()],
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "game.exe")];
+        let actions = e.decide(&rules, &procs, tk_active(Instant::now(), 0, false));
+        assert_eq!(actions, vec![RuleAction::Kill(10)]);
     }
 
     #[test]

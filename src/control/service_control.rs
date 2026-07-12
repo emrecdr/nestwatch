@@ -5,7 +5,7 @@
 //! is delegated to a helper launched into the interactive user session (see `crate::session`).
 
 use super::windows::WindowsControl;
-use super::{ControlError, ProcessInfo, SystemControl};
+use super::{ControlError, ProcessInfo, SessionState, SystemControl};
 
 pub struct ServiceControl {
     inner: WindowsControl,
@@ -44,5 +44,11 @@ impl SystemControl for ServiceControl {
 
     fn abort_shutdown(&self) -> Result<(), ControlError> {
         self.inner.abort_shutdown()
+    }
+
+    fn session_state(&self) -> Result<SessionState, ControlError> {
+        // Session 0 has no session of its own to inspect; query the active console session
+        // (the child's) directly via WTS. No helper needed — WTS works from the service.
+        self.inner.session_state()
     }
 }
