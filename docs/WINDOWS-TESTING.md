@@ -86,8 +86,19 @@ Run through it once on his PC after installing.
 ## E2. Screen-time rules & time requests
 
 - [ ] In **Screen-time & app limits**, set a tiny **Daily limit** (e.g. 1 min), action **Lock
-      screen**, warn 30s, Save. After ~1–2 min of use the screen **locks** (and re-locks if he
-      unlocks). Set it back to 0 (off) afterwards.
+      screen**, warn 30s, Save. About 30s before the limit, a **"Screen time is up. This PC will
+      lock in 30 seconds."** message box appears on his desktop (proves `WTSSendMessageW` from the
+      service). After ~1–2 min of use the screen **locks**. Set it back to 0 (off) afterwards.
+- [ ] **Locked/idle time doesn't count.** With a small daily limit set and some minutes already
+      used, **lock his screen** (Win+L) and leave it a couple of minutes, then check **Usage
+      history / today's tally** — the used-minutes figure has **not** advanced while locked (proves
+      the `WTSQuerySessionInformation` session-state gate). It resumes when he unlocks. (Same holds
+      at the sign-in screen with nobody logged in — a PC left on overnight won't burn the budget.)
+- [ ] **A grant rescues an in-flight shutdown.** Set the daily limit action to **Shutdown**, tiny
+      limit; when the shutdown **countdown** starts, from your dashboard approve a `/ask` request
+      (or use bonus time) → within ~30s the pending shutdown is **cancelled** (verify as admin:
+      `shutdown /a` says "no shutdown in progress" because we already aborted it). Set action back
+      to Lock afterwards.
 - [ ] Add a **Blocked app** (e.g. `notepad.exe`), Save; launch Notepad → within ~30s it's
       **killed**. Remove it afterwards.
 - [ ] Add a **Per-app limit** (e.g. `notepad.exe` = 1 min), Save; run Notepad → after ~1 min

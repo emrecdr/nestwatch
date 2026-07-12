@@ -31,8 +31,8 @@ app also builds, runs, and is tested on macOS/Linux via a `FakeControl`.
 ```
 Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── auth (argon2 + session)
                           │  ├─ curfew enforcer  (window/day → warned shutdown)
-                          │  ├─ rules enforcer   (screen-time budget / blocklist / app limits
-                          │  │                     → kill · lock · shutdown)
+                          │  ├─ rules enforcer   (screen-time budget / blocklist / app limits;
+                          │  │                     counts active use only, warns child → kill · lock · shutdown)
                           │  ├─ processes / kill / shutdown         [direct, Session 0 OK]
                           │  └─ screenshot + lock ─→ helper in user session (WTSQueryUserToken +
                           │                           CreateProcessAsUserW) ─→ xcap ─→ PNG
@@ -45,6 +45,7 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
 | Assets | rust-embed 8 (embeds `assets/`) |
 | Auth | argon2 0.5 (Argon2id) |
 | OS ops | xcap 0.9 (screen, Windows-only dep), sysinfo 0.39 (processes), `shutdown /s` (power), `rundll32 …LockWorkStation` (lock) |
+| Session | `WTSQuerySessionInformation` (is the child logged in / locked / idle — screen-time counts active use only), `WTSSendMessage` (on-desktop "time's almost up" warning) |
 | Service / FFI | windows-service 0.8, windows 0.62 (WTS + CreateProcessAsUser) |
 | Time | chrono 0.4 (local-time curfew windows + daily screen-time reset) |
 | Cert | rcgen 0.14 |

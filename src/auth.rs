@@ -194,8 +194,12 @@ pub async fn login(
 }
 
 /// `POST /logout` — clear the session.
-pub async fn logout(session: Session) -> Result<Json<Value>, AppError> {
+pub async fn logout(
+    State(state): State<AppState>,
+    session: Session,
+) -> Result<Json<Value>, AppError> {
     session.flush().await?;
+    state.audit.record("logout", json!({}));
     Ok(Json(json!({ "ok": true })))
 }
 

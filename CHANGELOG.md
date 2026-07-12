@@ -2,6 +2,37 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.3] — 2026-07-12
+
+Accuracy and robustness pass for the screen-time budget, plus child-facing warnings.
+
+### Fixed
+- **Screen time no longer accrues while the PC is idle, locked, or logged out.** The budget
+  added 30s every tick unconditionally, so a machine left on overnight burned the whole day's
+  budget before the child woke — and time kept counting while the budget lock itself held the
+  screen, which also re-issued the Lock (re-spawning a session helper) every 30s against an
+  already-locked desktop. A new `SystemControl::session_state()` — one
+  `WTSQuerySessionInformationW(WTSSessionInfoEx)` call from the service, no user-session helper —
+  gates accrual and enforcement on the console session being present and unlocked, and gives a
+  fresh warning grace when the child returns.
+- **Approving more time now cancels an in-flight budget shutdown.** With the Shutdown action,
+  once `shutdown /s` was issued a grant cleared the enforcer's deadline but the machine powered
+  off anyway. The enforcer now aborts a shutdown it scheduled once the child is back under
+  budget — gated on curfew being inactive, so curfew stays the sole authority over its shutdowns.
+- **`config.json` and the `usage_state.json` tally are written atomically** (temp file → fsync →
+  rename), so a crash or power cut mid-write can't corrupt them. A truncated `config.json` would
+  otherwise stop the service from starting and lock the parent out until reinstall.
+- The daily `screentime_daily` rollup logged **today's** budget on the previous day's row; it
+  now records the budget that was actually in force that day.
+
+### Added
+- **Child-visible warnings.** The pre-lock grace period and the Warn action are no longer
+  silent: the child gets a brief "Screen time is up. This PC will lock in N seconds." desktop
+  notification (`WTSSendMessageW`, non-blocking, auto-dismissing) before a Lock — re-shown each
+  time it re-arms after they return — and on the rising edge of a Warn-mode limit.
+- The `session_start` / `session_stop` usage events (previously documented but never emitted)
+  are now recorded on active-use transitions, and `logout` is now written to the audit log.
+
 ## [0.2.2] — 2026-07-11
 
 ### Added

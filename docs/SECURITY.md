@@ -113,16 +113,21 @@ open the door on its own.
 - Security-relevant events are appended as JSON lines to `audit.jsonl` in the ACL-hardened data
   dir (`src/audit.rs`): login success/failure with **source IP**, rate-limited attempts, and
   the sensitive actions — screenshot, process kill, shutdown, **lock**, curfew change, **rules
-  change, password change (and failed attempts), and each time-request submit/approve/deny**
-  (the child submit is logged with its source IP). The parent reviews recent events in the
-  dashboard's **Recent access** panel or via `GET /api/audit`. This turns an otherwise invisible
-  access into something you can see — a login from an unfamiliar IP at an odd hour stands out.
+  change, password change (and failed attempts), logout, and each time-request
+  submit/approve/deny** (the child submit is logged with its source IP). The parent reviews
+  recent events in the dashboard's **Recent access** panel or via `GET /api/audit`. This turns an
+  otherwise invisible access into something you can see — a login from an unfamiliar IP at an odd
+  hour stands out.
 - Two further append-only logs live beside it with independent retention: `usage.jsonl` (usage
   history — daily screen-time, enforcement actions — read-only via `GET /api/usage`) and
   `time_requests.jsonl` (the event-sourced approval queue). A small `usage_state.json` sidecar
   holds the rules enforcer's running daily tally so a mid-day reboot doesn't reset the budget.
   All of these inherit the data dir's SYSTEM+Administrators-only ACL, and none contains secrets
   (no password, cookie, or hash).
+- **Crash-safe writes.** `config.json` and the `usage_state.json` tally are written atomically
+  (temp file → `fsync` → rename), so a power cut mid-write can't leave a truncated file. This
+  matters most for `config.json`: a corrupt config would stop the service from starting and lock
+  the parent out until reinstall.
 
 ---
 

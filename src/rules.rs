@@ -282,6 +282,7 @@ pub async fn run_rules_enforcer(
     let mut warning = false;
     let mut prev_active: Option<bool> = None; // last tick's active-session state (for session_* events)
     let mut prev_shutdown_wanted = false; // did we want a budget shutdown last tick? (to cancel it)
+    let mut prev_budget: Option<u32> = None; // effective budget in force at the last tick (for the daily rollup)
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
 
     loop {
@@ -336,7 +337,10 @@ pub async fn run_rules_enforcer(
 
         let budget = rules.effective_budget_mins(extra);
 
-        // Log the previous day's total once, on rollover.
+        // Log the previous day's total once, on rollover. Report the budget that was in force at
+        // the *end of that day* (carried across ticks), not today's — otherwise the fresh day's
+        // reset extra-time grant would be misattributed to yesterday's row. On the first tick
+        // after a restart we have no carried value, so fall back to today's budget as a proxy.
         if let Some(pd) = prev_day
             && pd != today
         {
@@ -345,10 +349,11 @@ pub async fn run_rules_enforcer(
                 serde_json::json!({
                     "date": pd.to_string(),
                     "minutes_used": prev_total / 60,
-                    "budget": budget,
+                    "budget": prev_budget.unwrap_or(budget),
                 }),
             );
         }
+        prev_budget = Some(budget);
 
         let used_mins = enforcer.usage.total_secs / 60;
 
