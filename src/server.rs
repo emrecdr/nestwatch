@@ -16,6 +16,7 @@
 //!     GET  POST /api/curfew
 //!     GET  /api/audit
 //!     GET  /api/usage
+//!     GET  /api/usage/today
 //!     GET  POST /api/rules
 //!     GET  /api/time-requests
 //!     POST /api/time-requests/{id}/approve  POST /api/time-requests/{id}/deny
@@ -57,6 +58,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
         .route("/audit", get(api::audit))
         .route("/usage", get(api::usage))
+        .route("/usage/today", get(api::usage_today))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/time-requests", get(api::list_time_requests))
         .route(

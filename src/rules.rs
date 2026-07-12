@@ -120,6 +120,23 @@ impl Usage {
             .unwrap_or_default()
     }
 
+    /// Load the persisted tally for read-only display of *today's* usage (the enforcer owns the
+    /// live copy). When the stored tally belongs to an earlier day it's treated as empty — but
+    /// stamped with `today` — so the dashboard never shows yesterday's numbers before the first
+    /// tick of the new day has run.
+    pub fn load_for_today(today: NaiveDate) -> Self {
+        let stored = Self::load_or_default(&usage_state_path());
+        if stored.day == Some(today) {
+            stored
+        } else {
+            Self {
+                day: Some(today),
+                total_secs: 0,
+                per_app_secs: BTreeMap::new(),
+            }
+        }
+    }
+
     fn save(&self, path: &std::path::Path) {
         if let Ok(json) = serde_json::to_string(self)
             && let Err(e) = crate::config::write_atomic(path, json.as_bytes())
@@ -127,6 +144,39 @@ impl Usage {
             tracing::warn!(error = %e, "usage tally save failed");
         }
     }
+}
+
+/// Path to the persisted daily-tally sidecar. One home so the enforcer (writer) and the
+/// read-only "today's usage" endpoint (reader) can't disagree on the location.
+pub(crate) fn usage_state_path() -> std::path::PathBuf {
+    crate::config::data_paths().dir.join("usage_state.json")
+}
+
+/// Build the read-only "today's usage" summary served at `GET /api/usage/today`: minutes
+/// used/remaining against today's effective budget, plus per-app usage for apps that have a
+/// limit. Pure (no I/O) so it's unit-tested; the handler supplies the config snapshot and the
+/// loaded tally. `remaining_mins` is `null` when no budget is set.
+pub fn today_summary(rules: &Rules, extra: u32, usage: &Usage) -> serde_json::Value {
+    let budget = rules.effective_budget_mins(extra);
+    let used_mins = usage.total_secs / 60;
+    let remaining_mins = (budget > 0).then(|| budget.saturating_sub(used_mins as u32));
+    let per_app: Vec<serde_json::Value> = rules
+        .app_limits
+        .iter()
+        .filter(|(_, v)| **v > 0)
+        .map(|(name, &lim)| {
+            let used = usage.per_app_secs.get(&norm(name)).copied().unwrap_or(0) / 60;
+            serde_json::json!({ "name": name, "used_mins": used, "limit_mins": lim })
+        })
+        .collect();
+    serde_json::json!({
+        "day": usage.day.map(|d| d.to_string()),
+        "budget_mins": budget,
+        "used_mins": used_mins,
+        "remaining_mins": remaining_mins,
+        "extra_mins": extra,
+        "per_app": per_app,
+    })
 }
 
 /// The per-tick clock/context injected into [`RulesEnforcer::decide`] — keeps that function
@@ -275,7 +325,7 @@ pub async fn run_rules_enforcer(
     config: Arc<RwLock<Config>>,
     usage_log: Arc<crate::usage::UsageLog>,
 ) {
-    let tally_path = crate::config::data_paths().dir.join("usage_state.json");
+    let tally_path = usage_state_path();
     let mut enforcer = RulesEnforcer::new(Usage::load_or_default(&tally_path));
     let mut locking = false; // is a budget lock currently in effect? (for transition logging)
     let mut shutting = false;
@@ -765,6 +815,48 @@ mod tests {
         assert!(!should_abort_budget_shutdown(true, false, true));
         // Nothing was pending → nothing to cancel.
         assert!(!should_abort_budget_shutdown(false, false, false));
+    }
+
+    #[test]
+    fn today_summary_reports_used_remaining_and_per_app() {
+        let rules = Rules {
+            daily_budget_mins: 120,
+            app_limits: [("Game.exe".into(), 60), ("chrome.exe".into(), 0)].into(), // 0 = off
+            ..Default::default()
+        };
+        let mut usage = Usage {
+            day: Some(day()),
+            total_secs: 47 * 60,
+            per_app_secs: Default::default(),
+        };
+        usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
+        // +30 granted → effective budget 150, used 47 → remaining 103.
+        let s = today_summary(&rules, 30, &usage);
+        assert_eq!(s["budget_mins"], 150);
+        assert_eq!(s["used_mins"], 47);
+        assert_eq!(s["remaining_mins"], 103);
+        assert_eq!(s["extra_mins"], 30);
+        // Only the limited, non-zero app is listed; its raw name is shown, usage from the
+        // normalized tally key.
+        let per_app = s["per_app"].as_array().unwrap();
+        assert_eq!(per_app.len(), 1);
+        assert_eq!(per_app[0]["name"], "Game.exe");
+        assert_eq!(per_app[0]["used_mins"], 20);
+        assert_eq!(per_app[0]["limit_mins"], 60);
+    }
+
+    #[test]
+    fn today_summary_has_null_remaining_without_a_budget() {
+        let rules = Rules::default(); // no daily budget
+        let usage = Usage {
+            day: Some(day()),
+            total_secs: 90 * 60,
+            per_app_secs: Default::default(),
+        };
+        let s = today_summary(&rules, 0, &usage);
+        assert_eq!(s["budget_mins"], 0);
+        assert_eq!(s["used_mins"], 90);
+        assert!(s["remaining_mins"].is_null());
     }
 
     #[test]

@@ -314,6 +314,41 @@ async fn usage_requires_auth_and_returns_array() {
 }
 
 #[tokio::test]
+async fn usage_today_requires_auth_and_returns_summary() {
+    let app = test_app();
+    // Unauthenticated → 401.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/usage/today")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Authenticated → 200 with the summary shape (no budget configured in tests → 0 / null).
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/usage/today")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    assert_eq!(body["budget_mins"], 0);
+    assert!(body["remaining_mins"].is_null());
+    assert!(body["per_app"].is_array());
+}
+
+#[tokio::test]
 async fn rules_get_and_validation() {
     let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();

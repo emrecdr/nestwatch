@@ -139,6 +139,19 @@ pub async fn usage(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Ap
     Ok(Json(events))
 }
 
+/// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the
+/// effective budget (base + granted extra) plus per-app usage for apps that have a limit. The
+/// numbers come from the enforcer's persisted sidecar (up to one 30s tick behind live).
+pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let today = crate::config::today();
+    let (rules, extra) = {
+        let cfg = crate::state::recover_read(&state.config);
+        (cfg.rules.clone(), cfg.extra.for_day(today))
+    };
+    let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
+    Ok(Json(crate::rules::today_summary(&rules, extra, &usage)))
+}
+
 /// `GET /api/rules` → the current usage rules (budget, blocklist, per-app limits).
 pub async fn get_rules(State(state): State<AppState>) -> Json<crate::rules::Rules> {
     Json(crate::state::recover_read(&state.config).rules.clone())
