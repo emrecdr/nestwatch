@@ -139,6 +139,33 @@ pub async fn usage(State(state): State<AppState>) -> Result<Json<Vec<Value>>, Ap
     Ok(Json(events))
 }
 
+#[derive(Deserialize)]
+pub struct ExtraTimeBody {
+    minutes: u32,
+}
+
+/// `POST /api/extra-time` → grant bonus minutes to today's budget directly, parent-initiated
+/// (no child request needed). Uses the exact same `DailyGrant` mechanism as approving a time
+/// request, so a mid-day reboot keeps the grant and it resets tomorrow.
+pub async fn extra_time(
+    State(state): State<AppState>,
+    Json(body): Json<ExtraTimeBody>,
+) -> Result<Json<Value>, AppError> {
+    if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
+        return Err(AppError::BadRequest("minutes out of range".into()));
+    }
+    let today = crate::config::today();
+    let minutes = body.minutes;
+    update_config(&state, |c| c.extra.add(today, minutes)).await?;
+    state
+        .audit
+        .record("extra_time_granted", json!({ "minutes": minutes }));
+    state
+        .usage
+        .record("extra_time_granted", json!({ "minutes": minutes }));
+    Ok(Json(json!({ "ok": true, "minutes": minutes })))
+}
+
 /// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the
 /// effective budget (base + granted extra) plus per-app usage for apps that have a limit. The
 /// numbers come from the enforcer's persisted sidecar (up to one 30s tick behind live).

@@ -349,6 +349,48 @@ async fn usage_today_requires_auth_and_returns_summary() {
 }
 
 #[tokio::test]
+async fn extra_time_requires_auth_and_validates_range() {
+    let app = test_app();
+
+    // Unauthenticated → 401.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/extra-time")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"minutes":30}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    // Zero minutes → 400. Over-range (>240) → 400. Neither reaches the persistence path, so this
+    // test never writes the real config; the successful grant + persistence lives in
+    // `rules_persist.rs`, which redirects the data dir.
+    for bad in [r#"{"minutes":0}"#, r#"{"minutes":9999}"#] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/extra-time")
+                    .header(header::COOKIE, &cookie)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(bad))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[tokio::test]
 async fn rules_get_and_validation() {
     let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();

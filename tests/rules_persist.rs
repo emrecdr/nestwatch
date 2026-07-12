@@ -1,5 +1,6 @@
-//! A valid `POST /api/rules` round-trip updates in-memory state AND persists to disk. Its own
-//! test binary so the `NESTWATCH_DATA_DIR` override is isolated from the other integration tests.
+//! Valid mutating round-trips (`POST /api/rules`, `POST /api/extra-time`) update in-memory state
+//! AND persist to disk. Its own test binary so the `NESTWATCH_DATA_DIR` override is isolated from
+//! the other integration tests (and from a second env-setting test running concurrently).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -66,6 +67,7 @@ async fn valid_rules_persist_and_update_state() {
 
     // POST valid rules.
     let res = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -88,15 +90,37 @@ async fn valid_rules_persist_and_update_state() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
-    // In-memory state updated...
-    let cfg = nestwatch::state::recover_read(&config_handle);
-    assert_eq!(cfg.rules.daily_budget_mins, 90);
-    assert_eq!(cfg.rules.blocklist, vec!["game.exe".to_string()]);
-    drop(cfg);
+    // In-memory state updated... (scoped so the read guard never spans the await below)
+    {
+        let cfg = nestwatch::state::recover_read(&config_handle);
+        assert_eq!(cfg.rules.daily_budget_mins, 90);
+        assert_eq!(cfg.rules.blocklist, vec!["game.exe".to_string()]);
+    }
 
     // ...and persisted to disk.
     let saved = std::fs::read_to_string(data_paths().config).unwrap();
     assert!(saved.contains("game.exe"), "rules persisted to config.json");
+
+    // A parent bonus-time grant lands in today's DailyGrant, in memory and on disk.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/extra-time")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "minutes": 30 }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    {
+        let cfg = nestwatch::state::recover_read(&config_handle);
+        assert_eq!(cfg.extra.for_day(nestwatch::config::today()), 30);
+    }
+    let saved = std::fs::read_to_string(data_paths().config).unwrap();
+    assert!(saved.contains("\"minutes\": 30"), "grant persisted");
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

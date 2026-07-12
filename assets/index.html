@@ -219,6 +219,14 @@
                 </div>
               </template>
 
+              <!-- Parent-granted bonus time (only meaningful with a budget) -->
+              <div class="mt-2 flex flex-wrap items-center gap-2" x-show="today.budget_mins > 0">
+                <span class="label-text">Add bonus time today:</span>
+                <button class="btn btn-outline btn-sm" @click="grantExtra(15)" :disabled="grantingExtra">+15</button>
+                <button class="btn btn-outline btn-sm" @click="grantExtra(30)" :disabled="grantingExtra">+30</button>
+                <button class="btn btn-outline btn-sm" @click="grantExtra(60)" :disabled="grantingExtra">+60</button>
+              </div>
+
               <!-- Per-app usage -->
               <template x-if="today.per_app && today.per_app.length">
                 <div class="mt-2">
@@ -497,6 +505,7 @@
           savingRules: false,
           today: { day: null, budget_mins: 0, used_mins: 0, remaining_mins: null, extra_mins: 0, per_app: [] },
           loadingToday: false,
+          grantingExtra: false,
           audit: [],
           loadingAudit: false,
           usage: [],
@@ -775,6 +784,26 @@
           loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", "Failed to load access log"); },
           loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", "Failed to load usage history"); },
           loadToday() { return this.loadList("/api/usage/today", "today", "loadingToday"); },
+
+          async grantExtra(mins) {
+            this.grantingExtra = true;
+            try {
+              const r = await this.postJSON("/api/extra-time", { minutes: mins });
+              if (r.ok) {
+                this.toast(`Granted +${mins} min`, "success");
+                this.loadToday();
+                this.loadUsage();
+              } else if (r.status === 400) {
+                this.toast("Minutes out of range (1–240)", "error");
+              } else {
+                this.toast("Could not grant time", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            } finally {
+              this.grantingExtra = false;
+            }
+          },
           loadTimeRequests() { return this.loadList("/api/time-requests", "timeRequests"); },
 
           async resolveTimeRequest(id, approve) {
