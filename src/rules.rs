@@ -122,7 +122,7 @@ impl Usage {
 
     fn save(&self, path: &std::path::Path) {
         if let Ok(json) = serde_json::to_string(self)
-            && let Err(e) = std::fs::write(path, json)
+            && let Err(e) = crate::config::write_atomic(path, json.as_bytes())
         {
             tracing::warn!(error = %e, "usage tally save failed");
         }

@@ -4,7 +4,8 @@
 //! (never the plaintext). It lives alongside the TLS cert/key in a per-user data dir:
 //! `%PROGRAMDATA%\HostHealth` on Windows (bland, low-profile), `~/.config/nestwatch` on dev.
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
@@ -140,10 +141,28 @@ impl Config {
         std::fs::create_dir_all(&paths.dir)
             .with_context(|| format!("could not create {}", paths.dir.display()))?;
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&paths.config, json)
+        write_atomic(&paths.config, json.as_bytes())
             .with_context(|| format!("could not write {}", paths.config.display()))?;
         Ok(())
     }
+}
+
+/// Write `contents` to `path` atomically: fill a sibling temp file, flush it to disk, then
+/// `rename` over the destination. A same-directory rename is atomic on NTFS and POSIX, so a
+/// crash or power cut mid-write can never leave a truncated file — which matters most for
+/// `config.json`: an unreadable config makes the service fail to start (locking the parent out
+/// until reinstall), and a torn `usage_state.json` silently resets the day's budget. The temp
+/// file is created inside the ACL-hardened data dir, so it's no more readable than the target.
+pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents)?;
+        // Flush the bytes to disk BEFORE the rename, or the rename could be persisted while the
+        // contents are still buffered — exposing an empty file after a power cut.
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
 }
 
 #[cfg(test)]
@@ -161,6 +180,23 @@ mod tests {
         let back: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(back.port, 8443);
         assert_eq!(back.password_hash, "$argon2id$abc");
+    }
+
+    #[test]
+    fn write_atomic_replaces_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join(format!("nw-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.json");
+
+        write_atomic(&path, b"first").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first");
+        // A second write replaces the contents in place…
+        write_atomic(&path, b"second").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+        // …and never leaves the sibling temp file behind.
+        assert!(!dir.join("data.tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
