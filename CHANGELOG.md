@@ -2,6 +2,29 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.5] — 2026-07-12
+
+Validation pass over the 0.2.4 features — correctness and robustness fixes.
+
+### Fixed
+- **Pausing (or clearing the budget) no longer leaves a shutdown running.** With the Shutdown
+  action, if the parent paused enforcement while the shutdown countdown was already in flight,
+  the enforcer skipped its abort logic and the machine powered off anyway. The idle/paused path
+  now cancels a shutdown it had scheduled (still gated on curfew being inactive).
+- **The dashboard no longer shows a phantom budget on an unlimited day.** Granting extra time on
+  a day with no base budget (reachable via the child-approve path) displayed a budget/remaining
+  the enforcer never applied. `effective_budget_mins` now returns 0 when the day is unlimited, and
+  the enforcer, its logging, and the card all read that one value.
+- **A malformed `budget_by_weekday` can't brick startup.** It was a fixed 7-element array, so a
+  wrong-length array in a hand-edited config failed to parse and stopped the service from starting
+  (locking the parent out). It's now a length-tolerant list that falls back per day.
+- **Per-day budget inputs no longer log errors while hidden**, and toggling per-day mode off then
+  on no longer wipes a saved weekend configuration.
+
+### Changed
+- Usage history distinguishes a parent-initiated bonus (`source: parent`) from a child
+  request that was approved (`source: request`).
+
 ## [0.2.4] — 2026-07-12
 
 Parental-control parity pass: the dashboard now shows the day's usage and gives the parent
