@@ -660,6 +660,7 @@
           loadingShot: false,
           autoRefresh: false,
           _shotTimer: null,
+          _shotBusy: false,
           _refreshMs: 3000,
           killTarget: null,
           confirmShutdown: false,
@@ -924,6 +925,10 @@
           },
 
           async takeScreenshot(silent = false) {
+            // Never overlap captures: the service helper can take up to ~15s, but the Live timer
+            // fires every few seconds — without this guard slow captures would pile up.
+            if (this._shotBusy) return;
+            this._shotBusy = true;
             if (!silent) this.loadingShot = true;
             try {
               const r = await fetch("/api/screenshot");
@@ -936,6 +941,7 @@
               if (!silent) this.toast("Screenshot failed", "error");
             } finally {
               if (!silent) this.loadingShot = false;
+              this._shotBusy = false;
             }
           },
 
