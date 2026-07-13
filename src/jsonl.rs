@@ -130,4 +130,28 @@ mod tests {
         log.record("x", json!({}));
         assert!(log.recent(10).is_empty());
     }
+
+    #[test]
+    fn rotates_when_over_size() {
+        let dir = std::env::temp_dir().join(format!("nw-jsonl-rot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.jsonl");
+
+        // Pre-fill past the rotation threshold, then a single record triggers rotation.
+        std::fs::write(&path, vec![b'x'; MAX_BYTES as usize + 1]).unwrap();
+        let log = JsonlLog::new(path.clone());
+        log.record("after_rotate", json!({}));
+
+        // The oversized file was moved aside to `.jsonl.1`…
+        assert!(
+            path.with_extension("jsonl.1").exists(),
+            "rotated backup exists"
+        );
+        // …and the live file now holds only the fresh line.
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content.lines().count(), 1);
+        assert!(content.contains("after_rotate"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

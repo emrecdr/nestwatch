@@ -320,6 +320,35 @@ mod tests {
     }
 
     #[test]
+    fn is_within_matches_modular_oracle_across_the_day() {
+        // An independent oracle via modular arithmetic (a different formulation than the
+        // branch-on-`cmp` implementation), swept over every minute of the day for same-day,
+        // midnight-wrapping, and empty windows.
+        fn oracle(m: i32, s: i32, e: i32) -> bool {
+            let span = (e - s).rem_euclid(1440); // window length (0 = empty)
+            let off = (m - s).rem_euclid(1440); // how far m is past the start
+            span != 0 && off < span
+        }
+        let nt =
+            |min: i32| NaiveTime::from_hms_opt((min / 60) as u32, (min % 60) as u32, 0).unwrap();
+        for &(s, e) in &[
+            (9 * 60, 17 * 60),          // same day
+            (22 * 60, 7 * 60),          // wraps midnight
+            (0, 0),                     // empty
+            (23 * 60 + 30, 30),         // wraps, short
+            (6 * 60 + 15, 6 * 60 + 15), // empty, non-midnight
+        ] {
+            for m in 0..1440 {
+                assert_eq!(
+                    is_within(nt(m), nt(s), nt(e)),
+                    oracle(m, s, e),
+                    "m={m} s={s} e={e}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn parses_and_rejects_times() {
         assert!(parse_hm("07:30").is_some());
         assert!(parse_hm("23:59").is_some());
