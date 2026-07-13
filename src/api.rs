@@ -232,26 +232,30 @@ pub async fn save_routine(
     }
     body.rules.validate().map_err(AppError::BadRequest)?;
     let rules = body.rules;
-    // Reject a brand-new routine past the cap, but always allow updating an existing one.
-    {
-        let cfg = crate::state::recover_read(&state.config);
-        let exists = cfg.routines.iter().any(|r| r.name == name);
-        if !exists && cfg.routines.len() >= crate::config::MAX_ROUTINES {
-            return Err(AppError::BadRequest("too many routines".into()));
+
+    // Cap check + upsert under a single write guard (no TOCTOU between checking the count and
+    // pushing), then persist the snapshot off the runtime. Updating an existing routine is always
+    // allowed; only a brand-new one can hit the cap. The guard is dropped before the `.await`.
+    let snapshot = {
+        let mut guard = crate::state::recover_write(&state.config);
+        match guard.routines.iter_mut().find(|r| r.name == name) {
+            Some(existing) => existing.rules = rules,
+            None => {
+                if guard.routines.len() >= crate::config::MAX_ROUTINES {
+                    return Err(AppError::BadRequest("too many routines".into()));
+                }
+                guard.routines.push(crate::config::Routine {
+                    name: name.clone(),
+                    rules,
+                });
+            }
         }
-    }
-    let audit_name = name.clone();
-    update_config(&state, move |c| {
-        if let Some(existing) = c.routines.iter_mut().find(|r| r.name == name) {
-            existing.rules = rules;
-        } else {
-            c.routines.push(crate::config::Routine { name, rules });
-        }
-    })
-    .await?;
-    state
-        .audit
-        .record("routine_saved", json!({ "name": audit_name }));
+        guard.clone()
+    };
+    spawn(move || snapshot.save())
+        .await?
+        .map_err(AppError::Internal)?;
+    state.audit.record("routine_saved", json!({ "name": name }));
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -269,7 +273,14 @@ pub async fn apply_routine(
     let Some(rules) = rules else {
         return Err(AppError::BadRequest("no such routine".into()));
     };
-    update_config(&state, |c| c.rules = rules).await?;
+    // Apply the routine's rule *content* but preserve the current pause state: the enforcing/paused
+    // toggle is a temporary override, not something a "Homework"/"Weekend" preset should flip.
+    update_config(&state, |c| {
+        let paused = !c.rules.enabled;
+        c.rules = rules;
+        c.rules.enabled = !paused;
+    })
+    .await?;
     state
         .audit
         .record("routine_applied", json!({ "name": name }));
