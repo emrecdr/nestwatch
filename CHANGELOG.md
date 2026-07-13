@@ -2,6 +2,21 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.4] — 2026-07-13
+
+### Fixed
+- **Live-mode screenshots no longer pile up.** A slow capture (the session helper can take up to
+  ~15s) let the auto-refresh timer stack overlapping requests; a new capture is now skipped while
+  one is already in flight.
+
+### Added
+- **Certificate-expiry warning.** The service logs a loud warning at startup when the TLS cert is
+  within 30 days of its 825-day expiry, so you can re-run `install` before it stops working
+  (Safari/iOS hard-reject an expired cert). Best-effort, using the cert's mtime — no cert parser.
+
+### Internal
+- The per-IP submission limiter's window logic is now unit-tested (the clock is injected).
+
 ## [0.3.3] — 2026-07-13
 
 ### Added
