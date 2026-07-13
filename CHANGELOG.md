@@ -2,6 +2,17 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.3] — 2026-07-13
+
+### Added
+- **`nestwatch fingerprint`** — re-prints the installed TLS certificate's SHA-256 fingerprint
+  (the one `install` shows once), so you can re-verify it when adding a new device months later.
+
+### Internal
+- Deduplicated the four integration-test binaries' shared login / state / body plumbing into
+  `tests/common`, and added coverage for two previously-untested edges: a 1440-minute
+  curfew-window sweep against an independent oracle, and JSONL size-based rotation.
+
 ## [0.3.2] — 2026-07-13
 
 ### Added

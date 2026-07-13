@@ -53,7 +53,8 @@ Run through it once on his PC after installing.
 - [ ] Browse to `https://<his-pc-ip>:<port>` — it **loads** (proves the firewall rule works; if
       it times out, see Troubleshooting).
 - [ ] Browser shows a one-time "not trusted" warning. View the cert → its **SHA-256 matches**
-      the fingerprint from step A. Proceed.
+      the fingerprint from step A. Proceed. (Lost the fingerprint? As admin, run
+      `nestwatch.exe fingerprint` to re-print it — handy when verifying a new phone/laptop later.)
 - [ ] Login page shows the bland **"Host Health"** header (not "Nestwatch").
 - [ ] Wrong password → rejected; after ~5 quick wrong tries → **locked out** briefly (429).
 - [ ] Correct password → dashboard shows **"🪺 Nestwatch"**.
