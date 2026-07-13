@@ -63,6 +63,40 @@ pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
     Ok(fingerprint(cert.der()))
 }
 
+/// Certificate validity window in days (see [`generate`]).
+const VALIDITY_DAYS: u64 = 825;
+/// Start warning once the cert is within this many days of expiry.
+const RENEW_WARN_DAYS: u64 = 30;
+
+/// Whether a cert `age_days` old is close enough to its [`VALIDITY_DAYS`] expiry to warn about.
+fn is_expiring(age_days: u64) -> bool {
+    age_days + RENEW_WARN_DAYS >= VALIDITY_DAYS
+}
+
+/// Best-effort startup check: warn loudly (to the service log) if the installed cert is nearing
+/// expiry, so the parent re-runs `install` before Safari/iOS start hard-rejecting it. Uses the
+/// cert file's mtime as a proxy for generation time — `install` rewrites the cert, refreshing the
+/// mtime — so no cert parser is needed. Never fails the server start.
+pub fn warn_if_expiring(cert_path: &Path) {
+    let Ok(age_days) = cert_age_days(cert_path) else {
+        return;
+    };
+    if is_expiring(age_days) {
+        tracing::warn!(
+            "TLS certificate is ~{age_days} days old and nears its {VALIDITY_DAYS}-day expiry — \
+             re-run `nestwatch install` to refresh it (the fingerprint will change)"
+        );
+    }
+}
+
+fn cert_age_days(cert_path: &Path) -> std::io::Result<u64> {
+    let mtime = std::fs::metadata(cert_path)?.modified()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(mtime)
+        .unwrap_or_default();
+    Ok(age.as_secs() / 86_400)
+}
+
 /// Read an existing cert PEM and return its SHA-256 fingerprint (same format `install` printed),
 /// so a parent can re-check it when adding a new device long after install. Reads the actual
 /// cert on disk, so it stays correct even if the cert was regenerated.
@@ -106,6 +140,16 @@ fn primary_lan_ip() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_expiring_only_near_the_end() {
+        assert!(!is_expiring(0));
+        assert!(!is_expiring(700));
+        assert!(!is_expiring(VALIDITY_DAYS - RENEW_WARN_DAYS - 1));
+        assert!(is_expiring(VALIDITY_DAYS - RENEW_WARN_DAYS)); // exactly at the threshold
+        assert!(is_expiring(VALIDITY_DAYS));
+        assert!(is_expiring(VALIDITY_DAYS + 100)); // already expired
+    }
 
     #[test]
     fn read_fingerprint_matches_generate() {

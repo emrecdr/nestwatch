@@ -115,6 +115,7 @@ pub async fn serve_with_handle(
 ) -> Result<()> {
     let paths = config::data_paths();
     cert::ensure_cert(&paths.cert, &paths.key)?;
+    cert::warn_if_expiring(&paths.cert);
     let tls = RustlsConfig::from_pem_file(&paths.cert, &paths.key).await?;
 
     let port = crate::state::recover_read(&state.config).port;
