@@ -3,7 +3,6 @@
 //! payoff of the `SystemControl` abstraction.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
@@ -12,74 +11,10 @@ use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 use tower::ServiceExt; // for `oneshot`
 
-use nestwatch::audit::AuditLog;
-use nestwatch::auth::hash_password;
-use nestwatch::config::Config;
-use nestwatch::control::FakeControl;
 use nestwatch::server::build_router;
-use nestwatch::state::AppState;
-use nestwatch::usage::UsageLog;
 
-const PASSWORD: &str = "test-password";
-
-fn test_state() -> AppState {
-    let mut state = AppState::new(
-        Arc::new(FakeControl::new()),
-        Config {
-            port: 8443,
-            password_hash: hash_password(PASSWORD).unwrap(),
-            ..Default::default()
-        },
-    );
-    // Tests must never touch the real data dir; keep the logs off.
-    state.audit = Arc::new(AuditLog::disabled());
-    state.usage = Arc::new(UsageLog::disabled());
-    state.time_requests = Arc::new(nestwatch::timereq::TimeRequests::disabled());
-    state.time_codes = Arc::new(nestwatch::timecode::TimeCodes::disabled());
-    state
-}
-
-/// The router wired with a mock loopback peer, so the LAN-scope gate admits `oneshot`
-/// requests (which carry no real socket). Loopback is on the allowlist.
-fn test_app() -> Router {
-    let state = test_state();
-    build_router(state).layer(MockConnectInfo(SocketAddr::from(([127, 0, 0, 1], 40000))))
-}
-
-/// POST /login and return the session cookie (`name=value`) on success.
-async fn login(app: &axum::Router, password: &str) -> Option<String> {
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/login")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "password": password }).to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    if res.status() != StatusCode::OK {
-        return None;
-    }
-    let cookie = res
-        .headers()
-        .get(header::SET_COOKIE)?
-        .to_str()
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_string();
-    Some(cookie)
-}
-
-async fn body_json(res: axum::response::Response) -> Value {
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    serde_json::from_slice(&bytes).unwrap()
-}
+mod common;
+use common::{PASSWORD, body_json, login, test_app, test_state};
 
 #[tokio::test]
 async fn api_requires_auth() {
