@@ -63,6 +63,16 @@ pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
     Ok(fingerprint(cert.der()))
 }
 
+/// Read an existing cert PEM and return its SHA-256 fingerprint (same format `install` printed),
+/// so a parent can re-check it when adding a new device long after install. Reads the actual
+/// cert on disk, so it stays correct even if the cert was regenerated.
+pub fn read_fingerprint(cert_path: &Path) -> Result<String> {
+    let pem = std::fs::read_to_string(cert_path)
+        .with_context(|| format!("reading cert at {}", cert_path.display()))?;
+    let parsed = pem::parse(pem.as_bytes()).context("parsing cert PEM")?;
+    Ok(fingerprint(parsed.contents()))
+}
+
 /// SHA-256 of the DER cert, formatted `AB:CD:...`.
 fn fingerprint(der: &[u8]) -> String {
     let digest = Sha256::digest(der);
@@ -91,4 +101,25 @@ fn primary_lan_ip() -> Option<String> {
         return None;
     }
     Some(ip.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_fingerprint_matches_generate() {
+        let dir = std::env::temp_dir().join(format!("nw-cert-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert = dir.join("cert.pem");
+        let key = dir.join("key.pem");
+
+        // The fingerprint generate() returns must match reading the cert back off disk.
+        let at_install = generate(&cert, &key).unwrap();
+        let read_back = read_fingerprint(&cert).unwrap();
+        assert_eq!(at_install, read_back);
+        assert!(read_back.contains(':') && read_back.len() == 95); // 32 bytes → "AB:..:CD"
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

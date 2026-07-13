@@ -12,6 +12,7 @@ axum = "0.8.9"
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 image = "0.25"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+pem = "3"
 rpassword = "7.5.4"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rust-embed = { version = "8", features = ["mime-guess"] }

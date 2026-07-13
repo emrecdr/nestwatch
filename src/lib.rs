@@ -62,6 +62,7 @@ pub fn run_cli() -> Result<()> {
         "uninstall" => install::uninstall(),
         "run" => run_server(),
         "service-run" => run_service(),
+        "fingerprint" => print_fingerprint(),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -92,6 +93,15 @@ fn run_helper(args: &[String]) -> Result<()> {
             std::process::exit(2);
         }
     }
+}
+
+/// `fingerprint`: print the installed cert's SHA-256 fingerprint, so a parent can verify it when
+/// adding a new device long after install (when `install` printed it once).
+fn print_fingerprint() -> Result<()> {
+    let cert = config::data_paths().cert;
+    let fp = cert::read_fingerprint(&cert)?;
+    println!("TLS certificate SHA-256 fingerprint:\n{fp}");
+    Ok(())
 }
 
 /// `service-run`: entry point invoked by the Windows Service Control Manager.
@@ -170,7 +180,8 @@ fn print_usage() {
          USAGE:\n  \
            nestwatch install     set password + TLS cert, install the SYSTEM service\n  \
            nestwatch uninstall   stop + remove the service\n  \
-           nestwatch run         run the HTTPS server in the foreground (dev)\n\n\
+           nestwatch run         run the HTTPS server in the foreground (dev)\n  \
+           nestwatch fingerprint print the TLS cert SHA-256 (to verify a new device)\n\n\
          Internal (invoked automatically):\n  \
            nestwatch service-run            SCM entry point for the service\n  \
            nestwatch helper --capture PATH  capture a screenshot in the user session\n"
