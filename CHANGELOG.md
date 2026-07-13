@@ -2,6 +2,23 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.6] — 2026-07-14
+
+Fixes from an adversarial review of the Wave-3 features.
+
+### Fixed
+- **Time codes could be redeemed more than once under concurrency** (security). `redeem` was a
+  check-then-append with no lock spanning the two, so parallel redemptions of the *same*
+  single-use code each granted its minutes — a child's most direct path to free screen time. It's
+  now atomic (a mutex held across find→consume), with a concurrent-redeem regression test.
+- **`nestwatch fingerprint` now selects the CERTIFICATE block** rather than the first PEM block,
+  so a key-first combined `cert.pem` can't cause it to fingerprint the private key and mislead the
+  trust-on-first-use check.
+- **Applying a routine preserves the enforcing/paused toggle** (a temporary override) instead of
+  overwriting it with the preset's saved state.
+- Routine save does its cap check atomically (no TOCTOU); the `/ask` code hint now matches the
+  real 8-character code format.
+
 ## [0.3.5] — 2026-07-14
 
 ### Added

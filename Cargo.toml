@@ -1,6 +1,6 @@
 [package]
 name = "nestwatch"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 # Private tool — guard against accidental `cargo publish` to crates.io.
 publish = false
