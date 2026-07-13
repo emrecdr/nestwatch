@@ -12,6 +12,7 @@
 //! in the SYSTEM+Administrators-only data dir, unreadable to the child.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use serde::Serialize;
 use serde_json::json;
@@ -39,12 +40,17 @@ pub struct ActiveCode {
 /// The persisted code store.
 pub struct TimeCodes {
     log: JsonlLog,
+    /// Serializes each check-and-append (`issue`'s cap check, `redeem`'s consume) so the
+    /// read → decide → append sequence is atomic. Without this, concurrent redemptions of the
+    /// same single-use code all observe it as active and each grant the minutes.
+    gate: Mutex<()>,
 }
 
 impl TimeCodes {
     pub fn new(path: PathBuf) -> Self {
         Self {
             log: JsonlLog::new(path),
+            gate: Mutex::new(()),
         }
     }
 
@@ -53,12 +59,14 @@ impl TimeCodes {
     pub fn disabled() -> Self {
         Self {
             log: JsonlLog::disabled(),
+            gate: Mutex::new(()),
         }
     }
 
     /// Mint a new code worth `minutes`, or `None` if the active-code cap is reached. Returns the
     /// plaintext code for the parent to write down / hand over.
     pub fn issue(&self, minutes: u32) -> Option<String> {
+        let _gate = self.gate.lock().unwrap_or_else(|p| p.into_inner());
         if self.active().len() >= MAX_ACTIVE_CODES {
             return None;
         }
@@ -102,6 +110,9 @@ impl TimeCodes {
         if code.is_empty() {
             return None;
         }
+        // Hold the gate across find → append so a single-use code can't be consumed twice by
+        // concurrent redemptions (each would otherwise see it as still active and grant minutes).
+        let _gate = self.gate.lock().unwrap_or_else(|p| p.into_inner());
         let found = self.active().into_iter().find(|c| c.code == code)?;
         self.log.record("redeemed", json!({ "code": code }));
         Some(found.minutes)
@@ -191,6 +202,39 @@ mod tests {
             a.bytes().all(|c| CODE_ALPHABET.contains(&c)),
             "only alphabet chars"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_redeem_grants_a_code_only_once() {
+        // Regression: redeem must be atomic. Fire many threads at one single-use code and assert
+        // exactly one wins — without the gate, several would each observe it as active and grant.
+        use std::sync::Arc;
+        let dir = std::env::temp_dir().join(format!(
+            "nw-timecode-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::UNIX_EPOCH
+                .elapsed()
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let codes = Arc::new(TimeCodes::new(dir.join("time_codes.jsonl")));
+        let code = codes.issue(30).unwrap();
+
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let codes = codes.clone();
+            let code = code.clone();
+            handles.push(std::thread::spawn(move || codes.redeem(&code)));
+        }
+        let wins = handles
+            .into_iter()
+            .filter_map(|h| h.join().unwrap())
+            .count();
+        assert_eq!(wins, 1, "a single-use code must redeem exactly once");
+        assert!(codes.active().is_empty());
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

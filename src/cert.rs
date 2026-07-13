@@ -103,8 +103,15 @@ fn cert_age_days(cert_path: &Path) -> std::io::Result<u64> {
 pub fn read_fingerprint(cert_path: &Path) -> Result<String> {
     let pem = std::fs::read_to_string(cert_path)
         .with_context(|| format!("reading cert at {}", cert_path.display()))?;
-    let parsed = pem::parse(pem.as_bytes()).context("parsing cert PEM")?;
-    Ok(fingerprint(parsed.contents()))
+    // Select the CERTIFICATE block specifically — `pem::parse` returns the first block regardless
+    // of tag, so a key-first combined PEM would otherwise fingerprint the private key silently,
+    // defeating the whole point (verifying you're trusting the right server's cert).
+    let block = pem::parse_many(pem.as_bytes())
+        .context("parsing cert PEM")?
+        .into_iter()
+        .find(|b| b.tag() == "CERTIFICATE")
+        .with_context(|| format!("no CERTIFICATE block in {}", cert_path.display()))?;
+    Ok(fingerprint(block.contents()))
 }
 
 /// SHA-256 of the DER cert, formatted `AB:CD:...`.
@@ -163,6 +170,13 @@ mod tests {
         let read_back = read_fingerprint(&cert).unwrap();
         assert_eq!(at_install, read_back);
         assert!(read_back.contains(':') && read_back.len() == 95); // 32 bytes → "AB:..:CD"
+
+        // A key-first combined PEM must still fingerprint the CERTIFICATE block, not the key.
+        let combined = dir.join("combined.pem");
+        let key_pem = std::fs::read_to_string(&key).unwrap();
+        let cert_pem = std::fs::read_to_string(&cert).unwrap();
+        std::fs::write(&combined, format!("{key_pem}\n{cert_pem}")).unwrap();
+        assert_eq!(read_fingerprint(&combined).unwrap(), at_install);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
