@@ -2,6 +2,16 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.7] — 2026-07-14
+
+Minor accessibility and efficiency polish.
+
+### Changed
+- The icon-only "remove" buttons and the usage progress bars now carry `aria-label`s, so screen
+  readers announce what they do and show.
+- The dashboard's background refresh pauses while the browser tab is hidden — no needless polling
+  when you're not looking at it.
+
 ## [0.3.6] — 2026-07-14
 
 Fixes from an adversarial review of the Wave-3 features.

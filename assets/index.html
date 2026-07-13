@@ -172,7 +172,7 @@
                           </label>
                         </template>
                       </div>
-                      <button class="btn btn-ghost btn-xs" @click="removeWindow(i)">✕</button>
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove window" @click="removeWindow(i)">✕</button>
                     </div>
                   </template>
                   <p class="text-xs opacity-60">No day selected = every day.</p>
@@ -219,6 +219,7 @@
                       x-show="today.extra_mins > 0" x-text="` (incl. +${today.extra_mins} bonus)`"></span></span>
                   </div>
                   <progress class="progress w-full mt-1"
+                            :aria-label="`Screen time: ${today.used_mins} of ${today.budget_mins} minutes used`"
                             :class="today.remaining_mins === 0 ? 'progress-error' : (today.remaining_mins <= 15 ? 'progress-warning' : 'progress-primary')"
                             :value="today.used_mins" :max="today.budget_mins"></progress>
                 </div>
@@ -241,6 +242,7 @@
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="a.name"></span>
                         <progress class="progress flex-1"
+                                  :aria-label="`${a.name}: ${a.used_mins} of ${a.limit_mins} minutes`"
                                   :class="a.used_mins >= a.limit_mins ? 'progress-error' : 'progress-primary'"
                                   :value="a.used_mins" :max="a.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="a.used_mins"></span>/<span
@@ -260,6 +262,7 @@
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="g.name"></span>
                         <progress class="progress flex-1"
+                                  :aria-label="`${g.name}: ${g.used_mins} of ${g.limit_mins} minutes`"
                                   :class="g.used_mins >= g.limit_mins ? 'progress-error' : 'progress-primary'"
                                   :value="g.used_mins" :max="g.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="g.used_mins"></span>/<span
@@ -343,7 +346,7 @@
                     <div class="flex items-center gap-2">
                       <input type="text" x-model="rules.blocklist[i]" placeholder="game.exe"
                              class="input input-bordered input-sm w-64" />
-                      <button class="btn btn-ghost btn-xs" @click="rules.blocklist.splice(i, 1)">✕</button>
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit" @click="rules.blocklist.push('')">+ Add app</button>
@@ -360,7 +363,7 @@
                              class="input input-bordered input-sm w-64" />
                       <input type="number" min="0" x-model.number="row.mins" placeholder="min"
                              class="input input-bordered input-sm w-24" />
-                      <button class="btn btn-ghost btn-xs" @click="appLimitRows.splice(i, 1)">✕</button>
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit"
@@ -380,7 +383,7 @@
                              class="input input-bordered input-sm w-64" />
                       <input type="number" min="0" x-model.number="g.limit_mins" placeholder="min"
                              class="input input-bordered input-sm w-24" />
-                      <button class="btn btn-ghost btn-xs" @click="groupRows.splice(i, 1)">✕</button>
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit"
@@ -728,6 +731,7 @@
             this.stopPolling();
             this._pollTimer = setInterval(() => {
               if (!this.authed) { this.stopPolling(); return; }
+              if (document.hidden) return; // skip fetches while the tab is backgrounded
               this.loadToday();
               this.loadTimeRequests();
             }, this._pollMs);
