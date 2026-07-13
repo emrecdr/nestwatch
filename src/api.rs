@@ -304,7 +304,9 @@ pub async fn time_request(
     Json(body): Json<TimeReqBody>,
 ) -> Result<Json<Value>, AppError> {
     let ip = peer.ip();
-    state.time_req_limiter.count_and_check(ip)?;
+    state
+        .time_req_limiter
+        .count_and_check(ip, std::time::Instant::now())?;
     if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
         return Err(AppError::BadRequest("minutes out of range".into()));
     }
@@ -418,7 +420,9 @@ pub async fn redeem_code(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<RedeemBody>,
 ) -> Result<Json<Value>, AppError> {
-    state.code_limiter.count_and_check(peer.ip())?;
+    state
+        .code_limiter
+        .count_and_check(peer.ip(), std::time::Instant::now())?;
     let codes = state.time_codes.clone();
     let input = body.code;
     let granted = spawn(move || codes.redeem(&input)).await?;

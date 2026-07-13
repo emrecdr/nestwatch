@@ -136,8 +136,8 @@ impl SubmitLimiter {
     }
 
     /// Record a call from `ip` and return `Err(TooManyAttempts)` if it exceeds the window quota.
-    pub fn count_and_check(&self, ip: IpAddr) -> Result<(), AppError> {
-        let now = Instant::now();
+    /// `now` is injected (callers pass `Instant::now()`) so the window logic is unit-testable.
+    pub fn count_and_check(&self, ip: IpAddr, now: Instant) -> Result<(), AppError> {
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         // Drop timestamps outside the window, everywhere, so the map stays bounded.
         map.retain(|_, times| {
@@ -206,15 +206,38 @@ mod tests {
     #[test]
     fn submit_limiter_trips_after_quota() {
         let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let now = Instant::now();
         let lim = SubmitLimiter::new(2, Duration::from_secs(60));
-        assert!(lim.count_and_check(ip).is_ok());
-        assert!(lim.count_and_check(ip).is_ok());
+        assert!(lim.count_and_check(ip, now).is_ok());
+        assert!(lim.count_and_check(ip, now).is_ok());
         assert!(
-            lim.count_and_check(ip).is_err(),
+            lim.count_and_check(ip, now).is_err(),
             "3rd exceeds the quota of 2"
         );
         // A different IP is unaffected.
         let other: IpAddr = "192.168.1.6".parse().unwrap();
-        assert!(lim.count_and_check(other).is_ok());
+        assert!(lim.count_and_check(other, now).is_ok());
+    }
+
+    #[test]
+    fn submit_limiter_window_expires() {
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let base = Instant::now();
+        let window = Duration::from_secs(60);
+        let lim = SubmitLimiter::new(2, window);
+        // Fill the quota at t=0.
+        assert!(lim.count_and_check(ip, base).is_ok());
+        assert!(lim.count_and_check(ip, base).is_ok());
+        assert!(lim.count_and_check(ip, base).is_err());
+        // Still inside the window a moment later → still blocked.
+        assert!(
+            lim.count_and_check(ip, base + Duration::from_secs(59))
+                .is_err()
+        );
+        // Past the window the old timestamps age out → allowed again.
+        assert!(
+            lim.count_and_check(ip, base + window + Duration::from_secs(1))
+                .is_ok()
+        );
     }
 }
