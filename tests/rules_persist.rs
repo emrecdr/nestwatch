@@ -100,6 +100,7 @@ async fn valid_rules_persist_and_update_state() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let res = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -117,6 +118,45 @@ async fn valid_rules_persist_and_update_state() {
         assert_eq!(
             cfg.rules.daily_budget_mins, 15,
             "routine applied to live rules"
+        );
+    }
+
+    // Applying a routine preserves the current pause state: pause enforcement, then re-apply the
+    // routine (whose saved rules are enabled) → live rules stay paused, but its content applies.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/rules")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "enabled": false, "daily_budget_mins": 99 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/routines/Homework/apply")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    {
+        let cfg = nestwatch::state::recover_read(&config_handle);
+        assert!(!cfg.rules.enabled, "apply preserves the paused state");
+        assert_eq!(
+            cfg.rules.daily_budget_mins, 15,
+            "but applies routine content"
         );
     }
 

@@ -792,6 +792,9 @@
                 this.groupRows = this.rules.app_groups.map((g) => ({
                   name: g.name, appsText: (g.apps || []).join(", "), limit_mins: g.limit_mins,
                 }));
+                // Drop any stashed per-day array so a later per-day toggle reflects THESE rules,
+                // not a stale array from before (e.g. after applying a routine).
+                this._lastPerDay = null;
               }
             } catch {}
           },
