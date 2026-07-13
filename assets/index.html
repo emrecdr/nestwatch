@@ -54,7 +54,9 @@
       <div>
         <div class="navbar bg-base-100 shadow">
           <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
-          <div class="flex-none gap-2">
+          <div class="flex-none items-center gap-2">
+            <span class="badge badge-warning gap-1" x-show="timeRequests.length > 0"
+                  x-text="`${timeRequests.length} request${timeRequests.length === 1 ? '' : 's'}`"></span>
             <button class="btn btn-info btn-sm" @click="doLock()">🔒 Lock</button>
             <button class="btn btn-warning btn-sm" @click="confirmShutdown = true">⏻ Shut down</button>
             <button class="btn btn-ghost btn-sm" @click="logout()">Log out</button>
@@ -661,6 +663,8 @@
           autoRefresh: false,
           _shotTimer: null,
           _shotBusy: false,
+          _pollTimer: null,
+          _pollMs: 60000,
           _refreshMs: 3000,
           killTarget: null,
           confirmShutdown: false,
@@ -715,6 +719,22 @@
             this.loadUsage();
             this.loadTimeRequests();
             this.loadCodes();
+            this.startPolling();
+          },
+
+          // Keep the live-changing panels (today's usage + pending requests) fresh without a
+          // manual refresh. Light: two small JSON GETs a minute. Stops itself once logged out.
+          startPolling() {
+            this.stopPolling();
+            this._pollTimer = setInterval(() => {
+              if (!this.authed) { this.stopPolling(); return; }
+              this.loadToday();
+              this.loadTimeRequests();
+            }, this._pollMs);
+          },
+
+          stopPolling() {
+            if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
           },
 
           async loadCurfew() {
@@ -905,6 +925,7 @@
 
           async logout() {
             this.stopAutoRefresh();
+            this.stopPolling();
             await fetch("/logout", { method: "POST" });
             this.authed = false;
             this.processes = [];

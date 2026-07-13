@@ -2,6 +2,14 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.3.5] — 2026-07-14
+
+### Added
+- **Live dashboard.** Today's-usage and pending more-time requests now refresh automatically
+  (about once a minute) instead of only on a manual refresh, and a navbar badge shows the
+  pending-request count — so a child's request and their remaining minutes are visible without
+  reloading the page. The poll stops on logout / session expiry.
+
 ## [0.3.4] — 2026-07-13
 
 ### Fixed
