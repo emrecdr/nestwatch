@@ -6,16 +6,32 @@
 
 
 A single self-contained Rust app that lets a parent, from any device on the **same home
-network**, log into a web page and control a child's Windows PC:
+network**, log into a web page and manage a child's Windows PC. No cloud, no accounts, no
+telemetry — one password, and everything stays on your LAN.
 
-- take a screenshot (with an optional near-live auto-refresh), see running apps, close a
-  specific app, **lock** the screen, or shut the machine down;
-- enforce a **curfew** (multiple windows, per-day-of-week) during which the PC auto-shuts-down,
-  a **daily screen-time budget**, an **app blocklist**, and **per-app time limits**;
-- review a **usage history** and an **access log**, and change the password from the dashboard;
-- let the child **request more time** at `https://<this-pc>:8443/ask` — the parent approves or
-  denies it in the dashboard (an approval adds minutes to today's budget);
-- run as a **tamper-resistant SYSTEM service** a standard (non-admin) user can't stop.
+**Remote control** — take a screenshot (with an optional near-live auto-refresh), see running
+apps, close a specific app, **lock** the screen, or shut the machine down.
+
+**Screen-time rules**, enforced by a background service that counts only *active* use (not idle,
+locked, or logged-out time):
+- a **daily budget**, optionally **different per day of week**, with a configurable action when
+  it's spent — **lock** (default), **shut down**, or **warn-only** — and a warning the child sees
+  first;
+- an **app blocklist** (killed on sight), **per-app daily limits**, and **app groups** that share
+  one pool (e.g. all games get 90 minutes *together*);
+- a **curfew** — multiple windows, per day of week — during which the PC won't stay on;
+- a one-switch **pause** for a free evening, and **named routines** (Homework / Weekend / …) you
+  switch between with one click.
+
+**Granting more time** — a **today's-usage** view (minutes used / remaining, per app and per
+group) with **+15 / +30 / +60 bonus** buttons; a child **"request more time"** page at
+`https://<this-pc>:8443/ask` that the parent approves or denies; and **offline time codes** you
+generate and hand over, which the child redeems on their own PC even while you're away.
+
+**Operations & safety** — a **usage history** and an **access log** on a **live-updating
+dashboard**; password change and a `fingerprint` command to re-verify the certificate; HTTPS with
+a verifiable fingerprint; and a **tamper-resistant SYSTEM service** a standard (non-admin) user
+can't stop.
 
 Single-user, LAN-only. No keylogging or covert data collection.
 
@@ -107,7 +123,7 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
 You download and run **`nestwatch.exe`** — it's the same binary that `install` copies to
 `C:\Program Files\HostHealth\host-health.exe` (the bland on-disk name) on the target.
 
-**Releases:** push a tag (`git tag v0.2.0 && git push --tags`) and `.github/workflows/release.yml`
+**Releases:** push a tag (`git tag v0.3.5 && git push --tags`) and `.github/workflows/release.yml`
 builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's in each version.
 
@@ -117,6 +133,7 @@ builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release. See
 nestwatch.exe install     # password + TLS cert; copies binary, registers & starts the
                           # SYSTEM service, hardens ACLs
 nestwatch.exe uninstall   # stop + delete the service
+nestwatch.exe fingerprint # re-print the TLS cert SHA-256 (to verify a new device later)
 ```
 
 - `install` copies the binary to `C:\Program Files\HostHealth\host-health.exe` and registers
@@ -147,7 +164,13 @@ link-verified via the Windows target, but its **runtime behavior must be verifie
 actual Windows machine** — see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md) for a
 step-by-step on-device checklist.
 
-## Not included (by design)
+## Not included
 
-Live screen streaming, keylogging/covert monitoring, multi-machine hub. The `SystemControl`
-trait leaves room to add live streaming later without touching the web layer.
+- **Keylogging / covert monitoring** — never. This is overt parental control, not spyware.
+- **Off-LAN access** — by design you must be on the home network. Want remote reach? Bring your
+  own VPN (WireGuard/Tailscale) — unsupported but compatible; the app itself stays LAN-only.
+- **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
+  leaves room to add streaming later without touching the web layer.
+- **Web/content filtering** and **foreground-app-aware limits** (e.g. "earn time in a learning
+  app") — not yet. Both need Windows-specific work that must be verified on real hardware; today's
+  limits count an app as used while it's *running*, not only while it's focused.
