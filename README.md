@@ -7,33 +7,62 @@
 
 A single self-contained Rust app that lets a parent, from any device on the **same home
 network**, log into a web page and manage a child's Windows PC. No cloud, no accounts, no
-telemetry — one password, and everything stays on your LAN.
+telemetry, no keylogging — one password, and everything stays on your LAN.
 
-**Remote control** — take a screenshot (with an optional near-live auto-refresh), see running
-apps, close a specific app, **lock** the screen, or shut the machine down.
+## Features
 
-**Screen-time rules**, enforced by a background service that counts only *active* use (not idle,
-locked, or logged-out time):
-- a **daily budget**, optionally **different per day of week**, with a configurable action when
-  it's spent — **lock** (default), **shut down**, or **warn-only** — and a warning the child sees
-  first;
-- an **app blocklist** (killed on sight), **per-app daily limits**, and **app groups** that share
-  one pool (e.g. all games get 90 minutes *together*);
-- a **curfew** — multiple windows, per day of week — during which the PC won't stay on;
-- a one-switch **pause** for a free evening, and **named routines** (Homework / Weekend / …) you
-  switch between with one click.
+Every capability below is exposed in the dashboard (or, for the child, at `/ask`). For a
+step-by-step way to verify each one on the real machine, follow
+**[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md)**.
 
-**Granting more time** — a **today's-usage** view (minutes used / remaining, per app and per
-group) with **+15 / +30 / +60 bonus** buttons; a child **"request more time"** page at
-`https://<this-pc>:8443/ask` that the parent approves or denies; and **offline time codes** you
-generate and hand over, which the child redeems on their own PC even while you're away.
+**Remote control**
+- **Screenshot** the primary monitor, with an optional **Live** auto-refresh toggle.
+- **Running apps** list (heaviest first) and **kill** any process.
+- **Lock** the screen (password required to resume).
+- **Shut down** the machine (with a warned countdown).
 
-**Operations & safety** — a **usage history** and an **access log** on a **live-updating
-dashboard**; password change and a `fingerprint` command to re-verify the certificate; HTTPS with
-a verifiable fingerprint; and a **tamper-resistant SYSTEM service** a standard (non-admin) user
-can't stop.
+**Daily screen-time budget** — enforced by a background service that counts only *active* use
+(not idle, locked, or logged-out time), persists across reboots, and resets at midnight.
+- **Daily limit** in minutes (`0` = no limit).
+- **Per-day-of-week limits** — a different budget for each weekday (`0` = no limit that day).
+- **Action when the budget is spent:** **Lock** (default), **Shut down**, or **Warn only**.
+- **On-screen warning to the child** before a Lock actually fires.
 
-Single-user, LAN-only. No keylogging or covert data collection.
+**App controls**
+- **Blocklist** — named apps killed on sight.
+- **Per-app daily limits** — an app is killed once it exceeds its own minutes.
+- **App groups** — several apps sharing **one** daily pool (e.g. all games get 90 min together);
+  when the pool is spent, every member is killed.
+
+**Curfew** — a "the PC shouldn't be on now" schedule, separate from the budget.
+- One or more **time windows**, each with **per-day-of-week** selection.
+- Warns, then **shuts down**, and **re-issues** the shutdown if it's cancelled.
+
+**Granting more time**
+- **Parent bonus** buttons (**+15 / +30 / +60 min**) on the Today card.
+- **Child "request more time"** page at `/ask` → the parent **approves or denies** it.
+- **Offline time codes** — the parent generates a single-use code; the child redeems it at `/ask`
+  even while the parent is away or the network is down.
+
+**Modes & presets**
+- **Pause / resume** the whole rules enforcer with one toggle (a free evening) — curfew still
+  applies.
+- **Named routines** — save the current rules as a preset (Homework / Weekend / …) and apply one
+  with a click.
+
+**Visibility**
+- **Today's usage** — minutes used / remaining, plus per-app and per-group bars.
+- **Usage history** — daily screen-time and enforcement events.
+- **Access log** — logins (with source IP) and every sensitive action.
+- **Live dashboard** — the Today view and pending requests refresh automatically; a navbar badge
+  shows the pending-request count.
+
+**Account & safety**
+- Single **password** login (Argon2id); **change the password** from the dashboard.
+- **LAN-only** — a Windows firewall rule *and* an app-layer allowlist.
+- **HTTPS** with a verifiable self-signed certificate; `nestwatch fingerprint` re-prints its
+  SHA-256 so you can verify a new device later.
+- **Tamper-resistant SYSTEM service** a standard (non-admin) user can't stop.
 
 ## How it works
 
@@ -123,7 +152,7 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
 You download and run **`nestwatch.exe`** — it's the same binary that `install` copies to
 `C:\Program Files\HostHealth\host-health.exe` (the bland on-disk name) on the target.
 
-**Releases:** push a tag (`git tag v0.3.5 && git push --tags`) and `.github/workflows/release.yml`
+**Releases:** push a tag (`git tag vX.Y.Z && git push --tags`) and `.github/workflows/release.yml`
 builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's in each version.
 

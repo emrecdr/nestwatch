@@ -104,6 +104,10 @@ Run through it once on his PC after installing.
       **killed**. Remove it afterwards.
 - [ ] Add a **Per-app limit** (e.g. `notepad.exe` = 1 min), Save; run Notepad → after ~1 min
       it's killed on sight, while other apps keep running. Remove it afterwards.
+- [ ] **App group (shared pool):** add a group (name `Test`, apps `notepad.exe, mspaint.exe`,
+      1 min), Save. Open Notepad for ~30s, close it, open Paint for ~30s → once the shared minute
+      is spent, the running member is killed (the pool is shared across both, not per-app). Remove
+      the group afterwards.
 - [ ] **Budget survives a restart:** with a small daily limit set, accrue a little usage, then
       `taskkill /f /im host-health.exe` (it auto-restarts) → the used-minutes tally is **not**
       reset (it's persisted in `usage_state.json`); enforcement resumes from where it was.
@@ -121,6 +125,9 @@ Run through it once on his PC after installing.
       120, Save → enforcement uses today's 1-min value (locks quickly); the card's budget matches.
 - [ ] **Pause toggle:** flip **Enforcing → Paused** → the card shows a "Paused" badge and, with a
       tiny daily limit set, the screen no longer locks; flip back → enforcement resumes.
+- [ ] **Routines:** with some rules set, in **Routines** type a name (e.g. `Weekend`) and **Save
+      current as routine**. Change the daily limit, then **Apply** `Weekend` → the settings revert
+      to the saved preset (and the paused/enforcing toggle is left as-is). **Delete** it afterward.
 
 ## F. Resilience
 
