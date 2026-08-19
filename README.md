@@ -1,105 +1,77 @@
-# Nestwatch — home remote control
+# Nestwatch
+
+**Screen-time limits, a bedtime curfew and remote control for a child's Windows PC — from any
+device on your own home network. No cloud, no accounts, no telemetry, no keylogging.**
+
+[![build](https://github.com/emrecdr/nestwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/emrecdr/nestwatch/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/emrecdr/nestwatch?label=release)](https://github.com/emrecdr/nestwatch/releases/latest)
+[![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](#requirements)
+
+**[Install guide →](https://emrecdr.github.io/nestwatch/)** · [Releases](https://github.com/emrecdr/nestwatch/releases/latest) · [Security model](docs/SECURITY.md) · [Known limits](docs/OPEN-FINDINGS.md)
+
+---
+
+## What it is
+
+One self-contained Rust binary. It installs as a background service on the child's PC and serves
+a small web dashboard over HTTPS to your phone or laptop **on the same Wi-Fi**. You set a daily
+minute budget and a bedtime; it enforces them and shows you what actually happened.
+
+Nothing leaves the house: no account to create, no vendor to trust, no data sent anywhere.
+
+**The two controls that hold** are the daily budget and the curfew — they cannot be dodged by
+renaming a file or rebooting. App blocklists are habit-shaping rather than a wall, and the README
+says so below rather than letting you find out later.
+
+## Quick start
+
+On the child's PC, from an **elevated** PowerShell:
+
+```powershell
+# 1. Download nestwatch.exe + nestwatch.exe.sha256 from the latest release, then verify:
+Get-FileHash nestwatch.exe -Algorithm SHA256 | Format-List   # must match the .sha256 file
+
+# 2. Right-click the .exe -> Properties -> tick "Unblock", then:
+.\nestwatch.exe install     # sets the password, makes a TLS cert, prints a QR code
+
+# 3. Scan the QR with your phone. You are in the dashboard, signed in.
+nestwatch.exe doctor         # anything wrong? this says what, and how to fix it
+```
+
+Full walkthrough, including what to check afterwards: **[the install guide](https://emrecdr.github.io/nestwatch/)**.
+
+## Requirements
+
+- **Windows 10 or 11** on the managed PC (the child's account must be a **standard user**, not an
+  administrator — see [Tamper-resistance](#tamper-resistance--and-its-limits)).
+- Any device with a browser on the same home network, for the parent.
+- Nothing else. No runtime to install, no Node, no Python, no service account.
 
 > "Nestwatch" is the parent-facing project name. The service, folders and files the installer
 > creates on the managed PC are named plainly and unremarkably instead; `nestwatch.exe doctor`
 > lists exactly what is installed and where.
 
-
-A single self-contained Rust app that lets a parent, from any device on the **same home
-network**, log into a web page and manage a child's Windows PC. No cloud, no accounts, no
-telemetry, no keylogging — one password, and everything stays on your LAN.
-
 ## Features
 
-Every capability below is exposed in the dashboard (or, for the child, at `/ask`). For a
-step-by-step way to verify each one on the real machine, follow
-**[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md)**.
+Everything below is in the dashboard (the child sees only their own page at `/ask`). Verify each
+one on the real machine with **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md)**.
 
-**Remote control**
-- **Screenshot** the primary monitor, with an optional **Live** auto-refresh toggle.
-- **Running apps** list (heaviest first) and **kill** any process.
-- **Lock** the screen (password required to resume).
-- **Shut down** the machine (with a warned countdown).
+| | |
+|---|---|
+| **Daily budget** | Minutes per day, optionally different per weekday. Counts only *active* use — not idle, locked or logged-out time. Survives reboots, resets at midnight. When spent: lock, shut down, or warn only. |
+| **Curfew** | One or more time windows per weekday, separate from the budget. Counts down on the child's screen, then shuts down — and re-issues if the shutdown is cancelled. |
+| **Warnings** | 15, 5 and 1 minutes before both the budget and bedtime, so the limit is never a surprise. A budget shorter than a threshold never announces it; a mid-day restart doesn't replay warnings; granting extra time re-arms them. |
+| **Screen-time report** | 30 days as a chart, with per-app minutes and a comparison against the period before. Days the service wasn't running show as **not measured**, never as zero — so a stopped enforcer can't look like a quiet week. |
+| **Asking for more** | The child's page shows time left and can request more; you approve or deny. Single-use offline codes cover times you're away or the network is down. |
+| **Remote control** | Screenshot the desktop (with live refresh), list and kill running apps, lock the screen, shut down with a warned countdown. |
+| **App rules** | Blocklist, per-app daily limits, and groups sharing one pool. Habit-shaping, not a wall — see [Not included](#not-included). |
+| **Modes** | Pause the whole rules enforcer with one toggle for a free evening (curfew still applies). Save the current setup as a named routine and reapply with a click. |
+| **Trust the setup** | `nestwatch doctor` reports whether the service is up, the port listening, the firewall rule right, the network private, the certificate valid, and whether anything is actually being enforced. Every problem prints its fix. |
+| **Visibility** | Today's usage with per-app bars, usage history, and an access log of logins with source IP. |
 
-**Daily screen-time budget** — enforced by a background service that counts only *active* use
-(not idle, locked, or logged-out time), persists across reboots, and resets at midnight.
-- **Daily limit** in minutes (`0` = no limit).
-- **Per-day-of-week limits** — a different budget for each weekday (`0` = no limit that day).
-- **Action when the budget is spent:** **Lock** (default), **Shut down**, or **Warn only**.
-- **Countdown warnings to the child** at **15, 5 and 1 minutes left**, so the limit is never a
-  surprise — plus a final on-screen warning before a Lock actually fires. Each fires once: a budget
-  shorter than a threshold never announces it, a restart mid-day doesn't replay warnings already
-  passed, and granting extra time re-arms them. Locking the screen and unlocking it doesn't earn
-  another grace period, and a cancelled shut-down is re-issued immediately rather than offering
-  another countdown to cancel.
-- **Resists clock tampering** — changing the PC's time zone (which Windows lets a standard user do
-  with no prompt) can't reset the day's tally or move the curfew window. Real daylight-saving
-  changes are still followed.
-
-**App controls**
-> **These are speed bumps, not walls — the budget and curfew are the real controls.** Apps are
-> matched by their filename, so a child who copies `chrome.exe` to `notes.exe` in their own folder
-> is no longer blocked. There's no software fix for that at this level; if you need a genuine app
-> wall, Windows **AppLocker** (Pro/Enterprise) or **Microsoft Family Safety** enforce by publisher
-> or file hash in the kernel, and can't be dodged by renaming. Use these to steer everyday habits,
-> and the daily budget plus curfew for the limits that actually have to hold.
-
-- **Blocklist** — named apps killed on sight.
-- **Per-app daily limits** — an app is killed once it exceeds its own minutes.
-- **App groups** — several apps sharing **one** daily pool (e.g. all games get 90 min together);
-  when the pool is spent, every member is killed.
-
-**Curfew** — a "the PC shouldn't be on now" schedule, separate from the budget.
-- One or more **time windows**, each with **per-day-of-week** selection.
-- **Counts down to bedtime** on the child's screen at **15, 5 and 1 minutes**, then **shuts down**,
-  and **re-issues** the shutdown if it's cancelled.
-
-**Granting more time**
-- **Parent bonus** buttons (**+15 / +30 / +60 min**) on the Today card.
-- **The child's own page** at `/ask` shows **how much time they have left today** and a progress
-  bar — so they can check without asking — plus a form to **request more time**, which the parent
-  **approves or denies**. It deliberately shows totals only: no blocked-app names, no per-app
-  limits, no curfew times.
-- **Offline time codes** — the parent generates a single-use code; the child redeems it at `/ask`
-  even while the parent is away or the network is down.
-
-**Modes & presets**
-- **Pause / resume** the whole rules enforcer with one toggle (a free evening) — curfew still
-  applies.
-- **Named routines** — save the current rules as a preset (Homework / Weekend / …) and apply one
-  with a click.
-
-**Trust the setup**
-- **`nestwatch doctor`** — one screen: is the service up, is the port listening, is the firewall
-  rule right, is the network Private, how long has the certificate got, is anything actually being
-  enforced, and who are the local administrators. Every problem prints its fix.
-
-**Visibility**
-- **Today's usage** — minutes used / remaining, plus per-app and per-group bars.
-- **Screen-time report** — the last 30 days as a chart, with per-app minutes for apps that have a
-  limit, a running total and a comparison against the previous period. Days the service wasn't
-  running are drawn as **not measured**, never as zero, so a stopped enforcer can't be mistaken
-  for a quiet week. It counts time the PC was unlocked with an app *running* — not focused
-  attention, and not per-account — so the figures aren't comparable to a phone's screen time.
-- **Usage history** — daily screen-time and enforcement events.
-- **Access log** — logins (with source IP) and every sensitive action.
-- **Live dashboard** — the Today view and pending requests refresh automatically; a navbar badge
-  shows the pending-request count.
-
-**Setup & access**
-- **Scan-to-pair** — `install` prints a QR code; scan it and you're in the dashboard, signed in,
-  without typing an address or a password on a phone. Single-use, expires in 15 minutes.
-  `nestwatch pair` mints a fresh one for the next device.
-
-**Account & safety**
-- Single **password** login (Argon2id); **change the password** from the dashboard — which also
-  signs every other device out.
-- **Stay signed in** — sessions survive reboots and service restarts, with a 30-day
-  "remember this device" window, so you don't retype a passphrase on a phone after every restart.
-- **LAN-only** — a Windows firewall rule *and* an app-layer allowlist.
-- **HTTPS** with a verifiable self-signed certificate; `nestwatch fingerprint` re-prints its
-  SHA-256 so you can verify a new device later.
-- **Tamper-resistant SYSTEM service** a standard (non-admin) user can't stop.
+**Resists clock tampering.** Changing the PC's time zone — which Windows lets a standard user do
+with no prompt — cannot reset the day's tally or move the curfew window. Real daylight-saving
+changes are still followed.
 
 ## How it works
 
@@ -216,65 +188,16 @@ You download and run **`nestwatch.exe`** — it's the same binary that `install`
 builds `nestwatch.exe` + a SHA-256 and attaches them to a GitHub Release. See
 [`CHANGELOG.md`](CHANGELOG.md) for what's in each version.
 
-## First run (start here)
+## First run
 
-Before you begin, two things the tool depends on and can't fix for you:
+The [install guide](https://emrecdr.github.io/nestwatch/) is the step-by-step version, written to
+be read on a phone while you stand at the PC. The short form is in [Quick start](#quick-start)
+above.
 
-- **The child's Windows account must be a *standard* user, not an administrator.** Check with
-  `net localgroup Administrators` — their name must not be listed. A local admin can stop the
-  service, and no software-only tool can prevent that.
-- **The PC's network must be set to *Private*.** The firewall rule is scoped to private/domain
-  networks; on a "Public" network it silently never matches and you just can't connect.
-
-`nestwatch doctor` (below) checks both and tells you how to fix them.
-
-**1. Download and unblock it.** Grab `nestwatch.exe` from the
-[Releases page](https://github.com/emrecdr/nestwatch/releases). Then — this step saves a scare —
-**right-click the file → Properties → tick "Unblock" → OK.** That clears the
-"downloaded from the internet" mark, so Windows won't show the *"Windows protected your PC"*
-dialog at all.
-
-If you skip it and that blue dialog appears: the only visible button is **Don't run**; click the
-small **More info** link, then **Run anyway**. (The binary is unsigned — a code-signing
-certificate costs money a hobby project doesn't have. Verify what you downloaded instead:
-`Get-FileHash .\nestwatch.exe -Algorithm SHA256` should match the published `nestwatch.exe.sha256`.)
-
-**2. Install it.** Start menu → type `powershell` → **right-click → Run as administrator**
-(an elevated window opens in `System32`, so `cd` first). Installing requires elevation and will
-stop with a clear message if you forget.
-
-```powershell
-cd $env:USERPROFILE\Downloads
-.\nestwatch.exe install
-```
-
-You'll be asked to set a control password — this is the password for the dashboard, not your
-Windows password. At least 10 characters; a short sentence works well.
-
-**3. Scan the QR code.** `install` prints one. Scan it with your phone's camera (on the same
-Wi-Fi) and you land in the dashboard **already signed in** — no typing an IP or a password on a
-phone. Your browser will warn once that the certificate isn't trusted: that's expected, because
-the certificate is made by your own PC rather than bought from a company. Continue past it.
-
-The QR is single-use and expires after 15 minutes. Run `nestwatch.exe pair` any time for a fresh
-one — that's also how you add a second phone or a laptop.
-
-**4. Set a limit.** A fresh install enforces **nothing** — it only counts screen time. The
-dashboard says so ("Nothing set up yet"). Set a daily limit, or turn on Curfew, or both.
-
-**5. Check it worked.**
-
-```powershell
-.\nestwatch.exe doctor
-```
-
-One screen: is the service running, is the port listening, is the firewall rule right, how long
-the certificate has left, whether anything is actually being enforced, and who the local
-administrators are. Anything wrong prints the fix underneath it.
-
-**6. Show your child their page.** `https://<pc-address>:8443/ask` — it shows how much time they
-have left today and lets them ask for more (or redeem a code you've given them). The dashboard's
-*Time codes* card has a Copy-link button for exactly this.
+Afterwards, work through **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md)** on the real
+machine. It opens with seven checks that take about fifteen minutes and are worth more than the
+rest of the list combined — several things here (the screen helper, the ACLs, the firewall rule,
+the origin check in a real browser) can only be verified there.
 
 ## Command reference
 
