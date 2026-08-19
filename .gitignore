@@ -20,3 +20,6 @@
 # Findings that describe how enforcement can be avoided. Kept out of the public repo
 # deliberately — see docs/private/OPERATIONAL-FINDINGS.md.
 /docs/private/
+
+# macOS directory metadata. Untracked so far by luck, not by rule.
+.DS_Store
