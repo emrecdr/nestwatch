@@ -1,5 +1,10 @@
 # Screen-time reporting — design
 
+> **Historical working document.** This records how one feature was designed and built, kept
+> because the reasoning is still useful. It refers to a repository history that was later
+> reset, so commit hashes and version numbers in it will not resolve. Nothing here is a
+> current instruction — for what the software does now, see the README and CHANGELOG.
+
 **Date:** 2026-08-17
 **Status:** approved scope, not implemented
 **Scope:** Tier 0 + Tier 1 + Tier 1.5, hardening H1–H4, and honesty items I1–I3 (below).
@@ -119,7 +124,7 @@ Reads via `recent(usize::MAX)` — the established pattern, already used by `tim
 `timereq.rs:100`. A third caller, not a new idea.
 
 Aggregation is a **pure function** taking the loaded rows and the window as parameters, mirroring
-the `today_summary` refactor of 2026-08-17 (commit `efae1ad`) and for the same reason: the logic
+the `today_summary` refactor of 2026-08-17 (the purity refactor that preceded this work) and for the same reason: the logic
 becomes unit-testable without touching disk or process globals.
 
 **Touches:** `api.rs` (handler), `server.rs` (route), `rules.rs` (pure fn + tests),

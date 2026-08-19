@@ -1,5 +1,10 @@
 # Screen-Time Reporting Implementation Plan
 
+> **Historical working document.** This records how one feature was designed and built, kept
+> because the reasoning is still useful. It refers to a repository history that was later
+> reset, so commit hashes and version numbers in it will not resolve. Nothing here is a
+> current instruction — for what the software does now, see the README and CHANGELOG.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn the screen-time history Nestwatch already collects into a readable 30-day report, without touching any enforcement path.
@@ -1478,7 +1483,7 @@ isolation."
 - [ ] `cargo test --all-targets` → all pass (expect ~176: 162 existing + ~14 new)
 - [ ] Windows cross-check (Global Constraints) → exit 0
 - [ ] `git status --short` → empty
-- [ ] `git diff v0.4.4 --stat -- Cargo.toml` → no dependency changes
+- [ ] `git diff <base> --stat -- Cargo.toml` → no dependency changes (base = the commit this work started from)
 - [ ] Confirm no enforcement path changed:
-      `git diff v0.4.4 -- src/rules.rs | grep -E '^\+' | grep -E 'accrue|decide|Targets|per_app_secs\s*\+='`
+      `git diff <base> -- src/rules.rs | grep -E '^\+' | grep -E 'accrue|decide|Targets|per_app_secs\s*\+='`
       → only the snapshot clone and the rollup write should appear; **no change to accrual or decisions**

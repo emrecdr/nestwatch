@@ -320,6 +320,11 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   (AppLocker/WDAC by publisher or hash, or Microsoft Family Safety) actually closes it. Treat app
   rules as habit-shaping, and rely on the **daily budget and curfew** — which are not name-based —
   for limits that must hold. The README says the same thing to the parent.
+- **Screen-time figures are per-machine, not per-account.** The tally follows whoever is at the
+  console, so a parent signing in to do their own work adds to the child's totals. This is
+  conservative for enforcement — it cannot be dodged by switching users — and misleading for the
+  report, which says so on the card. Attributing per-account is possible (the console session's
+  username is already read and discarded) but changes the `SystemControl` trait; tracked as O6.
 - **Time is counted while an app is *running*, not while it's focused.** An app left open in the
   background consumes its per-app limit and its group's pool. This makes per-app limits
   impractical for anything that auto-starts, which is a usability limit rather than a bypass —
