@@ -1,0 +1,79 @@
+name: release
+
+# Tag a release: `git tag v0.1.0 && git push --tags`.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # Gate: never publish a binary that doesn't pass the same checks as CI.
+  #
+  # `needs:` only works between jobs in ONE workflow, and this is a separate workflow from
+  # ci.yml — a tag push starts both in parallel, so without this the release could publish
+  # while (or even after) CI fails. Mirroring the checks here rather than depending on ci.yml
+  # is the only self-contained way to make the gate real. Runs on Windows because that's the
+  # target that actually ships.
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install NASM (for ring)
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - run: cargo fmt --all -- --check
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+
+  release:
+    needs: [verify]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install NASM (for ring)
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build release binary
+        run: cargo build --release --locked
+      # Emit "<hash>  nestwatch.exe" so the file is consumable by `sha256sum -c` / `shasum -c`.
+      # A bare hash with no filename can't be checked by either.
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash target/release/nestwatch.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  nestwatch.exe" | Out-File -Encoding ascii -NoNewline nestwatch.exe.sha256
+      # Pinned to a commit: this action holds a token that can publish releases, so a moved tag
+      # would be able to publish on our behalf.
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            target/release/nestwatch.exe
+            nestwatch.exe.sha256

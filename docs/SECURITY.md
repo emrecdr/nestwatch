@@ -1,0 +1,334 @@
+# Nestwatch — Security Model
+
+Nestwatch lets a parent, from another device on the **same home network**, log into a web
+page and control a child's Windows PC (screenshot, list/kill apps, lock or shut down, set a
+curfew, set screen-time/app-limit rules, change the password). Because those are powerful,
+partly destructive actions, the security goal is narrow and concrete:
+
+> **Only the parent, from a device on the home LAN, can reach the controls — and every access
+> is recorded so it's visible.**
+
+This document is the threat model and the list of protections. It is scoped to a home LAN and
+a single parent; it deliberately does **not** try to be safe against a determined attacker who
+already has administrator rights on the PC, or against the wider internet.
+
+---
+
+## What an authenticated session can do (the "prize")
+
+One valid login unlocks all of it, so the whole model reduces to *who can get an
+authenticated session*:
+
+| Capability | Endpoint |
+|---|---|
+| See the live screen | `GET /api/screenshot` |
+| List running apps | `GET /api/processes` |
+| Kill any app | `POST /api/processes/{pid}/kill` |
+| Lock the screen | `POST /api/lock` |
+| Power off the PC | `POST /api/shutdown` |
+| Read / change the curfew | `GET`·`POST /api/curfew` |
+| Read / change usage rules (budget, blocklist, per-app limits) | `GET`·`POST /api/rules` |
+| Read the access log / usage history | `GET /api/audit`, `GET /api/usage` |
+| Read the screen-time report (per-day totals and per-app minutes, up to a year back) | `GET /api/screentime` |
+| See pending time requests | `GET /api/time-requests` |
+| Approve / deny a time request (grants screen time) | `POST /api/time-requests/{id}/approve`·`deny` |
+| Change the control password | `POST /api/password` |
+
+`POST /api/password` keeps the parent logged in (rotating their session id) and **does** revoke
+every other session (see §4).
+
+## Who might try to reach it (adversaries in scope)
+
+- **A stranger on the Wi-Fi** — a guest, a visiting friend of the child, a neighbour who
+  learned the Wi-Fi password, or a compromised phone/IoT device on the LAN. This is the
+  primary adversary.
+- **The child (a standard, non-admin user of the PC).** Handled mainly by the *tamper
+  resistance* model (SYSTEM service + ACLs) documented in the README; not repeated here.
+
+Out of scope: an attacker with local Administrator on the PC (no software-only measure is
+reliable against that), and exposure to the public internet (the tool is LAN-only by design).
+
+---
+
+## Trust boundaries & layered protections
+
+Access to the controls passes through several independent layers, so a failure in one does not
+open the door on its own.
+
+### 1. Network scope — two independent gates
+- **Windows Firewall rule** (`install`): inbound TCP allowed only from `LocalSubnet` on
+  Private/Domain profiles. This blocks off-subnet traffic before the app even sees it. The
+  installer reads the rule back after adding it and **warns loudly** if it didn't apply (this
+  is non-fatal because the next gate, below, is the real guarantee).
+- **App-layer LAN allowlist** (`src/security.rs::require_lan_peer`): the server itself rejects
+  any client whose source IP is not private/loopback, returning `403` before any
+  authentication work. This is deliberate defense-in-depth: even if the firewall rule is
+  missing, disabled, or the network profile flips to *Public*, the controls are not reachable
+  from off-LAN. The peer address comes from the TCP socket (`ConnectInfo`), never from a
+  spoofable `X-Forwarded-For` header (there is no reverse proxy).
+
+### 2. Transport — TLS with a verifiable identity
+- All traffic is HTTPS (rustls, TLS 1.2+). The password and screenshots never travel in clear.
+- The certificate is **self-signed**, so the browser shows a one-time trust warning. To tell
+  the real server from a LAN impostor, `install` prints the certificate's **SHA-256
+  fingerprint** — verify it once against what the browser shows (trust-on-first-use). Certs
+  are valid for **825 days** (the maximum Apple accepts) and carry the `serverAuth` usage, so
+  they work on iPhones/Macs as well as desktops.
+- **Known residual risk:** a parent trained to click through the warning could be
+  man-in-the-middled by an attacker on the LAN presenting their own self-signed cert. The
+  fingerprint check is the mitigation; a fully warning-free fix (a trusted certificate) is
+  tracked as future work and is out of the LAN-only scope.
+
+### 3. Authentication
+- A single password, stored only as an **Argon2id** hash (memory-hard), verified off the async
+  runtime. Minimum 10 characters at install.
+- The verification is **serialized** (one at a time process-wide), which by itself caps online
+  guessing to a handful per second regardless of anything else.
+- **Per-IP rate limiting** (`src/auth.rs::LoginLimiter`): after repeated wrong passwords, only
+  the *offending* source IP is throttled. A global lockout was deliberately avoided — it would
+  let any device on the LAN lock the parent out (a denial-of-service), which OWASP warns
+  against.
+- There is a *second, separate* throttle for the unauthenticated child endpoint
+  (`src/timereq.rs::SubmitLimiter`, 5/min/IP) that counts **every** submission, not just
+  failures — see "The child's request-more-time surface" below.
+
+### 4. Session
+- On success the session id is rotated (anti-fixation) and stored in a cookie that is
+  `Secure`, `HttpOnly`, and `SameSite=Strict`.
+- Sessions **persist across restarts** (`sessions.json` in the ACL-hardened data dir) and slide
+  on a 30-day inactivity window, so signing in is a one-time cost per device rather than a
+  penalty for every reboot of an auto-restarting service. Two consequences worth stating plainly:
+  - That file is a set of **long-lived bearer tokens**. It inherits the SYSTEM+Administrators-only
+    ACL, so the child can't read it — but anything that copies the data directory (a backup, a
+    disk image) copies live credentials. Treat it like the TLS key.
+  - A reboot is **no longer** an implicit "log everyone out" lever, which it used to be.
+- Changing the password (`POST /api/password`) re-hashes with Argon2id, persists, **signs every
+  other device out**, and rotates the caller's own id so the parent stays logged in. Since a
+  restart no longer clears sessions, this is the only way to revoke a leaked cookie before its
+  30-day expiry — and it's what a worried parent will do, so it must actually work.
+- **CSRF:** three layers. `SameSite=Strict` on the cookie; every state-changing endpoint that takes
+  a JSON body also requires `Content-Type: application/json`, forcing a CORS preflight that fails
+  closed; and an **origin check** on every request (`src/security.rs::require_same_origin`).
+  - The origin check exists because the first two leave a real hole. A "site" is scheme +
+    registrable domain and **excludes the port**, so a page served over HTTPS from another port on
+    this same machine is *same-site* and the browser attaches the parent's session cookie to it.
+    Seven `/api` endpoints take no JSON body (`.../kill`, `/shutdown`, `/lock`, `.../approve`,
+    `.../deny`, `.../apply`, `.../delete`), so nothing forces a preflight for them and a plain HTML
+    form reaches them. The child has an account on this PC and can serve such a page from it. This
+    was **demonstrated**, not theorised: with the middleware removed, a same-site `POST` carrying
+    the parent's cookie killed a process and returned `200` (`tests/origin.rs`).
+  - `Sec-Fetch-Site` distinguishes `same-origin` from `same-site`, which is exactly what the cookie
+    attribute cannot. Browsers forbid page scripts from setting any `Sec-` header, so it can't be
+    forged. We allow `same-origin`, `none` (a typed URL, a bookmark, the pairing QR), and a
+    top-level navigation `GET` (following a link still works) — and reject the rest. A cross-site
+    **form POST** is also a navigation, so the `GET`-only condition is load-bearing; there's a test
+    pinning it.
+  - The header is absent from non-browser clients (`curl`, probes) and pre-2020 browsers, which are
+    allowed through: they carry no ambient cookie authority for a third party to abuse, and failing
+    closed would break every non-browser caller.
+
+### 5. Browser hardening
+- Every response carries a strict **Content-Security-Policy** (`default-src 'none'`, allowing
+  only the same-origin script/style the page needs, plus `blob:`/`data:` images for
+  screenshots and UI icons), `frame-ancestors 'none'` / `X-Frame-Options: DENY`
+  (anti-clickjacking), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a
+  deny-all `Permissions-Policy`. HSTS is intentionally **not** set — with a self-signed cert a
+  browser ignores it, and if it ever stuck it would make cert rotation an unrecoverable
+  lockout.
+
+### 6. Auditing / visibility
+- Security-relevant events are appended as JSON lines to `audit.jsonl` in the ACL-hardened data
+  dir (`src/audit.rs`): login success/failure with **source IP**, rate-limited attempts, and
+  the sensitive actions — screenshot, process kill, shutdown, **lock**, curfew change, **rules
+  change, password change (and failed attempts), logout, routine save/apply/delete, and each
+  time-request submit/approve/deny** (the child submit is logged with its source IP). The parent
+  reviews
+  recent events in the dashboard's **Recent access** panel or via `GET /api/audit`. This turns an
+  otherwise invisible access into something you can see — a login from an unfamiliar IP at an odd
+  hour stands out.
+- Further append-only logs live beside it with independent retention: `usage.jsonl` (usage
+  history — session edges, countdowns, enforcement actions — read-only via `GET /api/usage`),
+  `screentime.jsonl` (one rollup row per completed day, read-only via `GET /api/screentime`; kept
+  in its own file so the higher-volume events in `usage.jsonl` cannot rotate the daily history
+  away, whether that volume is incidental or deliberately generated),
+  `time_requests.jsonl` (the event-sourced approval queue), and `time_codes.jsonl` (issued/
+  redeemed time codes). A small `usage_state.json` sidecar holds the rules enforcer's running
+  daily tally so a mid-day reboot doesn't reset the budget. It is saved on the enforcer's 30-second
+  tick whenever the tally changed, which **bounds what a hostile reboot can win at under half a
+  minute** — less than the reboot itself costs, so cutting the power is not a way to buy screen
+  time. That bound is the reason the interval is short; a longer one would turn "reboot, gain the
+  interval, repeat" into a real bypass. (Ticks where the tally didn't change — an idle or locked
+  session accrues nothing — write nothing, which is a cost saving only and doesn't move the bound.) The security audit log records
+  `time_code_issued` (minutes only — never the code) and `time_code_redeemed` (with source IP).
+  All of these inherit the data dir's SYSTEM+Administrators-only ACL, and none contains secrets
+  (no password, cookie, or hash).
+- **Crash-safe writes.** `config.json` and the `usage_state.json` tally are written atomically
+  (temp file → `fsync` → rename), so a power cut mid-write can't leave a truncated file. This
+  matters most for `config.json`: a corrupt config would stop the service from starting and lock
+  the parent out until reinstall.
+
+---
+
+## Pairing tokens (`GET /p/{token}`)
+
+`install` and `nestwatch pair` print a QR whose URL grants a logged-in session when opened — so
+the parent can reach the dashboard from a phone without typing an IP address or a passphrase.
+This is deliberately a **password bypass**, so it's bounded tightly:
+
+- **Single-use.** Redeeming unlinks the token file; `remove_file` is the atomic step, so of two
+  concurrent scans exactly one can win.
+- **Short-lived.** 15 minutes, then it's refused *and* deleted.
+- **Only a hash is stored.** `pairing.json` holds a SHA-256, never the token, so reading the file
+  (which needs SYSTEM/Administrators anyway) doesn't yield a usable token.
+- **One at a time.** Minting overwrites any pending token, so `pair` can't leave two live QRs.
+- **LAN-gated and throttled.** Same `require_lan_peer` layer as everything else, and a wrong
+  token counts against the *same* per-IP login limiter — so the 80-bit token can't be ground at
+  speed. It always redirects to `/`, never revealing whether a pairing is pending.
+- **Not left behind.** `uninstall` clears any pending token.
+
+**The residual risk, stated plainly:** the QR is displayed on a console *on the child's own PC*.
+For those 15 minutes, someone standing at that screen could photograph and use it. The mitigation
+is procedural — scan it yourself while you're at the machine, which consumes it immediately — and
+the exposure is no worse than the elevated console session the install already required. If you'd
+rather not have the window at all, ignore the QR and sign in with the password; the token simply
+expires unused.
+
+## The child's unauthenticated surfaces (by design)
+
+Four routes are reachable **without a login**, by design, so the child can act from their own
+(non-parent) session — they sit on the outer router, *before* `require_auth`:
+
+- `GET /ask` — the child's page: how much time they have left, plus request/redeem forms.
+- `GET /status` — the numbers behind that page. Deliberately narrow: `limited`, `budget_mins`,
+  `used_mins`, `remaining_mins` and nothing else — no blocklist, no per-app limits, no app
+  groups, no curfew window, no queue contents. A child is entitled to know their own limit; they
+  are not entitled to a map of the rules to plan around. Rate-limited (30/min/IP) because each
+  call reads a file on the shared blocking pool. There's a test asserting the response contains
+  none of the rule fields.
+- `POST /time-request` — submits `{minutes, reason}` to the parent's approval queue.
+- `POST /redeem-code` — cashes in a parent-issued time code (see below).
+
+(`GET /p/{token}` is also unauthenticated, but it's parent-facing — see *Pairing tokens* above.)
+
+This is **not** a hole in the "everything is auth-gated" model, because each surface is bounded
+on every axis:
+
+- **LAN-gated** by the same `require_lan_peer` outer layer as the controls (`src/server.rs`) —
+  an off-LAN client gets `403` here too.
+- **Rate-limited** by *separate* per-IP `SubmitLimiter`s (`src/timereq.rs`, 5/min/IP) — one for
+  requests, one for redemptions — that count **every** call (unlike the login limiter, which
+  counts only failures), so a child can neither flood the parent's queue nor rapidly guess codes.
+- **Request is powerless on its own**: `POST /time-request` only *enqueues a request* (always
+  answering `{ok:true}`, leaking no queue state). No screen time is granted until the **parent
+  approves it** (`POST /api/time-requests/{id}/approve`). Input is bounded (1–240 minutes; reason
+  truncated to 200 chars; at most 5 pending requests).
+
+### Time codes (`POST /redeem-code`)
+
+A time code *does* grant screen time without a live parent action — that's the point (leave a
+code for when you're away). It's safe because:
+
+- **The code is the capability, and it's unguessable.** Codes are 8 Crockford-base32 characters
+  (~1.1 trillion combinations) from the OS CSPRNG. At the 5/min rate limit, brute-forcing one is
+  infeasible (millennia), and the limiter throttles rapid guessing regardless.
+- **The parent hands the code over deliberately** — there's no interception threat; the parent
+  chooses when and to whom to give it.
+- **Single-use and bounded**: each code is worth 1–240 minutes, is consumed on first redemption
+  (event-sourced `redeemed` line), and at most 50 can be outstanding.
+- **Plaintext codes never leave the ACL'd data dir** (SYSTEM+Administrators only), so the child
+  can't read the list; they're deliberately **not** written to the audit log either.
+- **Minimal feedback**: redemption returns only `{ok, minutes}` on success or `{ok:false}` on a
+  bad code — no other state.
+
+Net: at worst, any LAN device can add up to 5 pending lines to a queue the parent reviews, or
+redeem a code the parent already chose to hand out — it cannot see or change anything sensitive.
+
+---
+
+## How to verify your install is sound
+
+1. **Cert fingerprint** — the first time a browser warns, compare its certificate SHA-256 to
+   the fingerprint `install` printed. They must match; if they don't, you may be talking to an
+   impostor on the network.
+2. **Firewall** — the network profile on the PC must be **Private** (not Public) for the
+   LocalSubnet rule to apply. `install` warns if it couldn't add or read back the rule; heed
+   that warning (the app-layer allowlist still protects you, but the firewall is the outer
+   layer).
+3. **Standard user** — confirm the child's Windows account is a *standard* user, not an
+   administrator; the tamper resistance depends on it.
+4. **Run `nestwatch doctor`** — it checks all of the above that can be checked automatically (the
+   service, the listening port, the firewall rule and its scope, the network profile, certificate
+   expiry, whether anything is actually being enforced, and who the local administrators are) and
+   prints a fix under anything wrong. Run it elevated: the data directory is locked to
+   Administrators, so an ordinary console can't read the config or certificate and those checks
+   are reported as unknown rather than guessed at.
+4. **Access log** — after logging in, open **Recent access** and confirm you only see your own
+   sign-ins.
+5. **Child page** — open `https://<this-pc>:<port>/ask` and confirm it shows only the request
+   form: no controls, no screen, no data.
+
+## Resisting the child's own privileges
+
+Tamper resistance against a standard user is mostly the SYSTEM service + ACLs described in the
+README. One case needed its own defense, because Windows grants the privilege by default:
+
+- **Changing the time zone** (`SeTimeZonePrivilege`) is granted to the **Users** group with no UAC
+  prompt. Every time-based decision here — when the daily budget resets, whether the curfew window
+  is open — read the OS clock, so flipping between two zones a day apart reset the day's tally on
+  every flip (repeatable every 30 seconds) and moved wall time out of the curfew window, which
+  makes the enforcer *cancel* a pending shutdown.
+- Time is now anchored to **UTC** — which that privilege cannot move; changing the clock itself
+  needs `SeSystemtimePrivilege`, which standard users don't hold — plus an offset recorded at
+  install (`tz_offset_mins`). The OS offset is still followed while it stays within an hour of the
+  anchor, so genuine DST transitions work; larger jumps are ignored and logged. The comparison is
+  always against the stored anchor, never the previous reading, so induced drift is bounded at one
+  hour and can't be walked forward.
+- Independently, the enforcer refuses more than one day rollover per 12 monotonic hours, so the
+  tally survives even if the clock is wrong for some other reason.
+- **The anchor is recorded at install time.** An install upgraded in place from before this existed
+  has no anchor and falls back to plain local time; re-run `install` to anchor it. Deliberate:
+  guessing an offset for a machine that may have genuinely moved would be worse than not guessing.
+
+Two related enforcement gaps closed the same way — by not letting a dodged action reset the
+enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace period, and a
+`shutdown /a` no longer earns a fresh cancellable countdown (the re-issue has no delay).
+
+- **System binaries are invoked by absolute path** (`src/syspath.rs`), never by bare name. Rust
+  resolves a bare `"shutdown"` by searching **the directory of the current executable before
+  `System32`** (it does not search the working directory). For the installed service that
+  directory is `C:\Program Files\HostHealth\`, which is ACL-locked, so the service itself was
+  never exposed. The reachable case was `install` and `doctor`, which run **elevated** from
+  wherever the parent left `nestwatch.exe`: a `netsh.exe` or `icacls.exe` planted beside it in a
+  child-writable folder (`C:\Users\Public\Downloads`, a shared folder, a USB stick) would have run
+  as administrator. Resolving through `GetSystemDirectoryW` removes the search entirely rather
+  than relying on which folders happen not to be writable.
+
+## Residual risks (honest limits)
+
+- **Self-signed MITM** if the fingerprint is never verified (see §2).
+- **A device that has the Wi-Fi password is "on the LAN."** The allowlist scopes to the local
+  network, not to specific devices; the password is what gates control from there, so use a
+  strong one.
+- **The child's `/ask` / `/time-request` endpoint is reachable without a login** — intentionally,
+  so the child can request time. It is LAN-gated, rate-limited (5/min/IP), input-bounded, leaks
+  no state, and grants nothing without parent approval. The residual exposure is that any LAN
+  device can add up to 5 pending request lines to the queue; the parent simply denies spam.
+- **The app blocklist and per-app limits are evadable by renaming.** Matching is on the process
+  image name, so copying `chrome.exe` to `notes.exe` in a writable folder escapes every app rule.
+  This is inherent to name-based matching from user space: matching on full path or file hash
+  raises the bar slightly but loses to a re-copy, and nothing short of kernel-level enforcement
+  (AppLocker/WDAC by publisher or hash, or Microsoft Family Safety) actually closes it. Treat app
+  rules as habit-shaping, and rely on the **daily budget and curfew** — which are not name-based —
+  for limits that must hold. The README says the same thing to the parent.
+- **Time is counted while an app is *running*, not while it's focused.** An app left open in the
+  background consumes its per-app limit and its group's pool. This makes per-app limits
+  impractical for anything that auto-starts, which is a usability limit rather than a bypass —
+  but it pushes parents toward the total budget, which is the control that resists tampering best
+  anyway.
+- **Enforcement may not cover every way the machine can be started.** Whether it does is an open
+  question about the specific device, not a settled property of this software, so do not assume a
+  reboot cannot get around it. The specifics, the fix, and the check are tracked outside this
+  public repository — see `docs/private/OPERATIONAL-FINDINGS.md`.
+- **A wedged enforcer is reported but not repaired.** A panic restarts the service, but a tick that
+  hangs leaves enforcement off until someone looks at the dashboard or runs `doctor`. See O4.
+- **Local administrator on the PC** can defeat any of this — out of scope by design.

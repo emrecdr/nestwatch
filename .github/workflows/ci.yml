@@ -1,0 +1,111 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# Least privilege: CI only reads the repo. (Without this, the workflow inherits the repository
+# default, which on older repos is read/write for every scope.) The release workflow declares
+# its own `contents: write` separately.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast formatting gate (toolchain pinned via rust-toolchain.toml, so this is deterministic).
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # Cross-platform test: handlers/auth/config/curfew run on the FakeControl path, so the
+  # suite is meaningful on both Linux and Windows.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `ring` (rustls crypto provider) assembles its primitives with NASM on the MSVC
+      # target; it isn't reliably preinstalled on windows-latest. (Perl is.)
+      - name: Install NASM (Windows, for ring)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Clippy (warnings as errors)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --all-targets
+
+  # Supply-chain gate. BLOCKING, with no ignore list.
+  #
+  # This used to be `continue-on-error: true` plus two `--ignore` flags, because `cargo audit`
+  # scans Cargo.lock — which lists crates that never compile on Windows (xcap's Linux/Wayland
+  # backend and its dependencies). That made the job permanently red, so it was made advisory,
+  # which meant a real advisory would have landed somewhere nobody looks. `cargo deny` resolves
+  # the graph for the shipped target instead, so those crates are legitimately absent and the
+  # check can fail the build honestly. Policy lives in deny.toml.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to a commit: this action downloads and executes binaries, so a moved tag would be
+      # arbitrary code execution in CI.
+      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check advisories sources
+
+  # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push).
+  windows-release:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install NASM (for ring)
+        uses: ilammy/setup-nasm@v1
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      - name: Build release binary
+        run: cargo build --release --locked
+      - uses: actions/upload-artifact@v5
+        with:
+          name: nestwatch-windows-exe
+          path: target/release/nestwatch.exe

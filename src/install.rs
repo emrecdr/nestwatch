@@ -1,0 +1,730 @@
+//! One-time setup and teardown.
+//!
+//! `install` stores the password (as an Argon2 hash only), generates the TLS cert, and —
+//! on Windows — copies the binary to a protected location, registers a SYSTEM service that
+//! auto-starts and auto-restarts, opens a LAN-scoped firewall rule, and ACL-hardens its
+//! files so a standard (non-admin) user can't stop, read, or delete it.
+//!
+//! Ordering matters: the data directory is created and ACL-locked **before** any secret is
+//! written into it, so the TLS key / password hash are never briefly world-readable.
+//!
+//! Prerequisite for tamper-resistance: the child must be a **standard user**. Against a
+//! local administrator no software-only measure is reliable. Run from an elevated console.
+
+use std::path::Path;
+
+use anyhow::{Context, Result, bail};
+
+use crate::auth;
+use crate::config::{self, Config, DEFAULT_PORT};
+
+// Only referenced by the Windows service/firewall code paths.
+// `pub(crate)` so `doctor` checks the rule this module actually creates, rather than a second
+// copy of the name that silently stops matching if this one is ever changed.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const FIREWALL_RULE: &str = "HostHealthService";
+
+pub fn install() -> Result<()> {
+    println!("== nestwatch :: install ==\n");
+    // Fail fast (before prompting for a password or creating anything) if we're not elevated:
+    // the ACL-hardening below would otherwise lock the data dir and then be unable to write the
+    // config into it, leaving a confusing half-installed state. See `ensure_elevated`.
+    ensure_elevated("install", SERVICE_ELEVATION_REASON)?;
+
+    let args: Vec<String> = std::env::args().collect();
+
+    // Distinguish "no config yet" (a fresh install — fine) from "there IS a config and it won't
+    // parse". Both used to collapse to `None`, so a corrupt file meant `..Default::default()`
+    // silently reset the curfew, rules, routines and port — while the docs promise a reinstall
+    // preserves them. Losing a carefully-tuned setup without being told is worse than stopping.
+    let existing = match Config::load() {
+        Ok(cfg) => Some(cfg),
+        Err(_) if !config::data_paths().config.exists() => None,
+        Err(e) => {
+            let path = config::data_paths().config;
+            if !args.iter().any(|a| a == "--reset-config") {
+                bail!(
+                    "{} exists but can't be read ({e}).\n\
+                     Continuing would reset your curfew, screen-time rules and routines to their \
+                     defaults.\n\
+                     If that's what you want, re-run with `--reset-config`. Otherwise restore or \
+                     repair that file first (you may need an elevated console to read it).",
+                    path.display()
+                );
+            }
+            println!(
+                "(--reset-config: replacing the unreadable {})",
+                path.display()
+            );
+            None
+        }
+    };
+
+    // Port precedence: --port flag > existing config > default.
+    let port = match parse_port_flag(&args)? {
+        Some(p) => p,
+        None => existing.as_ref().map(|c| c.port).unwrap_or(DEFAULT_PORT),
+    };
+
+    // Interactive by default; NESTWATCH_PASSWORD allows a silent/headless install.
+    let password = match std::env::var("NESTWATCH_PASSWORD") {
+        Ok(pw) if !pw.is_empty() => pw,
+        _ => {
+            let pw = rpassword::prompt_password("Set a control password: ")?;
+            let confirm = rpassword::prompt_password("Confirm password:      ")?;
+            if pw != confirm {
+                bail!("passwords do not match");
+            }
+            pw
+        }
+    };
+    if password.chars().count() < auth::MIN_PASSWORD_LEN {
+        bail!(
+            "please choose a password of at least {} characters (a passphrase is ideal)",
+            auth::MIN_PASSWORD_LEN
+        );
+    }
+
+    let paths = config::data_paths();
+    // Create + lock down the data dir BEFORE writing any secret into it.
+    prepare_data_dir(&paths.dir)?;
+
+    let cfg = Config {
+        port,
+        password_hash: auth::hash_password(&password)?,
+        // Anchor the clock to wherever this machine is at install time, so a later timezone
+        // change (which a standard user can make with no UAC prompt) can't move the day boundary
+        // or the curfew window. Re-recorded on every install, so a genuine relocation is handled
+        // by reinstalling.
+        tz_offset_mins: Some(crate::clock::current_offset_mins()),
+        // Preserve existing settings (curfew, rules, granted extra) across reinstalls.
+        ..existing.unwrap_or_default()
+    };
+    cfg.save()?;
+
+    // Reuse the existing certificate when it still covers this machine.
+    //
+    // Reissuing changes the fingerprint, which makes EVERY paired phone and laptop show the
+    // "not trusted" warning again and invalidates the exception they accepted. Doing that on every
+    // routine upgrade trains the parent to click through warnings without looking — the exact
+    // habit the fingerprint check depends on them not having. Reissue only when the addresses
+    // changed (a stale SAN would stack a name-mismatch error on top) or on `--new-cert`.
+    let hosts = crate::cert::reachable_hosts();
+    let force_new = args.iter().any(|a| a == "--new-cert");
+    let covered = !cfg.cert_sans.is_empty() && cfg.cert_sans == hosts;
+    let reuse = !force_new && covered && paths.cert.exists() && paths.key.exists();
+
+    let fingerprint = if reuse {
+        println!(
+            "\nKeeping the existing certificate (already covers {}).",
+            hosts.join(", ")
+        );
+        println!("Devices you've already paired won't warn again. Use `--new-cert` to reissue.");
+        crate::cert::read_fingerprint(&paths.cert)?
+    } else {
+        if !cfg.cert_sans.is_empty() && !covered && !force_new {
+            println!(
+                "\nThis PC's address changed ({} -> {}), so a new certificate is needed.",
+                cfg.cert_sans.join(", "),
+                hosts.join(", ")
+            );
+            println!(
+                "Your devices will show the trust warning once more — verify the new fingerprint below."
+            );
+        }
+        let fp = crate::cert::generate(&paths.cert, &paths.key)?;
+        // Record what the new cert covers, so the next install can make this same decision.
+        let mut cfg = cfg.clone();
+        cfg.cert_sans = hosts;
+        cfg.save()?;
+        fp
+    };
+
+    deploy(cfg.port)?;
+
+    println!("\nInstalled.");
+    print_access_block(cfg.port);
+    println!("\nTLS cert SHA-256 — verify this the first time your browser warns, so you know");
+    println!("you're trusting THIS machine and not a LAN impostor:");
+    println!("  {fingerprint}");
+    Ok(())
+}
+
+pub fn uninstall() -> Result<()> {
+    ensure_elevated("uninstall", SERVICE_ELEVATION_REASON)?;
+    // Don't leave a live pairing token behind for a service that's going away.
+    crate::pairing::clear(&config::data_paths().pairing);
+    let purge = std::env::args().any(|a| a == "--purge");
+    remove_service()?;
+    if purge {
+        let dir = config::data_paths().dir;
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            println!("(could not remove {}: {e})", dir.display());
+        } else {
+            println!("Purged config/cert at {}", dir.display());
+        }
+    } else {
+        println!(
+            "Config/cert left in {} (use `uninstall --purge` to remove).",
+            config::data_paths().dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// Print everything the parent needs to actually reach the dashboard: a scannable pairing QR,
+/// the real URLs, and the child's `/ask` link.
+///
+/// Shared by `install` and `nestwatch pair`. Addresses come from [`crate::cert::reachable_hosts`]
+/// — the same list used for the certificate SANs — so the address we advertise is always one the
+/// cert covers, and the parent never gets a name-mismatch error stacked on the trust warning.
+///
+/// Best-effort throughout: a machine that's offline, or a QR that won't render, degrades to
+/// printing plain text. Nothing here is worth failing an install over.
+pub fn print_access_block(port: u16) {
+    let hosts = crate::cert::reachable_hosts();
+    let Some((primary, rest)) = hosts.split_first() else {
+        println!(
+            "\nCouldn't detect this PC's network address — is it offline? Once it's on the home\n\
+             Wi-Fi, run `ipconfig`, then browse to https://<that-address>:{port}"
+        );
+        return;
+    };
+
+    // A pairing token turns "type an IP and a passphrase on a phone" into "point the camera".
+    match crate::pairing::mint(&config::data_paths().pairing) {
+        Ok(token) => {
+            let url = crate::pairing::pair_url(primary, port, &token);
+            println!("\nScan this with your phone's camera — it opens the dashboard, signed in:");
+            match crate::pairing::qr_code(&url) {
+                Some(qr) => println!("\n{qr}"),
+                None => println!(),
+            }
+            println!("  {url}");
+            println!(
+                "  (valid {} minutes, one use — run `nestwatch pair` for a new one)",
+                crate::pairing::TTL_SECS / 60
+            );
+            // Not "the password you just set" — `nestwatch pair` shares this block, and there
+            // the password may be months old.
+            println!("\nOr open it and sign in with your password:");
+        }
+        Err(e) => {
+            // Visible, not debug-level: a `pair` that silently prints no QR looks broken.
+            println!("\n(Couldn't create a pairing code: {e})");
+            println!(
+                "Open this on your phone or laptop (same Wi-Fi) and sign in with your password:"
+            );
+        }
+    }
+
+    println!("  https://{primary}:{port}");
+    for host in rest {
+        println!("  https://{host}:{port}   (also works)");
+    }
+    println!("\nYour child asks for more time at:");
+    println!("  https://{primary}:{port}/ask");
+}
+
+/// Parse an optional `--port <N>` from argv.
+fn parse_port_flag(args: &[String]) -> Result<Option<u16>> {
+    if let Some(i) = args.iter().position(|a| a == "--port") {
+        let raw = args.get(i + 1).context("--port requires a value")?;
+        let port: u16 = raw.parse().context("--port must be 1..=65535")?;
+        if port == 0 {
+            bail!("--port must be 1..=65535");
+        }
+        return Ok(Some(port));
+    }
+    Ok(None)
+}
+
+/// Whether this process holds an elevated token.
+///
+/// Also used by `doctor`, which must not mistake "the data folder is locked to Administrators"
+/// for "nothing is installed".
+///
+/// SAFETY: Win32 token FFI; the process-token handle is closed on every path. Returns `false`
+/// if the query itself fails — callers treat that as "assume not elevated", which is the safe
+/// direction for both a refusal and a diagnostic.
+#[cfg(windows)]
+pub fn is_elevated() -> bool {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut ret_len = 0u32;
+        let info = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut core::ffi::c_void),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut ret_len,
+        );
+        let _ = CloseHandle(token);
+        info.is_ok() && elevation.TokenIsElevated != 0
+    }
+}
+
+/// On non-Windows (dev builds) there is no elevation concept; behave as if we have it so the
+/// dev `doctor` reports on the real state of the local data dir.
+#[cfg(not(windows))]
+pub fn is_elevated() -> bool {
+    true
+}
+
+/// Why `install`/`uninstall` need elevation, appended to the refusal message.
+pub const SERVICE_ELEVATION_REASON: &str = "It registers a SYSTEM service, edits the firewall, and locks its data directory to \
+     Administrators — all of which require elevation. Also confirm your account is an \
+     administrator: `net localgroup Administrators`.";
+
+/// Refuse to run `action` from a non-elevated console, explaining `why`.
+///
+/// Under UAC an administrator account in an ordinary console holds a *filtered* token whose
+/// Administrators SID is deny-only. For `install` that meant it could create the data dir but
+/// then not write into it once ACL-locked — a confusing "Access is denied" **after** a
+/// half-hardened directory already existed. Checking up front turns that into one clear message
+/// and guarantees no partially-installed state is left behind.
+///
+/// No `#[cfg]` split needed: [`is_elevated`] already returns `true` on non-Windows, so this is
+/// an unconditional `Ok` there. One platform seam for the whole concept instead of two.
+pub fn ensure_elevated(action: &str, why: &str) -> Result<()> {
+    if is_elevated() {
+        return Ok(());
+    }
+    bail!(
+        "`nestwatch {action}` must be run from an elevated console.\n\
+         Right-click PowerShell or Command Prompt, choose \"Run as administrator\", and run it \
+         again.\n({why})"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Windows: install/protect the SYSTEM service
+// ---------------------------------------------------------------------------
+
+/// Filename the binary is installed and registered under (low-profile, matches the service).
+#[cfg(windows)]
+const INSTALL_EXE_NAME: &str = "host-health.exe";
+
+#[cfg(windows)]
+fn install_dir() -> std::path::PathBuf {
+    use std::path::PathBuf;
+    std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files"))
+        .join("HostHealth")
+}
+
+/// Create the data dir and restrict it to SYSTEM + Administrators before secrets land in it.
+#[cfg(windows)]
+fn prepare_data_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    harden_acl(dir)
+}
+
+#[cfg(not(windows))]
+fn prepare_data_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
+}
+
+#[cfg(windows)]
+fn deploy(port: u16) -> Result<()> {
+    use std::ffi::{OsStr, OsString};
+
+    use windows_service::service::{
+        ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType,
+    };
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    use crate::service::{SERVICE_DESCRIPTION, SERVICE_DISPLAY_NAME, SERVICE_NAME};
+
+    let dir = install_dir();
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let target_exe = dir.join(INSTALL_EXE_NAME);
+    let current_exe = std::env::current_exe()?;
+
+    let manager = ServiceManager::local_computer(
+        None::<&OsStr>,
+        ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
+    )?;
+
+    // If the service already exists, this is an update: stop it (to release the locked exe),
+    // overwrite the binary, and reuse the registration.
+    let existing = manager
+        .open_service(
+            SERVICE_NAME,
+            ServiceAccess::QUERY_STATUS
+                | ServiceAccess::STOP
+                | ServiceAccess::START
+                | ServiceAccess::CHANGE_CONFIG,
+        )
+        .ok();
+    if let Some(svc) = &existing {
+        stop_and_wait(svc)?;
+    }
+
+    // Everything from the stop above until the service is started again is a window where an
+    // upgrade has enforcement switched OFF. Any `?` in here used to abort the install and leave
+    // it that way until the next reboot — with a failed binary copy (antivirus holding the file,
+    // a lingering helper process) being the likely trigger. Do the fallible work first, then put
+    // the old service back if it didn't work out.
+    let staged = (|| -> Result<()> {
+        if current_exe != target_exe {
+            std::fs::copy(&current_exe, &target_exe)
+                .with_context(|| format!("copying binary to {}", target_exe.display()))?;
+        }
+        // Users get read+execute so the child's session can run the screenshot helper.
+        harden_program_dir(&dir)
+    })();
+
+    if let Err(e) = staged {
+        if let Some(svc) = &existing {
+            match svc.start(&[] as &[&OsStr]) {
+                Ok(()) => println!(
+                    "\nUpdate failed — restarted the previous version, so screen-time limits and \
+                     curfew keep working."
+                ),
+                Err(restart) => println!(
+                    "\nWARNING: the update failed AND the previous service could not be restarted \
+                     ({restart}).\nEnforcement is OFF until you re-run install or reboot."
+                ),
+            }
+        }
+        return Err(e);
+    }
+
+    configure_firewall(port)?;
+
+    // Applied on BOTH paths: an upgrade used to keep whatever recovery config the existing
+    // service had, so a service installed before the failureflag existed never gained it.
+    configure_recovery();
+
+    match existing {
+        Some(svc) => {
+            start_and_verify(&svc, port).context("restarting the updated service")?;
+            println!("Updated and restarted service '{SERVICE_NAME}'.");
+        }
+        None => {
+            let info = ServiceInfo {
+                name: OsString::from(SERVICE_NAME),
+                display_name: OsString::from(SERVICE_DISPLAY_NAME),
+                service_type: ServiceType::OWN_PROCESS,
+                start_type: ServiceStartType::AutoStart,
+                error_control: ServiceErrorControl::Normal,
+                executable_path: target_exe,
+                launch_arguments: vec![OsString::from("service-run")],
+                dependencies: vec![],
+                account_name: None, // LocalSystem
+                account_password: None,
+            };
+            let service = manager
+                .create_service(
+                    &info,
+                    ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::DELETE,
+                )
+                .map_err(|e| {
+                    // 1072 = ERROR_SERVICE_MARKED_FOR_DELETE: a previous copy is still shutting
+                    // down, usually because Services/Task Manager is holding a handle open.
+                    // The raw message tells a parent nothing about what to do.
+                    if e.to_string().contains("1072") {
+                        anyhow::anyhow!(
+                            "a previous copy of the service is still being removed.\n\
+                             Close the Services window and Task Manager if they're open, wait a \
+                             few seconds, and run this again (a reboot always clears it)."
+                        )
+                    } else {
+                        anyhow::anyhow!(e).context("creating service")
+                    }
+                })?;
+            let _ = service.set_description(SERVICE_DESCRIPTION);
+            configure_recovery();
+            if let Err(e) = start_and_verify(&service, port) {
+                // Don't leave a registered-but-dead service behind. The handle must carry DELETE
+                // for this to work — without it `delete()` fails with access-denied, the error
+                // was swallowed, and the message below ("rolled back") was simply untrue.
+                if let Err(del) = service.delete() {
+                    tracing::warn!(error = %del, "could not roll back the new service");
+                }
+                return Err(e).context("starting the new service (rolled back)");
+            }
+            println!("Installed service '{SERVICE_NAME}' (LocalSystem, auto-start/restart).");
+        }
+    }
+
+    println!("Binary: {}", dir.join(INSTALL_EXE_NAME).display());
+    println!("Reminder: this resists a STANDARD user — ensure your son is not an administrator,");
+    println!("and that this PC's network is set to 'Private' (not 'Public') so the rule applies.");
+    Ok(())
+}
+
+/// How long to watch a freshly started service before believing it.
+#[cfg(windows)]
+const VERIFY_POLLS: u32 = 12;
+#[cfg(windows)]
+const VERIFY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Start a service and confirm it is still running a moment later.
+///
+/// `StartServiceW` returns as soon as the SCM *accepts* the request, so a successful `start()`
+/// proves nothing about whether the process stayed up. A service that fails to bind its port —
+/// easily the most likely real failure, since something else may already hold 8443 — dies within
+/// milliseconds, and the installer would still print "Installed", leaving the parent with a dead
+/// dashboard, no enforcement, and no error to search for.
+#[cfg(windows)]
+fn start_and_verify(service: &windows_service::service::Service, port: u16) -> Result<()> {
+    use std::ffi::OsStr;
+
+    use windows_service::service::ServiceState;
+
+    service
+        .start(&[] as &[&OsStr])
+        .context("starting service")?;
+
+    let mut running_streak = 0;
+    for _ in 0..VERIFY_POLLS {
+        std::thread::sleep(VERIFY_INTERVAL);
+        match service.query_status() {
+            Ok(s) if s.current_state == ServiceState::Running => {
+                running_streak += 1;
+                // Two consecutive Running readings — it survived past its own startup.
+                if running_streak >= 2 {
+                    return Ok(());
+                }
+            }
+            Ok(s) if s.current_state == ServiceState::Stopped => {
+                bail!(
+                    "the service started and then stopped immediately.\n\
+                     The usual cause is that port {port} is already in use by another program \
+                     (check with `netstat -ano | findstr :{port}`).\n\
+                     The reason is logged in the newest service.<date>.log in {} (readable as \
+                     Administrator); or re-run with `install --port <other>`.",
+                    config::data_paths().dir.display()
+                );
+            }
+            // StartPending or a transient query failure — keep watching.
+            Ok(_) => running_streak = 0,
+            Err(_) => running_streak = 0,
+        }
+    }
+    bail!("the service did not reach a running state within 6 seconds")
+}
+
+/// Stop a service and wait until it reports Stopped (so its exe file is released).
+#[cfg(windows)]
+fn stop_and_wait(service: &windows_service::service::Service) -> Result<()> {
+    use windows_service::service::ServiceState;
+
+    // Ignore "not started" errors.
+    let _ = service.stop();
+    for _ in 0..50 {
+        match service.query_status() {
+            Ok(status) if status.current_state == ServiceState::Stopped => return Ok(()),
+            Ok(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Err(_) => return Ok(()), // gone / inaccessible — treat as stopped
+        }
+    }
+    bail!("service did not stop within 10s")
+}
+
+// Well-known SIDs (locale-independent — "Administrators"/"Users" are localized names).
+#[cfg(windows)]
+const SID_SYSTEM: &str = "*S-1-5-18";
+#[cfg(windows)]
+const SID_ADMINS: &str = "*S-1-5-32-544";
+#[cfg(windows)]
+const SID_USERS: &str = "*S-1-5-32-545";
+
+/// Lock the **data** dir (password hash, TLS key) to SYSTEM + Administrators only — a
+/// standard user gets no access at all. Checked; the tamper model depends on it.
+#[cfg(windows)]
+fn harden_acl(path: &Path) -> Result<()> {
+    run_icacls(
+        path,
+        &[
+            &format!("{SID_SYSTEM}:(OI)(CI)F"),
+            &format!("{SID_ADMINS}:(OI)(CI)F"),
+        ],
+    )
+}
+
+/// Lock the **program** dir (the binary) to SYSTEM + Administrators full, plus Users
+/// read+execute — the child can't modify/delete the binary, but CAN execute it, which is
+/// required because the service launches the screenshot helper as the child via
+/// CreateProcessAsUserW (that access check uses the child's token).
+#[cfg(windows)]
+fn harden_program_dir(path: &Path) -> Result<()> {
+    run_icacls(
+        path,
+        &[
+            &format!("{SID_SYSTEM}:(OI)(CI)F"),
+            &format!("{SID_ADMINS}:(OI)(CI)F"),
+            &format!("{SID_USERS}:(OI)(CI)RX"),
+        ],
+    )
+}
+
+#[cfg(windows)]
+fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
+    let mut cmd = std::process::Command::new(crate::syspath::system32("icacls.exe"));
+    cmd.arg(path).arg("/inheritance:r");
+    for grant in grants {
+        cmd.arg("/grant:r").arg(grant);
+    }
+    let status = cmd.status().context("running icacls")?;
+    if !status.success() {
+        bail!(
+            "failed to ACL-harden {} (icacls exited {status}); refusing to continue",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Delete the app's firewall rule if present (best-effort; used on (re)install and uninstall).
+#[cfg(windows)]
+fn delete_firewall_rule() {
+    let _ = std::process::Command::new(crate::syspath::system32("netsh.exe"))
+        .args(["advfirewall", "firewall", "delete", "rule"])
+        .arg(format!("name={FIREWALL_RULE}"))
+        .status();
+}
+
+/// Recreate an inbound TCP rule scoped to the local subnet on Private/Domain networks, then
+/// read it back to confirm it applied. Non-fatal: the app-layer LAN allowlist
+/// (`security::require_lan_peer`) is the actual guarantee that off-LAN clients are rejected, so
+/// a firewall hiccup degrades defense-in-depth but never leaves the controls exposed. We still
+/// warn loudly so the parent can fix it.
+#[cfg(windows)]
+fn configure_firewall(port: u16) -> Result<()> {
+    use std::process::Command;
+
+    // Idempotent: delete any stale rule (possibly on an old port) first.
+    delete_firewall_rule();
+
+    let status = Command::new(crate::syspath::system32("netsh.exe"))
+        .args(["advfirewall", "firewall", "add", "rule"])
+        .arg(format!("name={FIREWALL_RULE}"))
+        .args(["dir=in", "action=allow", "protocol=TCP"])
+        .arg(format!("localport={port}"))
+        .args(["profile=private,domain", "remoteip=LocalSubnet"])
+        .status()
+        .context("running netsh")?;
+    if !status.success() {
+        println!(
+            "WARNING: could not add firewall rule (netsh exited {status}); the app-layer LAN \
+             allowlist still applies, but remote access may be blocked."
+        );
+        return Ok(());
+    }
+
+    if !firewall_rule_is_subnet_scoped() {
+        println!(
+            "WARNING: firewall rule '{FIREWALL_RULE}' did not read back with a LocalSubnet \
+             scope; verify it in 'Windows Defender Firewall with Advanced Security'."
+        );
+    }
+    Ok(())
+}
+
+/// Read the firewall rule back and confirm it carries the LocalSubnet scope.
+///
+/// `LocalSubnet` is a value token, not a localized label, so this is locale-independent. Shared
+/// with `doctor` so the installer's own verification and the diagnostic can't disagree about what
+/// a correct rule looks like — or about what it's called.
+#[cfg(windows)]
+pub(crate) fn firewall_rule_is_subnet_scoped() -> bool {
+    let shown = std::process::Command::new(crate::syspath::system32("netsh.exe"))
+        .args(["advfirewall", "firewall", "show", "rule"])
+        .arg(format!("name={FIREWALL_RULE}"))
+        .output();
+    // Both conditions: a rule disabled in the firewall GUI still reads back with its LocalSubnet
+    // scope intact, so scope alone reported a healthy rule while inbound traffic was blocked —
+    // a false OK for the single most common "I can't connect from my phone" cause. `Enabled` and
+    // `LocalSubnet` are value tokens, not localized labels, so this stays locale-independent.
+    matches!(shown, Ok(out) if {
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.contains("LocalSubnet") && text.contains("Yes")
+    })
+}
+
+/// Auto-restart on failure (best-effort; three attempts, 5s apart, daily reset).
+///
+/// Also sets the `failureflag`, without which Windows runs these actions **only** when the
+/// process dies without reporting Stopped — not when it reports Stopped with an error code, which
+/// is what a clean-but-failed startup does. Called on every install, not just the first: an
+/// upgrade previously left an existing service with whatever recovery config it already had.
+#[cfg(windows)]
+fn configure_recovery() {
+    use crate::service::SERVICE_NAME;
+    let _ = std::process::Command::new(crate::syspath::system32("sc.exe"))
+        .args([
+            "failure",
+            SERVICE_NAME,
+            "reset=",
+            "86400",
+            "actions=",
+            "restart/5000/restart/5000/restart/5000",
+        ])
+        .status();
+    // Restart on a non-zero exit code too, not only on an unreported death.
+    let _ = std::process::Command::new(crate::syspath::system32("sc.exe"))
+        .args(["failureflag", SERVICE_NAME, "1"])
+        .status();
+}
+
+#[cfg(windows)]
+fn remove_service() -> Result<()> {
+    use std::ffi::OsStr;
+
+    use windows_service::service::ServiceAccess;
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    use crate::service::SERVICE_NAME;
+
+    let manager = ServiceManager::local_computer(None::<&OsStr>, ServiceManagerAccess::CONNECT)?;
+    if let Ok(service) = manager.open_service(
+        SERVICE_NAME,
+        ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
+    ) {
+        let _ = stop_and_wait(&service);
+        service.delete().context("deleting service")?;
+        println!("Stopped and deleted service '{SERVICE_NAME}'.");
+    } else {
+        println!("Service '{SERVICE_NAME}' was not installed.");
+    }
+
+    // Remove the firewall rule and the installed binary directory.
+    delete_firewall_rule();
+    let dir = install_dir();
+    if dir.exists()
+        && let Err(e) = std::fs::remove_dir_all(&dir)
+    {
+        println!("(could not remove {}: {e})", dir.display());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Non-Windows: dev convenience (write config/cert, no service)
+// ---------------------------------------------------------------------------
+
+#[cfg(not(windows))]
+fn deploy(_port: u16) -> Result<()> {
+    println!("(service install is Windows-only — config + cert written for dev `run`)");
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn remove_service() -> Result<()> {
+    println!("(service uninstall is Windows-only)");
+    Ok(())
+}

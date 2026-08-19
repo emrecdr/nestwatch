@@ -1,0 +1,1455 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dim">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Host Health</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script defer src="/alpine.min.js"></script>
+  </head>
+  <body class="min-h-screen bg-base-200" x-data="app()" x-init="init()" x-cloak>
+    <!-- ── Loading gate ─────────────────────────────────────────────── -->
+    <template x-if="authed === null">
+      <div class="flex min-h-screen items-center justify-center">
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+      </div>
+    </template>
+
+    <!-- ── Login ────────────────────────────────────────────────────── -->
+    <template x-if="authed === false">
+      <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="card w-full max-w-sm bg-base-100 shadow-xl">
+          <form class="card-body" @submit.prevent="login()">
+            <h1 class="card-title justify-center text-2xl">🩺 Host Health</h1>
+            <p class="text-center text-sm opacity-70">Sign in to continue</p>
+
+            <label class="form-control w-full mt-2">
+              <span class="label-text mb-1">Password</span>
+              <input
+                type="password"
+                x-model="password"
+                :disabled="busy"
+                autofocus
+                class="input input-bordered w-full"
+                placeholder="••••••••"
+              />
+            </label>
+
+            <template x-if="loginError">
+              <div class="alert alert-error text-sm py-2" x-text="loginError"></div>
+            </template>
+
+            <button class="btn btn-primary mt-2" :disabled="busy || !password">
+              <span x-show="busy" class="loading loading-spinner loading-sm"></span>
+              Sign in
+            </button>
+          </form>
+        </div>
+      </div>
+    </template>
+
+    <!-- ── Dashboard ────────────────────────────────────────────────── -->
+    <template x-if="authed === true">
+      <div>
+        <div class="navbar bg-base-100 shadow">
+          <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
+          <div class="flex-none items-center gap-2">
+            <span class="badge badge-warning gap-1" x-show="timeRequests.length > 0"
+                  x-text="`${timeRequests.length} request${timeRequests.length === 1 ? '' : 's'}`"></span>
+            <button class="btn btn-info btn-sm" @click="doLock()">🔒 Lock</button>
+            <button class="btn btn-warning btn-sm" @click="confirmShutdown = true">⏻ Shut down</button>
+            <button class="btn btn-ghost btn-sm" @click="logout()">Log out</button>
+          </div>
+        </div>
+
+        <main class="mx-auto grid max-w-5xl gap-4 p-4 md:grid-cols-2">
+          <!-- Screenshot -->
+          <section class="card bg-base-100 shadow">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Screen</h2>
+                <div class="flex items-center gap-2">
+                  <label class="label cursor-pointer gap-2 py-0">
+                    <span class="label-text text-xs">Live</span>
+                    <input type="checkbox" class="toggle toggle-primary toggle-sm"
+                           x-model="autoRefresh" @change="toggleAutoRefresh()" />
+                  </label>
+                  <button class="btn btn-primary btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
+                    <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
+                    Take screenshot
+                  </button>
+                </div>
+              </div>
+              <div class="mt-2 flex min-h-48 items-center justify-center rounded-lg bg-base-300">
+                <template x-if="!shotUrl && !loadingShot">
+                  <span class="opacity-50">No screenshot yet</span>
+                </template>
+                <template x-if="shotUrl">
+                  <img :src="shotUrl" alt="screen" class="max-h-96 w-full rounded-lg object-contain" />
+                </template>
+              </div>
+            </div>
+          </section>
+
+          <!-- Processes -->
+          <section class="card bg-base-100 shadow">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Running apps</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadProcesses()" :disabled="loadingProcs">
+                  <span x-show="loadingProcs" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <div class="mt-2 max-h-96 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>App</th><th class="text-right">Memory</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in processes" :key="p.pid">
+                      <tr>
+                        <td class="truncate" x-text="p.name"></td>
+                        <td class="text-right whitespace-nowrap" x-text="fmtBytes(p.memory_bytes)"></td>
+                        <td class="text-right">
+                          <button class="btn btn-error btn-xs" @click="askKill(p)">Kill</button>
+                        </td>
+                      </tr>
+                    </template>
+                    <template x-if="processes.length === 0 && !loadingProcs">
+                      <tr><td colspan="3" class="text-center opacity-50">No processes</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Curfew -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Curfew</h2>
+                <input type="checkbox" class="toggle toggle-warning" x-model="curfew.enabled" />
+              </div>
+              <p class="text-sm opacity-70">
+                When the PC is on during a closed window, it shuts down (with a warning countdown).
+              </p>
+
+              <!-- Simple single window (shown until you add day-specific schedules) -->
+              <template x-if="!curfew.windows || curfew.windows.length === 0">
+                <div class="mt-2 flex flex-wrap items-end gap-3">
+                  <label class="form-control">
+                    <span class="label-text mb-1">From</span>
+                    <input type="time" x-model="curfew.start" class="input input-bordered" />
+                  </label>
+                  <label class="form-control">
+                    <span class="label-text mb-1">Until</span>
+                    <input type="time" x-model="curfew.end" class="input input-bordered" />
+                  </label>
+                </div>
+              </template>
+
+              <!-- Per-day schedules (authoritative when present) -->
+              <template x-if="curfew.windows && curfew.windows.length > 0">
+                <div class="mt-2 flex flex-col gap-3">
+                  <template x-for="(w, i) in curfew.windows" :key="i">
+                    <div class="flex flex-wrap items-end gap-2 rounded-lg bg-base-200 p-2">
+                      <label class="form-control">
+                        <span class="label-text mb-1 text-xs">From</span>
+                        <input type="time" x-model="w.start" class="input input-bordered input-sm" />
+                      </label>
+                      <label class="form-control">
+                        <span class="label-text mb-1 text-xs">Until</span>
+                        <input type="time" x-model="w.end" class="input input-bordered input-sm" />
+                      </label>
+                      <div class="flex items-end gap-1">
+                        <template x-for="d in ['mon','tue','wed','thu','fri','sat','sun']" :key="d">
+                          <label class="flex flex-col items-center text-xs">
+                            <span class="uppercase opacity-70" x-text="d[0]"></span>
+                            <input type="checkbox" class="checkbox checkbox-xs" x-model="w.days[d]" />
+                          </label>
+                        </template>
+                      </div>
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove window" @click="removeWindow(i)">✕</button>
+                    </div>
+                  </template>
+                  <p class="text-xs opacity-60">No day selected = every day.</p>
+                </div>
+              </template>
+
+              <div class="mt-3 flex flex-wrap items-end gap-3">
+                <button class="btn btn-ghost btn-sm" @click="addWindow()">+ Add day schedule</button>
+                <label class="form-control">
+                  <span class="label-text mb-1">Warning (sec)</span>
+                  <input type="number" min="0" max="600" x-model.number="curfew.warn_secs"
+                         class="input input-bordered w-28" />
+                </label>
+                <button class="btn btn-primary" @click="saveCurfew()" :disabled="savingCurfew">
+                  <span x-show="savingCurfew" class="loading loading-spinner loading-sm"></span>
+                  Save
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Today's screen time (live tally). Always rendered: `used_mins` is tracked even
+               with no budget set, and "he's been on 2h today" is useful on its own. Hiding this
+               card on a fresh install removed the one view that shows the tool working. -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">
+                  Today's screen time
+                  <span class="badge badge-warning badge-sm" x-show="today.enabled === false">Paused</span>
+                </h2>
+                <button class="btn btn-ghost btn-sm" @click="loadToday()" :disabled="loadingToday">
+                  <span x-show="loadingToday" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+
+              <!-- Enforcement liveness. Both enforcers stamp a heartbeat each tick; if neither
+                   has reported recently the limits below are not being applied, and nothing else
+                   on this page would look any different. -->
+              <template x-if="isEnforcerStale(today.enforcer_age_secs)">
+                <div class="alert alert-error mt-1">
+                  <span class="text-sm">
+                    <strong>Enforcement may not be running.</strong>
+                    <span x-show="today.enforcer_age_secs !== null"
+                          x-text="`No check-in for ${Math.round(today.enforcer_age_secs / 60)} min.`"></span>
+                    <span x-show="today.enforcer_age_secs === null">The background checks haven't reported yet.</span>
+                    Limits and curfew may not be applied right now — run
+                    <span class="font-mono">nestwatch doctor</span> on the PC.
+                  </span>
+                </div>
+              </template>
+
+              <!-- Total budget bar -->
+              <template x-if="today.budget_mins > 0">
+                <div class="mt-1">
+                  <div class="flex justify-between text-sm">
+                    <span><span class="font-semibold" x-text="today.used_mins"></span> of
+                      <span x-text="today.budget_mins"></span> min used</span>
+                    <span class="opacity-70"><span x-text="today.remaining_mins"></span> min left<span
+                      x-show="today.extra_mins > 0" x-text="` (incl. +${today.extra_mins} bonus)`"></span></span>
+                  </div>
+                  <progress class="progress w-full mt-1"
+                            :aria-label="`Screen time: ${today.used_mins} of ${today.budget_mins} minutes used`"
+                            :class="today.remaining_mins === 0 ? 'progress-error' : (today.remaining_mins <= 15 ? 'progress-warning' : 'progress-primary')"
+                            :value="today.used_mins" :max="today.budget_mins"></progress>
+                </div>
+              </template>
+
+              <!-- No budget: still show the tally. Time is counted regardless, so this answers
+                   "has he been on the PC today?" even before any limit exists. -->
+              <template x-if="!(today.budget_mins > 0)">
+                <div class="mt-1">
+                  <p class="text-sm">
+                    <span class="font-semibold" x-text="today.used_mins ?? 0"></span> min used today
+                  </p>
+                  <p class="text-sm opacity-70">
+                    No daily limit set — tracking only. Set one under
+                    <span class="font-medium">Screen-time &amp; app limits</span> to start enforcing.
+                  </p>
+                </div>
+              </template>
+
+              <!-- Parent-granted bonus time (only meaningful with a budget) -->
+              <div class="mt-2 flex flex-wrap items-center gap-2" x-show="today.budget_mins > 0">
+                <span class="label-text">Add bonus time today:</span>
+                <button class="btn btn-outline btn-sm" @click="grantExtra(15)" :disabled="grantingExtra">+15</button>
+                <button class="btn btn-outline btn-sm" @click="grantExtra(30)" :disabled="grantingExtra">+30</button>
+                <button class="btn btn-outline btn-sm" @click="grantExtra(60)" :disabled="grantingExtra">+60</button>
+              </div>
+
+              <!-- Per-app usage -->
+              <template x-if="today.per_app && today.per_app.length">
+                <div class="mt-2">
+                  <span class="label-text">Per-app usage today</span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="a in today.per_app" :key="a.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" x-text="a.name"></span>
+                        <progress class="progress flex-1"
+                                  :aria-label="`${a.name}: ${a.used_mins} of ${a.limit_mins} minutes`"
+                                  :class="a.used_mins >= a.limit_mins ? 'progress-error' : 'progress-primary'"
+                                  :value="a.used_mins" :max="a.limit_mins"></progress>
+                        <span class="whitespace-nowrap opacity-70"><span x-text="a.used_mins"></span>/<span
+                          x-text="a.limit_mins"></span> min</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Group (shared pool) usage -->
+              <template x-if="today.groups && today.groups.length">
+                <div class="mt-2">
+                  <span class="label-text">App groups today</span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="g in today.groups" :key="g.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" x-text="g.name"></span>
+                        <progress class="progress flex-1"
+                                  :aria-label="`${g.name}: ${g.used_mins} of ${g.limit_mins} minutes`"
+                                  :class="g.used_mins >= g.limit_mins ? 'progress-error' : 'progress-primary'"
+                                  :value="g.used_mins" :max="g.limit_mins"></progress>
+                        <span class="whitespace-nowrap opacity-70"><span x-text="g.used_mins"></span>/<span
+                          x-text="g.limit_mins"></span> min</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </section>
+
+          <!-- Usage rules: budget + blocklist + per-app limits -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Screen-time &amp; app limits</h2>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <!-- Three states, not two. `enabled` only means "not paused"; with nothing
+                       configured the enforcer skips every tick, so showing "Enforcing" on a
+                       fresh install told the parent the PC was limited when it wasn't. -->
+                  <span class="label-text"
+                        x-text="!rules.enabled ? 'Paused' : (anyRulesSet() ? 'Enforcing' : 'Nothing set up yet')"></span>
+                  <input type="checkbox" class="toggle toggle-sm toggle-primary"
+                         :checked="rules.enabled"
+                         @change="rules.enabled = $event.target.checked; saveRules()" />
+                </label>
+              </div>
+              <p class="text-sm opacity-70" x-show="!rules.enabled">
+                Paused — screen-time, blocked apps, and per-app limits are not enforced (curfew still applies).
+              </p>
+              <div class="alert alert-info mt-1" x-show="rules.enabled && !anyRulesSet()">
+                <span class="text-sm">
+                  No limits are set, so nothing is being enforced yet. Set a daily limit below
+                  (or turn on Curfew) to start.
+                </span>
+              </div>
+
+              <!-- Daily budget -->
+              <label class="flex w-fit items-center gap-2 mt-1 cursor-pointer">
+                <input type="checkbox" class="checkbox checkbox-sm"
+                       :checked="!!rules.budget_by_weekday" @change="togglePerDay($event.target.checked)" />
+                <span class="label-text">Different limit each day</span>
+              </label>
+
+              <div class="mt-1 flex flex-wrap items-end gap-3">
+                <label class="form-control" x-show="!rules.budget_by_weekday">
+                  <span class="label-text mb-1">Daily limit (min, 0 = off)</span>
+                  <input type="number" min="0" x-model.number="rules.daily_budget_mins"
+                         class="input input-bordered w-40" />
+                </label>
+                <label class="form-control">
+                  <span class="label-text mb-1">When time's up</span>
+                  <select x-model="rules.budget_action" class="select select-bordered">
+                    <option value="lock">Lock screen</option>
+                    <option value="shutdown">Shut down</option>
+                    <option value="warn">Warn only</option>
+                  </select>
+                </label>
+                <label class="form-control">
+                  <span class="label-text mb-1">Warning (sec)</span>
+                  <input type="number" min="0" max="600" x-model.number="rules.warn_secs"
+                         class="input input-bordered w-28" />
+                </label>
+              </div>
+
+              <!-- Per-day limits. `x-if` (not x-show) so the inputs aren't evaluated as
+                   null[i] while per-day mode is off. -->
+              <template x-if="rules.budget_by_weekday">
+                <div class="mt-2">
+                  <div class="flex flex-wrap gap-2">
+                    <template x-for="(d, i) in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="i">
+                      <label class="form-control">
+                        <span class="label-text mb-1 text-center" x-text="d"></span>
+                        <input type="number" min="0" x-model.number="rules.budget_by_weekday[i]"
+                               class="input input-bordered input-sm w-16 text-center" />
+                      </label>
+                    </template>
+                  </div>
+                  <p class="text-xs opacity-60 mt-1">
+                    0 = no limit that day. To block a day entirely, use a full-day curfew window.
+                  </p>
+                </div>
+              </template>
+
+              <!-- Blocked apps -->
+              <div class="mt-3">
+                <span class="label-text">Blocked apps (killed on sight)</span>
+                <div class="mt-1 flex flex-col gap-1">
+                  <template x-for="(b, i) in rules.blocklist" :key="i">
+                    <div class="flex items-center gap-2">
+                      <input type="text" x-model="rules.blocklist[i]" placeholder="game.exe"
+                             class="input input-bordered input-sm w-64" />
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
+                    </div>
+                  </template>
+                  <button class="btn btn-ghost btn-sm w-fit" @click="rules.blocklist.push('')">+ Add app</button>
+                </div>
+              </div>
+
+              <!-- Per-app limits -->
+              <div class="mt-3">
+                <span class="label-text">Per-app daily limits</span>
+                <div class="mt-1 flex flex-col gap-1">
+                  <template x-for="(row, i) in appLimitRows" :key="i">
+                    <div class="flex items-center gap-2">
+                      <input type="text" x-model="row.name" placeholder="chrome.exe"
+                             class="input input-bordered input-sm w-64" />
+                      <input type="number" min="0" x-model.number="row.mins" placeholder="min"
+                             class="input input-bordered input-sm w-24" />
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
+                    </div>
+                  </template>
+                  <button class="btn btn-ghost btn-sm w-fit"
+                          @click="appLimitRows.push({ name: '', mins: 60 })">+ Add limit</button>
+                </div>
+              </div>
+
+              <!-- App groups (shared pool) -->
+              <div class="mt-3">
+                <span class="label-text">App groups (shared daily pool)</span>
+                <div class="mt-1 flex flex-col gap-1">
+                  <template x-for="(g, i) in groupRows" :key="i">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <input type="text" x-model="g.name" placeholder="Games"
+                             class="input input-bordered input-sm w-32" />
+                      <input type="text" x-model="g.appsText" placeholder="minecraft.exe, roblox.exe"
+                             class="input input-bordered input-sm w-64" />
+                      <input type="number" min="0" x-model.number="g.limit_mins" placeholder="min"
+                             class="input input-bordered input-sm w-24" />
+                      <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>
+                    </div>
+                  </template>
+                  <button class="btn btn-ghost btn-sm w-fit"
+                          @click="groupRows.push({ name: '', appsText: '', limit_mins: 90 })">+ Add group</button>
+                </div>
+              </div>
+
+              <div class="mt-3">
+                <button class="btn btn-primary" @click="saveRules()" :disabled="savingRules">
+                  <span x-show="savingRules" class="loading loading-spinner loading-sm"></span>
+                  Save
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- Routines (saved rule presets) -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Routines</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadRoutines()" :disabled="loadingRoutines">
+                  <span x-show="loadingRoutines" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Save the current screen-time settings above as a named preset, then switch with one
+                click (e.g. Homework, Weekend). Applying a routine replaces the live settings.
+              </p>
+              <div class="mt-1 flex flex-wrap items-end gap-2">
+                <input type="text" x-model="newRoutineName" maxlength="40" placeholder="Homework"
+                       class="input input-bordered input-sm w-48" />
+                <button class="btn btn-primary btn-sm" @click="saveRoutine()" :disabled="savingRoutine">
+                  <span x-show="savingRoutine" class="loading loading-spinner loading-xs"></span>
+                  Save current as routine
+                </button>
+              </div>
+              <div class="mt-2 flex flex-col gap-1" x-show="routines.length > 0">
+                <template x-for="name in routines" :key="name">
+                  <div class="flex items-center gap-2">
+                    <span class="flex-1 truncate" x-text="name"></span>
+                    <button class="btn btn-success btn-xs" @click="applyRoutine(name)">Apply</button>
+                    <button class="btn btn-ghost btn-xs" @click="deleteRoutine(name)">Delete</button>
+                  </div>
+                </template>
+              </div>
+              <p class="text-sm opacity-50" x-show="routines.length === 0 && !loadingRoutines">
+                No saved routines.
+              </p>
+            </div>
+          </section>
+
+          <!-- More-time requests -->
+          <section class="card bg-base-100 shadow md:col-span-2" x-show="timeRequests.length > 0">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">
+                  More-time requests
+                  <span class="badge badge-primary" x-text="timeRequests.length"></span>
+                </h2>
+                <button class="btn btn-ghost btn-sm" @click="loadTimeRequests()">Refresh</button>
+              </div>
+              <div class="mt-2 max-h-72 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Time</th><th>Minutes</th><th>Reason</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="r in timeRequests" :key="r.id">
+                      <tr>
+                        <td class="whitespace-nowrap" x-text="fmtTime(r.ts)"></td>
+                        <td x-text="r.minutes"></td>
+                        <td class="truncate" x-text="r.reason || '—'"></td>
+                        <td class="text-right whitespace-nowrap">
+                          <button class="btn btn-success btn-xs" @click="resolveTimeRequest(r.id, true)">Approve</button>
+                          <button class="btn btn-error btn-xs" @click="resolveTimeRequest(r.id, false)">Deny</button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Time codes -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Time codes</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadCodes()" :disabled="loadingCodes">
+                  <span x-show="loadingCodes" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Generate a one-time code worth N minutes and hand it over — it's redeemed on the
+                child's page, even while you're away.
+              </p>
+              <!-- The full URL, copyable. Naming the path alone left the parent to reconstruct
+                   scheme + IP + port from memory to tell their child where to go. -->
+              <div class="mt-1 flex flex-wrap items-center gap-2">
+                <span class="label-text">Child's page:</span>
+                <code class="text-xs break-all" x-text="askUrl()"></code>
+                <button class="btn btn-ghost btn-xs" @click="copyAskUrl()"
+                        aria-label="Copy the child's page link">Copy link</button>
+              </div>
+              <div class="mt-1 flex flex-wrap items-end gap-2">
+                <label class="form-control">
+                  <span class="label-text mb-1">Minutes</span>
+                  <input type="number" min="1" max="240" x-model.number="newCodeMins"
+                         class="input input-bordered w-28" />
+                </label>
+                <button class="btn btn-primary" @click="issueCode()" :disabled="issuingCode">
+                  <span x-show="issuingCode" class="loading loading-spinner loading-sm"></span>
+                  Generate code
+                </button>
+              </div>
+              <div class="mt-2 max-h-60 overflow-y-auto" x-show="codes.length > 0">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Code</th><th>Minutes</th><th>Created</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="c in codes" :key="c.code">
+                      <tr>
+                        <td class="font-mono text-base tracking-widest" x-text="c.code"></td>
+                        <td x-text="c.minutes"></td>
+                        <td class="whitespace-nowrap" x-text="fmtTime(c.ts)"></td>
+                        <td class="text-right">
+                          <button class="btn btn-ghost btn-xs" @click="copyCode(c.code)">Copy</button>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <p class="text-sm opacity-50" x-show="codes.length === 0 && !loadingCodes">
+                No active codes.
+              </p>
+            </div>
+          </section>
+
+          <!-- Recent access -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Recent access</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadAudit()" :disabled="loadingAudit">
+                  <span x-show="loadingAudit" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Logins and actions on this PC, newest first. Watch for a sign-in you don't recognise.
+              </p>
+              <div class="mt-2 max-h-72 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Time</th><th>Event</th><th>Source</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(e, i) in audit" :key="i">
+                      <tr :class="e.event === 'auth_failure' ? 'text-error' : ''">
+                        <td class="whitespace-nowrap" x-text="fmtTime(e.ts)"></td>
+                        <td x-text="e.event"></td>
+                        <td class="whitespace-nowrap" x-text="e.src_ip || '—'"></td>
+                      </tr>
+                    </template>
+                    <template x-if="audit.length === 0 && !loadingAudit">
+                      <tr><td colspan="3" class="text-center opacity-50">No events yet</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Screen-time report -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Screen time</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadScreentime()" :disabled="loadingScreentime">
+                  <span x-show="loadingScreentime" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+
+              <template x-if="stEnforcementStale()">
+                <div role="status" class="alert alert-warning mt-2 py-2 text-sm">
+                  <span>⚠ Enforcement may not have been running — days below can be missing rather than quiet.</span>
+                </div>
+              </template>
+
+              <div class="mt-2 flex flex-wrap gap-4 text-sm">
+                <div><span class="opacity-70">Total</span>
+                  <span class="ml-1 font-semibold" x-text="`${screentime.total_mins} min`"></span></div>
+                <div><span class="opacity-70">Daily average</span>
+                  <span class="ml-1 font-semibold"
+                        x-text="screentime.daily_avg_mins == null ? '—' : `${screentime.daily_avg_mins} min`"></span></div>
+                <div><span class="opacity-70">Measured days</span>
+                  <span class="ml-1 font-semibold"
+                        x-text="`${screentime.measured_days}/${screentime.days.length}`"></span></div>
+                <div class="opacity-70" x-text="stChangeLabel()"></div>
+              </div>
+
+              <svg class="mt-3 h-28 w-full" role="img"
+                   aria-label="Daily screen-time minutes; hatched columns are days that were not measured"
+                   preserveAspectRatio="none">
+                <defs>
+                  <pattern id="st-nodata" width="6" height="6" patternUnits="userSpaceOnUse"
+                           patternTransform="rotate(45)">
+                    <rect width="6" height="6" class="fill-base-200"></rect>
+                    <line x1="0" y1="0" x2="0" y2="6" class="stroke-base-content" stroke-opacity="0.35"
+                          stroke-width="2"></line>
+                  </pattern>
+                </defs>
+                <template x-for="(d, i) in screentime.days" :key="d.date">
+                  <g>
+                    <title x-text="stBarTitle(d)"></title>
+                    <rect :x="`${(i / screentime.days.length) * 100}%`"
+                          :width="`${(1 / screentime.days.length) * 100 - 0.4}%`"
+                          :y="`${100 - stBarPct(d)}%`"
+                          :height="`${stBarPct(d)}%`"
+                          rx="2"
+                          :fill="d.minutes_used == null ? 'url(#st-nodata)' : null"
+                          :class="d.minutes_used == null ? '' : (d.over_budget ? 'fill-error' : 'fill-primary')"></rect>
+                  </g>
+                </template>
+              </svg>
+
+              <div class="mt-1 flex flex-wrap items-center gap-3 text-xs opacity-70">
+                <span><span class="inline-block h-2 w-3 align-middle bg-primary"></span> within budget</span>
+                <span><span class="inline-block h-2 w-3 align-middle bg-error"></span> over budget</span>
+                <span><span class="inline-block h-2 w-3 align-middle bg-base-200 border border-base-content/40"></span> not measured</span>
+              </div>
+
+              <!-- Text alternative for the chart above: the SVG <title> elements sit on
+                   non-focusable <rect>s and aren't reliably reachable by assistive tech, so this
+                   list carries the same per-day data in a form that's readable and scrollable.
+                   Deliberately newest first — the opposite of the chart's oldest-first left-to-
+                   right order — because a scrolling list reads better with "now" at the top; this
+                   is not a mismatched bug. -->
+              <p class="mt-3 label-text">Day by day (newest first)</p>
+              <div class="mt-1 max-h-40 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Date</th><th>Minutes</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="d in [...screentime.days].reverse()" :key="d.date">
+                      <tr>
+                        <td class="whitespace-nowrap" x-text="d.date"></td>
+                        <td :class="d.minutes_used == null ? 'opacity-50' : (d.over_budget ? 'text-error' : '')"
+                            x-text="stDayLabel(d)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+
+              <template x-if="stRecentAppDay()">
+                <div class="mt-3">
+                  <span class="label-text"
+                        x-text="`Most recent measured day with app data (${stRecentAppDay().date})`"></span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="a in stRecentAppDay().apps" :key="a.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" x-text="a.name"></span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <p class="mt-3 text-xs opacity-60">
+                Counts time this PC was unlocked with an app running — not time spent looking at it,
+                and not per-account. Any account signed in at this machine adds to the same total,
+                and a minimised app still counts, so these figures are not comparable to phone
+                Screen Time. The per-app list above only includes apps that already have a limit
+                set — other apps still count toward the total but aren't broken out by name.
+              </p>
+            </div>
+          </section>
+
+          <!-- Usage history -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h2 class="card-title text-base">Usage history</h2>
+                <button class="btn btn-ghost btn-sm" @click="loadUsage()" :disabled="loadingUsage">
+                  <span x-show="loadingUsage" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">Screen-time and enforcement events, newest first.</p>
+              <div class="mt-2 max-h-72 overflow-y-auto">
+                <table class="table table-pin-rows table-sm">
+                  <thead>
+                    <tr><th>Time</th><th>Event</th><th>Detail</th></tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(e, i) in usage" :key="i">
+                      <tr>
+                        <td class="whitespace-nowrap" x-text="fmtTime(e.ts)"></td>
+                        <td x-text="e.event"></td>
+                        <td x-text="usageDetail(e)"></td>
+                      </tr>
+                    </template>
+                    <template x-if="usage.length === 0 && !loadingUsage">
+                      <tr><td colspan="3" class="text-center opacity-50">No events yet</td></tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- Change password -->
+          <section class="card bg-base-100 shadow md:col-span-2">
+            <div class="card-body">
+              <h2 class="card-title text-base">Change password</h2>
+              <p class="text-sm opacity-70">Update the control password without reinstalling.</p>
+              <div class="mt-2 flex flex-wrap items-end gap-3">
+                <label class="form-control">
+                  <span class="label-text mb-1">Current</span>
+                  <input type="password" x-model="pwCurrent" class="input input-bordered" placeholder="••••••••" />
+                </label>
+                <label class="form-control">
+                  <span class="label-text mb-1">New</span>
+                  <input type="password" x-model="pwNew" class="input input-bordered" placeholder="at least 10 chars" />
+                </label>
+                <button class="btn btn-primary" @click="changePassword()"
+                        :disabled="savingPw || !pwCurrent || !pwNew">
+                  <span x-show="savingPw" class="loading loading-spinner loading-sm"></span>
+                  Update
+                </button>
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+    </template>
+
+    <!-- ── Confirm: kill ────────────────────────────────────────────── -->
+    <div class="modal" :class="{ 'modal-open': killTarget }">
+      <div class="modal-box">
+        <h3 class="text-lg font-bold">Close app?</h3>
+        <p class="py-2">
+          Terminate <span class="font-semibold" x-text="killTarget?.name"></span>
+          (PID <span x-text="killTarget?.pid"></span>)? Unsaved work may be lost.
+        </p>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="killTarget = null">Cancel</button>
+          <button class="btn btn-error" @click="killProcess()">Kill</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Confirm: shutdown ────────────────────────────────────────── -->
+    <div class="modal" :class="{ 'modal-open': confirmShutdown }">
+      <div class="modal-box">
+        <h3 class="text-lg font-bold">Shut down this PC?</h3>
+        <p class="py-2">The machine will power off in a few seconds.</p>
+        <div class="modal-action">
+          <button class="btn btn-ghost" @click="confirmShutdown = false">Cancel</button>
+          <button class="btn btn-warning" @click="doShutdown()">Shut down</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Toasts ───────────────────────────────────────────────────── -->
+    <div class="toast toast-end">
+      <template x-for="t in toasts" :key="t.id">
+        <div class="alert" :class="t.cls" x-text="t.msg"></div>
+      </template>
+    </div>
+
+    <style>
+      [x-cloak] { display: none !important; }
+    </style>
+
+    <script>
+      // Both enforcers stamp a heartbeat every 30s; past this many seconds since the last one,
+      // "enforcement is alive" can no longer be assumed. One shared constant so the "Today" panel
+      // banner and the screen-time card's staleness warning can never disagree about what counts
+      // as stale — they used to (150 vs 300), so a gap between them could show "no check-in" in
+      // one place and "all fine" in the other for the same age.
+      const ENFORCER_STALE_SECS = 150;
+
+      function app() {
+        return {
+          authed: null,
+          busy: false,
+          password: "",
+          loginError: "",
+          processes: [],
+          loadingProcs: false,
+          shotUrl: null,
+          loadingShot: false,
+          autoRefresh: false,
+          _shotTimer: null,
+          _shotBusy: false,
+          _pollTimer: null,
+          _pollMs: 60000,
+          _refreshMs: 3000,
+          killTarget: null,
+          confirmShutdown: false,
+          curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60, windows: [] },
+          savingCurfew: false,
+          rules: { enabled: true, daily_budget_mins: 0, budget_by_weekday: null, blocklist: [], app_limits: {}, app_groups: [], warn_secs: 60, budget_action: "lock" },
+          appLimitRows: [],
+          groupRows: [],
+          savingRules: false,
+          routines: [],
+          loadingRoutines: false,
+          newRoutineName: "",
+          savingRoutine: false,
+          today: { day: null, enabled: true, budget_mins: 0, used_mins: 0, remaining_mins: null, extra_mins: 0, per_app: [], groups: [] },
+          loadingToday: false,
+          grantingExtra: false,
+          _lastPerDay: null, // remembers the per-day array while single-limit mode is active
+          audit: [],
+          loadingAudit: false,
+          usage: [],
+          loadingUsage: false,
+          screentime: { days: [], total_mins: 0, measured_days: 0, daily_avg_mins: null, prev_total_mins: null, change_pct: null },
+          loadingScreentime: false,
+          timeRequests: [],
+          codes: [],
+          loadingCodes: false,
+          newCodeMins: 30,
+          issuingCode: false,
+          pwCurrent: "",
+          pwNew: "",
+          savingPw: false,
+          toasts: [],
+
+          async init() {
+            try {
+              const r = await fetch("/session");
+              const j = await r.json();
+              this.authed = !!j.authenticated;
+            } catch {
+              this.authed = false;
+            }
+            if (this.authed) this.loadAll();
+          },
+
+          // Load every dashboard panel — used by both init() and a fresh login() so the two
+          // entry points can't drift.
+          loadAll() {
+            this.loadProcesses();
+            this.loadCurfew();
+            this.loadRules();
+            this.loadRoutines();
+            this.loadToday();
+            this.loadAudit();
+            this.loadUsage();
+            this.loadScreentime();
+            this.loadTimeRequests();
+            this.loadCodes();
+            this.startPolling();
+          },
+
+          // Keep the live-changing panels (today's usage + pending requests) fresh without a
+          // manual refresh. Light: two small JSON GETs a minute. Stops itself once logged out.
+          startPolling() {
+            this.stopPolling();
+            this._pollTimer = setInterval(() => {
+              if (!this.authed) { this.stopPolling(); return; }
+              if (document.hidden) return; // skip fetches while the tab is backgrounded
+              this.loadToday();
+              this.loadTimeRequests();
+            }, this._pollMs);
+          },
+
+          stopPolling() {
+            if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+          },
+
+          async loadCurfew() {
+            try {
+              const r = await fetch("/api/curfew");
+              if (r.ok) {
+                this.curfew = await r.json();
+                if (!this.curfew.windows) this.curfew.windows = [];
+              }
+            } catch {}
+          },
+
+          addWindow() {
+            this.curfew.windows.push({
+              start: "22:00",
+              end: "07:00",
+              days: { mon: false, tue: false, wed: false, thu: false, fri: false, sat: false, sun: false },
+            });
+          },
+
+          removeWindow(i) {
+            this.curfew.windows.splice(i, 1);
+          },
+
+          async saveCurfew() {
+            this.savingCurfew = true;
+            try {
+              const r = await this.postJSON("/api/curfew", this.curfew);
+              if (r.ok) {
+                this.toast("Curfew saved", "success");
+              } else if (r.status === 400) {
+                this.toast("Invalid times — use HH:MM", "error");
+              } else {
+                this.toast("Could not save curfew", "error");
+              }
+            } catch {
+              this.toast("Save request failed", "error");
+            } finally {
+              this.savingCurfew = false;
+            }
+          },
+
+          async loadRules() {
+            try {
+              const r = await fetch("/api/rules");
+              if (r.ok) {
+                this.rules = await r.json();
+                if (!this.rules.blocklist) this.rules.blocklist = [];
+                if (!this.rules.app_limits) this.rules.app_limits = {};
+                if (!this.rules.app_groups) this.rules.app_groups = [];
+                // Expand the app_limits map into editable rows.
+                this.appLimitRows = Object.entries(this.rules.app_limits)
+                  .map(([name, mins]) => ({ name, mins }));
+                // Expand groups into editable rows (apps shown as a comma-separated string).
+                this.groupRows = this.rules.app_groups.map((g) => ({
+                  name: g.name, appsText: (g.apps || []).join(", "), limit_mins: g.limit_mins,
+                }));
+                // Drop any stashed per-day array so a later per-day toggle reflects THESE rules,
+                // not a stale array from before (e.g. after applying a routine).
+                this._lastPerDay = null;
+              }
+            } catch {}
+          },
+
+          // Switch between one everyday limit and a per-weekday array. Toggling on restores the
+          // last per-day array if there is one (so an accidental off→on round-trip doesn't wipe a
+          // weekend config), otherwise seeds all 7 days from the current everyday value.
+          togglePerDay(on) {
+            if (on) {
+              const base = this.rules.daily_budget_mins || 0;
+              this.rules.budget_by_weekday = this._lastPerDay || [base, base, base, base, base, base, base];
+            } else {
+              this._lastPerDay = this.rules.budget_by_weekday ? [...this.rules.budget_by_weekday] : null;
+              this.rules.budget_by_weekday = null;
+            }
+          },
+
+          // Is anything actually configured to enforce? Mirrors `Rules::has_targets()` on the
+          // server — deliberately NOT `any_configured()`, which folds in the pause toggle; the
+          // caller composes that separately to get the three-state badge.
+          //
+          // Reads the live form rows (not the last-saved `rules`) so the badge reacts as soon as
+          // the parent types a limit, not only after Save. That's why this can't just be a field
+          // on `GET /api/rules`.
+          anyRulesSet() {
+            const budget =
+              Number(this.rules.daily_budget_mins) > 0 ||
+              (Array.isArray(this.rules.budget_by_weekday) &&
+                this.rules.budget_by_weekday.some((d) => Number(d) > 0));
+            const blocked = (this.rules.blocklist || []).some((b) => (b || "").trim());
+            const limits = (this.appLimitRows || []).some(
+              (r) => (r.name || "").trim() && Number(r.mins) > 0,
+            );
+            const groups = (this.groupRows || []).some(
+              (g) => (g.appsText || "").trim() && Number(g.limit_mins) > 0,
+            );
+            return budget || blocked || limits || groups;
+          },
+
+          // Absolute URL of the child's page, so it can be copied and sent verbatim.
+          askUrl() {
+            return `${location.origin}/ask`;
+          },
+
+          async copyAskUrl() {
+            try {
+              await navigator.clipboard.writeText(this.askUrl());
+              this.toast("Link copied");
+            } catch {
+              this.toast("Couldn't copy — select the link instead", "error");
+            }
+          },
+
+          // Fold the editable rows (per-app limits, blocklist, groups) back into `this.rules`.
+          // Shared by Save and Save-as-routine so both capture exactly the on-screen settings.
+          collapseRules() {
+            this.rules.app_limits = {};
+            for (const row of this.appLimitRows) {
+              const name = (row.name || "").trim();
+              if (name) this.rules.app_limits[name] = row.mins || 0;
+            }
+            this.rules.blocklist = this.rules.blocklist.map((b) => b.trim()).filter(Boolean);
+            // Split each group's apps text on commas/whitespace; drop empty groups.
+            this.rules.app_groups = this.groupRows
+              .map((g) => ({
+                name: (g.name || "").trim(),
+                apps: (g.appsText || "").split(/[,\s]+/).map((a) => a.trim()).filter(Boolean),
+                limit_mins: g.limit_mins || 0,
+              }))
+              .filter((g) => g.name && g.apps.length);
+          },
+
+          async saveRules() {
+            this.savingRules = true;
+            this.collapseRules();
+            try {
+              const r = await this.postJSON("/api/rules", this.rules);
+              if (r.ok) {
+                this.toast("Rules saved", "success");
+                this.loadToday(); // keep the Today card (budget/paused badge) in sync
+              } else if (r.status === 400) {
+                this.toast("Warning seconds must be ≤ 600", "error");
+              } else {
+                this.toast("Could not save rules", "error");
+              }
+            } catch {
+              this.toast("Save request failed", "error");
+            } finally {
+              this.savingRules = false;
+            }
+          },
+
+          loadRoutines() { return this.loadList("/api/routines", "routines", "loadingRoutines"); },
+
+          async saveRoutine() {
+            const name = (this.newRoutineName || "").trim();
+            if (!name) { this.toast("Enter a routine name", "error"); return; }
+            this.savingRoutine = true;
+            this.collapseRules();
+            try {
+              const r = await this.postJSON("/api/routines", { name, rules: this.rules });
+              if (r.ok) {
+                this.toast(`Saved routine "${name}"`, "success");
+                this.newRoutineName = "";
+                this.loadRoutines();
+              } else if (r.status === 400) {
+                this.toast("Invalid name, or too many routines (max 20)", "error");
+              } else {
+                this.toast("Could not save routine", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            } finally {
+              this.savingRoutine = false;
+            }
+          },
+
+          async applyRoutine(name) {
+            try {
+              const r = await fetch(`/api/routines/${encodeURIComponent(name)}/apply`, { method: "POST" });
+              if (r.ok) {
+                this.toast(`Applied "${name}"`, "success");
+                this.loadRules();
+                this.loadToday();
+              } else {
+                this.toast("Could not apply routine", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            }
+          },
+
+          async deleteRoutine(name) {
+            try {
+              const r = await fetch(`/api/routines/${encodeURIComponent(name)}/delete`, { method: "POST" });
+              if (r.ok) {
+                this.toast(`Deleted "${name}"`, "success");
+                this.loadRoutines();
+              } else {
+                this.toast("Could not delete routine", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            }
+          },
+
+          async login() {
+            this.busy = true;
+            this.loginError = "";
+            try {
+              const r = await this.postJSON("/login", { password: this.password });
+              if (r.ok) {
+                this.password = "";
+                this.authed = true;
+                this.loadAll();
+              } else if (r.status === 429) {
+                this.loginError = "Too many attempts — wait a minute and try again.";
+              } else {
+                this.loginError = "Incorrect password.";
+              }
+            } catch {
+              this.loginError = "Could not reach the server.";
+            } finally {
+              this.busy = false;
+            }
+          },
+
+          async logout() {
+            this.stopAutoRefresh();
+            this.stopPolling();
+            await fetch("/logout", { method: "POST" });
+            this.authed = false;
+            this.processes = [];
+            if (this.shotUrl) { URL.revokeObjectURL(this.shotUrl); this.shotUrl = null; }
+          },
+
+          async loadProcesses() {
+            this.loadingProcs = true;
+            try {
+              const r = await fetch("/api/processes");
+              if (r.status === 401) { this.authed = false; return; }
+              this.processes = await r.json();
+            } catch {
+              this.toast("Failed to load processes", "error");
+            } finally {
+              this.loadingProcs = false;
+            }
+          },
+
+          async takeScreenshot(silent = false) {
+            // Never overlap captures: the service helper can take up to ~15s, but the Live timer
+            // fires every few seconds — without this guard slow captures would pile up.
+            if (this._shotBusy) return;
+            this._shotBusy = true;
+            if (!silent) this.loadingShot = true;
+            try {
+              const r = await fetch("/api/screenshot");
+              if (r.status === 401) { this.authed = false; this.stopAutoRefresh(); return; }
+              if (!r.ok) throw new Error();
+              const blob = await r.blob();
+              if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
+              this.shotUrl = URL.createObjectURL(blob);
+            } catch {
+              if (!silent) this.toast("Screenshot failed", "error");
+            } finally {
+              if (!silent) this.loadingShot = false;
+              this._shotBusy = false;
+            }
+          },
+
+          toggleAutoRefresh() {
+            if (this.autoRefresh) {
+              this.takeScreenshot();
+              // Skip while the tab is hidden, matching the data poll. Each tick spawns a helper
+              // in the child's session to capture and PNG-encode their whole desktop — by far
+              // the most expensive thing this tool does — and without the guard it kept doing it
+              // on their laptop for as long as the parent left the tab open in a pocket.
+              this._shotTimer = setInterval(() => {
+                if (!document.hidden) this.takeScreenshot(true);
+              }, this._refreshMs);
+            } else {
+              this.stopAutoRefresh();
+            }
+          },
+
+          stopAutoRefresh() {
+            if (this._shotTimer) { clearInterval(this._shotTimer); this._shotTimer = null; }
+            this.autoRefresh = false;
+          },
+
+          askKill(p) { this.killTarget = p; },
+
+          async killProcess() {
+            const p = this.killTarget;
+            this.killTarget = null;
+            if (!p) return;
+            try {
+              const r = await fetch(`/api/processes/${p.pid}/kill`, { method: "POST" });
+              if (r.ok) {
+                this.toast(`Closed ${p.name}`, "success");
+                this.loadProcesses();
+              } else {
+                this.toast(`Could not close ${p.name}`, "error");
+              }
+            } catch {
+              this.toast("Kill request failed", "error");
+            }
+          },
+
+          async doShutdown() {
+            this.confirmShutdown = false;
+            try {
+              const r = await fetch("/api/shutdown", { method: "POST" });
+              this.toast(r.ok ? "Shutting down…" : "Shutdown failed", r.ok ? "success" : "error");
+            } catch {
+              this.toast("Shutdown request failed", "error");
+            }
+          },
+
+          async doLock() {
+            try {
+              const r = await fetch("/api/lock", { method: "POST" });
+              this.toast(r.ok ? "Screen locked" : "Lock failed", r.ok ? "success" : "error");
+            } catch {
+              this.toast("Lock request failed", "error");
+            }
+          },
+
+          async changePassword() {
+            this.savingPw = true;
+            try {
+              const r = await this.postJSON("/api/password", { current: this.pwCurrent, new: this.pwNew });
+              if (r.ok) {
+                this.toast("Password changed", "success");
+                this.pwCurrent = "";
+                this.pwNew = "";
+              } else if (r.status === 401) {
+                this.toast("Current password is wrong", "error");
+              } else if (r.status === 400) {
+                this.toast("New password too short (min 10)", "error");
+              } else {
+                this.toast("Could not change password", "error");
+              }
+            } catch {
+              this.toast("Password request failed", "error");
+            } finally {
+              this.savingPw = false;
+            }
+          },
+
+          toast(msg, kind) {
+            const id = (this._n = (this._n || 0) + 1);
+            const cls = { success: "alert-success", error: "alert-error", info: "alert-info" }[kind] || "alert-info";
+            this.toasts.push({ id, msg, cls });
+            setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, 3500);
+          },
+
+          // POST a JSON body; the caller inspects the returned Response for status handling.
+          postJSON(url, body) {
+            return fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+          },
+
+          // GET a list into `this[field]`. `flag` (optional) toggles a loading spinner; `errMsg`
+          // (optional) toasts on failure. Logs out on 401.
+          async loadList(url, field, flag, errMsg) {
+            if (flag) this[flag] = true;
+            try {
+              const r = await fetch(url);
+              if (r.status === 401) { this.authed = false; return; }
+              if (r.ok) this[field] = await r.json();
+            } catch {
+              if (errMsg) this.toast(errMsg, "error");
+            } finally {
+              if (flag) this[flag] = false;
+            }
+          },
+
+          loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", "Failed to load access log"); },
+          loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", "Failed to load usage history"); },
+          loadToday() { return this.loadList("/api/usage/today", "today", "loadingToday"); },
+          loadScreentime() { return this.loadList("/api/screentime", "screentime", "loadingScreentime", "Failed to load screen-time report"); },
+
+          async grantExtra(mins) {
+            this.grantingExtra = true;
+            try {
+              const r = await this.postJSON("/api/extra-time", { minutes: mins });
+              if (r.ok) {
+                this.toast(`Granted +${mins} min`, "success");
+                this.loadToday();
+                this.loadUsage();
+              } else if (r.status === 400) {
+                this.toast("Minutes out of range (1–240)", "error");
+              } else {
+                this.toast("Could not grant time", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            } finally {
+              this.grantingExtra = false;
+            }
+          },
+          loadTimeRequests() { return this.loadList("/api/time-requests", "timeRequests"); },
+          loadCodes() { return this.loadList("/api/time-codes", "codes", "loadingCodes"); },
+
+          async issueCode() {
+            this.issuingCode = true;
+            try {
+              const r = await this.postJSON("/api/time-codes", { minutes: this.newCodeMins });
+              if (r.ok) {
+                const j = await r.json().catch(() => ({}));
+                this.toast(`Code ${j.code} = ${j.minutes} min`, "success");
+                this.loadCodes();
+              } else if (r.status === 400) {
+                this.toast("Minutes 1–240, and at most 50 active codes", "error");
+              } else {
+                this.toast("Could not generate a code", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            } finally {
+              this.issuingCode = false;
+            }
+          },
+
+          async copyCode(code) {
+            try {
+              await navigator.clipboard.writeText(code);
+              this.toast("Code copied", "success");
+            } catch {
+              this.toast("Copy failed — select it manually", "error");
+            }
+          },
+
+          async resolveTimeRequest(id, approve) {
+            const verb = approve ? "approve" : "deny";
+            try {
+              const r = await fetch(`/api/time-requests/${id}/${verb}`, { method: "POST" });
+              if (r.ok) {
+                const j = await r.json().catch(() => ({}));
+                this.toast(approve ? `Granted ${j.minutes ?? ""} min` : "Denied", "success");
+                this.loadTimeRequests();
+                if (approve) this.loadUsage();
+              } else {
+                this.toast("Could not update the request", "error");
+              }
+            } catch {
+              this.toast("Request failed", "error");
+            }
+          },
+
+          usageDetail(e) {
+            if (e.event === "screentime_daily")
+              return `${e.minutes_used ?? "?"}/${e.budget ?? "?"} min`;
+            if (e.reason) return e.reason;
+            if (e.minutes != null) return `${e.minutes} min`;
+            return "—";
+          },
+
+          // Bar height as a percentage of the tallest measured day, floored so a small non-zero
+          // day is still visible rather than rounding away to nothing.
+          stBarPct(d) {
+            const peak = Math.max(1, ...this.screentime.days.map(x => x.minutes_used ?? 0));
+            if (d.minutes_used == null) return 100;      // the hatch fills the column
+            // Deliberate 3% floor, not a true zero height: a measured-zero day is a real
+            // observation (the service watched and saw nothing) and needs a visible, hoverable
+            // mark of its own, distinct from both a tall measured bar and the not-measured hatch.
+            // Do not "correct" this back to 0 — a height:0% rect renders no area and can't be
+            // hovered, which would make the day's <title> unreachable.
+            if (d.minutes_used === 0) return 3;
+            return Math.max(4, Math.round((d.minutes_used / peak) * 100));
+          },
+
+          // How a day's figure is phrased, in one place. The chart tooltip and the day-by-day
+          // table both show it, and when they each formatted it themselves they had already
+          // drifted apart ("90 of 180 min" vs "90 min of 180 min budget") in the same commit.
+          stDayLabel(d) {
+            if (d.minutes_used == null) return "not measured";
+            const budget = d.budget ? ` of ${d.budget}` : "";
+            return `${d.minutes_used}${budget} min${d.over_budget ? " (over budget)" : ""}`;
+          },
+
+          stBarTitle(d) {
+            if (d.minutes_used == null) return `${d.date}: not measured — the service was not running`;
+            return `${d.date}: ${this.stDayLabel(d)}`;
+          },
+
+          stChangeLabel() {
+            const c = this.screentime.change_pct, prev = this.screentime.prev_total_mins;
+            // A null change_pct does not always mean "no baseline": a previous period that was
+            // measured at exactly zero has no defined percentage, but it is still a comparison
+            // worth showing. Saying "no earlier period" there would be plainly untrue.
+            if (c == null) {
+              return prev == null ? "no earlier period to compare"
+                                  : `previous period: ${prev} min`;
+            }
+            const dir = c > 0 ? "▲" : c < 0 ? "▼" : "—";
+            return `${dir} ${Math.abs(c)}% vs the previous period (${prev} min)`;
+          },
+
+          // The most recent day carrying per-app data — not necessarily the most recent
+          // *measured* day: a day can be measured (the service was running) and still have no
+          // apps entry, because per-app tracking only exists for apps with a limit set (see the
+          // footnote below the card). Returns null if no day in the window has any, so the
+          // heading's date makes the substitution visible instead of silently showing an older day.
+          stRecentAppDay() {
+            const days = this.screentime.days.filter(d => d.apps && d.apps.length);
+            return days.length ? days[days.length - 1] : null;
+          },
+
+          // Shared by the "Today" panel banner (above) and the screen-time card, so the two can
+          // never disagree about what counts as stale. Strict `=== null`, not `== null`: the
+          // initial `today` object has no `enforcer_age_secs` key at all, so a loose check treats
+          // `undefined` the same as `null` and the warning flashes on every page load until
+          // `loadToday()` resolves.
+          isEnforcerStale(age) {
+            return age === null || age > ENFORCER_STALE_SECS;
+          },
+
+          // The enforcer heartbeat, already served by /api/usage/today. A stale or absent value
+          // means the figures below may be missing days rather than showing light use.
+          stEnforcementStale() {
+            return this.isEnforcerStale(this.today?.enforcer_age_secs);
+          },
+
+          fmtTime(ts) {
+            if (!ts) return "—";
+            const d = new Date(ts);
+            return isNaN(d.getTime()) ? ts : d.toLocaleString();
+          },
+
+          fmtBytes(b) {
+            if (!b) return "—";
+            const u = ["B", "KB", "MB", "GB"];
+            let i = 0;
+            while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+            return `${b.toFixed(i ? 1 : 0)} ${u[i]}`;
+          },
+        };
+      }
+    </script>
+  </body>
+</html>

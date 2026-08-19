@@ -1,0 +1,11 @@
+/* Tailwind v4 + daisyUI 5 entry (CSS-first config).
+   Built to ../assets/app.css by `npm run build`. */
+@import "tailwindcss";
+
+/* Scan the HTML (markup + inline Alpine class strings) for used utilities/components. */
+@source "../../assets/**/*.html";
+
+/* daisyUI 5, with the two themes referenced by index.html's data-theme. */
+@plugin "daisyui" {
+  themes: dim --default, light;
+}

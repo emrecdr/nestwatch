@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nestwatch — screen-time limits for a child's PC, on your own network</title>
+<meta name="description" content="A single self-contained Rust app that lets a parent manage a child's Windows PC from any device on the same home network. No cloud, no accounts, no telemetry.">
+<meta property="og:title" content="Nestwatch">
+<meta property="og:description" content="Screen-time limits, bedtime curfew and remote control for a child's Windows PC — entirely on your own network.">
+<meta property="og:type" content="website">
+<!--
+  This page deliberately carries none of the identifiers visible on the managed PC.
+  Those strings are what someone reads off that machine; a search-indexed page naming
+  them would hand back the mapping the installer works to withhold. The pages workflow
+  fails the deploy if any of them appear here. Keep it that way.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg:#fcfcfb; --panel:#fff; --fg:#152e29; --muted:#5f6f6a; --faint:#8a9995;
+    --line:#e4e8e6; --accent:#186b57; --accent-soft:#e8f2ee;
+    --code-bg:#f3f5f4; --shadow:0 1px 2px rgba(20,40,35,.05), 0 4px 16px rgba(20,40,35,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#111416; --panel:#181d1f; --fg:#e7ecea; --muted:#9daba6; --faint:#77857f;
+      --line:#28302f; --accent:#5fd0af; --accent-soft:#16302a;
+      --code-bg:#0d1011; --shadow:0 1px 2px rgba(0,0,0,.3), 0 4px 20px rgba(0,0,0,.25);
+    }
+  }
+  *,*::before,*::after { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body {
+    margin:0; background:var(--bg); color:var(--fg);
+    font:16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .wrap { max-width:64rem; margin:0 auto; padding:0 1.25rem; }
+  .narrow { max-width:44rem; }
+
+  /* ---- nav ---- */
+  nav {
+    position:sticky; top:0; z-index:10; backdrop-filter:blur(8px);
+    background:color-mix(in srgb, var(--bg) 88%, transparent);
+    border-bottom:1px solid var(--line);
+  }
+  nav .wrap { display:flex; align-items:center; gap:1.25rem; height:3.5rem; }
+  .brand { font-weight:700; letter-spacing:-.01em; margin-right:auto; }
+  .brand span { color:var(--accent); }
+  nav a { color:var(--muted); text-decoration:none; font-size:.92rem; }
+  nav a:hover { color:var(--fg); }
+  @media (max-width:34rem){ nav a.hide-s { display:none; } }
+
+  /* ---- hero ---- */
+  header.hero { padding:4rem 0 3rem; border-bottom:1px solid var(--line); }
+  h1 { font-size:clamp(2rem,5vw,2.9rem); line-height:1.12; letter-spacing:-.025em; margin:0 0 1rem; }
+  .lede { font-size:clamp(1.05rem,2.2vw,1.2rem); color:var(--muted); margin:0 0 1.75rem; max-width:38rem; }
+  .pills { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:2rem; }
+  .pill {
+    font-size:.8rem; font-weight:600; letter-spacing:.02em; color:var(--accent);
+    background:var(--accent-soft); border-radius:999px; padding:.3rem .75rem;
+  }
+  .cta { display:flex; flex-wrap:wrap; gap:.75rem; align-items:center; }
+  .btn {
+    display:inline-block; text-decoration:none; font-weight:600; font-size:.95rem;
+    padding:.65rem 1.25rem; border-radius:8px; border:1px solid transparent;
+  }
+  .btn-primary { background:var(--accent); color:var(--bg); }
+  .btn-primary:hover { filter:brightness(1.08); }
+  .btn-ghost { border-color:var(--line); color:var(--fg); background:var(--panel); }
+  .btn-ghost:hover { border-color:var(--muted); }
+  .ver { font-size:.88rem; color:var(--faint); }
+
+  /* ---- sections ---- */
+  section { padding:3.5rem 0; border-bottom:1px solid var(--line); }
+  section:last-of-type { border-bottom:0; }
+  h2 { font-size:1.5rem; letter-spacing:-.015em; margin:0 0 .5rem; }
+  .sec-lede { color:var(--muted); margin:0 0 2rem; max-width:42rem; }
+  h3 { font-size:1rem; margin:0 0 .35rem; }
+
+  .grid { display:grid; gap:1rem; grid-template-columns:repeat(auto-fit,minmax(15.5rem,1fr)); }
+  .card {
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding:1.15rem 1.25rem; box-shadow:var(--shadow);
+  }
+  .card p { margin:0; color:var(--muted); font-size:.93rem; }
+  .card .k { color:var(--accent); font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; display:block; margin-bottom:.5rem; }
+
+  ul.clean { list-style:none; padding:0; margin:0; }
+  ul.clean li { padding-left:1.35rem; position:relative; margin:.55rem 0; color:var(--muted); }
+  ul.clean li::before { content:""; position:absolute; left:0; top:.62em; width:.42rem; height:.42rem; border-radius:2px; background:var(--accent); }
+  ul.clean strong { color:var(--fg); font-weight:600; }
+
+  /* ---- diagram ---- */
+  figure { margin:0; }
+  figure svg { width:100%; height:auto; display:block; }
+  figcaption { color:var(--faint); font-size:.85rem; margin-top:.75rem; text-align:center; }
+  .dg-box { fill:var(--panel); stroke:var(--line); }
+  .dg-accent { fill:var(--accent-soft); stroke:var(--accent); }
+  .dg-t { fill:var(--fg); font:600 12px -apple-system,"Segoe UI",Roboto,sans-serif; }
+  .dg-s { fill:var(--muted); font:400 10.5px -apple-system,"Segoe UI",Roboto,sans-serif; }
+  .dg-l { stroke:var(--muted); fill:none; stroke-width:1.4; }
+
+  /* ---- steps / code ---- */
+  ol.steps { counter-reset:s; list-style:none; padding:0; margin:0; }
+  ol.steps > li { counter-increment:s; position:relative; padding:0 0 1.4rem 2.6rem; }
+  ol.steps > li::before {
+    content:counter(s); position:absolute; left:0; top:-.1rem;
+    width:1.75rem; height:1.75rem; border-radius:50%;
+    background:var(--accent-soft); color:var(--accent);
+    font-size:.85rem; font-weight:700; display:grid; place-items:center;
+  }
+  ol.steps > li:not(:last-child)::after {
+    content:""; position:absolute; left:.86rem; top:1.9rem; bottom:.2rem; width:1px; background:var(--line);
+  }
+  .cmd { display:flex; gap:.5rem; align-items:flex-start; background:var(--code-bg);
+         border:1px solid var(--line); border-radius:8px; padding:.6rem .7rem; margin:.6rem 0; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .cmd code { flex:1; word-break:break-all; font-size:.87rem; }
+  .cmd button { flex:none; font:inherit; font-size:.76rem; cursor:pointer; background:transparent;
+                color:var(--faint); border:1px solid var(--line); border-radius:6px; padding:.15rem .5rem; }
+  .cmd button:hover { color:var(--fg); border-color:var(--muted); }
+  code:not(.cmd code) { background:var(--code-bg); border-radius:4px; padding:.1em .35em; font-size:.88em; }
+
+  /* The steps' paragraph rhythm comes from position, not from an inline override on each one:
+     first paragraph in a step, one following a command block, and the last before the step ends. */
+  ol.steps li p { margin:.25rem 0 .4rem; }
+  ol.steps li p:last-child { margin-bottom:0; }
+  ol.steps .cmd + p { margin-top:.4rem; }
+
+  .note { border-left:3px solid var(--accent); background:var(--accent-soft);
+          border-radius:0 8px 8px 0; padding:.85rem 1rem; margin:1.25rem 0 0; font-size:.93rem; }
+  .note strong { color:var(--fg); }
+
+  footer { padding:2.5rem 0 3.5rem; color:var(--faint); font-size:.88rem; }
+  footer a { color:var(--muted); }
+  footer .row { display:flex; flex-wrap:wrap; gap:1.25rem; margin-bottom:1rem; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <div class="brand">Nest<span>watch</span></div>
+  <a href="#what" class="hide-s">What it does</a>
+  <a href="#how" class="hide-s">How it works</a>
+  <a href="#security" class="hide-s">Security</a>
+  <a href="#limits">Limits</a>
+  <a href="#install">Install</a>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <h1>Screen-time limits for a child's PC,<br>on your own network.</h1>
+  <p class="lede">One self-contained app. A parent signs into a web page from any device on the
+    same home Wi-Fi and manages the machine — budget, bedtime, apps. Nothing leaves the house.</p>
+  <div class="pills">
+    <span class="pill">No cloud</span>
+    <span class="pill">No accounts</span>
+    <span class="pill">No telemetry</span>
+    <span class="pill">No keylogging</span>
+    <span class="pill">Single binary</span>
+    <span class="pill">MIT licensed</span>
+  </div>
+  <div class="cta">
+    <a class="btn btn-primary" href="#install">Install &amp; verify</a>
+    <a class="btn btn-ghost" href="https://github.com/emrecdr/nestwatch">View source</a>
+    <span class="ver" id="ver">Checking latest release…</span>
+  </div>
+</div></header>
+
+<section id="what"><div class="wrap">
+  <h2>What it does</h2>
+  <p class="sec-lede">Everything below is in the dashboard. The two controls that actually hold are
+    the daily budget and the curfew — the rest shapes habits.</p>
+  <div class="grid">
+    <div class="card"><span class="k">Daily budget</span>
+      <h3>Time, counted honestly</h3>
+      <p>A minutes-per-day limit, optionally different for each weekday. Counts only active use —
+        not idle, locked or logged-out time — survives reboots, and resets at midnight. When it's
+        spent: lock, shut down, or just warn.</p></div>
+    <div class="card"><span class="k">Curfew</span>
+      <h3>Bedtime that arrives quietly</h3>
+      <p>One or more time windows per weekday. The child sees a countdown at 15, 5 and 1 minutes,
+        then the machine shuts down — and re-issues if the shutdown is cancelled.</p></div>
+    <div class="card"><span class="k">Warnings</span>
+      <h3>The limit is never a surprise</h3>
+      <p>Countdowns at 15, 5 and 1 minutes for both the budget and bedtime. A budget shorter than a
+        threshold never announces it, a mid-day restart doesn't replay warnings, and granting extra
+        time re-arms them.</p></div>
+    <div class="card"><span class="k">Screen-time report</span>
+      <h3>The week, not just today</h3>
+      <p>Thirty days as a chart, with per-app minutes and a comparison against the period before.
+        Days the service wasn't running show as <em>not measured</em> rather than zero, so a stopped
+        enforcer can't be mistaken for a quiet week.</p></div>
+    <div class="card"><span class="k">Asking for more</span>
+      <h3>A way to say yes</h3>
+      <p>The child's own page shows how much time is left and can request more; the parent approves
+        or denies. Single-use offline codes cover the times you're away or the network is down.</p></div>
+    <div class="card"><span class="k">Remote control</span>
+      <h3>See and act</h3>
+      <p>Screenshot the desktop with an optional live refresh, list running apps and close one,
+        lock the screen, or power the machine off with a warned countdown.</p></div>
+    <div class="card"><span class="k">App rules</span>
+      <h3>Blocklists and pools</h3>
+      <p>Named apps closed on sight, per-app daily limits, and groups that share one pool — all the
+        games together get ninety minutes between them. Habit-shaping, not a wall (see below).</p></div>
+    <div class="card"><span class="k">Modes</span>
+      <h3>One toggle for a free evening</h3>
+      <p>Pause the whole rules enforcer with a switch — curfew still applies. Save the current
+        setup as a named routine and reapply it with a click.</p></div>
+    <div class="card"><span class="k">Trust the setup</span>
+      <h3>A doctor that answers</h3>
+      <p>One command reports whether the service is up, the port is listening, the firewall rule is
+        right, the network is private, how long the certificate has left, and whether anything is
+        actually being enforced. Every problem prints its fix.</p></div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <p class="sec-lede">One binary. On Windows it installs as a background service that serves the
+    dashboard over HTTPS and runs two independent enforcers. Because that service has no desktop of
+    its own, anything needing the screen is delegated to a short-lived helper.</p>
+  <figure>
+    <svg viewBox="0 0 720 260" role="img" aria-label="A browser on the LAN connects over HTTPS to the background service, which runs a curfew enforcer and a rules enforcer, and delegates screenshots and screen-lock to a helper in the user's session.">
+      <rect class="dg-box" x="8" y="96" width="132" height="58" rx="9"/>
+      <text class="dg-t" x="74" y="120" text-anchor="middle">Parent's browser</text>
+      <text class="dg-s" x="74" y="137" text-anchor="middle">phone or laptop, same Wi-Fi</text>
+
+      <path class="dg-l" d="M140 125 H196" marker-end="url(#a)"/>
+      <text class="dg-s" x="168" y="117" text-anchor="middle">HTTPS</text>
+
+      <rect class="dg-accent" x="196" y="52" width="196" height="150" rx="10"/>
+      <text class="dg-t" x="294" y="76" text-anchor="middle">Background service</text>
+      <text class="dg-s" x="294" y="93" text-anchor="middle">web UI · JSON API · auth</text>
+      <rect class="dg-box" x="212" y="106" width="164" height="34" rx="7"/>
+      <text class="dg-s" x="294" y="127" text-anchor="middle">curfew enforcer</text>
+      <rect class="dg-box" x="212" y="150" width="164" height="38" rx="7"/>
+      <text class="dg-s" x="294" y="166" text-anchor="middle">rules enforcer — budget,</text>
+      <text class="dg-s" x="294" y="180" text-anchor="middle">blocklist, per-app limits</text>
+
+      <path class="dg-l" d="M392 125 H452" marker-end="url(#a)"/>
+      <text class="dg-s" x="422" y="117" text-anchor="middle">delegates</text>
+
+      <rect class="dg-box" x="452" y="96" width="146" height="58" rx="9"/>
+      <text class="dg-t" x="525" y="120" text-anchor="middle">Session helper</text>
+      <text class="dg-s" x="525" y="137" text-anchor="middle">screenshot · lock</text>
+
+      <path class="dg-l" d="M598 125 H654" marker-end="url(#a)"/>
+      <rect class="dg-box" x="654" y="96" width="58" height="58" rx="9"/>
+      <text class="dg-s" x="683" y="129" text-anchor="middle">child's</text>
+      <text class="dg-s" x="683" y="142" text-anchor="middle">desktop</text>
+
+      <text class="dg-s" x="294" y="228" text-anchor="middle">All OS access sits behind one trait, so the whole app also builds and is tested on macOS and Linux.</text>
+      <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M0 0 L10 5 L0 10 z" fill="var(--muted)"/></marker></defs>
+    </svg>
+    <figcaption>Two enforcers run independently, so a fault in one doesn't silently disable the other.</figcaption>
+  </figure>
+</div></section>
+
+<section id="security"><div class="wrap">
+  <h2>How it's kept closed</h2>
+  <p class="sec-lede">The thing being protected is a session that can watch a screen and power off a
+    machine. It sits behind several independent layers, so one failing doesn't open the door.</p>
+  <div class="grid">
+    <div class="card"><span class="k">Reach</span><h3>Two separate network gates</h3>
+      <p>A firewall rule scoped to the local subnet, and an application-level check that refuses
+        anything off-LAN. Either alone would do; both have to fail together.</p></div>
+    <div class="card"><span class="k">Transport</span><h3>HTTPS you can verify</h3>
+      <p>A self-signed certificate whose SHA-256 fingerprint is printed at install and reprintable
+        on demand, so you can confirm you're talking to the right machine rather than something
+        else on the network.</p></div>
+    <div class="card"><span class="k">Login</span><h3>One password, slow to guess</h3>
+      <p>Argon2id hashing, per-IP throttling that a stranger can't use to lock the parent out, and
+        sessions that survive a reboot so you're not retyping a passphrase on a phone.</p></div>
+    <div class="card"><span class="k">Cross-origin</span><h3>Requests checked for origin</h3>
+      <p>A login cookie alone can't tell this dashboard apart from a page served on a different port
+        of the same PC. Every request is checked against the browser's own report of where it came
+        from — while links, bookmarks and the pairing QR keep working.</p></div>
+    <div class="card"><span class="k">On disk</span><h3>Out of the child's reach</h3>
+      <p>The password hash, the TLS key and every log live in a directory restricted to the system
+        and administrators. A standard user can't read them, alter them or delete them.</p></div>
+    <div class="card"><span class="k">Record</span><h3>Actions are logged</h3>
+      <p>Logins with their source address, and every sensitive action, in append-only logs the
+        dashboard can show you. Daily screen-time totals are kept in a separate file so ordinary
+        event volume can't push the history out.</p></div>
+  </div>
+  <div class="note">
+    <strong>The whole model rests on one assumption:</strong> the child's Windows account is a
+    standard user, not an administrator. An administrator can undo any of this. It's the first
+    thing to check, and it's worth more than every other measure combined.
+  </div>
+</div></section>
+
+<section id="limits"><div class="wrap narrow">
+  <h2>What it deliberately doesn't do</h2>
+  <p class="sec-lede">A tool like this is worth less if it overstates itself. These are real limits,
+    not oversights.</p>
+  <ul class="clean">
+    <li><strong>App rules are speed bumps, not walls.</strong> Apps are matched by filename, so a
+      child who copies an executable under another name in a folder they can write to is no longer
+      blocked. Nothing short of kernel-level enforcement closes that. Use app rules to steer
+      everyday habits and rely on the budget and curfew — which aren't name-based — for limits that
+      have to hold.</li>
+    <li><strong>Time is counted while an app runs, not while it's watched.</strong> Something left
+      open in the background still consumes its limit. That makes per-app limits impractical for
+      anything that starts itself, and it means the figures aren't comparable to the numbers a
+      phone reports.</li>
+    <li><strong>Totals are per-machine, not per-account.</strong> Whoever is signed in at the
+      keyboard adds to the same total — including you.</li>
+    <li><strong>No keylogging, no browsing history, no microphone, no location.</strong> Not
+      oversights: the point is a time limit a household can agree on, not surveillance.</li>
+    <li><strong>An administrator on the PC can defeat all of it.</strong> Out of scope by design.</li>
+    <li><strong>It watches its own pulse, but doesn't yet repair itself.</strong> If an enforcer
+      stops, the dashboard says so rather than quietly reporting a quiet day — but restarting it is
+      still a person's job.</li>
+  </ul>
+</div></section>
+
+<section id="install"><div class="wrap narrow">
+  <h2>Install &amp; verify</h2>
+  <p class="sec-lede">Written to be followed on your phone while you stand at the PC.</p>
+  <ol class="steps">
+    <li>
+      <h3>Get the build</h3>
+      <p class="sec-lede">Download <code>nestwatch.exe</code> <strong>and</strong>
+        <code>nestwatch.exe.sha256</code> — you need both.</p>
+      <a class="btn btn-ghost" href="https://github.com/emrecdr/nestwatch/releases/latest">Latest release</a>
+    </li>
+    <li>
+      <h3>Verify it before you run it</h3>
+      <p class="sec-lede">In PowerShell, in the folder you downloaded to:</p>
+      <div class="cmd"><code>Get-FileHash nestwatch.exe -Algorithm SHA256 | Format-List</code>
+        <button type="button" data-copy>Copy</button></div>
+      <p class="sec-lede">Open the <code>.sha256</code> file and check it matches,
+        character for character. If it doesn't, delete the download and fetch it again. This binary
+        will run with administrator rights on your child's machine — it's worth thirty seconds.</p>
+    </li>
+    <li>
+      <h3>Unblock and install</h3>
+      <p class="sec-lede">Right-click the file → Properties → tick
+        <strong>Unblock</strong>. Then, from an <strong>elevated</strong> PowerShell:</p>
+      <div class="cmd"><code>.\nestwatch.exe install</code><button type="button" data-copy>Copy</button></div>
+      <p class="sec-lede"><strong>Write down the certificate fingerprint it
+        prints.</strong> You need it once per device you pair.</p>
+    </li>
+    <li>
+      <h3>Pair a device</h3>
+      <p class="sec-lede">Scan the QR code it shows. It opens the dashboard
+        already signed in, and the link works exactly once.</p>
+    </li>
+    <li>
+      <h3>Confirm it actually works</h3>
+      <p class="sec-lede">Installing cleanly isn't the same as working:</p>
+      <ul class="clean">
+        <li>The dashboard loads from your phone, and the certificate warning shows the fingerprint you wrote down.</li>
+        <li>A screenshot returns the live desktop rather than a black image.</li>
+        <li><strong>The managed account is a standard user, not an administrator.</strong></li>
+      </ul>
+    </li>
+  </ol>
+  <div class="note">
+    The full step-by-step list — what each check proves, and what to do when one fails — lives in
+    <a href="https://github.com/emrecdr/nestwatch/blob/main/docs/WINDOWS-TESTING.md">the on-device
+    checklist</a>. Work through it once on the real machine; several things can only be verified there.
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <div class="row">
+    <a href="https://github.com/emrecdr/nestwatch">Source</a>
+    <a href="https://github.com/emrecdr/nestwatch/releases">Releases</a>
+    <a href="https://github.com/emrecdr/nestwatch/blob/main/CHANGELOG.md">Changelog</a>
+    <a href="https://github.com/emrecdr/nestwatch/blob/main/docs/SECURITY.md">Security model</a>
+    <a href="https://github.com/emrecdr/nestwatch/blob/main/docs/WINDOWS-TESTING.md">On-device checklist</a>
+    <a href="https://github.com/emrecdr/nestwatch/blob/main/docs/OPEN-FINDINGS.md">Open findings</a>
+  </div>
+  <p>Built for one household, in the open. Nestwatch is the parent-facing name; what the installer
+     puts on the managed PC is named plainly instead.</p>
+</div></footer>
+
+<script>
+  for (const b of document.querySelectorAll("[data-copy]")) {
+    b.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(b.previousElementSibling.textContent.trim());
+        const was = b.textContent; b.textContent = "Copied";
+        setTimeout(() => { b.textContent = was; }, 1200);
+      } catch { b.textContent = "Select it"; }
+    });
+  }
+  // Fails soft on purpose: the release links above already work, so a blocked or
+  // rate-limited API call must not make the page look broken.
+  fetch("https://api.github.com/repos/emrecdr/nestwatch/releases/latest")
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(r => { document.getElementById("ver").textContent = `Latest release: ${r.tag_name}`; })
+    .catch(() => { document.getElementById("ver").textContent = ""; });
+</script>
+</body>
+</html>

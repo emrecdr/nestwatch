@@ -1,0 +1,61 @@
+[package]
+name = "nestwatch"
+version = "0.1.0"
+edition = "2024"
+# Private tool — guard against accidental `cargo publish` to crates.io.
+publish = false
+
+[dependencies]
+anyhow = "1.0.103"
+argon2 = "0.5"
+# tower-sessions declares `SessionStore` with `#[async_trait]`, so our file-backed store has to
+# be annotated the same way. Already in the graph via tower-sessions — no new crate.
+async-trait = "0.1"
+axum = "0.8.9"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+# PNG encoding only (screenshots). Default features drag in the whole decode stack — AV1
+# (rav1e/ravif), EXR, TIFF, WebP, JPEG — ~54 crates this app never calls, since nothing here
+# ever *decodes* an image. xcap already declares image correctly; feature unification means
+# this declaration is what pulls the rest in.
+image = { version = "0.25", default-features = false, features = ["png"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+pem = "3"
+# Renders the pairing URL as a QR in the install console. `default-features = false` drops its
+# image/SVG renderers (which would pull `image`'s decode stack back in) and leaves it with ZERO
+# transitive dependencies — we only use the built-in unicode half-block renderer.
+qrcode = { version = "0.14", default-features = false }
+rpassword = "7.5.4"
+# Not imported directly (we reach it via `argon2::password_hash::rand_core`) — this entry exists
+# to turn ON its `getrandom` feature, which is what makes `OsRng` available at all. Removing it
+# breaks password hashing and time-code generation. `cargo machete` flags it as unused; it isn't.
+rand_core = { version = "0.6", features = ["getrandom"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sysinfo = "0.39"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "signal", "io-util", "time", "sync"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-sessions = "0.15"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tracing-appender = "0.2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+sha2 = "0.10"
+time = { version = "0.3.53", default-features = false, features = ["std"] }
+
+# Keep the shipped .exe small and self-contained.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[target."cfg(windows)".dependencies]
+# Screen capture is only used on Windows (control/windows.rs); keeping it Windows-only
+# avoids pulling X11/Wayland system deps into Linux/macOS builds and CI.
+xcap = "0.9"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_Security", "Win32_System_Threading", "Win32_System_Environment", "Win32_System_StationsAndDesktops", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging"] }
+windows-service = "0.8.1"

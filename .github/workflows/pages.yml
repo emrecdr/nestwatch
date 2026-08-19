@@ -1,0 +1,54 @@
+name: pages
+
+# Publishes site/ to GitHub Pages. Deliberately NOT tied to tags: the page tells you how to
+# install and verify a build, and reads the current version from the releases API at load time,
+# so it does not need republishing when a release goes out.
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+# Least privilege, matching ci.yml. `pages: write` and `id-token: write` are the two the deploy
+# action requires; nothing here needs to write repository contents.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time. `cancel-in-progress: false` (unlike ci.yml) because cancelling a
+# half-finished deployment can leave the live site on a partial upload.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Guard: the whole point of this page is that it carries none of the strings visible on the
+      # managed PC — a search-indexed page naming them would undo the on-device discretion the
+      # installer goes to some trouble to maintain. Fail the deploy rather than publish one.
+      - name: Refuse to publish on-device identifiers
+        run: |
+          # `host[- ]health` covers all four load-bearing forms in one alternative: the folder
+          # and service (`HostHealth`), the display name (`Host Health Service`), the description
+          # ("Monitors host health and availability."), and — the one an earlier version of this
+          # pattern missed — the installed binary `host-health.exe` (INSTALL_EXE_NAME).
+          if grep -rniE 'hosthealth|host[- ]health' site/; then
+            echo "::error::site/ contains an identifier visible on the managed PC — remove it before publishing."
+            exit 1
+          fi
+          echo "site/ is clean."
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,31 @@
+# Supply-chain policy for `cargo deny`, run as a BLOCKING CI gate.
+#
+# Scoped to the shipped target on purpose. `cargo audit` scans Cargo.lock, which lists crates that
+# never compile on Windows — xcap pulls a Linux/Wayland backend whose dependencies carry
+# advisories. That produced a permanently-red advisory job, so it was made non-blocking with a
+# growing list of `--ignore` flags, which is the same as not having a gate: a real advisory would
+# have landed in a job nobody looks at.
+#
+# Resolving the graph for the Windows target instead makes those crates legitimately absent, so
+# this can fail the build with NO ignores. If something is ignored here in future it should be
+# because it was assessed, not because the job was noisy.
+[graph]
+targets = ["x86_64-pc-windows-msvc"]
+
+[advisories]
+version = 2
+
+[bans]
+# Duplicate versions are informational — a few are unavoidable transitively.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause",
+  "ISC", "Unicode-3.0", "Zlib", "MPL-2.0", "CC0-1.0", "BSL-1.0", "Unlicense", "OpenSSL",
+]
