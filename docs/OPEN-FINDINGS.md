@@ -139,14 +139,18 @@ by the Windows cross-check — only on the target machine. Shipping a self-abort
 service whose runtime behaviour hasn't been observed since an early build risks converting a hypothetical
 hang into a real restart loop. **Trigger:** do this on-device, with `WINDOWS-TESTING.md` in hand.
 
-### O5 · Boot-time and recovery-mode gaps — tracked privately
+### O5 · An unanswered question about enforcement coverage — tracked privately
 
-There is an open question about whether enforcement survives every way the machine can be
-started, and it is the highest-value unanswered item about this system.
+There is an open question about whether enforcement holds under conditions this repository
+deliberately does not enumerate. It is the highest-value unanswered item about this system.
 
 The detail is deliberately **not** in this repository. It describes how enforcement can be
-avoided rather than how it works, and the repository is public: published, it is a how-to
-reachable from a name visible on the managed PC. It lives in
+avoided rather than how it works, and — unlike every other finding here — it cannot be
+re-derived by reading `src/`, because it is a property of the operating system's behaviour
+rather than of this code. That asymmetry is the whole reason for the split: redacting what
+the source already shows would buy nothing, so nothing else here is redacted. The repository
+is public, and published, this one would be a how-to reachable from a name visible on the
+managed PC. It lives in
 `docs/private/OPERATIONAL-FINDINGS.md`, which is git-ignored, alongside the fix and the
 condition for applying it.
 
