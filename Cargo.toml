@@ -2,6 +2,7 @@
 name = "nestwatch"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 # Private tool — guard against accidental `cargo publish` to crates.io.
 publish = false
 

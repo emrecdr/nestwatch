@@ -5,6 +5,8 @@ device on your own home network. No cloud, no accounts, no telemetry, no keylogg
 
 [![build](https://github.com/emrecdr/nestwatch/actions/workflows/ci.yml/badge.svg)](https://github.com/emrecdr/nestwatch/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/emrecdr/nestwatch?label=release)](https://github.com/emrecdr/nestwatch/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/emrecdr/nestwatch/total?label=downloads)](https://github.com/emrecdr/nestwatch/releases)
+[![license](https://img.shields.io/github/license/emrecdr/nestwatch)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](#requirements)
 
 **[Install guide →](https://emrecdr.github.io/nestwatch/)** · [Releases](https://github.com/emrecdr/nestwatch/releases/latest) · [Security model](docs/SECURITY.md) · [Known limits](docs/OPEN-FINDINGS.md)
