@@ -260,10 +260,10 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
       time. (After a parent grant, the *next* time he goes over he should get a fresh warning —
       the guard shouldn't make it feel punitive once more time has been given.)
 
-- [ ] **Start-up and recovery-mode coverage.** The steps for this check are kept outside the
-      public repository, in `docs/private/OPERATIONAL-FINDINGS.md`. Work through them from that
-      file — it is the highest-value check on this list, and the only one whose answer decides
-      whether everything else here holds after a reboot.
+- [ ] **The coverage check kept outside this repository.** Its steps are in
+      `docs/private/OPERATIONAL-FINDINGS.md`; work through them from that file. It is the
+      highest-value check on this list, and the only one whose answer decides whether
+      everything else here holds. See O5 in `OPEN-FINDINGS.md` for why it is held back.
 ## E4. Enforcement is visibly alive
 
 - [ ] **The dashboard proves enforcement is running.** With the service up, the **Today's screen
