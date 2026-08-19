@@ -285,6 +285,7 @@ nestwatch.exe doctor      # check the install; report anything wrong and how to 
 nestwatch.exe pair        # print a fresh QR to sign in another phone/laptop
 nestwatch.exe fingerprint # re-print the TLS cert SHA-256 (to verify a new device later)
 nestwatch.exe uninstall   # stop + delete the service (add --purge to remove data too)
+nestwatch.exe version     # print this build's version (also --version / -V)
 
 # install also accepts:
 #   --port <N>        listen on a different port
