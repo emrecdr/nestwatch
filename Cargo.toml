@@ -3,6 +3,9 @@ name = "nestwatch"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+# Matches the pin in rust-toolchain.toml, which CI and local builds both use — so this is the
+# version the project is actually built and tested with, not an aspirational floor.
+rust-version = "1.96.0"
 # Private tool — guard against accidental `cargo publish` to crates.io.
 publish = false
 
