@@ -4,7 +4,8 @@ Known design problems that are **not** bugs and **not** scheduled. Each one was 
 pass, judged real, and deliberately left alone — with the reasoning, so it doesn't have to be
 re-derived, and so nobody re-raises something already weighed.
 
-`CHANGELOG.md` records what shipped. This records what didn't, and why.
+`CHANGELOG.md` records what shipped. This records what didn't, and why: what is still **open**,
+what proved worth **fixing** after all, and what was **considered and declined**.
 
 **Provenance.** Several independent review passes over this codebase (2026-08, twelve reviewers in
 total), plus a security analysis and a verification round — across four angles: reuse, simplification, efficiency,
@@ -75,21 +76,6 @@ refactor.
 on-device against `docs/WINDOWS-TESTING.md`. If that verification finds nothing, do this first,
 before the feature.
 
-### ~~O3 · `today_summary` is documented pure but reads process globals~~ — **fixed**
-
-Its doc said "Pure (no I/O) so it's unit-tested" while calling `crate::heartbeat::worst_age_secs()`,
-which reads two process-global atomics **and** `SystemTime::now()`.
-
-The cost was visible in the tests: four of them passed only because *none* asserted on
-`enforcer_age_secs`. The impure field was precisely the untested one, because pinning it would have
-coupled the test to whatever else in the binary had called `beat()`.
-
-`today_summary` now takes `enforcer_age_secs: Option<i64>`, and `api::usage_today` reads the
-heartbeat at the edge alongside its other I/O. The function is pure for real, and
-`today_summary_passes_the_enforcer_heartbeat_through` asserts all three cases — fresh, stale, and
-`None` (never reported, which after one tick's uptime means the loops never started). Confirmed by
-mutation: hardcoding the field to `None` fails that test while the other four stay green.
-
 ### O4 · A wedged enforcer is reported but never recovered
 
 `heartbeat.rs` calls a silently dead enforcer "the worst failure this product can have", and then
@@ -155,26 +141,6 @@ managed PC. It lives in
 condition for applying it.
 
 
-### ~~O7 · The binary could not tell you which version it is~~ — **fixed**
-
-Nothing in `src/` referenced `CARGO_PKG_VERSION`, and the release profile sets `strip = true`, so
-the shipped `.exe` carried no version string at all — found by checking a published artifact, which
-contained its own version number nowhere. There was no `--version` flag, and `doctor` did not print
-one either.
-
-**Why it mattered.** This is a tool installed by hand, from a downloaded file, onto a machine
-visited rarely. The question you could not answer while standing at that PC was *which build is
-actually running*, which is the first thing worth knowing when something behaves unexpectedly, and
-the one that decides whether a given security fix reached the machine rather than just the
-repository.
-
-**Fix, as shipped.** `env!("CARGO_PKG_VERSION")` behind `crate::VERSION`, surfaced by a `version`
-command (`--version` / `-V`), in `doctor`'s report header, and in the usage text. `strip = true`
-does not affect `env!` — it is baked in at compile time as an ordinary string constant. Verified
-where it counts: a **stripped release build** reports its version from both surfaces, and a test
-pins the doctor header so it cannot silently drop out of the one report you read when something is
-wrong.
-
 ### O6 · Screen-time figures are machine-wide and count running, not focused, time
 
 The report added in the screen-time work counts any account at the console, and counts an app while
@@ -202,6 +168,50 @@ held. Do it alongside the next change that already opens `SystemControl`, not on
 **Foreground accuracy is not cheap.** Microsoft disabled Interactive Service Detection in Windows 10
 build 1803, so a session-0 service cannot reach user-session windows at all; it would need a helper
 resident in the child's session, well beyond the existing on-demand screenshot helper.
+
+---
+
+## Fixed
+
+Raised here, then resolved. Kept rather than deleted, so nobody re-derives a question already
+answered — and because *how* a finding was proved fixed is worth more than the fact that it was.
+Both below were confirmed by mutation: break the fix, watch the named test fail, restore.
+
+### ~~O3 · `today_summary` is documented pure but reads process globals~~ — **fixed**
+
+Its doc said "Pure (no I/O) so it's unit-tested" while calling `crate::heartbeat::worst_age_secs()`,
+which reads two process-global atomics **and** `SystemTime::now()`.
+
+The cost was visible in the tests: four of them passed only because *none* asserted on
+`enforcer_age_secs`. The impure field was precisely the untested one, because pinning it would have
+coupled the test to whatever else in the binary had called `beat()`.
+
+`today_summary` now takes `enforcer_age_secs: Option<i64>`, and `api::usage_today` reads the
+heartbeat at the edge alongside its other I/O. The function is pure for real, and
+`today_summary_passes_the_enforcer_heartbeat_through` asserts all three cases — fresh, stale, and
+`None` (never reported, which after one tick's uptime means the loops never started). Confirmed by
+mutation: hardcoding the field to `None` fails that test while the other four stay green.
+
+### ~~O7 · The binary could not tell you which version it is~~ — **fixed**
+
+Nothing in `src/` referenced `CARGO_PKG_VERSION`, and the release profile sets `strip = true`, so
+the shipped `.exe` carried no version string at all — found by checking a published artifact, which
+contained its own version number nowhere. There was no `--version` flag, and `doctor` did not print
+one either.
+
+**Why it mattered.** This is a tool installed by hand, from a downloaded file, onto a machine
+visited rarely. The question you could not answer while standing at that PC was *which build is
+actually running*, which is the first thing worth knowing when something behaves unexpectedly, and
+the one that decides whether a given security fix reached the machine rather than just the
+repository.
+
+**Fix, as shipped.** `env!("CARGO_PKG_VERSION")` behind `crate::VERSION`, surfaced by a `version`
+command (`--version` / `-V`), in `doctor`'s report header, and in the usage text. `strip = true`
+does not affect `env!` — it is baked in at compile time as an ordinary string constant. Verified
+where it counts: a **stripped release build** reports its version from both surfaces, and a test
+pins the doctor header so it cannot silently drop out of the one report you read when something is
+wrong. Confirmed by mutation: dropping `v{}` from the header format string fails
+`the_report_header_names_the_build` and nothing else.
 
 ---
 
