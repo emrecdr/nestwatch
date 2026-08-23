@@ -186,6 +186,24 @@ mod tests {
         assert!(is_expiring(VALIDITY_DAYS + 100)); // already expired
     }
 
+    /// The fingerprint is the one value a parent copies onto paper and compares by eye on a new
+    /// device. `read_fingerprint_matches_generate` compares two live computations against each
+    /// other, so if the digest implementation ever changed output BOTH sides would move together
+    /// and it would still pass — it pins agreement, not the value.
+    ///
+    /// This pins the value, against the NIST FIPS 180-4 known answer for SHA-256("abc"). It is
+    /// what makes a `sha2` major upgrade a real gate rather than a compile check, and it also
+    /// pins the `AB:CD:` rendering, since a parent comparing by eye is comparing the format too.
+    #[test]
+    fn fingerprint_matches_the_nist_known_answer() {
+        // FIPS 180-4, B.1: SHA-256("abc")
+        // = ba7816bf 8f01cfea 414140de 5dae2223 b00361a3 96177a9c b410ff61 f20015ad
+        let expected = "BA:78:16:BF:8F:01:CF:EA:41:41:40:DE:5D:AE:22:23:\
+                        B0:03:61:A3:96:17:7A:9C:B4:10:FF:61:F2:00:15:AD"
+            .replace(' ', "");
+        assert_eq!(fingerprint(b"abc"), expected);
+    }
+
     #[test]
     fn read_fingerprint_matches_generate() {
         let dir = std::env::temp_dir().join(format!("nw-cert-{}", std::process::id()));
