@@ -1,0 +1,42 @@
+# Two actions in these workflows are pinned to commit SHAs on purpose — one executes downloaded
+# binaries, one holds a token that can publish releases, and one holds a signing identity. SHA
+# pinning removes the moved-tag risk but replaces it with a quieter one: a pinned SHA never
+# updates, including past an advisory. Dependabot is the half that makes pinning safe rather
+# than merely frozen — it opens a PR moving the SHA, and CI decides whether it lands.
+#
+# `cargo deny check advisories` already fails the build on a vulnerable crate. That reports;
+# this proposes the fix.
+version: 2
+updates:
+  # GitHub Actions — rewrites pinned SHAs and keeps the `# vX` comment in step.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+
+  # Rust. Grouped: this is a single-maintainer tool, and one PR per patch bump across ~40 crates
+  # is noise that trains you to merge without reading. Majors stay separate — those are the ones
+  # worth reading, and axum/rustls/tokio majors have real migration cost here.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"
+
+  # Frontend build tooling (Tailwind/DaisyUI). Build-time only — none of this ships in the .exe,
+  # which is why it is grouped wholesale rather than reviewed bump by bump.
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: monthly
+    groups:
+      web-build:
+        patterns: ["*"]
+    commit-message:
+      prefix: "web"
