@@ -2,6 +2,31 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Fixed
+- **Two settings saved at the same moment could corrupt `config.json`.** Every writer shared one
+  temp file, so two overlapping saves interleaved into it and the result was published over the
+  real config. A corrupt config stops the service from starting, which locks the parent out until
+  a reinstall — the worst thing this file can do. Each save now writes to its own temp file, and
+  the mutate-and-persist pair is serialized, so a save can no longer land an older snapshot on
+  top of a newer one and silently revert a setting at the next restart. Reachable from ordinary
+  use: approving a time request while a rules change is still saving.
+- The certificate and its key are written the same way as everything else in the data folder, so
+  an interrupted write cannot leave a half-cert whose fingerprint no longer matches the one
+  printed at install.
+
+### Security
+- The dependency license and duplicate-version policies are now enforced on every push. They were
+  written but never run, so nothing checked that the dependency tree stayed compatible with the
+  MIT license the project ships under.
+- Released binaries carry a **signed build-provenance attestation**. The published checksum only
+  proves a download wasn't corrupted; the attestation proves the binary came from this
+  repository's release workflow, and is checkable with
+  `gh attestation verify nestwatch.exe --repo emrecdr/nestwatch`.
+- Dependency and workflow updates are proposed automatically, so a pinned action can no longer sit
+  quietly on a version with a known advisory.
+
 ## [0.1.0] — 2026-08-19
 
 First release of the current codebase. The project was developed privately before this point;
