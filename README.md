@@ -35,6 +35,7 @@ On the child's PC, from an **elevated** PowerShell:
 ```powershell
 # 1. Download nestwatch.exe + nestwatch.exe.sha256 from the latest release, then verify:
 Get-FileHash nestwatch.exe -Algorithm SHA256 | Format-List   # must match the .sha256 file
+gh attestation verify nestwatch.exe --repo emrecdr/nestwatch # stronger: proves who built it
 
 # 2. Right-click the .exe -> Properties -> tick "Unblock", then:
 .\nestwatch.exe install     # sets the password, makes a TLS cert, prints a QR code

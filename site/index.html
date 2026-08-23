@@ -336,6 +336,12 @@
       <p class="sec-lede">Open the <code>.sha256</code> file and check it matches,
         character for character. If it doesn't, delete the download and fetch it again. This binary
         will run with administrator rights on your child's machine — it's worth thirty seconds.</p>
+      <p class="sec-lede"><strong>Stronger, if you have the
+        <a href="https://cli.github.com/">GitHub CLI</a>:</strong> the hash only proves the
+        download didn't corrupt — it ships from the same place as the file. This instead checks a
+        signature proving the binary was built by this repository's release workflow:</p>
+      <div class="cmd"><code>gh attestation verify nestwatch.exe --repo emrecdr/nestwatch</code>
+        <button type="button" data-copy>Copy</button></div>
     </li>
     <li>
       <h3>Unblock and install</h3>
