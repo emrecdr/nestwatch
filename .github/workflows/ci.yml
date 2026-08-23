@@ -70,6 +70,11 @@ jobs:
   # which meant a real advisory would have landed somewhere nobody looks. `cargo deny` resolves
   # the graph for the shipped target instead, so those crates are legitimately absent and the
   # check can fail the build honestly. Policy lives in deny.toml.
+  #
+  # All four policies run. `licenses` and `bans` were defined in deny.toml but left off this
+  # command line, so the allow-list — which excludes GPL/AGPL/LGPL — was never enforced: a
+  # copyleft dependency could have landed against a repo that advertises MIT. Both pass today,
+  # so turning them on costs nothing and catches the dependency that doesn't.
   supply-chain:
     runs-on: ubuntu-latest
     steps:
@@ -79,8 +84,11 @@ jobs:
       # arbitrary code execution in CI.
       - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2
         with:
-          tool: cargo-deny
-      - run: cargo deny check advisories sources
+          # Version-pinned too: the action is commit-pinned, but an unpinned `tool:` resolves to
+          # @latest, so a cargo-deny release could change what this gate accepts with no commit
+          # here. Bump deliberately.
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check advisories sources licenses bans
 
   # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push).
   windows-release:
