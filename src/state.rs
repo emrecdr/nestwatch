@@ -29,6 +29,18 @@ pub struct AppState {
     /// Serializes login attempts so limiter check + verify + record is atomic, and only one
     /// (memory-hard) Argon2 verification runs at a time.
     pub login_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes `api::update_config` so mutate-then-persist is one critical section.
+    ///
+    /// The `config` lock above cannot do this job: it is a std `RwLock`, so it must be released
+    /// before the `.await` that persists, which leaves a window where a second handler mutates
+    /// and saves in between. Both writes then land, but in whichever order the blocking pool
+    /// finishes them — so the *earlier* snapshot can be written last, silently reverting the
+    /// later change on disk while memory still shows it. The parent sees their setting applied,
+    /// and it is gone after the next restart.
+    ///
+    /// This is the same shape as `login_lock`, for the same reason: a read-modify-write that
+    /// spans an await is only atomic if something holds across the await.
+    pub config_save_lock: Arc<tokio::sync::Mutex<()>>,
     /// Append-only security audit log (login attempts + sensitive actions).
     pub audit: Arc<AuditLog>,
     /// Append-only usage-history log (daily screen-time, sessions, enforcement events).
@@ -72,6 +84,7 @@ impl AppState {
             config: Arc::new(RwLock::new(config)),
             limiter: Arc::new(LoginLimiter::default()),
             login_lock: Arc::new(tokio::sync::Mutex::new(())),
+            config_save_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
             usage,
             screentime,

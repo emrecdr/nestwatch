@@ -60,7 +60,9 @@ jobs:
       - name: Clippy (warnings as errors)
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: cargo test --all-targets
+        # --locked so a test run can never silently resolve different versions than the
+        # release build, which already uses it.
+        run: cargo test --all-targets --locked
 
   # Supply-chain gate. BLOCKING, with no ignore list.
   #

@@ -55,8 +55,12 @@ pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
         .self_signed(&key_pair)
         .context("self-signing certificate")?;
 
-    std::fs::write(cert_path, cert.pem())?;
-    std::fs::write(key_path, key_pair.serialize_pem())?;
+    // Atomic like every other write into the data dir. A cert without its key (or a torn one)
+    // stops the service from serving HTTPS at all, and these two files are the pair the printed
+    // fingerprint refers to — a half-written cert would make a parent's written-down fingerprint
+    // silently stop matching.
+    crate::config::write_atomic(cert_path, cert.pem().as_bytes())?;
+    crate::config::write_atomic(key_path, key_pair.serialize_pem().as_bytes())?;
     tracing::info!(
         "generated self-signed certificate at {}",
         cert_path.display()

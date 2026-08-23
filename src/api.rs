@@ -49,13 +49,43 @@ where
 /// `await_holding_lock` and make the future `!Send`). We apply `mutate`, clone the whole
 /// `Config` out under the guard, release the lock, then save the owned snapshot on a blocking
 /// thread. Callers should `validate()` before calling.
+///
+/// That release is also why `config_save_lock` is held for the whole function. Dropping the
+/// `RwLock` before the await is required, but it means two handlers can interleave as
+/// mutate-A, mutate-B, save-B, save-A — and the last write wins on disk, so A's older snapshot
+/// silently reverts B's change at the next restart while memory still shows both. Holding the
+/// async mutex across mutate *and* save makes the pair atomic, so disk order matches the order
+/// the parent actually made the changes in.
+///
+/// The two locks nest in one direction only: `config_save_lock` is taken first and the
+/// `RwLock` inside it. No path takes them the other way round, so they cannot deadlock.
 async fn update_config<F>(state: &AppState, mutate: F) -> Result<(), AppError>
 where
     F: FnOnce(&mut Config),
 {
+    try_update_config(state, |c| {
+        mutate(c);
+        Ok(())
+    })
+    .await
+}
+
+/// [`update_config`] for a mutation that can reject the request (a cap, a validation that needs
+/// to see the current config). This is the **only** place config is mutated and persisted, so a
+/// handler cannot accidentally write config without taking `config_save_lock` — `save_routine`
+/// previously hand-rolled this block because it needed a fallible mutation, which is exactly the
+/// kind of second write path that makes serialization look done while leaving a hole.
+///
+/// `mutate` must leave the config unchanged when it returns `Err`: on that path the guard is
+/// dropped without saving, so a partial change would live in memory and not on disk.
+async fn try_update_config<F>(state: &AppState, mutate: F) -> Result<(), AppError>
+where
+    F: FnOnce(&mut Config) -> Result<(), AppError>,
+{
+    let _persist = state.config_save_lock.lock().await;
     let snapshot = {
         let mut guard = crate::state::recover_write(&state.config);
-        mutate(&mut guard);
+        mutate(&mut guard)?;
         guard.clone()
     };
     spawn(move || snapshot.save())
@@ -321,27 +351,25 @@ pub async fn save_routine(
     let rules = body.rules;
 
     // Cap check + upsert under a single write guard (no TOCTOU between checking the count and
-    // pushing), then persist the snapshot off the runtime. Updating an existing routine is always
-    // allowed; only a brand-new one can hit the cap. The guard is dropped before the `.await`.
-    let snapshot = {
-        let mut guard = crate::state::recover_write(&state.config);
-        match guard.routines.iter_mut().find(|r| r.name == name) {
+    // pushing). Updating an existing routine is always allowed; only a brand-new one can hit the
+    // cap, and it is rejected before anything is pushed, so the `Err` path leaves config
+    // untouched as `try_update_config` requires.
+    try_update_config(&state, |cfg| {
+        match cfg.routines.iter_mut().find(|r| r.name == name) {
             Some(existing) => existing.rules = rules,
             None => {
-                if guard.routines.len() >= crate::config::MAX_ROUTINES {
+                if cfg.routines.len() >= crate::config::MAX_ROUTINES {
                     return Err(AppError::BadRequest("too many routines".into()));
                 }
-                guard.routines.push(crate::config::Routine {
+                cfg.routines.push(crate::config::Routine {
                     name: name.clone(),
                     rules,
                 });
             }
         }
-        guard.clone()
-    };
-    spawn(move || snapshot.save())
-        .await?
-        .map_err(AppError::Internal)?;
+        Ok(())
+    })
+    .await?;
     state.audit.record("routine_saved", json!({ "name": name }));
     Ok(Json(json!({ "ok": true })))
 }
