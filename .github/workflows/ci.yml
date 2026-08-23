@@ -115,7 +115,7 @@ jobs:
           npm run build
       - name: Build release binary
         run: cargo build --release --locked
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: nestwatch-windows-exe
           path: target/release/nestwatch.exe
