@@ -2,7 +2,15 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
-## [Unreleased]
+## [0.2.0] — 2026-08-24
+
+### Changed
+- **The password minimum is 8 characters, down from 10** — and there are still no rules about
+  mixing letters, digits and symbols. Current guidance (NIST SP 800-63B Rev 4) says requiring
+  those makes passwords worse, not better, so instead the obvious guesses are refused:
+  `12345678`, `password123`, one character repeated, a straight run, a short pattern repeated.
+  An all-digit password is fine if it isn't one of those. `docs/SECURITY.md` explains the
+  reasoning, including where this departs from the standard and why.
 
 ### Fixed
 - **Two settings saved at the same moment could corrupt `config.json`.** Every writer shared one
@@ -15,6 +23,23 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 - The certificate and its key are written the same way as everything else in the data folder, so
   an interrupted write cannot leave a half-cert whose fingerprint no longer matches the one
   printed at install.
+- **Install no longer gives up on a service that is merely slow to start.** It waited 6 seconds,
+  which is less than Windows Defender can spend scanning a newly written program the first time
+  it runs — so a service that was about to come up fine was rolled back. It now waits 30 seconds,
+  the same as Windows itself.
+- **A failed install now tells you what happened.** "The service did not reach a running state"
+  named no cause and suggested nothing. It now reports what the service was last seen doing,
+  which separates *never started* from *started and stopped* — different problems that had the
+  same message — names the likely causes in order, and points at the log and Event Viewer. It
+  also says plainly that nothing was left behind, so it is safe to fix and try again.
+- **A typo in the password confirmation no longer aborts the whole install.** It asks again.
+
+### Improved
+- **Every password rejection now says what was actually wrong.** Too short reports the number of
+  characters it counted, so "it says 8 but I typed 10" is answerable instead of an argument. A
+  mismatch says whether the two entries differ in length and by how much, without showing either.
+  A leading or trailing space is pointed out rather than silently accepted or silently removed.
+  The dashboard shows the same explanations as the installer instead of its own guess.
 
 ### Security
 - The dependency license and duplicate-version policies are now enforced on every push. They were
