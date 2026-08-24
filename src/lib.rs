@@ -46,6 +46,7 @@ pub mod install;
 pub mod jsonl;
 pub mod pairing;
 pub mod preflight;
+pub mod remotesetup;
 pub mod rules;
 pub mod screentime;
 pub mod security;
@@ -99,6 +100,7 @@ pub fn run_cli() -> Result<()> {
         "fingerprint" => print_fingerprint(),
         "pair" => print_pairing(),
         "doctor" | "status" => doctor::run(),
+        "remote-setup" => print_remote_setup(),
         "version" | "--version" | "-V" => {
             println!("nestwatch {VERSION}");
             Ok(())
@@ -163,6 +165,37 @@ fn print_fingerprint() -> Result<()> {
     let fp = cert::read_fingerprint(&cert)?;
     println!("TLS certificate SHA-256 fingerprint:\n{fp}");
     Ok(())
+}
+
+/// `remote-setup`: print the script that turns remote administration on (or `--off`).
+///
+/// Prints rather than runs. Enabling remote administration is a decision about the whole machine,
+/// not about screen time, so it stays the parent's — to read first, then run. It also keeps this
+/// tool from owning a general-purpose admin channel, and being responsible for one.
+fn print_remote_setup() -> Result<()> {
+    if std::env::args().any(|a| a == "--off") {
+        print!("{}", remotesetup::teardown_script());
+        return Ok(());
+    }
+    // The certificate has to carry the name that will be typed when connecting, and this is the
+    // only place that knows it for certain.
+    let host = hostname();
+    eprintln!(
+        "# Review this, then run it on THIS PC in an elevated PowerShell.\n\
+         # Save it first if you prefer:  nestwatch remote-setup > setup.ps1\n\
+         # Background and the risks it avoids: docs/REMOTE-UPDATE.md\n"
+    );
+    print!("{}", remotesetup::script(&host));
+    Ok(())
+}
+
+/// This machine's name, as it must appear in the certificate and in the connect command.
+fn hostname() -> String {
+    // COMPUTERNAME on Windows, HOSTNAME elsewhere; the fallback is a visible placeholder rather
+    // than a plausible-looking wrong name, which would fail confusingly at connect time.
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "THIS-PC-NAME".into())
 }
 
 /// `service-run`: entry point invoked by the Windows Service Control Manager.
@@ -241,6 +274,7 @@ fn print_usage() {
          USAGE:\n  \
            nestwatch install     set password + TLS cert, install the SYSTEM service\n  \
            nestwatch uninstall   stop + remove the service\n  \
+  nestwatch remote-setup   print the script to enable remote admin (--off to undo)\n  \
            nestwatch run         run the HTTPS server in the foreground (dev)\n  \
            nestwatch doctor      check the install and report anything wrong\n  \
            nestwatch pair        show a QR code to sign in another phone or laptop\n  \

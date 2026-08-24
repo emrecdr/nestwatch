@@ -71,6 +71,12 @@ domain — that combination is the wrong answer:
 - Over WinRM HTTP, someone on the same network can **passively capture the NetNTLMv2 exchange and
   crack it offline.** On this network, "someone on the same network" is the person you are trying
   to manage, sitting at a PC with plenty of time.
+- And the firewall exception it adds is wider than most people assume. Microsoft's own
+  documentation: *"On client versions of the Windows operating system, `Enable-PSRemoting` creates
+  firewall rules for private and domain networks that allow **unrestricted remote access**."* Not
+  restricted to your subnet — unrestricted. Running that one command and stopping there is the
+  worst outcome available, which is why the setup below is generated as a single script rather
+  than a list of steps to work through by hand.
 
 So: HTTPS, with a certificate your laptop actually trusts. Then the machine is authenticated, the
 handshake is encrypted, and no password material is exposed to anyone listening.
@@ -79,7 +85,34 @@ handshake is encrypted, and no password material is exposed to anyone listening.
 
 ## Setting it up
 
-Steps 1–4 run **on the child's PC** in an elevated PowerShell. Steps 5–6 run **on your laptop.**
+### The short way
+
+On the child's PC, in an elevated PowerShell:
+
+```powershell
+cd "C:\Program Files\HostHealth"
+.\host-health.exe remote-setup > setup.ps1
+notepad setup.ps1        # read it
+.\setup.ps1
+```
+
+That generates the whole sequence below with this machine's real name already filled in, checks
+it is elevated, aborts on the first error, refuses to finish if a plaintext listener survived,
+and prints the certificate thumbprint and export path at the end.
+
+Run it **as a script, not line by line.** The first command opens the plaintext listener that
+later lines close — stopping partway leaves the machine worse off than never starting, which is
+exactly why this is generated rather than listed as steps.
+
+To undo it later: `.\host-health.exe remote-setup --off > teardown.ps1`
+
+`nestwatch doctor` reports the state afterwards, and will tell you if plaintext remoting is ever
+live or if you left HTTPS remoting on after an update.
+
+### The long way, and what each step is for
+
+Read this if you would rather understand it than run it. Steps 1–4 run **on the child's PC** in an
+elevated PowerShell. Steps 5–6 run **on your laptop.**
 
 ### 1. Turn on remoting
 

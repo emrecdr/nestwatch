@@ -179,6 +179,34 @@ pub fn run() -> Result<()> {
                 "Connect it to the home Wi-Fi, then run this again.",
             )),
         }
+        // Remote administration, if it was ever turned on, and specifically whether it was left
+        // in the dangerous shape. Port 5985 is WinRM's plaintext listener: on a workgroup network
+        // that means NTLM over HTTP, whose exchange can be captured and cracked offline by anyone
+        // on the LAN -- which here is the person being managed. Probed rather than parsed,
+        // because `winrm enumerate` output and firewall rule names are both localised, and this
+        // file already answers "is something listening" this way.
+        let winrm_http = SocketAddr::from((Ipv4Addr::LOCALHOST, 5985));
+        if TcpStream::connect_timeout(&winrm_http, PROBE_TIMEOUT).is_ok() {
+            checks.push(fail(
+                "remote management is listening WITHOUT encryption (port 5985)",
+                "Anyone on this network can capture the sign-in exchange and crack it\n\
+                 offline -- including the person using this PC.\n\
+                 Turn it off:            nestwatch remote-setup --off\n\
+                 Or set it up properly:  nestwatch remote-setup",
+            ));
+        }
+        // HTTPS remoting is a deliberate choice, not a fault -- but it is an administrative way
+        // in, and leaving it on between updates is the common mistake. Report it so it cannot be
+        // forgotten about.
+        let winrm_https = SocketAddr::from((Ipv4Addr::LOCALHOST, 5986));
+        if TcpStream::connect_timeout(&winrm_https, PROBE_TIMEOUT).is_ok() {
+            checks.push(warn(
+                "remote management is enabled (HTTPS, port 5986)",
+                "Fine while you need it. Turn it off when you are done, so it is not a\n\
+                 permanent way in:  nestwatch remote-setup --off",
+            ));
+        }
+
         // Is anything actually listening? A TCP connect proves the service bound the port,
         // without needing an HTTP client or trusting the self-signed cert.
         let local = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
