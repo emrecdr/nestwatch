@@ -238,6 +238,9 @@ nestwatch.exe version     # print this build's version (also --version / -V)
   time*, so an install upgraded in place doesn't have one and falls back to plain local time.
   Re-running `install` records it. Do the same if the PC genuinely moves to another time zone.
 - Silent install: set `NESTWATCH_PASSWORD` to skip the interactive prompt.
+- **Updating without going to the PC:** [`docs/REMOTE-UPDATE.md`](docs/REMOTE-UPDATE.md) — how to
+  do it over the network safely, why the usual advice for home networks is unsafe here, and why
+  there is no auto-updater.
 - `nestwatch.exe run` (interactive, no service) and `nestwatch.exe helper --capture <path>`
   also exist — the latter is what the service invokes in the user session for screenshots.
 

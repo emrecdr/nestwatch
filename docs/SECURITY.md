@@ -311,6 +311,14 @@ presence signal about a child's computer, sent to a third party, for a convenien
 information is the same either way; the difference is which machine is observable, and that is
 the whole claim.
 
+There is no auto-updater either, for a separate reason: it would be a path that writes an
+executable and runs it as SYSTEM, which is a component class with a poor record — including an
+unauthenticated RCE as SYSTEM in Microsoft's own WSUS (CVE-2025-59287) and several local
+privilege-escalation flaws worded as *an authorised local attacker elevates privileges*, which
+describes the child on this machine. [REMOTE-UPDATE.md](REMOTE-UPDATE.md) covers installing a new
+build over the network instead, and why the usual home-network remoting advice (NTLM over WinRM
+HTTP with `TrustedHosts`) is specifically unsafe against an adversary who is already on the LAN.
+
 ## Supply chain
 
 Every layer above assumes the program running is this program, built from this source. That
