@@ -101,11 +101,21 @@ fn is_same_origin(site: Option<&str>, mode: Option<&str>, method: &Method) -> bo
 
 /// Content-Security-Policy for the embedded single-page UI.
 ///
-/// `default-src 'none'` then allow only what the page uses. `'unsafe-inline'`/`'unsafe-eval'`
-/// are required by the current Alpine.js build (it compiles inline attribute expressions and
-/// there's an inline `<script>`); tightening to a nonce-free strict policy would mean adopting
-/// the `@alpinejs/csp` build and externalizing the inline script — deferred. `img-src` allows
-/// `blob:` (screenshot object URLs) and `data:` (DaisyUI's inline-SVG backgrounds).
+/// `default-src 'none'` then allow only what the page uses.
+///
+/// **`script-src` no longer admits `'unsafe-inline'`.** It used to, because both served pages
+/// carried their JavaScript in an inline `<script>`. Those now live in `assets/app.js` and
+/// `assets/ask.js`, so `'self'` covers them and the page can no longer execute a script that
+/// arrives in the markup — which is the directive that matters most here, since the markup is
+/// where injected content would land.
+///
+/// `'unsafe-eval'` stays: Alpine compiles its attribute expressions with `new Function`. Removing
+/// it means the `@alpinejs/csp` build, which is O8 — measured at 14 of 264 directives needing
+/// rework, and gated on there being any JavaScript tests at all rather than on the markup.
+///
+/// `style-src` keeps `'unsafe-inline'`: the `[x-cloak]` rule is still an inline `<style>`, and
+/// Alpine writes `style` attributes for `x-show` and `:style`. `img-src` allows `blob:`
+/// (screenshot object URLs) and `data:` (DaisyUI's inline-SVG backgrounds, and the favicon).
 ///
 /// `connect-src` also allows `api.github.com`, for the version check behind the button in the
 /// footer. That request is made by the *parent's* browser, on the parent's own device — the
@@ -117,7 +127,7 @@ fn is_same_origin(site: Option<&str>, mode: Option<&str>, method: &Method) -> bo
 /// screenshot, kill a process, shut the machine down — so exfiltration to one more host is not
 /// the marginal risk. `default-src 'none'` still blocks every other destination.
 const CSP: &str = "default-src 'none'; \
-     script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
+     script-src 'self' 'unsafe-eval'; \
      style-src 'self' 'unsafe-inline'; \
      img-src 'self' blob: data:; \
      connect-src 'self' https://api.github.com; \
@@ -205,9 +215,17 @@ mod tests {
     /// has both, and one of the links is assembled in JavaScript — every absolute URL must be
     /// accounted for one way or the other. A new one fails this test until somebody says which
     /// it is, which is the moment to think about it.
+    ///
+    /// Both files, because the page is served as two: the markup holds the navigation links and
+    /// `app.js` holds the fetch. Scanning only the markup would have left the one URL this test
+    /// exists for — the `api.github.com` call — unexamined, while the assertion stayed green.
     #[test]
     fn every_external_url_in_the_page_is_accounted_for() {
-        const PAGE: &str = include_str!("../assets/index.html");
+        const SOURCES: [(&str, &str); 3] = [
+            ("index.html", include_str!("../assets/index.html")),
+            ("app.js", include_str!("../assets/app.js")),
+            ("ask.js", include_str!("../assets/ask.js")),
+        ];
 
         /// Navigation targets: the parent's browser follows these, and `connect-src` does not
         /// govern navigation. Exact URLs, not hosts, so this cannot quietly widen.
@@ -220,35 +238,38 @@ mod tests {
             .expect("the policy must state connect-src explicitly");
 
         let mut found = 0usize;
-        let mut rest = PAGE;
-        while let Some(i) = rest.find("https://") {
-            rest = &rest[i..];
-            // `\r` included: `include_str!` embeds the file as checked out, and a Windows
-            // checkout has CRLF, which would otherwise land inside the captured URL.
-            let end = rest
-                .find(['"', '\'', '`', '<', ' ', '\n', '\r'])
-                .unwrap_or(rest.len());
-            let url = &rest[..end];
-            rest = &rest[end..];
-            found += 1;
+        for (name, text) in SOURCES {
+            let mut rest = text;
+            while let Some(i) = rest.find("https://") {
+                rest = &rest[i..];
+                // `\r` included: `include_str!` embeds the file as checked out, and a Windows
+                // checkout has CRLF, which would otherwise land inside the captured URL.
+                let end = rest
+                    .find(['"', '\'', '`', '<', ' ', '\n', '\r'])
+                    .unwrap_or(rest.len());
+                let url = &rest[..end];
+                rest = &rest[end..];
+                found += 1;
 
-            if LINK_ONLY.contains(&url) {
-                continue;
+                if LINK_ONLY.contains(&url) {
+                    continue;
+                }
+                let host = url
+                    .trim_start_matches("https://")
+                    .split('/')
+                    .next()
+                    .unwrap_or_default();
+                assert!(
+                    connect.contains(host),
+                    "{name} references {url}, which connect-src does not admit and which is not \
+                     listed as a navigation target:\n  connect-src: {connect}"
+                );
             }
-            let host = url
-                .trim_start_matches("https://")
-                .split('/')
-                .next()
-                .unwrap_or_default();
-            assert!(
-                connect.contains(host),
-                "the page references {url}, which connect-src does not admit and which is not \
-                 listed as a navigation target:\n  connect-src: {connect}"
-            );
         }
         assert!(
             found >= 2,
-            "found only {found} external URLs — the scan has drifted and is checking nothing"
+            "found only {found} external URLs across the served files — the scan has drifted and \
+             is checking nothing"
         );
     }
 

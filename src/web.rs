@@ -56,6 +56,38 @@ mod tests {
         ("ask.html", include_str!("../assets/ask.html")),
     ];
 
+    /// No inline `<script>` on any served page.
+    ///
+    /// `security::CSP` dropped `'unsafe-inline'` from `script-src` once both pages moved their
+    /// JavaScript into `assets/app.js` and `assets/ask.js`. That directive and this shape are one
+    /// decision in two files: add an inline `<script>` back and the browser silently refuses to
+    /// run it. Silently is the problem — there is no error on the page, just a dashboard that
+    /// does nothing, which is the same symptom as the chart bug this suite already carries a test
+    /// for.
+    ///
+    /// Matches `<script` not followed by a `src`, so `<script defer src="/app.js">` passes and a
+    /// bare `<script>` does not.
+    #[test]
+    fn no_inline_script_on_any_served_page() {
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            for (at, _) in html.match_indices("<script") {
+                let tag_end = html[at..]
+                    .find('>')
+                    .map(|e| at + e)
+                    .unwrap_or_else(|| panic!("{name}: unterminated <script at byte {at}"));
+                let tag = &html[at..tag_end];
+                assert!(
+                    tag.contains("src="),
+                    "{name}: inline <script> at byte {at}. script-src no longer admits \
+                     'unsafe-inline', so the browser will refuse to run this and the page will \
+                     fail with no visible error. Put the code in assets/*.js and load it with \
+                     src=.",
+                );
+            }
+        }
+    }
+
     /// No `<template>` inside an `<svg>`, on any served page.
     ///
     /// **This one shipped.** The screen-time chart drew its bars with

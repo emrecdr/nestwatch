@@ -2,8 +2,12 @@
    Built to ../assets/app.css by `npm run build`. */
 @import "tailwindcss";
 
-/* Scan the HTML (markup + inline Alpine class strings) for used utilities/components. */
-@source "../../assets/**/*.html";
+/* Scan the served files for used utilities/components.
+   The `.js` matters: the dashboard's script moved out of the markup into assets/app.js, and it
+   builds class strings there (stBarClass returns "bg-error"/"bg-primary"/"st-nodata"). Scanning
+   only *.html would purge any utility named solely in JavaScript, and the failure is silent —
+   the class is emitted into the DOM and simply has no rule behind it. */
+@source "../../assets/**/*.{html,js}";
 
 /* daisyUI 5, with the two themes referenced by index.html's data-theme. */
 @plugin "daisyui" {

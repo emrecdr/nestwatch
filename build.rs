@@ -12,7 +12,16 @@ fn main() {
     warn_on_toolchain_mismatch();
 
     let css = Path::new("assets/app.css");
-    let html = Path::new("assets/index.html");
+    // Everything Tailwind scans for class names, per `@source` in web/src/app.css. The `.js`
+    // entries are here because the dashboard's script left the markup: `stBarClass` names
+    // utilities that appear nowhere else, so app.js is an input to the CSS exactly as the markup
+    // is, and a class added there after the last build renders with no rule behind it.
+    let sources = [
+        Path::new("assets/index.html"),
+        Path::new("assets/ask.html"),
+        Path::new("assets/app.js"),
+        Path::new("assets/ask.js"),
+    ];
     // The other input to the CSS: bump Tailwind or daisyUI and the *same* markup compiles to
     // different output. Checking only the markup misses that entirely, and the miss is silent —
     // CI runs `npm ci && npm run build` on every job, so releases get the new compiler while the
@@ -24,10 +33,11 @@ fn main() {
             "cargo:warning=assets/app.css is missing — run `cd web && npm install && npm run build` \
              before building, or the UI will be unstyled."
         );
-    } else if newer(html, css) {
+    } else if let Some(stale) = sources.iter().find(|src| newer(src, css)) {
         println!(
-            "cargo:warning=assets/app.css is older than assets/index.html — run `cd web && npm run \
-             build` or the UI may render with classes missing from the compiled CSS."
+            "cargo:warning=assets/app.css is older than {} — run `cd web && npm run build` or the \
+             UI may render with classes missing from the compiled CSS.",
+            stale.display()
         );
     } else if newer(lock, css) {
         println!(
@@ -39,8 +49,10 @@ fn main() {
     // Rebuild if any input to the staleness check changes, so the check above actually re-runs
     // when it matters.
     println!("cargo:rerun-if-changed=assets/app.css");
-    println!("cargo:rerun-if-changed=assets/index.html");
     println!("cargo:rerun-if-changed=web/package-lock.json");
+    for src in sources {
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
 }
 
 /// Warn when the compiler running this build is not the one `rust-toolchain.toml` pins.

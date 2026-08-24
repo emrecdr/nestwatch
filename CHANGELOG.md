@@ -34,10 +34,22 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   documentation rather than beside the block. The reasoning was right; it was in the place a reader
   scrolling to the block does not look. All eight now match, and the lint that catches it is on.
 
+### Security
+- **The dashboard can no longer run a script that arrives in its markup.** Both pages kept their
+  JavaScript in the page itself, which meant the policy had to permit inline scripts in general —
+  and that permission is what an injected `<script>` would have needed. The code now lives in two
+  ordinary files, so the permission is gone. Nothing about the page changes for you; this closes
+  the gap between "we don't do that" and "that can't happen".
+
 ### Internal
 - Lint policy moved from CI's command line into `Cargo.toml`, so `cargo clippy` and the editor
   enforce what CI enforces. Turning on `undocumented_unsafe_blocks` is what found the four above —
   it is allow-by-default, so `-D warnings` had never switched it on.
+- The dashboard's 744-line script and the child page's 136-line script moved out of the markup
+  into `assets/app.js` and `assets/ask.js`. Beyond the policy change above, this is what makes it
+  possible to lint or test them at all — there are still no JavaScript tests, which is why the
+  chart could break unnoticed. Three source scans now guard the shapes that would silently undo
+  it: no inline script, no `<template>` inside `<svg>`, and `scope` on every column header.
 
 ## [0.2.3] — 2026-08-24
 

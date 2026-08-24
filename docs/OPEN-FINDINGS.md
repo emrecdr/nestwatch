@@ -171,14 +171,16 @@ resident in the child's session, well beyond the existing on-demand screenshot h
 
 ### O8 · The dashboard's logic is the least-verified code that ships
 
-`assets/index.html` carries a 732-line inline `<script>`. Against 231 Rust tests there are **zero**
-JavaScript tests, and no linter runs over it: the polling loop, the countdown, the screenshot
-lifecycle, and every error path the parent actually sees are unverified by anything except looking
-at them.
+**Step one is done; the finding stands on the half that is left.** The scripts are now
+`assets/app.js` (744 lines) and `assets/ask.js` (136), out of the markup, and `script-src` no
+longer admits `'unsafe-inline'` as a result — an inline `<script>` can no longer run on either
+page, which is the directive that matters most where injected content would land.
+`no_inline_script_on_any_served_page` holds that shape, since the failure mode is silent.
 
-The CSP consequence is already recorded on `security::CSP` — the inline script and Alpine's
-attribute expressions are what force `'unsafe-inline'`/`'unsafe-eval'`, and tightening means the
-`@alpinejs/csp` build plus externalizing the script. That note frames it as a security cost.
+What has not changed is the reason this entry exists: against 233 Rust tests there are still
+**zero** JavaScript tests, and no linter runs over those two files. The polling loop, the
+countdown, the screenshot lifecycle and every error path the parent actually sees are verified by
+nothing but looking at them — which is exactly how O9 shipped.
 
 **The point here is that it is the same fix twice.** Moving the script to `assets/app.js` is what
 makes it both lintable/testable *and* CSP-tightenable; neither is clearly worth the migration alone,
@@ -202,15 +204,16 @@ attributes in `index.html`, **14** are incompatible:
 
 So this is roughly 5% of the directives, not all of them (it was 17 of 268 before O9's fix
 retired four template literals along with the SVG chart). That changes the conclusion: the blocker
-was never the markup, it is that **232 Rust tests sit beside zero JavaScript tests**, so a runtime
+was never the markup, it is that **233 Rust tests sit beside zero JavaScript tests**, so a runtime
 swap under the parent's only interface has nothing to catch a regression.
 
-**Therefore two steps, in this order.** First move the script to `assets/app.js` unchanged — a pure
-relocation, no behaviour change, and it is what makes linting and testing possible at all. Get
-tests around the polling loop and the countdown. *Then* swap to `@alpinejs/csp` and tighten the
-policy, with something in place to catch what breaks. Doing it in one step means changing how every
-directive on the page is evaluated with no way to tell whether it still works — on the interface a
-parent depends on, and on a machine none of this has run on.
+**What is left, in order.** The relocation is done. Next is a linter and some tests over the two
+JavaScript files — which means choosing a toolchain and adding devDependencies to `web/`, a
+deliberate step for a project that has kept its build to one CSS compile, and so not something to
+adopt silently. *Then* `@alpinejs/csp`, with something in place to catch what breaks. Doing the
+runtime swap first would change how every directive on the page is evaluated with no way to tell
+whether it still works — on the interface a parent depends on, and on a machine none of this has
+run on. `'unsafe-eval'` is what remains of the policy cost until that lands.
 
 **Trigger.** Do this before the dashboard grows another panel, or the migration cost grows with it.
 
@@ -247,7 +250,7 @@ shipped in 0.2.3.
 
 **Why every existing gate missed it.** It is not a Rust bug, not a type error, and not a
 formatting or lint issue: it is a DOM namespace rule that only exists once a browser parses the
-file. 232 tests, clippy on two targets, and a cross-compile all passed over it. The failure was
+file. 233 tests, clippy on two targets, and a cross-compile all passed over it. The failure was
 silent in the UI too — the summary figures above the chart and the day-by-day table below it both
 read from the same data and were correct, so the page looked sparse rather than broken, and the
 only evidence was eight console errors nobody was looking at.
