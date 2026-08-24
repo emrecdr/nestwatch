@@ -659,30 +659,23 @@
                 <div class="opacity-70" x-text="stChangeLabel()"></div>
               </div>
 
-              <svg class="mt-3 h-28 w-full" role="img"
-                   aria-label="Daily screen-time minutes; hatched columns are days that were not measured"
-                   preserveAspectRatio="none">
-                <defs>
-                  <pattern id="st-nodata" width="6" height="6" patternUnits="userSpaceOnUse"
-                           patternTransform="rotate(45)">
-                    <rect width="6" height="6" class="fill-base-200"></rect>
-                    <line x1="0" y1="0" x2="0" y2="6" class="stroke-base-content" stroke-opacity="0.35"
-                          stroke-width="2"></line>
-                  </pattern>
-                </defs>
-                <template x-for="(d, i) in screentime.days" :key="d.date">
-                  <g>
-                    <title x-text="stBarTitle(d)"></title>
-                    <rect :x="`${(i / screentime.days.length) * 100}%`"
-                          :width="`${(1 / screentime.days.length) * 100 - 0.4}%`"
-                          :y="`${100 - stBarPct(d)}%`"
-                          :height="`${stBarPct(d)}%`"
-                          rx="2"
-                          :fill="d.minutes_used == null ? 'url(#st-nodata)' : null"
-                          :class="d.minutes_used == null ? '' : (d.over_budget ? 'fill-error' : 'fill-primary')"></rect>
-                  </g>
+              <!-- The bars are HTML, not SVG, and must stay that way.
+                   Alpine's x-for only works on a <template>, and a <template> written inside
+                   <svg> is parsed into the SVG namespace, where it is not an HTMLTemplateElement
+                   and has no `.content`. Alpine reads `template.content.children`, throws
+                   "Cannot read properties of undefined", and renders *no bars at all* — which is
+                   what 0.2.3 shipped: thirty days of data drawing an empty chart, with only
+                   console errors to say so. Nothing in the Rust suite can see a namespace bug, so
+                   `web::tests::no_alpine_template_inside_svg` guards the shape instead.
+                   Per-bar hover text is a plain `title` attribute here, which is also more
+                   reliable than SVG's <title> element. -->
+              <div class="mt-3 flex h-28 w-full items-end gap-px" role="img"
+                   aria-label="Daily screen-time minutes; hatched columns are days that were not measured">
+                <template x-for="d in screentime.days" :key="d.date">
+                  <div class="min-w-0 flex-1 rounded-sm" :title="stBarTitle(d)"
+                       :class="stBarClass(d)" :style="stBarStyle(d)"></div>
                 </template>
-              </svg>
+              </div>
 
               <div class="mt-1 flex flex-wrap items-center gap-3 text-xs opacity-70">
                 <span><span class="inline-block h-2 w-3 align-middle bg-primary"></span> within budget</span>
@@ -1585,6 +1578,19 @@
             if (d.minutes_used == null) return "not measured";
             const budget = d.budget ? ` of ${d.budget}` : "";
             return `${d.minutes_used}${budget} min${d.over_budget ? " (over budget)" : ""}`;
+          },
+
+          // How a bar looks, in methods rather than in the attribute. Keeps the three states —
+          // measured, over budget, not measured — named in one place, and keeps the markup to
+          // plain method calls, which is the form Alpine's CSP build accepts (see O8): no
+          // template literals and no globals in an attribute.
+          stBarClass(d) {
+            if (d.minutes_used == null) return "st-nodata";
+            return d.over_budget ? "bg-error" : "bg-primary";
+          },
+
+          stBarStyle(d) {
+            return `height: ${this.stBarPct(d)}%`;
           },
 
           stBarTitle(d) {

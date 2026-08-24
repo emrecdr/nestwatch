@@ -9,3 +9,16 @@
 @plugin "daisyui" {
   themes: dim --default, light;
 }
+
+/* "Not measured" columns in the screen-time chart.
+   Was an SVG <pattern> until the chart stopped being SVG — see the comment above the chart in
+   index.html. Written in theme variables rather than fixed colours so it follows both themes,
+   and kept as plain CSS (not @utility) so it is emitted whether or not the scanner sees the
+   class name, which is produced by a method rather than written in the markup. */
+.st-nodata {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--color-base-200) 0 3px,
+    color-mix(in oklab, var(--color-base-content) 35%, transparent) 3px 5px
+  );
+}

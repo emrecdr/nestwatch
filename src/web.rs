@@ -50,6 +50,76 @@ fn serve_asset(path: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// The served pages contain both HTML files, so both scans below share this list.
+    const PAGES: [(&str, &str); 2] = [
+        ("index.html", include_str!("../assets/index.html")),
+        ("ask.html", include_str!("../assets/ask.html")),
+    ];
+
+    /// No `<template>` inside an `<svg>`, on any served page.
+    ///
+    /// **This one shipped.** The screen-time chart drew its bars with
+    /// `<template x-for="(d, i) in screentime.days">` inside its `<svg>`. A `<template>` written
+    /// inside `<svg>` is parsed into the SVG namespace, where it is *not* an
+    /// `HTMLTemplateElement` and has no `.content` property at all. Alpine's `x-for` reads
+    /// `template.content.children`, so it threw `Cannot read properties of undefined` and
+    /// rendered **no bars** — thirty days of data drawing an empty chart in 0.2.3, reported
+    /// nowhere except the browser console.
+    ///
+    /// Nothing else in this repository can catch that. It is not a Rust bug, not a type error,
+    /// and not visible to any of the 231 tests: it is a DOM namespace rule that only appears when
+    /// a browser parses the file. A string scan is a crude instrument, but the defect has a
+    /// reliable textual shape, and the alternative is finding it again by eye.
+    ///
+    /// Deliberately blunt: any `<template>` between an `<svg` and its `</svg>` fails, without
+    /// trying to decide whether it is Alpine's. There is no legitimate use of one there.
+    ///
+    /// Comments are stripped first. The comment explaining this rule, above the chart, naturally
+    /// contains the words it forbids — and the first version of this test failed on its own
+    /// prose, exactly as the `<th>` scan in `spawn_paths.rs`-style checks has before.
+    #[test]
+    fn no_alpine_template_inside_svg() {
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            let html = html.as_str();
+            let mut from = 0usize;
+            while let Some(open) = html[from..].find("<svg") {
+                let open = from + open;
+                let close = html[open..]
+                    .find("</svg>")
+                    .map(|e| open + e)
+                    .unwrap_or_else(|| panic!("{name}: <svg at byte {open} is never closed"));
+                let inner = &html[open..close];
+                assert!(
+                    !inner.contains("<template"),
+                    "{name}: a <template> inside <svg> is parsed into the SVG namespace, has no \
+                     .content, and makes Alpine's x-for render nothing. Build the repeated \
+                     elements as HTML, or generate the SVG without x-for.\n  offending <svg> \
+                     starts at byte {open}",
+                );
+                from = close + "</svg>".len();
+            }
+        }
+    }
+
+    /// Replace every `<!-- ... -->` with an equal-length run of spaces.
+    ///
+    /// Same length so byte offsets in a failure message still point at the real file. An
+    /// unterminated comment swallows the rest of the page, which is what a browser does too.
+    fn strip_html_comments(html: &str) -> String {
+        let mut out = String::with_capacity(html.len());
+        let mut rest = html;
+        while let Some(start) = rest.find("<!--") {
+            out.push_str(&rest[..start]);
+            let after = &rest[start..];
+            let end = after.find("-->").map(|e| e + 3).unwrap_or(after.len());
+            out.extend(std::iter::repeat_n(' ', end));
+            rest = &after[end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
     /// Every column header carries `scope`, on both served pages.
     ///
     /// A `<th>` without `scope` leaves the header-to-cell association to the screen reader's
@@ -65,10 +135,7 @@ mod tests {
     /// one source-scanning test in this repo (`tests/spawn_paths.rs`).
     #[test]
     fn every_table_header_says_which_column_it_heads() {
-        for (name, html) in [
-            ("index.html", include_str!("../assets/index.html")),
-            ("ask.html", include_str!("../assets/ask.html")),
-        ] {
+        for (name, html) in PAGES {
             let mut rest = html;
             let mut seen = 0usize;
             while let Some(at) = rest.find("<th") {

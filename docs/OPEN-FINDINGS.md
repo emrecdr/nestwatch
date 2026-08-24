@@ -181,11 +181,36 @@ attribute expressions are what force `'unsafe-inline'`/`'unsafe-eval'`, and tigh
 `@alpinejs/csp` build plus externalizing the script. That note frames it as a security cost.
 
 **The point here is that it is the same fix twice.** Moving the script to `assets/app.js` is what
-makes it both lintable/testable *and* CSP-tightenable; neither is worth the migration alone, and
-together they probably are. Filed separately because the testability half has a cost the security
-note does not mention: `@alpinejs/csp` forbids inline expressions, so every `x-text`/`x-show` in
-1,650 lines of markup has to move into the component object. That is the real size of this job, and
-it is why it is not a cleanup-pass item.
+makes it both lintable/testable *and* CSP-tightenable; neither is clearly worth the migration alone,
+and together they are.
+
+**The cost, measured — and the first estimate in this entry was wrong.** It claimed
+`@alpinejs/csp` "forbids inline expressions, so every `x-text`/`x-show` in 1,650 lines has to move
+into the component object", sourced from a GitHub discussion rather than the documentation. The
+documentation says otherwise, and counting the markup settles it. Of **264** Alpine directive
+attributes in `index.html`, **14** are incompatible:
+
+| | count | verdict |
+|---|---|---|
+| Template literals | 10 | must become string concatenation or a getter |
+| Spread (`[...days].reverse()`) | 1 | must become a getter |
+| `Math.round` (inside one of the 10) | 1 | globals are unreachable; move into the component |
+| `??` / `?.` | 3 | **undocumented either way** — verify before relying on it |
+| `x-model` | 23 | **works** — the discussion claiming otherwise is stale |
+| Dotted paths (`today.used_mins`) | 20 | works |
+| Comparisons, ternaries, arithmetic, `+` concatenation, method calls | — | all work |
+
+So this is roughly 5% of the directives, not all of them (it was 17 of 268 before O9's fix
+retired four template literals along with the SVG chart). That changes the conclusion: the blocker
+was never the markup, it is that **232 Rust tests sit beside zero JavaScript tests**, so a runtime
+swap under the parent's only interface has nothing to catch a regression.
+
+**Therefore two steps, in this order.** First move the script to `assets/app.js` unchanged — a pure
+relocation, no behaviour change, and it is what makes linting and testing possible at all. Get
+tests around the polling loop and the countdown. *Then* swap to `@alpinejs/csp` and tighten the
+policy, with something in place to catch what breaks. Doing it in one step means changing how every
+directive on the page is evaluated with no way to tell whether it still works — on the interface a
+parent depends on, and on a machine none of this has run on.
 
 **Trigger.** Do this before the dashboard grows another panel, or the migration cost grows with it.
 
@@ -195,7 +220,7 @@ it is why it is not a cleanup-pass item.
 
 Raised here, then resolved. Kept rather than deleted, so nobody re-derives a question already
 answered — and because *how* a finding was proved fixed is worth more than the fact that it was.
-Both below were confirmed by mutation: break the fix, watch the named test fail, restore.
+Each was confirmed by mutation: break the fix, watch the named test fail, restore.
 
 ### ~~O3 · `today_summary` is documented pure but reads process globals~~ — **fixed**
 
@@ -211,6 +236,34 @@ heartbeat at the edge alongside its other I/O. The function is pure for real, an
 `today_summary_passes_the_enforcer_heartbeat_through` asserts all three cases — fresh, stale, and
 `None` (never reported, which after one tick's uptime means the loops never started). Confirmed by
 mutation: hardcoding the field to `None` fails that test while the other four stay green.
+
+### ~~O9 · The screen-time chart rendered no bars at all~~ — **fixed**
+
+Not raised by a review — found by running the dashboard in a browser, which nothing else here had
+done. The chart repeated its bars with `<template x-for>` **inside the `<svg>`**. A `<template>`
+parsed inside `<svg>` belongs to the SVG namespace, is not an `HTMLTemplateElement`, and has no
+`.content`; Alpine's `x-for` reads `template.content.children`, threw, and rendered nothing. It
+shipped in 0.2.3.
+
+**Why every existing gate missed it.** It is not a Rust bug, not a type error, and not a
+formatting or lint issue: it is a DOM namespace rule that only exists once a browser parses the
+file. 232 tests, clippy on two targets, and a cross-compile all passed over it. The failure was
+silent in the UI too — the summary figures above the chart and the day-by-day table below it both
+read from the same data and were correct, so the page looked sparse rather than broken, and the
+only evidence was eight console errors nobody was looking at.
+
+**Fix, as shipped.** The bars are HTML `<div>`s in a flex row, so no `<template>` sits inside an
+`<svg>` anywhere. Per-bar hover text became a `title` attribute, which is more reliably surfaced
+than SVG's `<title>` element; the hatch for unmeasured days moved from an SVG `<pattern>` to a
+`.st-nodata` rule in `web/src/app.css`, written in theme variables so it still follows both themes.
+`stBarClass`/`stBarStyle` keep the three states named in one place and keep the markup to method
+calls — which also removes four template literals from the O8 migration's tally.
+
+**Verified by running**, since that is the only thing that could have caught it: 30 bars where
+there were 0, all three states present (10 hatched, 16 within budget, 4 over), the deliberate 3%
+floor keeping a measured-zero day visible and hoverable at 3px, and the console going from 20
+error lines to none. `web::tests::no_alpine_template_inside_svg` fails if the shape returns —
+confirmed by putting it back.
 
 ### ~~O7 · The binary could not tell you which version it is~~ — **fixed**
 

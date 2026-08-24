@@ -13,6 +13,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **The screen-time chart drew nothing.** Thirty days of data, an empty chart, and no message to
+  say why — the figures above it and the day-by-day table below it were right the whole time, so
+  the page looked merely bare rather than broken. Shipped in 0.2.3, found by opening the dashboard
+  in a browser rather than by reading it. The bars are now built as HTML instead of SVG, which
+  removes the cause rather than working around it, and a test refuses the shape that caused it.
+  *Cause, for the curious:* the bars were repeated by an Alpine `<template>` placed inside the
+  `<svg>`. A `<template>` written inside `<svg>` is parsed into the SVG namespace, where it is not
+  an HTML template and has no content to clone, so the loop produced nothing.
 - **A new security advisory could go unnoticed for as long as nobody pushed.** The check that fails
   the build on a vulnerable dependency only ran when something else triggered a build, and GitHub's
   own alerting was switched off for the repository — so for a tool that gets installed and then left
