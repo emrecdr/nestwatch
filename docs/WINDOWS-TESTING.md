@@ -12,9 +12,9 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these seven first
 
-The full list is 78 items, which is why it keeps not happening. These seven are the ones whose
+The full list is 80 items, which is why it keeps not happening. These seven are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the other
-seventy-one combined. Each links to its full entry below.
+seventy-three combined. Each links to its full entry below.
 
 1. **Is his account a standard user?** (§0) — `net localgroup Administrators`. If he is listed,
    stop: every other check on this list is measuring something that a local administrator can
@@ -41,6 +41,17 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
 
 ## 0. Prerequisites
 
+- [ ] **Verify the download before you run it.** It is about to run as SYSTEM on his PC.
+      Two independent checks, and the second is the stronger one:
+      ```powershell
+      Get-FileHash nestwatch.exe -Algorithm SHA256 | Format-List   # match the .sha256 file
+      gh attestation verify nestwatch.exe --repo emrecdr/nestwatch
+      ```
+      The hash only proves the download did not corrupt — it ships from the same place as the
+      file. The attestation is a signature proving this exact binary came out of the project's
+      release workflow, and it fails closed: alter one byte and the lookup, which is keyed on
+      the file's own digest, finds nothing to check it against. Skip this only for a binary you
+      built yourself.
 - [ ] **Confirm which build you are looking at:** `nestwatch.exe version` (or `doctor`, whose
       report leads with it). Worth doing first on a machine you visit rarely — every check below
       is about *this* build, and it is also how you tell whether a given security fix is present.

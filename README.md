@@ -241,7 +241,7 @@ On macOS or Linux the app uses `FakeControl` (synthetic processes, placeholder s
 no-op shutdown), so you can run and click through everything:
 
 ```bash
-NESTWATCH_PASSWORD=devpass cargo run -- install
+NESTWATCH_PASSWORD=dev-password cargo run -- install   # 8+ chars, or install refuses
 cargo run -- run        # https://localhost:8443
 cargo test              # unit + HTTP integration tests (run on any OS)
 ```
