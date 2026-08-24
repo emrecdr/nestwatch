@@ -2,6 +2,31 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.1] — 2026-08-24
+
+### Fixed
+- **A first-time install could destroy a service that had started correctly.** The installer
+  registers the service, starts it, then watches until it reports running. It was asking Windows
+  for permission to start and delete the service but not to *read its status* — so every check
+  came back "refused", the installer concluded it had never started, and deleted it. Upgrades
+  were unaffected, which is why this went unnoticed: only a fresh install could hit it. If your
+  install failed with *"the service did not reach a running state"*, this was almost certainly
+  why, and the service was probably running at the time.
+
+### Improved
+- **Failures now say what Windows said.** Errors from the service manager were reported as "IO
+  error in winapi call" regardless of the actual problem, discarding the error code that names
+  it. Every failure now reports the code, what it means, and what to do — including the common
+  ones: a leftover service still being deleted, a service left disabled by a half-finished
+  removal, and permission refusals.
+- **The install prints its own progress, not other programs'.** Lines like `processed file:`,
+  `Successfully processed 1 files` and `Deleted 1 rule(s)` came from the Windows tools the
+  installer calls and are now hidden unless something fails, where they explain it. One of them
+  was worse than noise: a `[SC] ... FAILED` line that the installer printed and then ignored.
+  If that step fails it now says so, and what it costs — the service still installs and runs,
+  it just won't restart itself automatically.
+- The install banner names the version: `== nestwatch v0.2.1 :: install ==`.
+
 ## [0.2.0] — 2026-08-24
 
 ### Changed
