@@ -34,6 +34,33 @@ use serde::{Deserialize, Serialize};
 pub struct Sample {
     #[serde(default)]
     pub apps: BTreeMap<String, u64>,
+    /// Seconds per **browser page title**, for the intervals where the focused window was a
+    /// browser. Empty for everything else, which is most windows.
+    ///
+    /// Separate from `apps` rather than folded into it: the keys are a different kind of thing
+    /// (`"Roblox"`, not `"chrome.exe"`), they are far higher-cardinality, and the enforcement tally
+    /// is keyed on process names — mixing them would let a page title collide with an app rule.
+    #[serde(default)]
+    pub pages: BTreeMap<String, u64>,
+}
+
+/// Largest number of distinct page titles kept from one report.
+///
+/// Page titles are the highest-cardinality thing this system records and they come from a process
+/// running as the child: every tab, every video, every renamed document is a new key. Without a cap
+/// a script that retitles a window in a loop grows `usage_state.json` and the daily rollup without
+/// bound. The heaviest entries are kept, which is also the only part anyone reads.
+pub const MAX_PAGES: usize = 40;
+
+/// Keep the `n` heaviest entries, dropping the rest. Ties break by name so the result is stable.
+pub fn retain_top(map: &mut BTreeMap<String, u64>, n: usize) {
+    if map.len() <= n {
+        return;
+    }
+    let mut by_weight: Vec<(String, u64)> = std::mem::take(map).into_iter().collect();
+    by_weight.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    by_weight.truncate(n);
+    *map = by_weight.into_iter().collect();
 }
 
 /// Parse one JSONL line from the watcher. `None` for anything malformed.
@@ -54,7 +81,24 @@ pub fn parse_sample(line: &str) -> Option<Sample> {
 ///
 /// Zero-valued entries are dropped: they carry no information and would otherwise let a forged
 /// report pad the map with thousands of app names.
-pub fn clamp(sample: Sample, elapsed_secs: u64) -> BTreeMap<String, u64> {
+pub fn clamp(sample: Sample, elapsed_secs: u64) -> Sample {
+    let mut pages = bound(sample.pages, elapsed_secs);
+    // Cap after bounding, so what survives is the heaviest *real* time rather than the heaviest
+    // claim. Applied only to pages: `apps` is bounded by how many programs are installed, while
+    // page titles are bounded by nothing at all.
+    retain_top(&mut pages, MAX_PAGES);
+
+    Sample {
+        apps: bound(sample.apps, elapsed_secs),
+        pages,
+    }
+}
+
+/// Bound one map of seconds-per-key by the seconds that actually elapsed.
+///
+/// Both maps get the same treatment for the same reason: only one window holds focus at a time, so
+/// neither the apps nor the pages recorded for an interval can sum to more than the interval.
+fn bound(map: BTreeMap<String, u64>, elapsed_secs: u64) -> BTreeMap<String, u64> {
     if elapsed_secs == 0 {
         return BTreeMap::new();
     }
@@ -62,8 +106,7 @@ pub fn clamp(sample: Sample, elapsed_secs: u64) -> BTreeMap<String, u64> {
     // Saturating, because this total is computed from numbers the child could have chosen. A
     // release build does not check overflow, so a plain sum could wrap to something small and
     // turn the bound below into a no-op — the one outcome this function exists to prevent.
-    let claimed = sample
-        .apps
+    let claimed = map
         .values()
         .fold(0u64, |acc, secs| acc.saturating_add(*secs));
 
@@ -71,11 +114,9 @@ pub fn clamp(sample: Sample, elapsed_secs: u64) -> BTreeMap<String, u64> {
         // Scale every entry by elapsed/claimed. `u128` because the numerator is a product of two
         // attacker-influenced `u64`s; the division floors, so the result understates.
         //
-        // The per-app bound falls out of this rather than needing its own pass: a lone app
+        // The per-key bound falls out of this rather than needing its own pass: a lone app
         // claiming 9,000s of a 30s tick is simply the case where it is the entire total.
-        sample
-            .apps
-            .into_iter()
+        map.into_iter()
             .map(|(name, secs)| {
                 let scaled =
                     u128::from(secs) * u128::from(elapsed_secs) / u128::from(claimed.max(1));
@@ -83,7 +124,7 @@ pub fn clamp(sample: Sample, elapsed_secs: u64) -> BTreeMap<String, u64> {
             })
             .collect()
     } else {
-        sample.apps
+        map
     };
 
     bounded.into_iter().filter(|(_, secs)| *secs > 0).collect()
@@ -230,23 +271,26 @@ impl Tracker {
     }
 
     /// Take everything banked so far as whole seconds, keeping sub-second remainders for next time.
-    /// The currently-focused app keeps its focus — a drain is a reporting boundary, not a reset.
-    pub fn drain(&mut self, now_ms: u64) -> Sample {
+    /// The currently-focused key keeps its focus — a drain is a reporting boundary, not a reset.
+    ///
+    /// Returns a bare map rather than a [`Sample`] because the watcher runs **two** of these: one
+    /// keyed by executable and one by browser page title. The state machine is the same for both.
+    pub fn drain(&mut self, now_ms: u64) -> BTreeMap<String, u64> {
         self.bank(now_ms);
 
-        let mut apps = BTreeMap::new();
+        let mut whole = BTreeMap::new();
         for (name, remaining) in &mut self.millis {
             let secs = *remaining / 1000;
             if secs > 0 {
-                apps.insert(name.clone(), secs);
+                whole.insert(name.clone(), secs);
                 *remaining %= 1000;
             }
         }
-        // Entries that carried nothing forward are dropped, so the map stays bounded by the apps
-        // actually in use rather than every app touched since the process started.
+        // Entries that carried nothing forward are dropped, so the map stays bounded by what is
+        // actually in use rather than everything touched since the process started.
         self.millis.retain(|_, remaining| *remaining > 0);
 
-        Sample { apps }
+        whole
     }
 }
 
@@ -272,6 +316,7 @@ pub struct Feed(std::sync::Arc<std::sync::Mutex<FeedState>>);
 #[derive(Default)]
 struct FeedState {
     pending: BTreeMap<String, u64>,
+    pending_pages: BTreeMap<String, u64>,
     /// Set by any report at all, including an empty one. Cleared by a drain.
     heard: bool,
 }
@@ -293,6 +338,7 @@ impl Feed {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.heard = true;
         accrue(&mut state.pending, sample.apps);
+        accrue(&mut state.pending_pages, sample.pages);
     }
 
     /// Take everything reported since the last drain, or `None` if no watcher has reported at all.
@@ -307,6 +353,7 @@ impl Feed {
         state.heard = false;
         Some(Sample {
             apps: std::mem::take(&mut state.pending),
+            pages: std::mem::take(&mut state.pending_pages),
         })
     }
 }
@@ -318,6 +365,7 @@ mod tests {
     fn sample(pairs: &[(&str, u64)]) -> Sample {
         Sample {
             apps: pairs.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
+            pages: BTreeMap::new(),
         }
     }
 
@@ -337,14 +385,14 @@ mod tests {
 
     #[test]
     fn an_honest_report_passes_through_unchanged() {
-        let got = clamp(sample(&[("roblox.exe", 20), ("chrome.exe", 10)]), 30);
+        let got = clamp(sample(&[("roblox.exe", 20), ("chrome.exe", 10)]), 30).apps;
         assert_eq!(got.get("roblox.exe"), Some(&20));
         assert_eq!(got.get("chrome.exe"), Some(&10));
     }
 
     #[test]
     fn one_app_claiming_more_than_the_tick_is_clamped() {
-        let got = clamp(sample(&[("homework.exe", 9_000)]), 30);
+        let got = clamp(sample(&[("homework.exe", 9_000)]), 30).apps;
         assert_eq!(
             got.get("homework.exe"),
             Some(&30),
@@ -361,9 +409,10 @@ mod tests {
         let forged: Vec<(String, u64)> = (0..20).map(|i| (format!("app{i}.exe"), 30)).collect();
         let s = Sample {
             apps: forged.into_iter().collect(),
+            pages: BTreeMap::new(),
         };
 
-        let got = clamp(s, 30);
+        let got = clamp(s, 30).apps;
         let total: u64 = got.values().sum();
 
         assert!(
@@ -376,7 +425,7 @@ mod tests {
     #[test]
     fn scaling_understates_rather_than_overstates() {
         // Three apps claiming 100s each inside a 10s tick: 10/300 of each is 3.33s.
-        let got = clamp(sample(&[("a.exe", 100), ("b.exe", 100), ("c.exe", 100)]), 10);
+        let got = clamp(sample(&[("a.exe", 100), ("b.exe", 100), ("c.exe", 100)]), 10).apps;
         let total: u64 = got.values().sum();
         assert!(total <= 10, "must not exceed the tick, got {total}");
         for (name, secs) in &got {
@@ -386,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_zero_second_entry_is_dropped() {
-        let got = clamp(sample(&[("idle.exe", 0), ("roblox.exe", 5)]), 30);
+        let got = clamp(sample(&[("idle.exe", 0), ("roblox.exe", 5)]), 30).apps;
         assert!(
             !got.contains_key("idle.exe"),
             "a zero carries no information and would let a forged report pad the map"
@@ -397,17 +446,17 @@ mod tests {
     /// A tick that took no time can charge no time — and must not divide by zero doing it.
     #[test]
     fn a_zero_length_tick_charges_nothing() {
-        let got = clamp(sample(&[("roblox.exe", 30)]), 0);
+        let got = clamp(sample(&[("roblox.exe", 30)]), 0).apps;
         assert!(got.is_empty(), "no elapsed time means nothing to charge");
     }
 
     #[test]
     fn accrual_adds_to_what_is_already_there() {
         let mut running: BTreeMap<String, u64> = BTreeMap::new();
-        accrue(&mut running, clamp(sample(&[("roblox.exe", 20)]), 30));
+        accrue(&mut running, clamp(sample(&[("roblox.exe", 20)]), 30).apps);
         accrue(
             &mut running,
-            clamp(sample(&[("roblox.exe", 10), ("chrome.exe", 5)]), 30),
+            clamp(sample(&[("roblox.exe", 10), ("chrome.exe", 5)]), 30).apps,
         );
 
         assert_eq!(running.get("roblox.exe"), Some(&30), "20 + 10");
@@ -420,7 +469,7 @@ mod tests {
     fn accrual_saturates_instead_of_wrapping() {
         let mut running: BTreeMap<String, u64> = BTreeMap::new();
         running.insert("roblox.exe".into(), u64::MAX);
-        accrue(&mut running, clamp(sample(&[("roblox.exe", 30)]), 30));
+        accrue(&mut running, clamp(sample(&[("roblox.exe", 30)]), 30).apps);
         assert_eq!(running.get("roblox.exe"), Some(&u64::MAX));
     }
 
@@ -459,7 +508,7 @@ mod tests {
     fn one_app_held_for_the_whole_interval_earns_all_of_it() {
         let mut t = Tracker::new();
         t.focus(Some("roblox.exe"), 0);
-        assert_eq!(t.drain(30_000).apps.get("roblox.exe"), Some(&30));
+        assert_eq!(t.drain(30_000).get("roblox.exe"), Some(&30));
     }
 
     #[test]
@@ -469,8 +518,8 @@ mod tests {
         t.focus(Some("chrome.exe"), 10_000);
         let s = t.drain(30_000);
 
-        assert_eq!(s.apps.get("roblox.exe"), Some(&10));
-        assert_eq!(s.apps.get("chrome.exe"), Some(&20));
+        assert_eq!(s.get("roblox.exe"), Some(&10));
+        assert_eq!(s.get("chrome.exe"), Some(&20));
     }
 
     /// An app in front of an empty chair is not screen time. Charging it is how a tracker reports
@@ -483,7 +532,7 @@ mod tests {
         let s = t.drain(30_000);
 
         assert_eq!(
-            s.apps.get("roblox.exe"),
+            s.get("roblox.exe"),
             Some(&5),
             "only the 5s before going idle counts"
         );
@@ -498,7 +547,7 @@ mod tests {
         let s = t.drain(30_000);
 
         assert_eq!(
-            s.apps.get("roblox.exe"),
+            s.get("roblox.exe"),
             Some(&15),
             "5s before idle plus 10s after returning"
         );
@@ -513,8 +562,8 @@ mod tests {
         t.focus(None, 10_000);
         let s = t.drain(30_000);
 
-        assert_eq!(s.apps.get("roblox.exe"), Some(&10));
-        assert_eq!(s.apps.len(), 1, "the other 20s belong to nobody");
+        assert_eq!(s.get("roblox.exe"), Some(&10));
+        assert_eq!(s.len(), 1, "the other 20s belong to nobody");
     }
 
     /// The accuracy property. Flooring on every drain would lose up to a second per app per
@@ -527,7 +576,7 @@ mod tests {
         // Three drains at 1.5s each. Flooring each time gives 1+1+1=3; carrying gives 1+2+1=4.
         let mut total = 0;
         for i in 1..=3 {
-            total += t.drain(1_500 * i).apps.get("roblox.exe").copied().unwrap_or(0);
+            total += t.drain(1_500 * i).get("roblox.exe").copied().unwrap_or(0);
         }
 
         assert_eq!(total, 4, "4.5s of focus must report as 4s, not 3s");
@@ -541,7 +590,7 @@ mod tests {
         let s = t.drain(20_000);
 
         assert_eq!(
-            s.apps.get("roblox.exe"),
+            s.get("roblox.exe"),
             Some(&10),
             "focus continues across a reporting boundary"
         );
@@ -554,7 +603,7 @@ mod tests {
         let mut t = Tracker::new();
         t.focus(Some("roblox.exe"), 10_000);
         let s = t.drain(5_000);
-        assert!(s.apps.is_empty(), "time cannot run backwards into credit");
+        assert!(s.is_empty(), "time cannot run backwards into credit");
     }
 
     /// Silence is not zero. A day with no watcher must record as *not measured*, or a child who
@@ -593,6 +642,55 @@ mod tests {
             feed.drain().is_none(),
             "a drained feed has heard nothing since; the next tick must not re-count"
         );
+    }
+
+    /// Page titles are the one unbounded thing here: every tab, every video, every renamed
+    /// document is a new key, and they arrive from a process running as the child. A script that
+    /// retitles a window in a loop must not be able to grow the stored tally without limit.
+    #[test]
+    fn page_titles_are_capped_so_a_retitling_loop_cannot_grow_the_tally() {
+        let flood: BTreeMap<String, u64> = (0..500)
+            .map(|i| (format!("page {i}"), 1))
+            .collect();
+        let got = clamp(
+            Sample {
+                apps: BTreeMap::new(),
+                pages: flood,
+            },
+            600,
+        );
+
+        assert!(
+            got.pages.len() <= MAX_PAGES,
+            "kept {} titles, cap is {MAX_PAGES}",
+            got.pages.len()
+        );
+    }
+
+    #[test]
+    fn the_cap_keeps_the_heaviest_entries_not_an_arbitrary_slice() {
+        let mut map: BTreeMap<String, u64> =
+            [("zzz small".to_string(), 1), ("aaa big".to_string(), 99)].into();
+        retain_top(&mut map, 1);
+
+        assert_eq!(map.len(), 1);
+        assert!(
+            map.contains_key("aaa big"),
+            "the heaviest entry must survive, not whichever sorts first"
+        );
+    }
+
+    /// Pages get the same sum bound as apps, and for the same reason: one window at a time.
+    #[test]
+    fn page_time_is_bounded_by_the_tick_like_app_time() {
+        let got = clamp(
+            Sample {
+                apps: BTreeMap::new(),
+                pages: [("Roblox".to_string(), 9_000)].into(),
+            },
+            30,
+        );
+        assert_eq!(got.pages.get("Roblox"), Some(&30));
     }
 
     /// A page whose own title ends in a browser name must not be mistaken for chrome.

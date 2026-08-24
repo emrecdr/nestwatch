@@ -164,7 +164,12 @@ pub fn stop(pump_thread_id: u32) {
 /// The measuring loop: wake on a focus event or every [`POLL`], re-read the truth, and report every
 /// [`EMIT`].
 fn worker(rx: &Receiver<()>) {
-    let mut tracker = Tracker::new();
+    // Two trackers over the same state machine: one keyed by executable, one by browser page
+    // title. They are separate rather than one map because the keys are different kinds of thing —
+    // `"chrome.exe"` is a program the enforcement tally also knows about, `"Roblox"` is what a tab
+    // happened to say — and because the second is unbounded where the first is not.
+    let mut apps = Tracker::new();
+    let mut pages = Tracker::new();
     let started = Instant::now();
     let mut last_emit = Duration::ZERO;
 
@@ -176,12 +181,26 @@ fn worker(rx: &Receiver<()>) {
         let elapsed = started.elapsed();
         let now_ms = elapsed.as_millis() as u64;
 
-        // Idle first, so the focus update below banks against the correct active/away state.
-        apply_idle(&mut tracker, now_ms);
-        tracker.focus(foreground_app().as_deref(), now_ms);
+        // Idle first, so the focus updates below bank against the correct active/away state.
+        apply_idle(&mut apps, now_ms);
+        apply_idle(&mut pages, now_ms);
+
+        apps.focus(foreground_app().as_deref(), now_ms);
+
+        // A page is only credited while a *browser* is in front. `browser_page` returns `None` for
+        // every other window, and `Tracker::focus(None, _)` charges those seconds to nobody — so
+        // time in Notepad never lands in the page list.
+        let page = foreground_title()
+            .as_deref()
+            .and_then(crate::foreground::browser_page)
+            .map(|p| p.page);
+        pages.focus(page.as_deref(), now_ms);
 
         if elapsed.saturating_sub(last_emit) >= EMIT {
-            emit(&tracker.drain(now_ms));
+            emit(&crate::foreground::Sample {
+                apps: apps.drain(now_ms),
+                pages: pages.drain(now_ms),
+            });
             last_emit = elapsed;
         }
     }
@@ -290,7 +309,6 @@ fn foreground_app() -> Option<String> {
 ///
 /// Safe to call cross-process: `GetWindowTextW` only blocks when asked about a window owned by the
 /// *calling* thread, which this never is.
-#[allow(dead_code)]
 fn foreground_title() -> Option<String> {
     // SAFETY: Win32 window FFI; `buf` is owned by this frame and `hwnd` is an opaque token.
     unsafe {

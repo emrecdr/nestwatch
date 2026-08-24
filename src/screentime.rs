@@ -80,6 +80,8 @@ pub struct DayRow {
     /// Minutes each app actually had **focus**. Empty when the day predates foreground tracking,
     /// or when the watcher wasn't running — which is unknown focus, not zero focus.
     pub focused: Vec<AppMinutes>,
+    /// Minutes per browser page title. Same absent-means-unknown rule as `focused`.
+    pub pages: Vec<AppMinutes>,
 }
 
 impl DayRow {
@@ -97,6 +99,7 @@ impl DayRow {
                 .is_some_and(|b| b > 0 && row.minutes_used > u64::from(b)),
             apps: row.apps.clone(),
             focused: row.focused.clone(),
+            pages: row.pages.clone(),
         }
     }
 
@@ -111,6 +114,7 @@ impl DayRow {
             over_budget: false,
             apps: Vec::new(),
             focused: Vec::new(),
+            pages: Vec::new(),
         }
     }
 }
@@ -140,6 +144,7 @@ struct ParsedRow {
     budget: Option<u32>,
     apps: Vec<AppMinutes>,
     focused: Vec<AppMinutes>,
+    pages: Vec<AppMinutes>,
 }
 
 impl ParsedRow {
@@ -148,7 +153,7 @@ impl ParsedRow {
     /// strictly richer, and comparing app counts alone let a legacy row win the tie and drop the
     /// focus figures without trace.
     fn detail(&self) -> usize {
-        self.apps.len() + self.focused.len()
+        self.apps.len() + self.focused.len() + self.pages.len()
     }
 }
 
@@ -169,6 +174,7 @@ fn parse_row(v: &Value) -> Option<(NaiveDate, ParsedRow)> {
             budget,
             apps: app_minutes(v, "apps"),
             focused: app_minutes(v, "focused"),
+            pages: app_minutes(v, "pages"),
         },
     ))
 }
@@ -465,6 +471,25 @@ mod tests {
             "an absent key is unknown focus, never measured-zero focus"
         );
         assert_eq!(r.days[0].minutes_used, Some(90), "the day itself is still measured");
+    }
+
+    /// Browser page titles ride alongside the app figures, under the same absent-means-unknown
+    /// rule — a day with no `pages` key was one nothing was watching, not one nothing was read.
+    #[test]
+    fn page_titles_are_reported_and_an_absent_key_stays_empty() {
+        let with_pages = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "apps": {"chrome.exe": 60},
+            "pages": {"Roblox": 45, "Homework": 10},
+        });
+        let r = build_report(&[with_pages], d("2026-08-17"), 1);
+        assert_eq!(r.days[0].pages.len(), 2);
+        assert_eq!(r.days[0].pages[0].name, "Roblox", "heaviest page first");
+        assert_eq!(r.days[0].pages[0].minutes, 45);
+
+        let legacy = row("2026-08-16", 90, 180);
+        let r = build_report(&[legacy], d("2026-08-17"), 1);
+        assert!(r.days[0].pages.is_empty(), "absent is unknown, not zero");
     }
 
     #[test]

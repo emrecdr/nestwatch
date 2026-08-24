@@ -263,6 +263,11 @@ pub struct Usage {
     /// `load_or_default` would swallow the error and hand the child a zeroed budget on upgrade day.
     #[serde(default)]
     pub foreground_secs: BTreeMap<String, u64>,
+    /// Seconds per **browser page title** today. Report-only, like `foreground_secs`, and bounded
+    /// to [`crate::foreground::MAX_PAGES`] entries because the keys are attacker-chosen strings
+    /// rather than a fixed set of installed programs.
+    #[serde(default)]
+    pub page_secs: BTreeMap<String, u64>,
 }
 
 /// Rule-derived, normalized enforcement targets for one tick — built once by `decide` and shared
@@ -316,6 +321,7 @@ impl Usage {
             self.total_secs = 0;
             self.per_app_secs.clear();
             self.per_group_secs.clear();
+            self.page_secs.clear();
             // Cleared with the rest: the day's focus figures belong to the day that just ended,
             // and `decide_after_snapshot` has already taken the copy the rollup row is built from.
             self.foreground_secs.clear();
@@ -511,6 +517,7 @@ pub struct PreRollover {
     pub total_secs: u64,
     pub per_app_secs: BTreeMap<String, u64>,
     pub foreground_secs: BTreeMap<String, u64>,
+    pub page_secs: BTreeMap<String, u64>,
 }
 
 /// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
@@ -597,6 +604,7 @@ impl RulesEnforcer {
             total_secs: self.usage.total_secs,
             per_app_secs: self.usage.per_app_secs.clone(),
             foreground_secs: self.usage.foreground_secs.clone(),
+            page_secs: self.usage.page_secs.clone(),
         };
         (prev, self.decide(rules, procs, t))
     }
@@ -753,6 +761,7 @@ fn rollup_row(
     budget: Option<u32>,
     per_app_secs: &BTreeMap<String, u64>,
     foreground_secs: &BTreeMap<String, u64>,
+    page_secs: &BTreeMap<String, u64>,
 ) -> Value {
     let mut row = serde_json::Map::new();
     row.insert("date".into(), Value::from(date.to_string()));
@@ -769,6 +778,11 @@ fn rollup_row(
         "focused".into(),
         Value::Object(per_app_minutes(foreground_secs)),
     );
+    // Browser page titles, same shape and same absent-means-unknown rule as `focused`. Sub-minute
+    // entries are dropped by `per_app_minutes`, which matters more here than anywhere else: a day
+    // of browsing touches hundreds of titles for a few seconds each, and none of them is a fact
+    // worth storing for a year.
+    row.insert("pages".into(), Value::Object(per_app_minutes(page_secs)));
     Value::Object(row)
 }
 
@@ -884,7 +898,15 @@ pub async fn run_rules_enforcer(
         // because these numbers come from a process running as the child.
         if let Some(sample) = foreground.drain() {
             let bounded = crate::foreground::clamp(sample, elapsed.as_secs());
-            crate::foreground::accrue(&mut enforcer.usage.foreground_secs, bounded);
+            crate::foreground::accrue(&mut enforcer.usage.foreground_secs, bounded.apps);
+            crate::foreground::accrue(&mut enforcer.usage.page_secs, bounded.pages);
+            // Re-cap the running day, not just the tick. `clamp` bounds each report to
+            // `MAX_PAGES`, but forty *different* titles every thirty seconds would still reach
+            // thousands by bedtime, and this map is persisted and rolled up.
+            crate::foreground::retain_top(
+                &mut enforcer.usage.page_secs,
+                crate::foreground::MAX_PAGES,
+            );
         }
 
         save_tally_if_changed(&enforcer.usage, &tally_path, &mut last_saved_tally).await;
@@ -906,6 +928,7 @@ pub async fn run_rules_enforcer(
                 prev_budget,
                 &prev.per_app_secs,
                 &prev.foreground_secs,
+                &prev.page_secs,
             );
             usage_log.record("screentime_daily", row.clone());
             // The durable copy, in a file noisy events cannot rotate away.
@@ -1296,7 +1319,7 @@ mod tests {
         let running: BTreeMap<String, u64> = [("roblox.exe".to_string(), 3600)].into();
         let focused: BTreeMap<String, u64> = [("roblox.exe".to_string(), 2400)].into();
 
-        let row = rollup_row(day(), 3600, Some(180), &running, &focused);
+        let row = rollup_row(day(), 3600, Some(180), &running, &focused, &BTreeMap::new());
 
         assert_eq!(row["apps"]["roblox.exe"], 60, "60 minutes with the app open");
         assert_eq!(
@@ -1418,7 +1441,7 @@ mod tests {
     #[test]
     fn rollup_row_omits_budget_when_unknown() {
         let per_app = BTreeMap::new();
-        let row = rollup_row(day(), 7_200, None, &per_app, &BTreeMap::new());
+        let row = rollup_row(day(), 7_200, None, &per_app, &BTreeMap::new(), &BTreeMap::new());
 
         assert!(
             row.as_object().unwrap().get("budget").is_none(),
@@ -1429,7 +1452,7 @@ mod tests {
     #[test]
     fn rollup_row_includes_budget_when_known() {
         let per_app = BTreeMap::new();
-        let row = rollup_row(day(), 7_200, Some(120), &per_app, &BTreeMap::new());
+        let row = rollup_row(day(), 7_200, Some(120), &per_app, &BTreeMap::new(), &BTreeMap::new());
 
         assert_eq!(row["budget"], 120);
     }
@@ -1444,7 +1467,7 @@ mod tests {
         let mut per_app = BTreeMap::new();
         per_app.insert("game.exe".to_string(), 3_600u64);
 
-        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new());
+        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new(), &BTreeMap::new());
 
         // Read it back the way the report does, with a window ending on the day just written.
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
@@ -1461,7 +1484,7 @@ mod tests {
     /// never as a zero that would read as "no limit" or flag a false over-budget day.
     #[test]
     fn a_row_written_without_a_budget_round_trips_as_no_verdict() {
-        let row = rollup_row(day(), 14_400, None, &BTreeMap::new(), &BTreeMap::new()); // 240 min, budget unknown
+        let row = rollup_row(day(), 14_400, None, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new()); // 240 min, budget unknown
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
 
         assert_eq!(report.days[0].minutes_used, Some(240));
@@ -1480,7 +1503,7 @@ mod tests {
         per_app.insert("game.exe".to_string(), 3_600u64); // 60 min
         per_app.insert("blip.exe".to_string(), 30u64); // 0 min — dropped, same as per_app_minutes
 
-        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new()); // 7530s = 125.5 min -> 125
+        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new(), &BTreeMap::new()); // 7530s = 125.5 min -> 125
 
         assert_eq!(row["date"], day().to_string());
         assert_eq!(
@@ -1897,6 +1920,7 @@ mod tests {
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
+            page_secs: Default::default(),
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
@@ -1923,6 +1947,7 @@ mod tests {
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
+            page_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage, Some(12));
         assert_eq!(s["budget_mins"], 0);
@@ -1941,6 +1966,7 @@ mod tests {
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
+            page_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 30, &usage, Some(12)); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
@@ -1960,6 +1986,7 @@ mod tests {
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
+            page_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage, Some(12));
         assert_eq!(s["budget_mins"], 90);
@@ -1982,6 +2009,7 @@ mod tests {
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
+            page_secs: Default::default(),
         };
 
         let fresh = today_summary(&rules, day(), 0, &usage, Some(7));

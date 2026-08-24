@@ -333,3 +333,21 @@ test("stRecentFocusDay is null when nothing has been measured", () => {
     "no focus data must render as absent, not as an empty list under a date heading",
   );
 });
+
+test("stRecentPageDay picks the newest day carrying browser page titles", () => {
+  const app = withState({
+    screentime: {
+      days: [
+        { date: "2026-08-14", pages: [{ name: "Roblox", minutes: 40 }] },
+        { date: "2026-08-15", pages: [] },
+      ],
+    },
+  });
+
+  assert.equal(app.stRecentPageDay().date, "2026-08-14");
+});
+
+test("stRecentPageDay is null when no browser time was recorded", () => {
+  const app = withState({ screentime: { days: [{ date: "2026-08-15", pages: [] }] } });
+  assert.equal(app.stRecentPageDay(), null);
+});

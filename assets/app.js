@@ -739,6 +739,13 @@ function app() {
       return days.length ? days[days.length - 1] : null;
     },
 
+    // The most recent day carrying browser page titles, chosen independently again — a day can
+    // have focused apps and no browser time at all, which is a normal evening rather than a gap.
+    stRecentPageDay() {
+      const days = this.screentime.days.filter(d => d.pages && d.pages.length);
+      return days.length ? days[days.length - 1] : null;
+    },
+
     // Shared by the "Today" panel banner and the screen-time card, so the two can never
     // disagree about what counts as stale.
     //
