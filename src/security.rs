@@ -106,11 +106,21 @@ fn is_same_origin(site: Option<&str>, mode: Option<&str>, method: &Method) -> bo
 /// there's an inline `<script>`); tightening to a nonce-free strict policy would mean adopting
 /// the `@alpinejs/csp` build and externalizing the inline script — deferred. `img-src` allows
 /// `blob:` (screenshot object URLs) and `data:` (DaisyUI's inline-SVG backgrounds).
+///
+/// `connect-src` also allows `api.github.com`, for the version check behind the button in the
+/// footer. That request is made by the *parent's* browser, on the parent's own device — the
+/// monitored PC still never contacts anything, which is what "nothing leaves the house" claims.
+/// It happens only on a click; nothing is fetched on load.
+///
+/// The cost is real but small: script running in this page could reach github.com. Script running
+/// in this page already holds the parent's session and can drive every control here — take a
+/// screenshot, kill a process, shut the machine down — so exfiltration to one more host is not
+/// the marginal risk. `default-src 'none'` still blocks every other destination.
 const CSP: &str = "default-src 'none'; \
      script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
      style-src 'self' 'unsafe-inline'; \
      img-src 'self' blob: data:; \
-     connect-src 'self'; \
+     connect-src 'self' https://api.github.com; \
      base-uri 'none'; \
      form-action 'self'; \
      frame-ancestors 'none'; \
@@ -150,6 +160,38 @@ pub async fn set_security_headers(mut response: Response) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The policy allows exactly one host to be contacted, and no more.
+    ///
+    /// `connect-src` is what stops this page sending data anywhere, and it is the one directive
+    /// that had to be widened -- for the footer's version check, which runs in the parent's
+    /// browser rather than on the monitored PC. Pinned so a future edit cannot quietly add a
+    /// second destination, and so `default-src 'none'` cannot be loosened into covering it.
+    #[test]
+    fn the_page_may_contact_itself_and_github_and_nothing_else() {
+        let connect = CSP
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("connect-src"))
+            .expect("the policy must state connect-src explicitly");
+
+        assert_eq!(
+            connect, "connect-src 'self' https://api.github.com",
+            "exactly one external host, and only over https"
+        );
+        assert!(
+            CSP.trim_start().starts_with("default-src 'none'"),
+            "everything not named must still be denied by default"
+        );
+        // The check is a click, not a page load, so no other host needs reaching -- and these
+        // two in particular would mean tracking or a CDN.
+        for forbidden in ["*", "http:", "data: https:", "googleapis", "cdn"] {
+            assert!(
+                !connect.contains(forbidden),
+                "connect-src must not admit {forbidden:?}: {connect}"
+            );
+        }
+    }
 
     #[test]
     fn lan_and_loopback_allowed_public_rejected() {

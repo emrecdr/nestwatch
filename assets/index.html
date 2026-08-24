@@ -797,9 +797,38 @@
           Nestwatch <span x-text="version || '—'"></span> on this PC ·
           <a class="link"
              href="https://github.com/emrecdr/nestwatch/releases/latest"
-             target="_blank" rel="noopener noreferrer">see the latest release</a>
+             target="_blank" rel="noopener noreferrer">releases</a>
+          ·
+          <button class="link" @click="checkForUpdate()" :disabled="checkingUpdate">
+            <span x-show="checkingUpdate" class="loading loading-spinner loading-xs"></span>
+            check for a newer version
+          </button>
+
+          <template x-if="updateState === 'current'">
+            <span class="block pt-1 text-success">✓ This is the latest release.</span>
+          </template>
+          <template x-if="updateState === 'newer'">
+            <span class="block pt-1 text-warning">
+              <span x-text="latestVersion"></span> is available — this PC has
+              <span x-text="version"></span>.
+              <a class="link" :href="latestUrl" target="_blank" rel="noopener noreferrer">
+                what changed</a>
+            </span>
+          </template>
+          <template x-if="updateState === 'ahead'">
+            <span class="block pt-1 opacity-75">
+              This PC is running <span x-text="version"></span>, newer than the latest
+              release (<span x-text="latestVersion"></span>).
+            </span>
+          </template>
+          <template x-if="updateState === 'failed'">
+            <span class="block pt-1 text-error" x-text="updateError"></span>
+          </template>
+
           <span class="block pt-1 opacity-75">
-            Nothing here contacts the internet — the link opens on the device you are reading this on.
+            This PC never contacts the internet. The check runs in
+            <em>this</em> browser, on the device you are reading this on, and only when you
+            press it.
           </span>
         </footer>
       </div>
@@ -930,6 +959,11 @@
           savingPw: false,
           toasts: [],
           version: "",
+          latestVersion: "",
+          latestUrl: "",
+          updateState: "",
+          updateError: "",
+          checkingUpdate: false,
 
           async init() {
             try {
@@ -1291,6 +1325,60 @@
               this.toast(r.ok ? "Shutting down…" : "Shutdown failed", r.ok ? "success" : "error");
             } catch {
               this.toast("Shutdown request failed", "error");
+            }
+          },
+
+          // Compare two dotted versions numerically. "0.10.0" is newer than "0.9.0", which a
+          // string compare gets backwards -- and will bite the first time a minor reaches 10.
+          // Missing or non-numeric parts count as 0, so "1.2" and "1.2.0" are equal.
+          compareVersions(a, b) {
+            const parts = (v) => String(v).replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
+            const [x, y] = [parts(a), parts(b)];
+            for (let i = 0; i < Math.max(x.length, y.length); i++) {
+              const d = (x[i] || 0) - (y[i] || 0);
+              if (d !== 0) return d < 0 ? -1 : 1;
+            }
+            return 0;
+          },
+
+          // Ask GitHub what the latest release is.
+          //
+          // Runs in the parent's browser, on the parent's own device, and only on a click. The
+          // monitored PC makes no outbound connection -- it serves this page and nothing else,
+          // which is what "nothing leaves the house" means. Nothing is fetched on page load, so
+          // simply opening the dashboard contacts no one.
+          async checkForUpdate() {
+            this.checkingUpdate = true;
+            this.updateState = "";
+            this.updateError = "";
+            try {
+              const r = await fetch(
+                "https://api.github.com/repos/emrecdr/nestwatch/releases/latest",
+                { headers: { Accept: "application/vnd.github+json" } }
+              );
+              if (r.status === 403 || r.status === 429) {
+                // 60 requests an hour per IP, unauthenticated. Worth naming rather than
+                // reporting as a generic failure, since waiting genuinely fixes it.
+                throw new Error("GitHub is rate-limiting this device — try again in a few minutes.");
+              }
+              if (!r.ok) throw new Error("GitHub returned " + r.status + ".");
+              const j = await r.json();
+              const tag = (j.tag_name || "").replace(/^v/, "");
+              if (!tag) throw new Error("GitHub did not report a version.");
+              this.latestVersion = tag;
+              this.latestUrl = j.html_url || "https://github.com/emrecdr/nestwatch/releases/latest";
+              const d = this.compareVersions(this.version, tag);
+              this.updateState = d < 0 ? "newer" : d > 0 ? "ahead" : "current";
+            } catch (e) {
+              // Offline, blocked, or CSP-refused. This is a convenience -- say what happened and
+              // leave the manual link, rather than implying anything is wrong with the install.
+              this.updateState = "failed";
+              this.updateError =
+                "Could not reach GitHub from this device (" +
+                (e?.message || "network error") +
+                ") — use the releases link instead.";
+            } finally {
+              this.checkingUpdate = false;
             }
           },
 

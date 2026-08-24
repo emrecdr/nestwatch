@@ -291,6 +291,26 @@ redeem a code the parent already chose to hand out — it cannot see or change a
 7. **Child page** — open `https://<this-pc>:<port>/ask` and confirm it shows only the request
    form: no controls, no screen, no data.
 
+## Outbound connections
+
+There are none from the monitored PC. It listens on one port and contacts nothing — no update
+check, no telemetry, no licence call, no crash reporting. `src/` contains no HTTP client; the only
+outgoing socket anywhere is `doctor`'s probe of `127.0.0.1` to confirm the service bound its port.
+A test pins this by asserting the Content-Security-Policy names exactly one external host and that
+`default-src` stays `'none'`.
+
+That one host is `api.github.com`, and the distinction matters: it is reachable **from the
+dashboard page**, which runs in the parent's browser on the parent's own device. The button that
+uses it ("check for a newer version") fetches the release list from *there*, not from the child's
+PC. Nothing is requested on page load, so opening the dashboard contacts nobody, and declining to
+press it leaves the behaviour exactly as before.
+
+Why it was not built the obvious way: a version check *in the service* would have the monitored
+machine contact GitHub, revealing the household's address and roughly when that PC is awake — a
+presence signal about a child's computer, sent to a third party, for a convenience. The
+information is the same either way; the difference is which machine is observable, and that is
+the whole claim.
+
 ## Supply chain
 
 Every layer above assumes the program running is this program, built from this source. That

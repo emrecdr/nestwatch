@@ -23,6 +23,14 @@ a small web dashboard over HTTPS to your phone or laptop **on the same Wi-Fi**. 
 minute budget and a bedtime; it enforces them and shows you what actually happened.
 
 Nothing leaves the house: no account to create, no vendor to trust, no data sent anywhere.
+The monitored PC makes no outbound connection at all — it listens, and nothing else.
+
+The single exception is worth stating precisely rather than hiding behind that sentence: the
+dashboard has a **"check for a newer version"** button. Pressing it fetches the release list
+**from the device you are reading the dashboard on** — your phone or laptop — not from the
+child's PC, which still contacts nobody. Nothing is fetched when the page loads, and the check
+sends nothing about your household beyond the request itself. Ignore the button and this
+software never touches the internet.
 
 **The two controls that hold** are the daily budget and the curfew — they cannot be dodged by
 renaming a file or rebooting. App blocklists are habit-shaping rather than a wall, and the README
