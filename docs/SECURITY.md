@@ -302,6 +302,55 @@ redeem a code the parent already chose to hand out — it cannot see or change a
 7. **Child page** — open `https://<this-pc>:<port>/ask` and confirm it shows only the request
    form: no controls, no screen, no data.
 
+## What is recorded about the child, and what is not
+
+The tally and the report answer "how long", and — since foreground tracking — "at what". This is
+the most personal data the system holds, so it is worth stating exactly.
+
+**Per-app foreground time records process names.** The watcher emits a `foreground::Sample`, whose
+`apps` map is normalized process names (`"roblox.exe"`) to seconds. No path, no command line, no
+document name.
+
+**Browser time is recorded by page title, and that is a deliberate trade.** The same sample's
+`pages` map holds the *page title* a browser window was showing — `"Roblox"` from
+`"Roblox - Google Chrome"` — for the intervals when a browser was in front. This is more personal
+than a process name and less than a browsing history:
+
+- **It is a title, never a URL and never a domain.** Nothing resolves, logs, or infers the address.
+  Getting domains would mean writing browser policy into `HKLM` to disable each browser's own DNS
+  resolver; that was considered and declined, because reconfiguring a child's browser belongs in
+  front of a parent as a decision rather than inside an installer as a detail.
+- **It is capped at 40 titles per report** (`foreground::MAX_PAGES`), heaviest first. The cap
+  exists because titles are the highest-cardinality thing here and arrive from a process running
+  as the child — without it, a script retitling a window in a loop grows the tally file without
+  bound. It also means the record is a summary of where the time went, not a log of everything
+  opened.
+- **It works in private browsing**, because window titles are not suppressed there. Worth knowing
+  before you assume Incognito is unobserved — and worth telling your child, since this project is
+  overt monitoring, not surveillance.
+- **It is reported, never enforced.** No limit, lock or shutdown is ever decided by a page title.
+  The watcher runs inside the child's session, so anything he can influence must not decide
+  whether his machine locks.
+
+`tests/privacy.rs` pins the shape of what is emitted: process names and page titles keyed to
+second counts, and nothing else. A new field fails it, so the paragraph above cannot drift from
+the code without somebody noticing.
+
+**Two Windows APIs the dependency list makes look worse than they are.** `Cargo.toml` enables
+`Win32_UI_Accessibility` and `Win32_UI_Input_KeyboardAndMouse`, both of which sound like the
+keylogging this project refuses. They are:
+
+- `SetWinEventHook` (Accessibility) — a notification when the *foreground window changes*. It
+  reports which window came to the front, not anything inside it.
+- `GetLastInputInfo` (KeyboardAndMouse) — the timestamp of the last input, used to tell "at the
+  keyboard" from "away from it". It reports **how long ago** something was pressed, and cannot
+  report what: the API returns a tick count and nothing else. Microsoft scopes it to the calling
+  session, so it says nothing about other users either.
+
+Neither installs a keyboard hook, and nothing anywhere reads key state. The design reasoning is in
+[FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md); this section exists so the answer is also where
+someone checking the privacy claim will look.
+
 ## Outbound connections
 
 There are none from the monitored PC. It listens on one port and contacts nothing — no update
@@ -423,11 +472,14 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   conservative for enforcement — it cannot be dodged by switching users — and misleading for the
   report, which says so on the card. Attributing per-account is possible (the console session's
   username is already read and discarded) but changes the `SystemControl` trait; tracked as O6.
-- **Time is counted while an app is *running*, not while it's focused.** An app left open in the
-  background consumes its per-app limit and its group's pool. This makes per-app limits
-  impractical for anything that auto-starts, which is a usability limit rather than a bypass —
-  but it pushes parents toward the total budget, which is the control that resists tampering best
-  anyway.
+- **Enforcement still counts an app while it is *running*, not while it is focused.** Focused
+  minutes are now *measured* and reported alongside the running figure (see below), but nothing
+  is enforced on them, and that is deliberate rather than unfinished: the watcher runs inside the
+  child's own session, so a figure he can influence must never decide whether his PC locks. So an
+  app left open in the background still consumes its per-app limit and its group's pool, which
+  makes per-app limits impractical for anything that auto-starts. A usability limit rather than a
+  bypass — and it pushes parents toward the total budget, which is the control that resists
+  tampering best anyway.
 - **Enforcement may not cover every way the machine can be started.** Whether it does is an open
   question about the specific device, not a settled property of this software, so do not assume a
   reboot cannot get around it. The specifics, the fix, and the check are tracked outside this
