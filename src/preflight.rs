@@ -15,6 +15,12 @@
 //!
 //! The decisions here are pure and unit-tested; the I/O that feeds them lives in [`gather`],
 //! which is the same split the enforcers use.
+//!
+//! One exception to "before anything is touched", and it is deliberate: a finding may carry a
+//! [`Remedy`], and [`apply`] performs it — a PowerShell call, an `sc.exe config`, a file write.
+//! Nothing here runs unasked; a remedy happens only when a parent answers yes at the prompt, or
+//! passes `--fix`. Auditing this module for "does it change the machine?" should stop at
+//! [`apply`] and nowhere else.
 
 use std::fmt::Write as _;
 
@@ -27,25 +33,24 @@ pub enum Severity {
     Caution,
 }
 
-/// One precondition that is not met.
-///
-/// `fix` is not optional. A finding a parent cannot act on is a finding that wastes their time —
-/// this is a tool installed by hand, at a machine, usually not by someone who wants to be
-/// reading about service control managers.
 /// A problem this installer can correct itself, given permission.
 ///
 /// An enum rather than a boxed closure so the decision to offer a fix stays pure data — testable,
 /// printable, and comparable — with the side effects confined to [`apply`]. Same split the
-/// enforcers use, and the reason the checks above are unit-testable at all.
+/// enforcers use, and the reason the checks in [`gather`] are unit-testable at all.
 ///
 /// Deliberately narrow. A fix belongs here only when it is unambiguous, reversible, and squarely
 /// within what installing this tool implies. Anything needing a judgement call — which program to
-/// stop so a port frees up, whether to repair Windows — stays [`Remedy::Manual`], because
-/// guessing on someone else's machine is worse than asking.
+/// stop so a port frees up, whether to repair Windows — gets no remedy at all and leaves the
+/// finding's `fix` prose as the whole answer, because guessing on someone else's machine is worse
+/// than asking.
+///
+/// Absence is `Option::None` rather than a `Manual` variant. As a variant it had to be accepted
+/// by [`apply`], which returned `Ok("")` for it — a success carrying no message, unreachable
+/// because [`fixable`] filters it out first, and printing as a bare `done:` if it ever were
+/// reached. With `Option`, every value of this type is something [`apply`] can actually perform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Remedy {
-    /// Nothing safe to do automatically; the `fix` text is the whole answer.
-    Manual,
     /// Switch every Public network adapter to Private.
     MakeNetworkPrivate,
     /// Strip the downloaded-from-the-internet mark from this file.
@@ -68,8 +73,8 @@ pub struct Finding {
     pub why: String,
     /// What to do about it, in words, whether or not [`Self::remedy`] can do it for them.
     pub fix: String,
-    /// Whether the installer can do it for them, on request.
-    pub remedy: Remedy,
+    /// What the installer can do for them, on request, if anything.
+    pub remedy: Option<Remedy>,
 }
 
 impl Finding {
@@ -83,7 +88,7 @@ impl Finding {
             what: what.into(),
             why: why.into(),
             fix: fix.into(),
-            remedy: Remedy::Manual,
+            remedy: None,
         }
     }
 
@@ -97,52 +102,42 @@ impl Finding {
             what: what.into(),
             why: why.into(),
             fix: fix.into(),
-            remedy: Remedy::Manual,
+            remedy: None,
         }
     }
 
     /// Attach a fix the installer can apply itself.
+    ///
+    /// Named for what it sets, not for what it makes the finding: `fixable` was already the free
+    /// function below, which selects findings rather than building one.
     #[must_use]
-    pub fn fixable(mut self, remedy: Remedy) -> Self {
-        self.remedy = remedy;
+    pub fn with_remedy(mut self, remedy: Remedy) -> Self {
+        self.remedy = Some(remedy);
         self
     }
 }
 
 /// Findings this installer could correct, in report order.
 pub fn fixable(findings: &[Finding]) -> Vec<&Finding> {
-    findings
-        .iter()
-        .filter(|f| f.remedy != Remedy::Manual)
-        .collect()
+    findings.iter().filter(|f| f.remedy.is_some()).collect()
 }
 
 /// No remedy is constructible off Windows -- every check that produces one is `cfg(windows)` --
 /// so this exists only to keep the cross-platform `install` path compiling and testable.
 #[cfg(not(windows))]
 pub fn apply(remedy: &Remedy) -> Result<String, String> {
-    match remedy {
-        Remedy::Manual => Ok(String::new()),
-        other => Err(format!("{other:?} is only available on Windows")),
-    }
+    Err(format!("{remedy:?} is only available on Windows"))
 }
 
-/// The useful part of a failed command's output, for putting in an error message.
+/// Where Windows records that a file was downloaded from the internet.
 ///
-/// Windows CLI tools split themselves between stdout and stderr inconsistently — `icacls` reports
-/// failures on stdout, `sc` on both — so take whichever has content. Collapsed to one line
-/// because it is being embedded in a sentence, and trimmed because these tools pad with blanks.
+/// Shared by the check that looks for the mark and the remedy that deletes it, which sit ~280
+/// lines apart. Change how the mark is located and only one of them would move otherwise —
+/// leaving pre-flight reporting a finding whose fix targets a different path, which reads to a
+/// parent as "it said done and nothing happened".
 #[cfg(windows)]
-pub(crate) fn tool_output(out: &std::process::Output) -> String {
-    let pick = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
-    let (o, e) = (pick(&out.stdout), pick(&out.stderr));
-    let text = match (o.is_empty(), e.is_empty()) {
-        (false, false) => format!("{o} {e}"),
-        (false, true) => o,
-        (true, false) => e,
-        (true, true) => return "(it printed nothing)".into(),
-    };
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+fn zone_identifier(path: &std::path::Path) -> String {
+    format!("{}:Zone.Identifier", path.display())
 }
 
 /// Carry out one remedy.
@@ -153,14 +148,12 @@ pub(crate) fn tool_output(out: &std::process::Output) -> String {
 #[cfg(windows)]
 pub fn apply(remedy: &Remedy) -> Result<String, String> {
     match remedy {
-        Remedy::Manual => Ok(String::new()),
-
         // Documented as equivalent to the Unblock tick-box in the file's properties: it removes
         // the Zone.Identifier alternate data stream and nothing else. Done natively rather than
         // through `Unblock-File`, since deleting the stream IS the operation and a subprocess
         // would only add a failure mode.
         Remedy::UnblockFile(path) => {
-            let ads = format!("{}:Zone.Identifier", path.display());
+            let ads = zone_identifier(path);
             match std::fs::remove_file(&ads) {
                 Ok(()) => Ok(format!("unblocked {}", path.display())),
                 // Already gone is success: the goal is the absence of the mark, not the deletion.
@@ -173,20 +166,18 @@ pub fn apply(remedy: &Remedy) -> Result<String, String> {
 
         Remedy::MakeNetworkPrivate => {
             let out = std::process::Command::new(crate::syspath::powershell())
-                .args([
-                    "-NoProfile",
-                    "-Command",
-                    "Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} | \
-                     Set-NetConnectionProfile -NetworkCategory Private",
-                ])
+                .args(["-NoProfile", "-Command", crate::doctor::MAKE_PRIVATE_PS])
                 .output()
                 .map_err(|e| format!("could not run PowerShell: {e}"))?;
             if !out.status.success() {
-                return Err(format!("PowerShell refused it: {}", tool_output(&out)));
+                return Err(format!(
+                    "PowerShell refused it: {}",
+                    crate::syspath::tool_output(&out)
+                ));
             }
             // Confirm rather than assume: the cmdlet can exit 0 having matched nothing.
             let left = crate::doctor::network_profiles();
-            if !left.is_empty() && left.iter().all(|p| p == "Public") {
+            if crate::doctor::all_public(&left) {
                 return Err("the command ran but the network is still Public".into());
             }
             Ok("network set to Private".into())
@@ -200,7 +191,10 @@ pub fn apply(remedy: &Remedy) -> Result<String, String> {
             if out.status.success() {
                 Ok("service set to start automatically".into())
             } else {
-                Err(format!("sc.exe refused it: {}", tool_output(&out)))
+                Err(format!(
+                    "sc.exe refused it: {}",
+                    crate::syspath::tool_output(&out)
+                ))
             }
         }
     }
@@ -211,11 +205,26 @@ pub fn blocked(findings: &[Finding]) -> bool {
     findings.iter().any(|f| f.severity == Severity::Blocker)
 }
 
+/// Whether anything on this machine has already been altered when a report is printed.
+///
+/// [`render`] is pure and gets asked twice per install: once before anything happens, and again
+/// after any accepted remedies have run. It closes a blocking report by telling the parent
+/// nothing was touched -- which is worth saying, and was false the second time. Accepting the
+/// Public-network fix and then failing on a different blocker printed "Nothing has been changed
+/// on this machine." immediately after changing the machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Machine {
+    /// Nothing has run yet; the reassurance is true.
+    Untouched,
+    /// At least one remedy was applied, so the report must not claim otherwise.
+    Changed,
+}
+
 /// The report a parent reads.
 ///
 /// Blockers first regardless of the order they were found in, because that is the order they have
 /// to be dealt with. Pure, so the wording is testable without a Windows machine.
-pub fn render(findings: &[Finding]) -> String {
+pub fn render(findings: &[Finding], machine: Machine) -> String {
     if findings.is_empty() {
         return "Pre-flight checks passed.\n".to_string();
     }
@@ -252,7 +261,11 @@ pub fn render(findings: &[Finding]) -> String {
     if !blockers.is_empty() {
         let _ = writeln!(
             out,
-            "Nothing has been changed on this machine. Fix the above and run install again."
+            "{} Fix the above and run install again.",
+            match machine {
+                Machine::Untouched => "Nothing has been changed on this machine.",
+                Machine::Changed => "Apart from the fixes you accepted, nothing has been changed.",
+            }
         );
     }
     out
@@ -293,7 +306,7 @@ fn entry(n: usize, f: &Finding) -> String {
 /// grouped by what they inspect rather than by how bad they are.
 pub fn gather(port: u16) -> Vec<Finding> {
     let mut out = Vec::new();
-    check_port(port, &mut out);
+    check_port(port, running_service_port(), &mut out);
     #[cfg(windows)]
     {
         check_system_tools(&mut out);
@@ -304,6 +317,40 @@ pub fn gather(port: u16) -> Vec<Finding> {
     out
 }
 
+/// The port our own service is serving right now, if it is running.
+///
+/// Only the running case counts. A stopped or disabled service holds nothing, so a busy port
+/// then is somebody else's and must still block.
+#[cfg(not(windows))]
+fn running_service_port() -> Option<u16> {
+    None
+}
+
+/// The port our own service is serving right now, if it is running.
+///
+/// Read as "is the service up" plus "what did we configure it with", rather than by asking the OS
+/// which process owns the socket -- that needs `GetExtendedTcpTable` and a PID comparison, for an
+/// answer these two facts already give. If the service is Running it has the port from its config;
+/// nothing else can have bound it.
+#[cfg(windows)]
+fn running_service_port() -> Option<u16> {
+    use windows_service::service::{ServiceAccess, ServiceState};
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    let manager =
+        ServiceManager::local_computer(None::<&std::ffi::OsStr>, ServiceManagerAccess::CONNECT)
+            .ok()?;
+    let svc = manager
+        .open_service(crate::service::SERVICE_NAME, ServiceAccess::QUERY_STATUS)
+        .ok()?;
+    let state = svc.query_status().ok()?.current_state;
+    // StartPending counts: it has already bound, or is about to, and install stops it either way.
+    if !matches!(state, ServiceState::Running | ServiceState::StartPending) {
+        return None;
+    }
+    crate::config::Config::load().ok().map(|c| c.port)
+}
+
 /// The port must be free *before* the service is registered.
 ///
 /// Otherwise the service starts, fails to bind, and exits within milliseconds — which surfaces as
@@ -311,8 +358,17 @@ pub fn gather(port: u16) -> Vec<Finding> {
 /// Binding is the only honest test: `netstat` parsing cannot see a socket opened between the
 /// check and the bind, and neither can this, but a real bind at least fails the same way the
 /// service would.
-fn check_port(port: u16, out: &mut Vec<Finding>) {
+fn check_port(port: u16, ours_on: Option<u16>, out: &mut Vec<Finding>) {
     use std::net::TcpListener;
+    // An upgrade over a running install: the thing holding this port is us. `deploy` stops the
+    // service before it rebinds, so this is not a conflict -- and treating it as one refused
+    // every in-place upgrade, including the remote one docs/REMOTE-UPDATE.md describes.
+    //
+    // Matched on the port, not merely on "the service is up": a service serving 8443 says nothing
+    // about whether something else holds the 9000 an `install --port 9000` is asking for.
+    if ours_on == Some(port) {
+        return;
+    }
     // 0.0.0.0 because that is what the server binds; a listener on a single interface would miss
     // a conflict on another one.
     match TcpListener::bind(("0.0.0.0", port)) {
@@ -346,17 +402,24 @@ fn check_port(port: u16, out: &mut Vec<Finding>) {
 /// the install rather than an obvious one here.
 #[cfg(windows)]
 fn check_system_tools(out: &mut Vec<Finding>) {
-    let missing: Vec<String> = [
+    const REPAIR: &str = "This usually means a damaged Windows install or a heavily stripped \n\
+         image. `sfc /scannow` from an elevated prompt is the standard repair.";
+
+    let absent = |tools: &[std::path::PathBuf]| -> Vec<String> {
+        tools
+            .iter()
+            .filter(|p| !p.exists())
+            .map(|p| p.display().to_string())
+            .collect()
+    };
+
+    // Install cannot finish without these.
+    let missing = absent(&[
         crate::syspath::system32("sc.exe"),
         crate::syspath::system32("netsh.exe"),
         crate::syspath::system32("icacls.exe"),
         crate::syspath::powershell(),
-    ]
-    .into_iter()
-    .filter(|p| !p.exists())
-    .map(|p| p.display().to_string())
-    .collect();
-
+    ]);
     if !missing.is_empty() {
         out.push(Finding::blocker(
             "some Windows system tools are missing",
@@ -365,8 +428,27 @@ fn check_system_tools(out: &mut Vec<Finding>) {
                  down the data folder. Not found:\n  {}",
                 missing.join("\n  ")
             ),
-            "This usually means a damaged Windows install or a heavily stripped image. \n\
-             `sfc /scannow` from an elevated prompt is the standard repair.",
+            REPAIR,
+        ));
+    }
+
+    // Install finishes fine without these; the product does not work. A caution rather than a
+    // blocker for exactly that reason -- and worth stating at install time, because the symptom
+    // otherwise is bedtime arriving and nothing happening, months later, with no error anywhere.
+    let missing = absent(&[
+        crate::syspath::system32("shutdown.exe"),
+        crate::syspath::system32("rundll32.exe"),
+    ]);
+    if !missing.is_empty() {
+        out.push(Finding::caution(
+            "the tools that enforce bedtime and lock are missing",
+            format!(
+                "Install will finish and the dashboard will work, but the curfew cannot lock \n\
+                 or shut this PC down when it fires -- it would look like it is working and do \n\
+                 nothing at the moment it matters. Not found:\n  {}",
+                missing.join("\n  ")
+            ),
+            REPAIR,
         ));
     }
 }
@@ -414,7 +496,7 @@ fn check_existing_service(out: &mut Vec<Finding>) {
                  A reboot clears a deletion that is still pending."
                 ),
             )
-            .fixable(Remedy::EnableService),
+            .with_remedy(Remedy::EnableService),
         );
     }
 
@@ -441,7 +523,7 @@ fn check_mark_of_the_web(out: &mut Vec<Finding>) {
         return;
     };
     // An ADS is opened as `path:StreamName`. Present means the file is still marked.
-    let ads = format!("{}:Zone.Identifier", exe.display());
+    let ads = zone_identifier(&exe);
     if std::fs::metadata(&ads).is_ok() {
         out.push(Finding::caution(
             "this .exe is still marked as downloaded from the internet",
@@ -454,7 +536,7 @@ fn check_mark_of_the_web(out: &mut Vec<Finding>) {
                 exe.display()
             ),
         )
-        .fixable(Remedy::UnblockFile(exe.clone())));
+        .with_remedy(Remedy::UnblockFile(exe)));
     }
 }
 
@@ -467,19 +549,19 @@ fn check_mark_of_the_web(out: &mut Vec<Finding>) {
 #[cfg(windows)]
 fn check_network_profile(out: &mut Vec<Finding>) {
     let profiles = crate::doctor::network_profiles();
-    // Empty means the query failed, which is not the same as Public. Per adapter, because
-    // Hyper-V, WSL and VPN adapters are routinely Public while the real Wi-Fi is fine.
-    if !profiles.is_empty() && profiles.iter().all(|p| p == "Public") {
+    // Per adapter, because Hyper-V, WSL and VPN adapters are routinely Public while the real
+    // Wi-Fi is fine. `all_public` owns the "empty means the query failed" rule.
+    if crate::doctor::all_public(&profiles) {
         out.push(
             Finding::caution(
                 "this PC's network is set to Public",
                 "The firewall rule only applies on Private and Domain networks. On a Public one \n\
              Windows blocks every incoming connection, so the dashboard address and the QR code \n\
              will time out from every device -- even though the service is running.",
-                "From this same elevated PowerShell, one line:\n\
+                format!(
+                    "From this same elevated PowerShell, one line:\n\
              \n  \
-             Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} |\n    \
-                 Set-NetConnectionProfile -NetworkCategory Private\n\
+             {}\n\
              \n\
              (That switches every Public adapter on this machine to Private, which is what you\n\
              want on a home PC. Run Get-NetConnectionProfile first if you would rather see them\n\
@@ -488,8 +570,10 @@ fn check_network_profile(out: &mut Vec<Finding>) {
              Or by hand: Settings > Network & internet > (your Wi-Fi) > Network profile type.\n\
              Either way it takes effect immediately -- nothing needs reinstalling, and you do\n\
              not need to run install again.",
+                    crate::doctor::MAKE_PRIVATE_PS
+                ),
             )
-            .fixable(Remedy::MakeNetworkPrivate),
+            .with_remedy(Remedy::MakeNetworkPrivate),
         );
     }
 }
@@ -513,6 +597,81 @@ mod tests {
         )
     }
 
+    /// An upgrade is not a port conflict.
+    ///
+    /// `install` over a running Nestwatch binds the port its own service is already holding. That
+    /// arrived as a Blocker, so pre-flight refused every in-place upgrade -- including the remote
+    /// one `docs/REMOTE-UPDATE.md` describes, where nobody is at the machine to see why. Held by
+    /// a real listener rather than a mocked one, because the bug was in what `bind` actually does.
+    #[test]
+    fn an_upgrade_over_our_own_service_is_not_a_conflict() {
+        let live = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = live.local_addr().unwrap().port();
+
+        let mut out = Vec::new();
+        check_port(port, Some(port), &mut out);
+        assert!(
+            out.is_empty(),
+            "our own service holding the port is an upgrade, not a conflict: {out:#?}"
+        );
+    }
+
+    /// The narrowness of that exemption is the whole of it.
+    ///
+    /// Anything that is not our service on this exact port must still block: a foreign program,
+    /// and -- the case a looser "is the service running?" test would wave through -- our service
+    /// running on a different port while the requested one is taken by something else.
+    #[test]
+    fn anything_other_than_our_own_service_still_blocks() {
+        let live = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = live.local_addr().unwrap().port();
+        // Ephemeral ports are well above 1024, so this cannot underflow.
+        for ours_on in [None, Some(port - 1)] {
+            let mut out = Vec::new();
+            check_port(port, ours_on, &mut out);
+            assert!(
+                blocked(&out),
+                "a port held by something else must block (our service on {ours_on:?})"
+            );
+        }
+    }
+
+    /// A free port is a free port, upgrade or not.
+    #[test]
+    fn a_free_port_produces_no_finding() {
+        let port = {
+            let probe = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        let mut out = Vec::new();
+        check_port(port, None, &mut out);
+        assert!(out.is_empty(), "nothing holds this port: {out:#?}");
+    }
+
+    /// The closing reassurance has to be true when it is printed.
+    ///
+    /// The report is rendered twice: once before anything runs, and again after accepted remedies
+    /// have. The second one said "Nothing has been changed on this machine." having just switched
+    /// the network profile -- the one line a parent would rely on to know where they stand.
+    #[test]
+    fn a_report_printed_after_a_fix_does_not_claim_nothing_changed() {
+        let after = render(&[b()], Machine::Changed);
+        assert!(
+            !after.contains("Nothing has been changed on this machine"),
+            "a remedy has already run, so this is false:\n{after}"
+        );
+        assert!(after.contains("Apart from the fixes you accepted"));
+        assert!(
+            after.contains("run install again"),
+            "it must still say what to do next"
+        );
+
+        // And the untouched case must keep saying it -- that is when it reassures.
+        assert!(
+            render(&[b()], Machine::Untouched).contains("Nothing has been changed on this machine")
+        );
+    }
+
     #[test]
     fn only_blockers_stop_the_install() {
         assert!(!blocked(&[]));
@@ -524,7 +683,7 @@ mod tests {
     /// doubt this whole module exists to remove.
     #[test]
     fn a_clean_report_says_so() {
-        let out = render(&[]);
+        let out = render(&[], Machine::Untouched);
         assert!(out.contains("passed"), "got: {out}");
     }
 
@@ -532,7 +691,7 @@ mod tests {
     /// with, and a parent reading top-down should not start with something optional.
     #[test]
     fn blockers_are_reported_before_cautions() {
-        let out = render(&[c(), b()]);
+        let out = render(&[c(), b()], Machine::Untouched);
         let (ci, bi) = (out.find("Public").unwrap(), out.find("8443").unwrap());
         assert!(bi < ci, "blocker must precede caution:\n{out}");
     }
@@ -541,19 +700,19 @@ mod tests {
     /// it on a cautions-only run would be a lie — that install goes ahead and changes plenty.
     #[test]
     fn the_nothing_changed_promise_appears_only_when_refusing() {
-        assert!(render(&[b()]).contains("Nothing has been changed"));
+        assert!(render(&[b()], Machine::Untouched).contains("Nothing has been changed"));
         assert!(
-            !render(&[c()]).contains("Nothing has been changed"),
+            !render(&[c()], Machine::Untouched).contains("Nothing has been changed"),
             "a cautions-only install proceeds and does change things"
         );
-        assert!(!render(&[]).contains("Nothing has been changed"));
+        assert!(!render(&[], Machine::Untouched).contains("Nothing has been changed"));
     }
 
     /// Every finding must carry all three parts. A problem with no fix is a problem the reader
     /// is standing at a machine unable to act on.
     #[test]
     fn every_finding_shows_what_why_and_fix() {
-        let out = render(&[b()]);
+        let out = render(&[b()], Machine::Untouched);
         assert!(out.contains("port 8443 is in use"), "what:\n{out}");
         assert!(
             out.contains("the service would exit at once"),
@@ -572,7 +731,7 @@ mod tests {
             "line one\n\nline three after a blank",
             "do this\n\n  some-command --flag\n\nthen that",
         );
-        let out = render(&[f]);
+        let out = render(&[f], Machine::Untouched);
         let bad: Vec<_> = out.lines().filter(|l| *l != l.trim_end()).collect();
         assert!(
             bad.is_empty(),
@@ -597,53 +756,31 @@ mod tests {
     /// Getting this wrong in either direction is bad: a missed remedy means the parent is told to
     /// run a command we could have run, and a spurious one means prompting to fix something we
     /// cannot.
-    /// Failed tool output has to survive into the message, since for icacls and netsh it is the
-    /// only description of what went wrong.
-    #[cfg(windows)]
-    #[test]
-    fn tool_output_prefers_whichever_stream_spoke() {
-        use std::os::windows::process::ExitStatusExt;
-        let out = |o: &str, e: &str| std::process::Output {
-            status: std::process::ExitStatus::from_raw(1),
-            stdout: o.as_bytes().to_vec(),
-            stderr: e.as_bytes().to_vec(),
-        };
-        assert_eq!(tool_output(&out("on stdout", "")), "on stdout");
-        assert_eq!(tool_output(&out("", "on stderr")), "on stderr");
-        assert_eq!(tool_output(&out("a", "b")), "a b");
-        assert_eq!(tool_output(&out("", "")), "(it printed nothing)");
-        // sc.exe pads with blank lines; the result is embedded in a sentence.
-        assert_eq!(
-            tool_output(&out("[SC] ChangeServiceConfig2 FAILED 1072:\n\n", "")),
-            "[SC] ChangeServiceConfig2 FAILED 1072:"
-        );
-    }
-
     #[test]
     fn only_findings_with_a_remedy_are_offered() {
         let manual = Finding::blocker("port busy", "would exit", "stop the other program");
         let auto = Finding::caution("network is Public", "unreachable", "set it to Private")
-            .fixable(Remedy::MakeNetworkPrivate);
+            .with_remedy(Remedy::MakeNetworkPrivate);
 
-        assert_eq!(manual.remedy, Remedy::Manual);
+        assert_eq!(manual.remedy, None);
         assert_eq!(fixable(std::slice::from_ref(&manual)).len(), 0);
         assert_eq!(fixable(&[manual, auto.clone()]).len(), 1);
         assert_eq!(fixable(std::slice::from_ref(&auto)).len(), 1);
         assert_eq!(fixable(&[]).len(), 0);
     }
 
-    /// `Manual` must stay the default. A constructor that silently attached a real remedy would
+    /// No remedy must stay the default. A constructor that silently attached a real one would
     /// make the installer act on a machine without being asked.
     #[test]
-    fn findings_are_manual_until_told_otherwise() {
+    fn findings_carry_no_remedy_until_told_otherwise() {
         assert_eq!(
             Finding::caution("a", "b", "c").remedy,
-            Remedy::Manual,
+            None,
             "a plain finding must never carry an automatic action"
         );
         assert_eq!(
             Finding::blocker("a", "b", "c").remedy,
-            Remedy::Manual,
+            None,
             "a plain finding must never carry an automatic action"
         );
     }
@@ -654,14 +791,14 @@ mod tests {
     #[test]
     fn a_fixable_finding_still_explains_the_manual_route() {
         let f = Finding::caution("network is Public", "unreachable", "set it to Private")
-            .fixable(Remedy::MakeNetworkPrivate);
+            .with_remedy(Remedy::MakeNetworkPrivate);
         assert!(!f.fix.trim().is_empty());
-        assert!(render(&[f]).contains("set it to Private"));
+        assert!(render(&[f], Machine::Untouched).contains("set it to Private"));
     }
 
     #[test]
     fn counts_agree_with_singular_and_plural() {
-        assert!(render(&[b()]).contains("1 thing that will stop"));
-        assert!(render(&[b(), b()]).contains("2 things that will stop"));
+        assert!(render(&[b()], Machine::Untouched).contains("1 thing that will stop"));
+        assert!(render(&[b(), b()], Machine::Untouched).contains("2 things that will stop"));
     }
 }

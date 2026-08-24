@@ -71,7 +71,10 @@ pub fn install() -> Result<()> {
     // secret first. Every step below this point changes something: it stops the running service,
     // overwrites the binary, rewrites the firewall rule.
     let mut findings = crate::preflight::gather(port);
-    print!("{}", crate::preflight::render(&findings));
+    print!(
+        "{}",
+        crate::preflight::render(&findings, crate::preflight::Machine::Untouched)
+    );
 
     // Offer to fix what we can, rather than printing a command and hoping. The first parent to
     // use this scrolled past a correct Public-network warning twice, which is the expected
@@ -90,7 +93,10 @@ pub fn install() -> Result<()> {
                 println!("All pre-flight checks pass now.\n");
             } else {
                 println!("Still outstanding:");
-                print!("{}", crate::preflight::render(&findings));
+                print!(
+                    "{}",
+                    crate::preflight::render(&findings, crate::preflight::Machine::Changed)
+                );
             }
         }
     }
@@ -342,8 +348,11 @@ pub fn ensure_elevated(action: &str, why: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Filename the binary is installed and registered under (low-profile, matches the service).
-#[cfg(windows)]
-const INSTALL_EXE_NAME: &str = "host-health.exe";
+// Named cross-platform, like FIREWALL_RULE above, so a test can pin it against the
+// documentation that spells it out by hand. Renaming it would otherwise break the
+// documented remote-update sequence with nothing failing.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const INSTALL_EXE_NAME: &str = "host-health.exe";
 
 /// Offer to apply the fixes we can, one at a time.
 ///
@@ -388,7 +397,9 @@ fn offer_fixes(findings: &[crate::preflight::Finding], assume_yes: bool) -> Resu
             println!("      skipped — the instructions above still apply.");
             continue;
         }
-        match crate::preflight::apply(&f.remedy) {
+        // `fixable` selected these, so every one carries a remedy; the type says so too.
+        let Some(remedy) = &f.remedy else { continue };
+        match crate::preflight::apply(remedy) {
             Ok(msg) => {
                 println!("      done: {msg}");
                 changed = true;
@@ -736,19 +747,19 @@ fn describe_service_error(err: &windows_service::Error) -> String {
     let explain = match code {
         2 => Some((
             "ERROR_FILE_NOT_FOUND",
-            "Windows could not find the program the service points at. The registered path may              be wrong, or the file was removed or quarantined after it was registered.",
+            "Windows could not find the program the service points at. The registered path may be wrong, or the file was removed or quarantined after it was registered.",
         )),
         5 => Some((
             "ERROR_ACCESS_DENIED",
-            "Refused for lack of permission. Either this console is not elevated, or the handle              the installer is using was opened without the right it needs for this call.",
+            "Refused for lack of permission. Either this console is not elevated, or the handle the installer is using was opened without the right it needs for this call.",
         )),
         193 | 216 => Some((
             "ERROR_BAD_EXE_FORMAT",
-            "The executable is not a program this machine can run — a 32/64-bit mismatch, or a              truncated or corrupted download.",
+            "The executable is not a program this machine can run — a 32/64-bit mismatch, or a truncated or corrupted download.",
         )),
         1053 => Some((
             "ERROR_SERVICE_REQUEST_TIMEOUT",
-            "The service did not report back in the time Windows allows. Usually the process              could not launch at all: antivirus holding the file, or a missing dependency.",
+            "The service did not report back in the time Windows allows. Usually the process could not launch at all: antivirus holding the file, or a missing dependency.",
         )),
         1056 => Some((
             "ERROR_SERVICE_ALREADY_RUNNING",
@@ -756,11 +767,11 @@ fn describe_service_error(err: &windows_service::Error) -> String {
         )),
         1058 => Some((
             "ERROR_SERVICE_DISABLED",
-            "The service exists but its start type is Disabled, so Windows refuses to start it.              This normally follows a half-finished removal. Re-running install after a reboot              clears it; `sc config HostHealthService start= auto` fixes it in place.",
+            "The service exists but its start type is Disabled, so Windows refuses to start it. This normally follows a half-finished removal. Re-running install after a reboot clears it; `sc config HostHealthService start= auto` fixes it in place.",
         )),
         1060 => Some((
             "ERROR_SERVICE_DOES_NOT_EXIST",
-            "No service by that name is registered. Expected during a first install; a problem              anywhere else.",
+            "No service by that name is registered. Expected during a first install; a problem anywhere else.",
         )),
         1062 => Some(("ERROR_SERVICE_NOT_ACTIVE", "The service is not running.")),
         1069 => Some((
@@ -769,7 +780,7 @@ fn describe_service_error(err: &windows_service::Error) -> String {
         )),
         1072 => Some((
             "ERROR_SERVICE_MARKED_FOR_DELETE",
-            "A previous copy is still being deleted, and will not finish while anything holds a              handle to it. Close the Services window and Task Manager, wait a few seconds, and              run install again. A reboot always clears it.",
+            "A previous copy is still being deleted, and will not finish while anything holds a handle to it. Close the Services window and Task Manager, wait a few seconds, and run install again. A reboot always clears it.",
         )),
         1073 => Some((
             "ERROR_SERVICE_EXISTS",
@@ -783,10 +794,10 @@ fn describe_service_error(err: &windows_service::Error) -> String {
     };
 
     match explain {
-        Some((name, meaning)) => format!(
-            "Windows error {code} ({name})\n     {meaning}\n                                               Windows says: {io}"
-        ),
-        None => format!("Windows error {code}\n     Windows says: {io}"),
+        Some((name, meaning)) => {
+            format!("Windows error {code} ({name})\n {meaning}\n Windows says: {io}")
+        }
+        None => format!("Windows error {code}\n Windows says: {io}"),
     }
 }
 
@@ -880,7 +891,7 @@ fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
              and logs would be readable by any user.\n  icacls exited {}\n  {}",
             path.display(),
             out.status,
-            crate::preflight::tool_output(&out),
+            crate::syspath::tool_output(&out),
         );
     }
     Ok(())
@@ -924,7 +935,7 @@ fn configure_firewall(port: u16) -> Result<()> {
              The app-layer LAN allowlist still applies, so this is not a security hole, but \
              other devices may not be able to reach the dashboard.",
             added.status,
-            crate::preflight::tool_output(&added),
+            crate::syspath::tool_output(&added),
         );
         return Ok(());
     }
@@ -985,7 +996,7 @@ fn configure_recovery() {
                  The service still installs and runs; it just will not restart itself \
                  automatically if it dies. Re-running install once the cause is fixed sets it.",
             out.status,
-            crate::preflight::tool_output(&out),
+            crate::syspath::tool_output(&out),
         ),
         Err(e) => println!("\nNote: could not run sc.exe to {what} ({e})."),
     };
@@ -1062,6 +1073,61 @@ mod tests {
 
     /// `--port` is the one piece of argument handling here that is pure and platform-independent,
     /// and it sits in the file with the worst on-hardware record. Cheap to pin, so pin it.
+    /// The docs spell out the installed binary's path; the code derives it. Pin them together.
+    ///
+    /// `INSTALL_EXE_NAME` is described in the README as "the bland on-disk name" — chosen for a
+    /// reason, and therefore re-choosable. Renaming it would break the remote-update sequence in
+    /// `docs/REMOTE-UPDATE.md`, which invokes that exact path over a PowerShell session, with
+    /// nothing failing in CI — on the one flow where nobody is standing at the machine.
+    ///
+    /// Same shape as the guide/script pin in `remotesetup`, and the same reason: prose that
+    /// states a fact about the code needs something holding the two together.
+    #[test]
+    fn the_docs_name_the_binary_this_install_actually_writes() {
+        let docs = [
+            ("README.md", include_str!("../README.md")),
+            (
+                "docs/REMOTE-UPDATE.md",
+                include_str!("../docs/REMOTE-UPDATE.md"),
+            ),
+            (
+                "docs/WINDOWS-TESTING.md",
+                include_str!("../docs/WINDOWS-TESTING.md"),
+            ),
+        ];
+
+        let dir = "Program Files\\HostHealth\\";
+        let mut found = 0usize;
+        for (name, text) in docs {
+            for (n, line) in text.lines().enumerate() {
+                let mut rest = line;
+                while let Some(i) = rest.find(dir) {
+                    rest = &rest[i + dir.len()..];
+                    let named: String = rest
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '-')
+                        .collect();
+                    // A path to the directory itself, not to a file in it.
+                    if !named.ends_with(".exe") {
+                        continue;
+                    }
+                    found += 1;
+                    assert_eq!(
+                        named,
+                        INSTALL_EXE_NAME,
+                        "{name}:{} names a binary this install never writes",
+                        n + 1
+                    );
+                }
+            }
+        }
+        assert!(
+            found >= 4,
+            "found only {found} references to the installed binary — the scan has drifted from \
+             the documentation and is checking nothing"
+        );
+    }
+
     #[test]
     fn port_flag_parses_or_explains() {
         let args = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();

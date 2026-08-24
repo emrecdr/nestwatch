@@ -38,6 +38,58 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   Windows for permission to start and delete the service but not to *read its status*, so every
   check came back refused and it concluded the service never started — then deleted it. Only
   fresh installs were affected; upgrades worked, which is why it went unnoticed.
+- **Installing over a running Nestwatch was refused.** The pre-flight port check added in 0.2.2
+  saw the port in use — by the copy already running — and reported it as a conflict that stops
+  the install. Fresh installs were fine, which is why it went unnoticed; every *upgrade* was
+  blocked, including the remote one this release documents. It now recognises its own running
+  service, and only when the port matches: a service on 8443 no longer excuses something else
+  holding the 9000 an `install --port 9000` asked for.
+- **A refused install could claim nothing had changed when something had.** Accept an offered fix,
+  then fail on a different blocker, and the report still signed off with "Nothing has been
+  changed on this machine." — printed immediately after changing the machine. It now says so.
+- **Install error text printed with large gaps mid-sentence** ("the registered path may⎵⎵⎵⎵⎵⎵be
+  wrong") — line continuations had been removed without collapsing the indentation.
+- `nestwatch help` listed the `install` flags out of alignment and omitted `--reset-config`,
+  which the README documents.
+- **A mistyped option was ignored instead of refused, and one of them inverted the command.**
+  `remote-setup --of > teardown.ps1` wrote the script that *enables* remote administration into a
+  file named teardown — which the next step tells you to run, elevated. `install --prot 9000`
+  installed on the default port and said nothing. Unrecognised options are now refused, naming
+  the option and listing what the command does accept.
+- **The remote-setup script's firewall step could look hung.** It selected the plaintext-WinRM
+  rules by piping every firewall rule through a port lookup — one query per rule, hundreds on a
+  stock Windows install. That matters more than the seconds: it is step 4 of 6 in a script that
+  must not be interrupted, since step 1 opens the unencrypted listener step 3 closes, so the step
+  most likely to be cancelled was the one whose cancellation does the most harm. It now queries
+  the port filters directly, which is Microsoft's documented way to select rules by port. The
+  script also **verifies the firewall result** now, not just the listeners, and refuses to finish
+  while any inbound rule still admits 5985.
+
+### Internal
+- **Pre-flight now warns when the tools that enforce bedtime are missing.** It checked the four
+  that `install` itself needs and none of the two the curfew needs — so `shutdown.exe` or
+  `rundll32.exe` missing from a stripped Windows image meant a clean install, a working dashboard,
+  and nothing happening at bedtime. A caution rather than a blocker: the install is genuinely
+  fine. A test derives the list from the call sites, the way `tests/spawn_paths.rs` already does,
+  because the hand-written list is what fell behind.
+- `Finding` carries `Option<Remedy>` rather than a `Remedy::Manual` variant, so every value of
+  that type is something the installer can actually perform. `apply` no longer has an unreachable
+  arm returning an empty success.
+- `tool_output` moved from `preflight` to `syspath`. The installer's *mutation* path depended on
+  the pre-check module purely to format a subprocess error; `syspath` already owns how Windows
+  tools are invoked.
+- `cargo deny` now refuses HTTP-client crates (`reqwest`, `ureq`, `curl` and friends). "Nothing
+  leaves the house" was stated in `SECURITY.md` and enforced by nothing: the dashboard's CSP is
+  checked by a test, but a CSP constrains the browser, not the service. Adding one outbound call
+  to `src/` would have kept every gate green. The `[bans]` policy was empty while CI was already
+  running `cargo deny check bans`.
+- Three more facts that were stated in two places now have something holding them together: the
+  page's external URLs against the CSP allowlist, the installed binary's name against the paths
+  the docs spell out, and the accepted-options table against the code that reads the flags.
+- The guide and the generated remote-setup script are pinned to each other by a test. They had
+  drifted: the guide named a firewall rule and a certificate file that the script does not
+  create, so setting up with the script and tearing down with the guide would have left the
+  encrypted-remoting port open.
 
 ## [0.2.2] — 2026-08-24
 

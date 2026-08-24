@@ -63,9 +63,16 @@ New-NetFirewallRule -DisplayName 'Nestwatch WinRM HTTPS (LAN only)' `
 
 # Disable every rule that would admit plaintext WinRM. Matched on the port, not on a
 # name: Windows localises DisplayName, and the built-in rules differ between versions.
-Get-NetFirewallRule | Where-Object {{
-    ($_ | Get-NetFirewallPortFilter).LocalPort -eq 5985
-}} | Set-NetFirewallRule -Enabled False
+#
+# Queried filters-first, which is Microsoft's documented way to select rules by port:
+# "the resultant filters are passed into the Get-NetFirewallRule cmdlet to return the
+# rules queried by port or protocol". The obvious form -- piping every rule into
+# Get-NetFirewallPortFilter -- issues one association query per rule, hundreds of them
+# on a stock install, and this step then looks hung for long enough to get cancelled.
+Get-NetFirewallPortFilter -Protocol TCP |
+    Where-Object {{ $_.LocalPort -eq 5985 }} |
+    Get-NetFirewallRule |
+    Set-NetFirewallRule -Enabled False
 
 Write-Host '5/6  Verifying...'
 $listeners = (winrm enumerate winrm/config/Listener) -join "`n"
@@ -74,6 +81,24 @@ if ($listeners -match 'Transport = HTTP\b') {{
 }}
 if ($listeners -notmatch 'Transport = HTTPS') {{
   throw 'No HTTPS listener was created.'
+}}
+
+# The firewall step is the one that can succeed at doing nothing -- a query that matches
+# no rules exits 0. Check the resulting state, not the exit status.
+#
+# Written as -ne 'False' / -ne 'Outbound' rather than the more natural -eq 'True' /
+# -eq 'Inbound'. Enabled and Direction are enums; if a comparison ever stopped matching,
+# the -eq form would select nothing and this check would pass while the port stayed open.
+# The -ne form selects everything instead and throws. A false alarm is recoverable here;
+# a silent pass is the failure this whole script exists to avoid.
+$openPlaintext = Get-NetFirewallPortFilter -Protocol TCP |
+    Where-Object {{ $_.LocalPort -eq 5985 }} |
+    Get-NetFirewallRule |
+    Where-Object {{ $_.Enabled -ne 'False' -and $_.Direction -ne 'Outbound' }}
+if ($openPlaintext) {{
+  throw ('Inbound firewall rules still allow plaintext WinRM on 5985: ' +
+         (($openPlaintext | ForEach-Object {{ $_.Name }}) -join ', ') +
+         '. Disable them before using this.')
 }}
 
 Write-Host '6/6  Exporting the certificate for your laptop...'
@@ -208,6 +233,41 @@ mod tests {
         );
     }
 
+    /// Plaintext rules are found filters-first, in both the script and the guide.
+    ///
+    /// `Get-NetFirewallRule | Where-Object {{ ($_ | Get-NetFirewallPortFilter)... }}` is the form
+    /// everyone writes and it reads better. It also issues one CIM association query per firewall
+    /// rule -- hundreds on a stock install. This is step 4 of 6 in a script whose whole premise is
+    /// that it must not be interrupted: step 1 opens the plaintext listener that step 3 closes. A
+    /// step that appears hung for a minute is the one that gets Ctrl-C'd, and that abort leaves
+    /// the machine in precisely the state this script exists to prevent -- so the slow form is a
+    /// safety problem here, not a performance one.
+    ///
+    /// Pinned in the guide too: it carries the same commands, and a reader who copies the slow
+    /// one back out of it hits the same trap.
+    #[test]
+    fn plaintext_rules_are_matched_filters_first() {
+        const GUIDE: &str = include_str!("../docs/REMOTE-UPDATE.md");
+        let s = script("TEST-PC");
+
+        for (what, text) in [("the script", s.as_str()), ("the guide", GUIDE)] {
+            assert!(
+                text.contains("Get-NetFirewallPortFilter -Protocol TCP"),
+                "{what} must start from the port filters"
+            );
+            assert!(
+                !text.contains("($_ | Get-NetFirewallPortFilter)"),
+                "{what} is back to one association query per rule"
+            );
+        }
+
+        // And the script must check the result, since a query matching nothing still exits 0.
+        assert!(
+            s.contains("Inbound firewall rules still allow plaintext WinRM on 5985"),
+            "the script must fail loudly if a rule survived"
+        );
+    }
+
     /// Restrictions that must survive any future edit: HTTPS only, this subnet only, private
     /// profile only. Each is one word away from being much wider.
     #[test]
@@ -258,5 +318,60 @@ mod tests {
         // The name must match between the two scripts, or teardown silently does nothing.
         let rule = "Nestwatch WinRM HTTPS (LAN only)";
         assert!(script("X").contains(rule) && t.contains(rule));
+    }
+
+    /// The guide and the generated script must agree on every name a parent types by hand.
+    ///
+    /// `docs/REMOTE-UPDATE.md` documents the same procedure a second time, for a reader who wants
+    /// to understand it rather than run it. That copy drifted: it named the firewall rule
+    /// `WinRM HTTPS (LAN only)` while the script creates `Nestwatch WinRM HTTPS (LAN only)`. A
+    /// parent who set up with the script and then tore down by following the guide would match
+    /// nothing -- leaving 5986 open on a machine they believed they had closed.
+    ///
+    /// Names only. The prose is free to differ; a string someone retypes into an elevated prompt
+    /// is not.
+    #[test]
+    fn the_guide_and_the_script_agree_on_every_name() {
+        const GUIDE: &str = include_str!("../docs/REMOTE-UPDATE.md");
+        let s = script("TEST-PC");
+
+        for (what, name) in [
+            ("firewall rule", "Nestwatch WinRM HTTPS (LAN only)"),
+            ("exported certificate", "nestwatch-winrm.cer"),
+        ] {
+            assert!(
+                s.contains(name),
+                "the script should name the {what} {name:?}"
+            );
+            assert!(
+                GUIDE.contains(name),
+                "REMOTE-UPDATE.md must name the same {what} as the script: {name:?}"
+            );
+        }
+
+        // A near-miss is the dangerous case -- an unprefixed rule name reads correct and matches
+        // nothing -- so no line may mention the rule without using the full name.
+        let full = "Nestwatch WinRM HTTPS (LAN only)";
+        for (i, line) in GUIDE.lines().enumerate() {
+            if line.contains("WinRM HTTPS (LAN only)") {
+                assert!(
+                    line.contains(full),
+                    "REMOTE-UPDATE.md:{} names the rule without the prefix the script uses:\n  {}",
+                    i + 1,
+                    line.trim()
+                );
+            }
+        }
+        // Likewise the certificate: `winrm.cer` alone is a different file from the one exported.
+        for (i, line) in GUIDE.lines().enumerate() {
+            if line.contains("winrm.cer") {
+                assert!(
+                    line.contains("nestwatch-winrm.cer"),
+                    "REMOTE-UPDATE.md:{} names a certificate the script never writes:\n  {}",
+                    i + 1,
+                    line.trim()
+                );
+            }
+        }
     }
 }

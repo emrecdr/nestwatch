@@ -193,6 +193,63 @@ mod tests {
         }
     }
 
+    /// Every external URL in the page is either admitted by `connect-src` or listed as a link.
+    ///
+    /// The test above pins the policy against a literal, which catches the policy being widened.
+    /// It cannot catch the other direction: change the URL in `checkForUpdate()` and the policy
+    /// stays as written, the assertion stays green, and the button fails at runtime — swallowed
+    /// by its own catch block as "Could not reach GitHub from this device", which reads like a
+    /// network problem rather than a policy one.
+    ///
+    /// Rather than trying to infer which URLs are fetched and which are navigated to — the page
+    /// has both, and one of the links is assembled in JavaScript — every absolute URL must be
+    /// accounted for one way or the other. A new one fails this test until somebody says which
+    /// it is, which is the moment to think about it.
+    #[test]
+    fn every_external_url_in_the_page_is_accounted_for() {
+        const PAGE: &str = include_str!("../assets/index.html");
+
+        /// Navigation targets: the parent's browser follows these, and `connect-src` does not
+        /// govern navigation. Exact URLs, not hosts, so this cannot quietly widen.
+        const LINK_ONLY: &[&str] = &["https://github.com/emrecdr/nestwatch/releases/latest"];
+
+        let connect = CSP
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("connect-src"))
+            .expect("the policy must state connect-src explicitly");
+
+        let mut found = 0usize;
+        let mut rest = PAGE;
+        while let Some(i) = rest.find("https://") {
+            rest = &rest[i..];
+            let end = rest
+                .find(['"', '\'', '`', '<', ' ', '\n'])
+                .unwrap_or(rest.len());
+            let url = &rest[..end];
+            rest = &rest[end..];
+            found += 1;
+
+            if LINK_ONLY.contains(&url) {
+                continue;
+            }
+            let host = url
+                .trim_start_matches("https://")
+                .split('/')
+                .next()
+                .unwrap_or_default();
+            assert!(
+                connect.contains(host),
+                "the page references {url}, which connect-src does not admit and which is not \
+                 listed as a navigation target:\n  connect-src: {connect}"
+            );
+        }
+        assert!(
+            found >= 2,
+            "found only {found} external URLs — the scan has drifted and is checking nothing"
+        );
+    }
+
     #[test]
     fn lan_and_loopback_allowed_public_rejected() {
         assert!(is_lan("192.168.1.20".parse().unwrap()), "home LAN");

@@ -69,6 +69,29 @@ pub fn powershell() -> PathBuf {
     system_dir().join(r"WindowsPowerShell\v1.0\powershell.exe")
 }
 
+/// The useful part of a failed command's output, for putting in an error message.
+///
+/// Lives here because this module owns how Windows tools are invoked. It began in
+/// `preflight`, which meant the installer's *mutation* path -- `run_icacls`,
+/// `configure_firewall`, `configure_recovery` -- depended on the pre-check module purely to
+/// format a subprocess error, and the next module to shell out would have had to do the same
+/// or grow its own copy.
+///
+/// Windows CLI tools split themselves between stdout and stderr inconsistently — `icacls` reports
+/// failures on stdout, `sc` on both — so take whichever has content. Collapsed to one line
+/// because it is being embedded in a sentence, and trimmed because these tools pad with blanks.
+pub fn tool_output(out: &std::process::Output) -> String {
+    let pick = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+    let (o, e) = (pick(&out.stdout), pick(&out.stderr));
+    let text = match (o.is_empty(), e.is_empty()) {
+        (false, false) => format!("{o} {e}"),
+        (false, true) => o,
+        (true, false) => e,
+        (true, true) => return "(it printed nothing)".into(),
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +121,26 @@ mod tests {
     #[test]
     fn the_system_directory_itself_is_absolute() {
         assert!(system_dir().is_absolute(), "{:?}", system_dir());
+    }
+
+    /// Failed tool output has to survive into the message, since for icacls and netsh it is the
+    /// only description of what went wrong.
+    #[test]
+    fn tool_output_prefers_whichever_stream_spoke() {
+        use std::os::windows::process::ExitStatusExt;
+        let out = |o: &str, e: &str| std::process::Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: o.as_bytes().to_vec(),
+            stderr: e.as_bytes().to_vec(),
+        };
+        assert_eq!(tool_output(&out("on stdout", "")), "on stdout");
+        assert_eq!(tool_output(&out("", "on stderr")), "on stderr");
+        assert_eq!(tool_output(&out("a", "b")), "a b");
+        assert_eq!(tool_output(&out("", "")), "(it printed nothing)");
+        // sc.exe pads with blank lines; the result is embedded in a sentence.
+        assert_eq!(
+            tool_output(&out("[SC] ChangeServiceConfig2 FAILED 1072:\n\n", "")),
+            "[SC] ChangeServiceConfig2 FAILED 1072:"
+        );
     }
 }

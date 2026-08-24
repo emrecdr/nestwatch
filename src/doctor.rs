@@ -31,6 +31,18 @@ const RUN_INSTALL: &str = "Run `nestwatch install` from an elevated console.";
 /// How long to wait when probing the local listener.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
+/// Whether anything is accepting connections on this port, on this machine.
+///
+/// A TCP connect rather than parsing a tool's output: `winrm enumerate` and firewall rule names
+/// are both localised, and a successful connect is the same evidence on every Windows language.
+/// Callers that need the *reason* a connect failed keep their own `match` — this is for the ones
+/// that only need the yes/no.
+#[cfg(windows)]
+fn listening(port: u16) -> bool {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).is_ok()
+}
+
 #[derive(PartialEq, Clone, Copy)]
 enum Level {
     Ok,
@@ -179,34 +191,6 @@ pub fn run() -> Result<()> {
                 "Connect it to the home Wi-Fi, then run this again.",
             )),
         }
-        // Remote administration, if it was ever turned on, and specifically whether it was left
-        // in the dangerous shape. Port 5985 is WinRM's plaintext listener: on a workgroup network
-        // that means NTLM over HTTP, whose exchange can be captured and cracked offline by anyone
-        // on the LAN -- which here is the person being managed. Probed rather than parsed,
-        // because `winrm enumerate` output and firewall rule names are both localised, and this
-        // file already answers "is something listening" this way.
-        let winrm_http = SocketAddr::from((Ipv4Addr::LOCALHOST, 5985));
-        if TcpStream::connect_timeout(&winrm_http, PROBE_TIMEOUT).is_ok() {
-            checks.push(fail(
-                "remote management is listening WITHOUT encryption (port 5985)",
-                "Anyone on this network can capture the sign-in exchange and crack it\n\
-                 offline -- including the person using this PC.\n\
-                 Turn it off:            nestwatch remote-setup --off\n\
-                 Or set it up properly:  nestwatch remote-setup",
-            ));
-        }
-        // HTTPS remoting is a deliberate choice, not a fault -- but it is an administrative way
-        // in, and leaving it on between updates is the common mistake. Report it so it cannot be
-        // forgotten about.
-        let winrm_https = SocketAddr::from((Ipv4Addr::LOCALHOST, 5986));
-        if TcpStream::connect_timeout(&winrm_https, PROBE_TIMEOUT).is_ok() {
-            checks.push(warn(
-                "remote management is enabled (HTTPS, port 5986)",
-                "Fine while you need it. Turn it off when you are done, so it is not a\n\
-                 permanent way in:  nestwatch remote-setup --off",
-            ));
-        }
-
         // Is anything actually listening? A TCP connect proves the service bound the port,
         // without needing an HTTP client or trusting the self-signed cert.
         let local = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -403,8 +387,62 @@ pub(crate) fn network_profiles() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The command that switches every Public adapter to Private.
+///
+/// One copy, because this string is both **run** — by [`crate::preflight::apply`], when a parent
+/// accepts the offered fix — and **printed** as advice, here and in pre-flight's finding. It had
+/// become three copies, and this release showed exactly how they rot: doctor's advice gained the
+/// command because pre-flight's already had it, updating two of the three. The third would then
+/// quietly tell a parent to run something other than what `install --fix` does.
+///
+/// One line on purpose. Split across two with a trailing `|`, a parent who copies only the first
+/// line leaves PowerShell sitting at a continuation prompt with nothing to say why.
+#[cfg(windows)]
+pub(crate) const MAKE_PRIVATE_PS: &str = "Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} | \
+     Set-NetConnectionProfile -NetworkCategory Private";
+
+/// Whether every adapter Windows reported sits on a Public profile.
+///
+/// Takes the profiles instead of reading them, so a caller holding them already does not spawn a
+/// second PowerShell. Owning the predicate here is the point: an empty list means the query
+/// failed, which is *not* the same as Public, and that rule was previously re-derived at each of
+/// the three call sites — one of which relied on an earlier branch to be correct at all.
+#[cfg(windows)]
+pub(crate) fn all_public(profiles: &[String]) -> bool {
+    !profiles.is_empty() && profiles.iter().all(|p| p == "Public")
+}
+
 #[cfg(windows)]
 fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
+    // Remote administration, if it was ever turned on, and specifically whether it was left in
+    // the dangerous shape. Port 5985 is WinRM's plaintext listener: on a workgroup network that
+    // means NTLM over HTTP, whose exchange can be captured and cracked offline by anyone on the
+    // LAN -- which here is the person being managed. Probed rather than parsed, because
+    // `winrm enumerate` output and firewall rule names are both localised.
+    //
+    // Windows-only, and here rather than in the cross-platform body of `run` for that reason: on
+    // a Linux or macOS dev box those ports mean nothing, and anything bound to 5986 would fail a
+    // check whose remedy is a Windows command.
+    if listening(5985) {
+        checks.push(fail(
+            "remote management is listening WITHOUT encryption (port 5985)",
+            "Anyone on this network can capture the sign-in exchange and crack it\n\
+             offline -- including the person using this PC.\n\
+             Turn it off:            nestwatch remote-setup --off\n\
+             Or set it up properly:  nestwatch remote-setup",
+        ));
+    }
+    // HTTPS remoting is a deliberate choice, not a fault -- but it is an administrative way in,
+    // and leaving it on between updates is the common mistake. Report it so it cannot be
+    // forgotten about.
+    if listening(5986) {
+        checks.push(warn(
+            "remote management is enabled (HTTPS, port 5986)",
+            "Fine while you need it. Turn it off when you are done, so it is not a\n\
+             permanent way in:  nestwatch remote-setup --off",
+        ));
+    }
+
     // The firewall rule is scoped to private+domain profiles; on a "Public" network it simply
     // never matches, which presents as "I can't connect from my phone" with no other symptom.
     // The per-adapter reading lives in `network_profiles`, shared with the installer's pre-flight.
@@ -416,14 +454,15 @@ fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
             "Check it by hand: Settings > Network & internet > (your Wi-Fi) > it must be\n\
              set to Private, or the firewall rule never matches.",
         ));
-    } else if profiles.iter().all(|p| p == "Public") {
+    } else if all_public(&profiles) {
         checks.push(warn(
             "this PC's network is set to Public",
-            "The firewall rule only applies on Private/Domain networks, so other devices\n\
-             can't reach the dashboard. Fix it from an elevated PowerShell:\n\
-             Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} |\n\
-             Set-NetConnectionProfile -NetworkCategory Private\n\
-             Or: Settings > Network & internet > (your Wi-Fi) > Network profile type.",
+            format!(
+                "The firewall rule only applies on Private/Domain networks, so other devices\n\
+                 can't reach the dashboard. Fix it from an elevated PowerShell:\n\
+                 {MAKE_PRIVATE_PS}\n\
+                 Or: Settings > Network & internet > (your Wi-Fi) > Network profile type."
+            ),
         ));
     } else {
         checks.push(ok(format!(

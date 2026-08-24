@@ -479,11 +479,13 @@ pub async fn pair(
 /// now that was only answerable at the machine itself (`version`, or `doctor`'s header), which is
 /// the wrong place: the parent asking "is this up to date?" is holding a phone, somewhere else.
 ///
-/// The *number* travels; nothing goes looking for a newer one. Checking would mean this machine
-/// contacting GitHub, and "nothing leaves the house" is a promise in the README, on the project
-/// page, and in `SECURITY.md`. It would also need `connect-src 'self'` widened, weakening a real
-/// control for a convenience. The dashboard shows the version beside a plain link to the releases
-/// page — following that link is the parent's browser doing it, on their own device.
+/// The *number* travels; this machine never goes looking for a newer one, and that distinction
+/// is the whole design. A version check from here would be the monitored PC contacting GitHub,
+/// and "nothing leaves the house" is a promise in the README, on the project page, and in
+/// `SECURITY.md`. The dashboard's check button asks GitHub from the *parent's* browser, on the
+/// parent's own device, and only on a click — which is why nothing in this crate gained an
+/// outbound client, and why `connect-src` names exactly one external host. See
+/// [`crate::security`], where that is pinned by a test.
 ///
 /// Sent whether or not the caller is signed in: it is the same string printed at install, on the
 /// console, by an unauthenticated `version` command. It reveals nothing a LAN attacker could not

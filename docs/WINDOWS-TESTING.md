@@ -12,9 +12,9 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these seven first
 
-The full list is 95 items, which is why it keeps not happening. These seven are the ones whose
+The full list is 100 items, which is why it keeps not happening. These seven are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the other
-eighty-eight combined. Each links to its full entry below.
+ninety-three combined. Each links to its full entry below.
 
 1. **Is his account a standard user?** (§0) — `net localgroup Administrators`. If he is listed,
    stop: every other check on this list is measuring something that a local administrator can
@@ -320,6 +320,17 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
 
 - [ ] Re-run `nestwatch.exe install` (as admin) → it stops the service, updates the binary,
       restarts; your **port, curfew, and rules are preserved**, you set the password again.
+- [ ] **Pre-flight does not refuse the upgrade.** This is the one to watch on the run above: with
+      the service **running**, pre-flight must not report `port 8443 is already in use`. It used
+      to — the port was held by the copy being replaced — and that refused every in-place upgrade.
+      Verified by unit test, but only the real service proves the service-state read works.
+- [ ] **A conflict on a *different* port still blocks.** With the service running normally on
+      8443, run `install --port <a port something else is using>`. It must still refuse: the
+      exemption above is only for the port our own service holds.
+- [ ] **A refused install after an accepted fix tells the truth.** If pre-flight offers a fix, you
+      accept it, and the install still stops on another blocker, the closing line must read
+      "Apart from the fixes you accepted, nothing has been changed" — not "Nothing has been
+      changed on this machine", which would be false.
 - [ ] `nestwatch.exe uninstall` → service gone (`sc query` → 1060 does not exist), firewall rule
       removed, `C:\Program Files\HostHealth` removed. The data dir remains (config, cert, and the
       usage/time-request/budget-state files).
@@ -352,6 +363,16 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 - [ ] **It refuses to run un-elevated.** Run `.\setup.ps1` from a *normal* PowerShell → it must
       throw *"Run this in an elevated PowerShell"* and change nothing.
 - [ ] **It completes elevated** and prints a certificate thumbprint and the export path.
+- [ ] **Step 4 does not stall.** Time it: `Measure-Command { .\setup.ps1 }`, or just watch. The
+      firewall step selects rules starting from the port filters; the obvious form runs one query
+      per rule and can sit for a minute or more. If step 4 looks hung, **do not Ctrl-C** — step 1
+      has already opened the plaintext listener that step 3 closes, so an abort there is the worst
+      outcome available. Let it finish, then report the timing.
+- [ ] **The script refuses to finish if a plaintext rule survived.** It now checks the firewall,
+      not just the listeners. To see the check work, re-enable a 5985 rule
+      (`Get-NetFirewallPortFilter -Protocol TCP | Where-Object { $_.LocalPort -eq 5985 } |
+      Get-NetFirewallRule | Set-NetFirewallRule -Enabled True`) and re-run: it must throw and name
+      the rules. Then re-run normally and confirm it passes.
 - [ ] **Plaintext remoting is genuinely gone.** `winrm enumerate winrm/config/Listener` shows
       **HTTPS only**. Then, importantly, run `nestwatch.exe doctor`: it must **not** report
       *"listening WITHOUT encryption"*. If it does, stop and do not use remoting.

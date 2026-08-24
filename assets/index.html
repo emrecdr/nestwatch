@@ -786,12 +786,13 @@
           </section>
         </main>
 
-        <!-- Which build is on this PC, and where to see whether it is current.
-             A plain link, not a check: fetching a version list would mean this machine making an
-             outbound request, and "nothing leaves the house" is promised in the README, on the
-             project page and in SECURITY.md. Clicking the link is the parent's own browser, on
-             the parent's own device. It also needs no CSP change -- `connect-src 'self'` still
-             forbids the page from calling out, and navigation is not connect-src. -->
+        <!-- Which build is on this PC, and whether it is the current one.
+             The check runs in the parent's browser: checkForUpdate() asks api.github.com from
+             this page, on the parent's own device, and only on a click. The monitored PC still
+             contacts nothing -- it serves this page and no more, which is what "nothing leaves
+             the house" means, and is promised in the README, on the project page and in
+             SECURITY.md. That one host is the only thing `connect-src` admits beyond 'self', and
+             a test in src/security.rs fails if a second one is ever added. -->
         <footer class="mx-auto w-full max-w-5xl px-4 pb-6 text-center text-xs opacity-60
                        xl:max-w-7xl 2xl:max-w-[110rem]">
           Nestwatch <span x-text="version || '—'"></span> on this PC ·

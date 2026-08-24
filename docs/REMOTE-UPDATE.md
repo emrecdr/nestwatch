@@ -114,6 +114,10 @@ live or if you left HTTPS remoting on after an update.
 Read this if you would rather understand it than run it. Steps 1–4 run **on the child's PC** in an
 elevated PowerShell. Steps 5–6 run **on your laptop.**
 
+The generated script is the source of truth. These steps use the same names and paths it does —
+if the two ever disagree, the script is right, and a test in `src/remotesetup.rs` fails when they
+drift apart.
+
 ### 1. Turn on remoting
 
 ```powershell
@@ -154,7 +158,7 @@ winrm enumerate winrm/config/Listener
 
 ```powershell
 # Allow HTTPS remoting from this subnet only, on Private networks only.
-New-NetFirewallRule -DisplayName "WinRM HTTPS (LAN only)" `
+New-NetFirewallRule -DisplayName "Nestwatch WinRM HTTPS (LAN only)" `
     -Direction Inbound -Protocol TCP -LocalPort 5986 `
     -RemoteAddress LocalSubnet -Profile Private -Action Allow
 
@@ -162,10 +166,28 @@ New-NetFirewallRule -DisplayName "WinRM HTTPS (LAN only)" `
 # rule name: Windows localises those, and the built-in one is "Windows Remote
 # Management (HTTP-In)" only on English installs. (Nestwatch's own code avoids the
 # same trap by looking groups up by SID rather than by the name "Administrators".)
-Get-NetFirewallRule | Where-Object {
-    ($_ | Get-NetFirewallPortFilter).LocalPort -eq 5985
-} | Set-NetFirewallRule -Enabled False
+#
+# Start from the port filters, not from the rules. Piping every rule into
+# Get-NetFirewallPortFilter runs one association query per rule -- hundreds of them --
+# and takes long enough to look hung. Microsoft's guidance is this direction: rule
+# parameters held in filters "can only be queried using filter objects".
+Get-NetFirewallPortFilter -Protocol TCP |
+    Where-Object { $_.LocalPort -eq 5985 } |
+    Get-NetFirewallRule |
+    Set-NetFirewallRule -Enabled False
 ```
+
+Confirm it actually matched something — a query that selects no rules succeeds quietly:
+
+```powershell
+Get-NetFirewallPortFilter -Protocol TCP |
+    Where-Object { $_.LocalPort -eq 5985 } |
+    Get-NetFirewallRule |
+    Format-Table Name, Enabled, Direction
+```
+
+Every inbound row must read `False`. The generated script checks this for you and refuses to
+finish if any inbound rule still admits 5985.
 
 Narrow it further to just your laptop if its address is fixed: replace `LocalSubnet` with that
 address.
@@ -173,7 +195,7 @@ address.
 Export the certificate so your laptop can trust it:
 
 ```powershell
-Export-Certificate -Cert $cert -FilePath C:\Users\Public\winrm.cer
+Export-Certificate -Cert $cert -FilePath C:\Users\Public\nestwatch-winrm.cer
 ```
 
 Copy that file to your laptop — a USB stick, or any method you would trust with it.
@@ -184,9 +206,9 @@ Elevated PowerShell:
 
 ```powershell
 # Check the thumbprint matches the one you wrote down in step 2 BEFORE importing.
-(Get-PfxCertificate -FilePath .\winrm.cer).Thumbprint
+(Get-PfxCertificate -FilePath .\nestwatch-winrm.cer).Thumbprint
 
-Import-Certificate -FilePath .\winrm.cer -CertStoreLocation Cert:\LocalMachine\Root
+Import-Certificate -FilePath .\nestwatch-winrm.cer -CertStoreLocation Cert:\LocalMachine\Root
 ```
 
 Comparing that thumbprint is the step that makes the rest of this safe. It is the same reasoning
@@ -242,17 +264,27 @@ between stop and start.
 
 ## Turning it off again
 
-There is no reason to leave this listening between updates.
+There is no reason to leave this listening between updates. The generated teardown does all of
+this:
+
+```powershell
+.\host-health.exe remote-setup --off > teardown.ps1
+notepad teardown.ps1     # read it
+.\teardown.ps1
+```
+
+By hand, if you would rather:
 
 ```powershell
 Disable-PSRemoting -Force
-Get-NetFirewallRule -DisplayName "WinRM HTTPS (LAN only)" | Set-NetFirewallRule -Enabled False
+Get-NetFirewallRule -DisplayName "Nestwatch WinRM HTTPS (LAN only)" |
+    Set-NetFirewallRule -Enabled False
 Stop-Service WinRM
 Set-Service WinRM -StartupType Manual
 ```
 
-That rule name is one you created in step 4, so it is not localised and matching it by name is
-safe.
+That rule name is one you created in step 4 — your own name, not a Windows one, so it is not
+localised and matching it by name is safe.
 
 Re-enable when you next need it. `Disable-PSRemoting` does not remove the listener or the firewall
 rule, which is why the second line is there.

@@ -140,3 +140,49 @@ fn every_system_binary_the_code_asks_for_is_a_real_file() {
         }
     }
 }
+
+/// Pre-flight must know about every tool the crate shells out to.
+///
+/// `check_system_tools` reports missing Windows tools before install touches anything, from a
+/// list written by hand. A hand-written list of what the code does is the exact shape this file
+/// exists to distrust — and it had already fallen behind: `shutdown.exe` and `rundll32.exe`,
+/// the two the curfew needs to lock or shut the PC down, were absent from it. Nothing checked
+/// them anywhere, so a stripped image would have installed cleanly and then done nothing at
+/// bedtime.
+///
+/// Derived from the call sites for the same reason as the scan above.
+#[test]
+fn preflight_knows_about_every_tool_the_crate_shells_out_to() {
+    let preflight = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/preflight.rs");
+    let text = std::fs::read_to_string(&preflight)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", preflight.display()));
+
+    let start = text
+        .find("fn check_system_tools")
+        .expect("src/preflight.rs no longer defines check_system_tools — this test is stale");
+    let body = &text[start..start + text[start..].find("\n}\n").expect("unterminated fn")];
+
+    let mut names: Vec<String> = requested_system_binaries()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    names.sort();
+    names.dedup();
+    assert!(
+        names.len() >= 4,
+        "only {} distinct tools found — the extractor is broken and this proves nothing",
+        names.len()
+    );
+
+    let unchecked: Vec<&String> = names
+        .iter()
+        .filter(|n| !body.contains(&format!("system32(\"{n}\")")))
+        .collect();
+    assert!(
+        unchecked.is_empty(),
+        "these tools are invoked somewhere in the crate but never pre-checked, so a machine \
+         missing one installs cleanly and fails later, with no error pointing at the cause: \
+         {unchecked:?}\n\nAdd them to `check_system_tools` in src/preflight.rs — as a blocker if \
+         install needs them, as a caution if only enforcement does."
+    );
+}

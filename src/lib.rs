@@ -68,7 +68,6 @@ pub mod syspath;
 
 use anyhow::{Context, Result};
 
-/// Parse `argv` and dispatch the requested subcommand.
 /// The build's own version, from `Cargo.toml` at compile time.
 ///
 /// `env!` bakes this in as an ordinary string constant, so `strip = true` in the release profile
@@ -76,6 +75,75 @@ use anyhow::{Context, Result};
 /// PC could not be asked which build it was, and that is the first thing worth knowing when
 /// something misbehaves or when checking whether a security fix is present.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Parse `argv` and dispatch the requested subcommand.
+/// Which options each subcommand accepts, and which of them take a value.
+///
+/// Every flag in this crate is read where it matters, with `args.iter().any(|a| a == "--x")`.
+/// That treats a typo as absence. For `--purge` the mistake is a harmless no-op; for two others
+/// it is not:
+///
+/// - `remote-setup` has two modes and `--off` chooses between them, so
+///   `remote-setup --of > teardown.ps1` writes the script that *enables* remote administration
+///   into a file named teardown — which the parent then runs, elevated.
+/// - `install --prot 9000` installs on the default port and says nothing, so the dashboard is
+///   not where they were told it would be.
+///
+/// Refusing unrecognised options is the settled convention for exactly this reason. One table,
+/// so a new flag that is not listed here fails loudly the first time it is used rather than at
+/// whichever call site reads it.
+struct Accepts {
+    bare: &'static [&'static str],
+    valued: &'static [&'static str],
+}
+
+fn accepts(cmd: &str) -> Option<Accepts> {
+    let a = |bare, valued| Some(Accepts { bare, valued });
+    match cmd {
+        "install" => a(&["--fix", "--reset-config", "--new-cert"], &["--port"]),
+        "uninstall" => a(&["--purge"], &[]),
+        "remote-setup" => a(&["--off"], &[]),
+        "run" | "doctor" | "status" | "pair" | "fingerprint" => a(&[], &[]),
+        "version" | "--version" | "-V" | "help" | "--help" | "-h" => a(&[], &[]),
+        // Deliberately unchecked:
+        // `helper` already rejects anything it does not recognise, and is handled before this
+        // point so nothing can write to the stdout it streams a PNG on.
+        // `service-run` is started by the SCM, not typed. A wrong entry in this table would turn
+        // into a service that refuses to start — much worse than the typo it would catch.
+        // An unknown command falls through here and is reported by the dispatch below.
+        _ => None,
+    }
+}
+
+/// Check `args` against [`accepts`]. `Err` is the message to print; pure, so it is testable.
+fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
+    let Some(ok) = accepts(cmd) else {
+        return Ok(());
+    };
+    let mut i = 2; // argv[0] is the program, argv[1] the subcommand.
+    while i < args.len() {
+        let arg = args[i].as_str();
+        if ok.valued.contains(&arg) {
+            // Skip the value unexamined: it is data, and may legitimately begin with a dash.
+            i += 2;
+            continue;
+        }
+        if ok.bare.contains(&arg) {
+            i += 1;
+            continue;
+        }
+        let known: Vec<&str> = ok.bare.iter().chain(ok.valued).copied().collect();
+        return Err(if known.is_empty() {
+            format!("unknown option `{arg}`: `{cmd}` takes no options.")
+        } else {
+            format!(
+                "unknown option `{arg}` for `{cmd}`.\nIt accepts: {}",
+                known.join(", ")
+            )
+        });
+    }
+    Ok(())
+}
 
 pub fn run_cli() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -91,6 +159,14 @@ pub fn run_cli() -> Result<()> {
     // rustls 0.23 requires a crypto provider to be installed. We build against the
     // `ring` provider (no C toolchain needed) and install it once at startup.
     let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Before anything acts on them. Exit 2 is the usage-error code the unknown-command arm below
+    // already uses.
+    if let Err(msg) = check_flags(cmd, &args) {
+        eprintln!("{msg}\n");
+        print_usage();
+        std::process::exit(2);
+    }
 
     match cmd {
         "install" => install::install(),
@@ -269,24 +345,173 @@ fn service_log_appender() -> Result<tracing_appender::rolling::RollingFileAppend
 }
 
 fn print_usage() {
-    // Indentation comes from the spaces BEFORE each backslash: a Rust line continuation eats the
-    // newline and all leading whitespace on the next source line, so the source cannot be laid
-    // out to match the output. Keep them in step by eye.
+    // A raw string, laid out exactly as it prints. The previous form built this from escaped
+    // line-continuations, where the indentation came from the spaces *before* each backslash --
+    // so the source looked nothing like the output and had to be kept in step by eye. It wasn't:
+    // the two `install` flags below were left at column 7 instead of aligned under the
+    // description column, and nothing catches that but running the binary.
     println!(
-        "nestwatch {VERSION} — home remote control (LAN only)\n\n\
-         USAGE:\n  \
-           nestwatch install       set password + TLS cert, install the SYSTEM service\n      \
-                                   --port N  listen on a port other than 8443\n      \
-                                   --fix     apply pre-flight fixes without asking\n  \
-           nestwatch uninstall     stop + remove the service (--purge also removes data)\n  \
-           nestwatch doctor        check the install and report anything wrong\n  \
-           nestwatch pair          show a QR code to sign in another phone or laptop\n  \
-           nestwatch fingerprint   print the TLS cert SHA-256 (to verify a new device)\n  \
-           nestwatch version       print this build's version\n  \
-           nestwatch remote-setup  print a script enabling remote admin (--off to undo)\n  \
-           nestwatch run           run the HTTPS server in the foreground (dev)\n\n\
-         Internal (invoked automatically):\n  \
-           nestwatch service-run            SCM entry point for the service\n  \
-           nestwatch helper --capture PATH  capture a screenshot in the user session\n"
+        r#"nestwatch {VERSION} — home remote control (LAN only)
+
+USAGE:
+  nestwatch install       set password + TLS cert, install the SYSTEM service
+                          --port N        listen on a port other than 8443
+                          --fix           apply pre-flight fixes without asking
+                          --reset-config  replace an unreadable config.json
+  nestwatch uninstall     stop + remove the service (--purge also removes data)
+  nestwatch doctor        check the install and report anything wrong
+  nestwatch pair          show a QR code to sign in another phone or laptop
+  nestwatch fingerprint   print the TLS cert SHA-256 (to verify a new device)
+  nestwatch version       print this build's version
+  nestwatch remote-setup  print a script enabling remote admin (--off to undo)
+  nestwatch run           run the HTTPS server in the foreground (dev)
+
+Internal (invoked automatically):
+  nestwatch service-run            SCM entry point for the service
+  nestwatch helper --capture PATH  capture a screenshot in the user session
+"#
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        std::iter::once("nestwatch")
+            .chain(parts.iter().copied())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The typo that inverts the operation.
+    ///
+    /// `remote-setup` prints the teardown script with `--off` and the *setup* script without it.
+    /// Ignoring an unrecognised option meant `remote-setup --of > teardown.ps1` produced the
+    /// script that enables remote administration, under a filename saying the opposite — and the
+    /// next step in the guide is to run that file, elevated.
+    #[test]
+    fn a_mistyped_off_is_refused_rather_than_inverted() {
+        assert!(check_flags("remote-setup", &argv(&["remote-setup", "--of"])).is_err());
+        assert!(check_flags("remote-setup", &argv(&["remote-setup", "-off"])).is_err());
+        assert!(check_flags("remote-setup", &argv(&["remote-setup", "--off"])).is_ok());
+        assert!(check_flags("remote-setup", &argv(&["remote-setup"])).is_ok());
+    }
+
+    /// A mistyped `--port` used to install on 8443 without a word about it.
+    #[test]
+    fn a_mistyped_port_is_refused_and_a_real_one_keeps_working() {
+        assert!(check_flags("install", &argv(&["install", "--prot", "9000"])).is_err());
+        assert!(check_flags("install", &argv(&["install", "--port", "9000"])).is_ok());
+        // The value is data and is never examined: a port is not a flag, even if it looks like one.
+        assert!(check_flags("install", &argv(&["install", "--port", "--fix"])).is_ok());
+        // Every real install flag, together.
+        assert!(
+            check_flags(
+                "install",
+                &argv(&[
+                    "install",
+                    "--fix",
+                    "--new-cert",
+                    "--reset-config",
+                    "--port",
+                    "9000"
+                ])
+            )
+            .is_ok()
+        );
+    }
+
+    /// Commands that take nothing say so, and the message names the command.
+    #[test]
+    fn a_command_with_no_options_says_so() {
+        let err = check_flags("doctor", &argv(&["doctor", "--verbose"])).unwrap_err();
+        assert!(
+            err.contains("--verbose"),
+            "name the offending option: {err}"
+        );
+        assert!(err.contains("takes no options"), "{err}");
+
+        let err = check_flags("uninstall", &argv(&["uninstall", "--purgee"])).unwrap_err();
+        assert!(err.contains("--purge"), "list what it does accept: {err}");
+    }
+
+    /// Commands whose arguments this table must not police.
+    #[test]
+    fn the_internal_commands_are_left_alone() {
+        // `helper` validates its own, and must not be intercepted before it streams PNG bytes.
+        assert!(check_flags("helper", &argv(&["helper", "--capture-stdout"])).is_ok());
+        // `service-run` is started by the SCM. Refusing here would mean a service that won't run.
+        assert!(check_flags("service-run", &argv(&["service-run", "--whatever"])).is_ok());
+    }
+
+    /// The table cannot fall behind the code that reads the flags.
+    ///
+    /// Every flag is consumed somewhere by `args.iter().any(|a| a == "--x")`, far from here. A
+    /// flag added there but not listed above would be rejected the first time anyone used it —
+    /// the failure lands on the user, not on CI. So the list is checked against the call sites,
+    /// the same way `tests/spawn_paths.rs` checks `syspath` against its own, and for the same
+    /// reason: a hand-maintained copy of what the code does is a copy that goes stale.
+    #[test]
+    fn every_flag_the_code_reads_is_listed_in_the_table() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut known: Vec<&str> = Vec::new();
+        for cmd in [
+            "install",
+            "uninstall",
+            "remote-setup",
+            "run",
+            "doctor",
+            "status",
+            "pair",
+            "fingerprint",
+            "version",
+            "help",
+        ] {
+            let a = accepts(cmd).expect("every user-facing command must be in the table");
+            known.extend(a.bare);
+            known.extend(a.valued);
+        }
+
+        let mut checked = 0usize;
+        let mut missing = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("reading src/").flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("reading a source file");
+            for (n, line) in text.lines().enumerate() {
+                // Prose mentions the idiom without being a call site — the same exclusion
+                // `tests/spawn_paths.rs` needs for the same reason.
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                // The one idiom every flag is read with: `|a| a == "--flag"`.
+                let Some(rest) = line.split_once("a == \"--") else {
+                    continue;
+                };
+                let Some((flag, _)) = rest.1.split_once('"') else {
+                    continue;
+                };
+                checked += 1;
+                let flag = format!("--{flag}");
+                if !known.contains(&flag.as_str()) {
+                    missing.push(format!("  {}:{} — {flag}", path.display(), n + 1));
+                }
+            }
+        }
+
+        assert!(
+            checked >= 6,
+            "found only {checked} flag reads — the scan pattern has drifted from the code and \
+             this test is no longer checking anything"
+        );
+        assert!(
+            missing.is_empty(),
+            "these flags are read by the code but absent from `accepts`, so using them would be \
+             refused:\n{}",
+            missing.join("\n")
+        );
+    }
 }
