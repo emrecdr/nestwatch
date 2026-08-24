@@ -1278,7 +1278,8 @@ mod tests {
     #[test]
     fn a_tally_written_before_foreground_tracking_still_loads() {
         let legacy = r#"{"day":null,"total_secs":120,"per_app_secs":{"roblox.exe":60}}"#;
-        let u: Usage = serde_json::from_str(legacy).expect("a pre-foreground tally must still load");
+        let u: Usage =
+            serde_json::from_str(legacy).expect("a pre-foreground tally must still load");
         assert_eq!(u.total_secs, 120);
         assert_eq!(u.per_app_secs.get("roblox.exe"), Some(&60));
         assert!(
@@ -1321,7 +1322,10 @@ mod tests {
 
         let row = rollup_row(day(), 3600, Some(180), &running, &focused, &BTreeMap::new());
 
-        assert_eq!(row["apps"]["roblox.exe"], 60, "60 minutes with the app open");
+        assert_eq!(
+            row["apps"]["roblox.exe"], 60,
+            "60 minutes with the app open"
+        );
         assert_eq!(
             row["focused"]["roblox.exe"], 40,
             "40 of those minutes actually looking at it"
@@ -1441,7 +1445,14 @@ mod tests {
     #[test]
     fn rollup_row_omits_budget_when_unknown() {
         let per_app = BTreeMap::new();
-        let row = rollup_row(day(), 7_200, None, &per_app, &BTreeMap::new(), &BTreeMap::new());
+        let row = rollup_row(
+            day(),
+            7_200,
+            None,
+            &per_app,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
 
         assert!(
             row.as_object().unwrap().get("budget").is_none(),
@@ -1452,7 +1463,14 @@ mod tests {
     #[test]
     fn rollup_row_includes_budget_when_known() {
         let per_app = BTreeMap::new();
-        let row = rollup_row(day(), 7_200, Some(120), &per_app, &BTreeMap::new(), &BTreeMap::new());
+        let row = rollup_row(
+            day(),
+            7_200,
+            Some(120),
+            &per_app,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
 
         assert_eq!(row["budget"], 120);
     }
@@ -1467,7 +1485,14 @@ mod tests {
         let mut per_app = BTreeMap::new();
         per_app.insert("game.exe".to_string(), 3_600u64);
 
-        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new(), &BTreeMap::new());
+        let row = rollup_row(
+            day(),
+            7_530,
+            Some(90),
+            &per_app,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
 
         // Read it back the way the report does, with a window ending on the day just written.
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
@@ -1484,7 +1509,14 @@ mod tests {
     /// never as a zero that would read as "no limit" or flag a false over-budget day.
     #[test]
     fn a_row_written_without_a_budget_round_trips_as_no_verdict() {
-        let row = rollup_row(day(), 14_400, None, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new()); // 240 min, budget unknown
+        let row = rollup_row(
+            day(),
+            14_400,
+            None,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ); // 240 min, budget unknown
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
 
         assert_eq!(report.days[0].minutes_used, Some(240));
@@ -1503,7 +1535,14 @@ mod tests {
         per_app.insert("game.exe".to_string(), 3_600u64); // 60 min
         per_app.insert("blip.exe".to_string(), 30u64); // 0 min — dropped, same as per_app_minutes
 
-        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new(), &BTreeMap::new()); // 7530s = 125.5 min -> 125
+        let row = rollup_row(
+            day(),
+            7_530,
+            Some(90),
+            &per_app,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        ); // 7530s = 125.5 min -> 125
 
         assert_eq!(row["date"], day().to_string());
         assert_eq!(

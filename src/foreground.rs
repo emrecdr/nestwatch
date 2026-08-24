@@ -425,7 +425,11 @@ mod tests {
     #[test]
     fn scaling_understates_rather_than_overstates() {
         // Three apps claiming 100s each inside a 10s tick: 10/300 of each is 3.33s.
-        let got = clamp(sample(&[("a.exe", 100), ("b.exe", 100), ("c.exe", 100)]), 10).apps;
+        let got = clamp(
+            sample(&[("a.exe", 100), ("b.exe", 100), ("c.exe", 100)]),
+            10,
+        )
+        .apps;
         let total: u64 = got.values().sum();
         assert!(total <= 10, "must not exceed the tick, got {total}");
         for (name, secs) in &got {
@@ -500,7 +504,11 @@ mod tests {
     #[test]
     fn a_non_browser_window_is_not_a_page() {
         assert_eq!(browser_page("Untitled - Notepad"), None);
-        assert_eq!(browser_page("Roblox"), None, "the game itself is not a page");
+        assert_eq!(
+            browser_page("Roblox"),
+            None,
+            "the game itself is not a page"
+        );
         assert_eq!(browser_page(""), None);
     }
 
@@ -649,9 +657,7 @@ mod tests {
     /// retitles a window in a loop must not be able to grow the stored tally without limit.
     #[test]
     fn page_titles_are_capped_so_a_retitling_loop_cannot_grow_the_tally() {
-        let flood: BTreeMap<String, u64> = (0..500)
-            .map(|i| (format!("page {i}"), 1))
-            .collect();
+        let flood: BTreeMap<String, u64> = (0..500).map(|i| (format!("page {i}"), 1)).collect();
         let got = clamp(
             Sample {
                 apps: BTreeMap::new(),

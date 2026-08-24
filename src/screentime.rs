@@ -470,7 +470,11 @@ mod tests {
             r.days[0].focused.is_empty(),
             "an absent key is unknown focus, never measured-zero focus"
         );
-        assert_eq!(r.days[0].minutes_used, Some(90), "the day itself is still measured");
+        assert_eq!(
+            r.days[0].minutes_used,
+            Some(90),
+            "the day itself is still measured"
+        );
     }
 
     /// Browser page titles ride alongside the app figures, under the same absent-means-unknown
