@@ -328,3 +328,13 @@ weighed and declined — so neither has to be rediscovered.
 - **Web/content filtering** and **foreground-app-aware limits** (e.g. "earn time in a learning
   app") — not yet. Both need Windows-specific work that must be verified on real hardware; today's
   limits count an app as used while it's *running*, not only while it's focused.
+  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** is the design for measuring
+  focused time, and the reasoning for what it deliberately won't do — it reports, it never
+  enforces, and it reads window titles rather than reconfiguring your children's browsers to
+  harvest domains. Half of it is built; the part that has to run inside the child's session is
+  waiting on a real machine.
+- **A phone app** — not built. The dashboard is a web page, and on a phone it stays one.
+  **[docs/MOBILE-APP.md](docs/MOBILE-APP.md)** records what a native app would and wouldn't buy:
+  it would remove the certificate warning, it could not notify you while you're away from home
+  (that needs a cloud service this design refuses), and it would mean a second interface to keep
+  in step with the first, forever.

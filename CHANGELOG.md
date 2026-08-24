@@ -5,6 +5,25 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Added
+- **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md) — measuring which apps were actually
+  in front of your child.** Today's figures count an app while its process *runs*, so a minimised
+  game and a game being played look identical. This is the design for measuring focus instead, and
+  the groundwork for it: the day's rollup now carries a `focused` map beside `apps`, and
+  `GET /api/screentime` serves it. **Nothing is measured yet** — the watcher that would fill those
+  numbers has to run inside your child's session, which is the one kind of code neither the tests
+  nor the Windows cross-check can exercise, so it waits for a real machine. Until then the field is
+  present and empty, and an empty one reads as *not measured*, never as zero.
+  Two decisions are deliberate and written down: it **reports, it never enforces** (the watcher runs
+  as the child, so its numbers are the child's to choose — a test keeps them out of the code that
+  decides when the PC locks), and it identifies web use from **window titles only**, because the
+  alternative was reconfiguring your children's browsers to harvest the domains they visit.
+- **[docs/MOBILE-APP.md](docs/MOBILE-APP.md) — what a phone app would and wouldn't buy.** Researched,
+  not built. It would remove the certificate warning; it could not tell you about a time request
+  while you're away from home, because that needs a cloud service this design refuses; and it would
+  be a second interface to keep in step with the first, forever. Includes the two findings that
+  cost the most to establish: an installable web page **cannot** work here (an iOS home-screen app
+  doesn't inherit Safari's certificate exception), and the certificate-pinning recipe in the most
+  popular Dart HTTP client's own documentation sends your password before it checks the certificate.
 - **[docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) — reaching the dashboard from outside the
   house.** Off-LAN access is still not a feature and still unsupported; what the guide adds is an
   answer to the question people ask anyway. Which arrangements work (a VPN that puts you on the
@@ -21,6 +40,12 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **A day's per-app detail could be silently dropped.** When the same date turned up in both
+  `usage.jsonl` and `screentime.jsonl`, the report kept whichever row listed more apps — so a row
+  holding the same apps *plus* richer detail could lose the tie and have that detail discarded. The
+  day still displayed, with less in it than was recorded, which is why nothing looked wrong. Found
+  while adding the `focused` map, and it would have thrown that map away on exactly the installs
+  that upgraded mid-life.
 - **Denying a request could have granted it.** The approve/deny handler took a yes/no flag, and
   anything that was not literally "no" counted as yes — so a wrong value granted the child the
   minutes instead of refusing them. The two buttons on the page always passed the right thing, so
