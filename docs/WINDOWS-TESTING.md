@@ -12,9 +12,9 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these seven first
 
-The full list is 80 items, which is why it keeps not happening. These seven are the ones whose
+The full list is 95 items, which is why it keeps not happening. These seven are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the other
-seventy-three combined. Each links to its full entry below.
+eighty-eight combined. Each links to its full entry below.
 
 1. **Is his account a standard user?** (§0) — `net localgroup Administrators`. If he is listed,
    stop: every other check on this list is measuring something that a local administrator can
@@ -65,6 +65,23 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
 
 ## A. Install
 
+- [ ] **Pre-flight runs before anything is touched, and before the password prompt.** Run
+      `.\nestwatch.exe install` and confirm the checks appear *first*. On a machine with nothing
+      wrong it says `Pre-flight checks passed.` and continues.
+- [ ] **A blocker refuses cleanly.** Occupy the port first — in a second window,
+      `python -m http.server 8443` or any listener — then run `install`. It must report
+      *"port 8443 is already in use"*, say **nothing has been changed on this machine**, and
+      exit **before** asking for a password. Confirm `dir C:\ProgramData\HostHealth` is
+      unchanged (or absent).
+- [ ] **The Public-network caution offers to fix itself.** With the network set to Public, run
+      `install`: it should offer `Fix "this PC's network is set to Public" now? [y/N]`. Answer
+      **y** and confirm it reports `done: network set to Private`, then re-checks and says the
+      remaining findings are gone. `Get-NetConnectionProfile` must now show Private.
+- [ ] **Answering no changes nothing.** Set the network back to Public, run `install`, press
+      Enter (the default is no) — it must say *skipped*, leave the profile Public, and still
+      install.
+- [ ] **`--fix` needs no console.** `install --fix` applies the same fixes without prompting;
+      useful when running it over a remote session where nobody can answer.
 - [ ] **Unblock first:** right-click the downloaded `nestwatch.exe` → Properties → tick
       **Unblock** → OK. Confirm that running it then does *not* show "Windows protected your PC".
 - [ ] **Non-elevated install is refused:** from a *normal* (non-admin) PowerShell, run
@@ -317,6 +334,41 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
 - [ ] **A failed update doesn't leave enforcement off.** Hard to stage deliberately; if an update
       ever does fail, confirm `sc query HostHealthService` still shows RUNNING (it restarts the
       previous version) and that the output says so.
+
+---
+
+## G2. Remote administration (only if you intend to use it)
+
+Skip this whole section unless you plan to update the PC over the network. It opens an
+administrative way in, and **none of it is safe while his account is a local administrator** —
+check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
+
+- [ ] **`doctor` says nothing about remoting when it is off.** Before enabling anything, run
+      `nestwatch.exe doctor` and confirm there is no mention of ports 5985 or 5986.
+- [ ] **The generated script is readable and complete.**
+      `.\host-health.exe remote-setup > setup.ps1`, then open it. It must name **this PC** in
+      `-DnsName` (not a placeholder), and contain the elevation check, the HTTPS listener, the
+      deletion of the plaintext one, and the verification step.
+- [ ] **It refuses to run un-elevated.** Run `.\setup.ps1` from a *normal* PowerShell → it must
+      throw *"Run this in an elevated PowerShell"* and change nothing.
+- [ ] **It completes elevated** and prints a certificate thumbprint and the export path.
+- [ ] **Plaintext remoting is genuinely gone.** `winrm enumerate winrm/config/Listener` shows
+      **HTTPS only**. Then, importantly, run `nestwatch.exe doctor`: it must **not** report
+      *"listening WITHOUT encryption"*. If it does, stop and do not use remoting.
+- [ ] **`doctor` notices remoting is on.** It should now warn *"remote management is enabled
+      (HTTPS, port 5986)"* — the reminder that this is a way in you left open.
+- [ ] **A remote session works, without a `-Skip` flag.** From your laptop, after importing the
+      exported certificate and comparing its thumbprint:
+      `New-PSSession -ComputerName <PC> -UseSSL -Credential (Get-Credential)`. If it only works
+      with `-SkipCACheck`, the certificate trust step did not take — fix that rather than skipping.
+- [ ] **It does not disturb him.** While the session is open, confirm the PC's screen is
+      unchanged and he is not signed out. (This is the reason for remoting over Remote Desktop.)
+- [ ] **An update over that session works end to end:** copy the new `.exe` with
+      `Copy-Item -ToSession`, run `install`, then `version` and `doctor` — following the sequence
+      in [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
+- [ ] **Teardown really tears down.** `.\host-health.exe remote-setup --off > teardown.ps1` and
+      run it. Then `nestwatch.exe doctor` must go back to reporting nothing about remoting, and
+      `Get-Service WinRM` must show Stopped with StartupType Manual.
 
 ---
 

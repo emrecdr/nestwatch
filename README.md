@@ -223,12 +223,22 @@ nestwatch.exe pair        # print a fresh QR to sign in another phone/laptop
 nestwatch.exe fingerprint # re-print the TLS cert SHA-256 (to verify a new device later)
 nestwatch.exe uninstall   # stop + delete the service (add --purge to remove data too)
 nestwatch.exe version     # print this build's version (also --version / -V)
+nestwatch.exe remote-setup # print a script that enables remote admin (--off to undo)
 
 # install also accepts:
 #   --port <N>        listen on a different port
+#   --fix             apply pre-flight fixes without asking (for a headless install,
+#                     where nobody is at the console to answer the prompt)
 #   --reset-config    replace an unreadable config.json (install refuses otherwise, rather
 #                     than silently resetting your curfew, rules and routines)
 ```
+
+- **`install` checks everything first.** Before it changes anything — and before it asks for a
+  password — it verifies the port is free, the Windows tools it needs are present, no leftover
+  service is disabled or mid-deletion, the file isn't still marked as downloaded-from-the-internet,
+  and the network is Private rather than Public. Anything that would stop the install is reported
+  with nothing yet touched; anything that merely affects the result is reported and it continues.
+  Where it can fix something itself it offers to, one at a time, defaulting to no.
 
 - `install` copies the binary to `C:\Program Files\HostHealth\host-health.exe` and registers
   the auto-start, auto-restart LocalSystem service `HostHealthService`. Re-running it updates in

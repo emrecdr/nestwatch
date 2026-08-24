@@ -2,6 +2,43 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.3] — 2026-08-24
+
+### Added
+- **Install offers to fix what it finds.** The checks added in 0.2.2 reported problems and left
+  you to run the commands. Three of them it can now do itself, if you say yes: setting the
+  network to Private, unblocking a file Windows marked as downloaded, and re-enabling a service
+  left disabled. Asked one at a time, defaulting to **no**, since these change the machine's
+  settings. `install --fix` answers yes in advance for an install with nobody at the console.
+- **The dashboard shows which version is on that PC**, with a button to check whether it is the
+  latest. The check runs in *your* browser, on the device you are reading the dashboard on —
+  the monitored PC still contacts nothing, and nothing is checked unless you press it.
+- **`nestwatch remote-setup`** prints a script that turns on remote administration properly, so
+  you can install a new build over the network instead of walking to the PC. It generates the
+  whole thing with this machine's name filled in — the usual step-by-step advice is dangerous to
+  follow halfway, because the first command opens an unencrypted way in that later ones close.
+  `--off` prints the teardown. See the new
+  [docs/REMOTE-UPDATE.md](docs/REMOTE-UPDATE.md), which also explains why there is no auto-updater.
+- **`doctor` now notices remote administration.** Unencrypted remote management is reported as a
+  failure — on a home network anyone can capture the sign-in exchange and crack it later — and
+  encrypted remote management as a reminder that you left a way in open.
+
+### Improved
+- **The dashboard uses the width of a large screen.** It stopped at 1024px, so on a 1920 monitor
+  it used barely half. Now 1280 at large sizes and up to 1760 on very wide ones — still bounded,
+  because a table stretched across a 4K display is harder to read, not easier.
+- **The screenshot opens full-window.** It was capped at a size where you could see something was
+  on screen but not read it. Click the picture or press Expand; Escape closes it. There is a
+  Fullscreen button for the whole monitor, and live refresh keeps working while it is open.
+- Warnings that tell you to change a Windows setting now give the command, not a path through
+  Settings — you are usually already at a prompt that can do it in one line.
+
+### Fixed
+- **A first-time install could fail even though the service had started.** The installer asked
+  Windows for permission to start and delete the service but not to *read its status*, so every
+  check came back refused and it concluded the service never started — then deleted it. Only
+  fresh installs were affected; upgrades worked, which is why it went unnoticed.
+
 ## [0.2.2] — 2026-08-24
 
 ### Added

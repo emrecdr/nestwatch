@@ -269,17 +269,22 @@ fn service_log_appender() -> Result<tracing_appender::rolling::RollingFileAppend
 }
 
 fn print_usage() {
+    // Indentation comes from the spaces BEFORE each backslash: a Rust line continuation eats the
+    // newline and all leading whitespace on the next source line, so the source cannot be laid
+    // out to match the output. Keep them in step by eye.
     println!(
         "nestwatch {VERSION} — home remote control (LAN only)\n\n\
          USAGE:\n  \
-           nestwatch install     set password + TLS cert, install the SYSTEM service\n  \
-           nestwatch uninstall   stop + remove the service\n  \
-  nestwatch remote-setup   print the script to enable remote admin (--off to undo)\n  \
-           nestwatch run         run the HTTPS server in the foreground (dev)\n  \
-           nestwatch doctor      check the install and report anything wrong\n  \
-           nestwatch pair        show a QR code to sign in another phone or laptop\n  \
-           nestwatch fingerprint print the TLS cert SHA-256 (to verify a new device)\n  \
-           nestwatch version     print this build's version\n\n\
+           nestwatch install       set password + TLS cert, install the SYSTEM service\n      \
+                                   --port N  listen on a port other than 8443\n      \
+                                   --fix     apply pre-flight fixes without asking\n  \
+           nestwatch uninstall     stop + remove the service (--purge also removes data)\n  \
+           nestwatch doctor        check the install and report anything wrong\n  \
+           nestwatch pair          show a QR code to sign in another phone or laptop\n  \
+           nestwatch fingerprint   print the TLS cert SHA-256 (to verify a new device)\n  \
+           nestwatch version       print this build's version\n  \
+           nestwatch remote-setup  print a script enabling remote admin (--off to undo)\n  \
+           nestwatch run           run the HTTPS server in the foreground (dev)\n\n\
          Internal (invoked automatically):\n  \
            nestwatch service-run            SCM entry point for the service\n  \
            nestwatch helper --capture PATH  capture a screenshot in the user session\n"
