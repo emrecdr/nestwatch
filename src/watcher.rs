@@ -41,7 +41,7 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -49,8 +49,8 @@ use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWi
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetMessageW, GetWindowTextW,
-    GetWindowThreadProcessId, MSG, PostThreadMessageW, TranslateMessage, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_QUIT,
+    GetWindowThreadProcessId, MSG, TranslateMessage, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS,
 };
 use windows::core::PWSTR;
 
@@ -149,16 +149,6 @@ pub fn run() -> Result<()> {
 
     let _ = worker.join();
     Ok(())
-}
-
-/// Ask the pump to exit. Only used by tests and an orderly shutdown; the service normally just
-/// terminates the process.
-#[allow(dead_code)]
-pub fn stop(pump_thread_id: u32) {
-    // SAFETY: posting WM_QUIT to a thread we own is the documented way to end a message pump.
-    unsafe {
-        let _ = PostThreadMessageW(pump_thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
-    }
 }
 
 /// The measuring loop: wake on a focus event or every [`POLL`], re-read the truth, and report every
