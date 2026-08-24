@@ -154,8 +154,13 @@ fn every_system_binary_the_code_asks_for_is_a_real_file() {
 #[test]
 fn preflight_knows_about_every_tool_the_crate_shells_out_to() {
     let preflight = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/preflight.rs");
+    // Normalised, because this scan looks for raw "\n}\n" rather than going line by line.
+    // Windows checkouts have CRLF (the runner sets core.autocrlf), so the unnormalised form
+    // matched nothing and the test failed on CI having passed everywhere else. The other scans
+    // in this file use `str::lines`, which strips the `\r` for them.
     let text = std::fs::read_to_string(&preflight)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", preflight.display()));
+        .unwrap_or_else(|e| panic!("reading {}: {e}", preflight.display()))
+        .replace("\r\n", "\n");
 
     let start = text
         .find("fn check_system_tools")

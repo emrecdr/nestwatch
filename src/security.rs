@@ -223,8 +223,10 @@ mod tests {
         let mut rest = PAGE;
         while let Some(i) = rest.find("https://") {
             rest = &rest[i..];
+            // `\r` included: `include_str!` embeds the file as checked out, and a Windows
+            // checkout has CRLF, which would otherwise land inside the captured URL.
             let end = rest
-                .find(['"', '\'', '`', '<', ' ', '\n'])
+                .find(['"', '\'', '`', '<', ' ', '\n', '\r'])
                 .unwrap_or(rest.len());
             let url = &rest[..end];
             rest = &rest[end..];
