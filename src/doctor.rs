@@ -377,13 +377,9 @@ pub(crate) fn network_profiles() -> Vec<String> {
 
 #[cfg(windows)]
 fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
-    use std::process::Command;
-
     // The firewall rule is scoped to private+domain profiles; on a "Public" network it simply
     // never matches, which presents as "I can't connect from my phone" with no other symptom.
-    // One line PER ADAPTER. Hyper-V, WSL, VirtualBox and VPN adapters routinely report Public, so
-    // a substring test on the joined output cried wolf about a perfectly fine Wi-Fi connection —
-    // and the multi-line value corrupted the report layout, since only `fix` text is line-split.
+    // The per-adapter reading lives in `network_profiles`, shared with the installer's pre-flight.
     let profiles = network_profiles();
 
     if profiles.is_empty() {
