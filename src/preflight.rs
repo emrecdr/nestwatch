@@ -32,6 +32,33 @@ pub enum Severity {
 /// `fix` is not optional. A finding a parent cannot act on is a finding that wastes their time —
 /// this is a tool installed by hand, at a machine, usually not by someone who wants to be
 /// reading about service control managers.
+/// A problem this installer can correct itself, given permission.
+///
+/// An enum rather than a boxed closure so the decision to offer a fix stays pure data — testable,
+/// printable, and comparable — with the side effects confined to [`apply`]. Same split the
+/// enforcers use, and the reason the checks above are unit-testable at all.
+///
+/// Deliberately narrow. A fix belongs here only when it is unambiguous, reversible, and squarely
+/// within what installing this tool implies. Anything needing a judgement call — which program to
+/// stop so a port frees up, whether to repair Windows — stays [`Remedy::Manual`], because
+/// guessing on someone else's machine is worse than asking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Remedy {
+    /// Nothing safe to do automatically; the `fix` text is the whole answer.
+    Manual,
+    /// Switch every Public network adapter to Private.
+    MakeNetworkPrivate,
+    /// Strip the downloaded-from-the-internet mark from this file.
+    UnblockFile(std::path::PathBuf),
+    /// Set a disabled service back to automatic start.
+    EnableService,
+}
+
+/// One precondition that is not met.
+///
+/// `fix` is not optional. A finding a parent cannot act on is a finding that wastes their time —
+/// this is a tool installed by hand, at a machine, usually not by someone who wants to be
+/// reading about service control managers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
     pub severity: Severity,
@@ -39,8 +66,10 @@ pub struct Finding {
     pub what: String,
     /// Why it matters — specifically, what will go wrong if it is left alone.
     pub why: String,
-    /// What to do about it.
+    /// What to do about it, in words, whether or not [`Self::remedy`] can do it for them.
     pub fix: String,
+    /// Whether the installer can do it for them, on request.
+    pub remedy: Remedy,
 }
 
 impl Finding {
@@ -54,6 +83,7 @@ impl Finding {
             what: what.into(),
             why: why.into(),
             fix: fix.into(),
+            remedy: Remedy::Manual,
         }
     }
 
@@ -67,6 +97,93 @@ impl Finding {
             what: what.into(),
             why: why.into(),
             fix: fix.into(),
+            remedy: Remedy::Manual,
+        }
+    }
+
+    /// Attach a fix the installer can apply itself.
+    #[must_use]
+    pub fn fixable(mut self, remedy: Remedy) -> Self {
+        self.remedy = remedy;
+        self
+    }
+}
+
+/// Findings this installer could correct, in report order.
+pub fn fixable(findings: &[Finding]) -> Vec<&Finding> {
+    findings
+        .iter()
+        .filter(|f| f.remedy != Remedy::Manual)
+        .collect()
+}
+
+/// No remedy is constructible off Windows -- every check that produces one is `cfg(windows)` --
+/// so this exists only to keep the cross-platform `install` path compiling and testable.
+#[cfg(not(windows))]
+pub fn apply(remedy: &Remedy) -> Result<String, String> {
+    match remedy {
+        Remedy::Manual => Ok(String::new()),
+        other => Err(format!("{other:?} is only available on Windows")),
+    }
+}
+
+/// Carry out one remedy.
+///
+/// Returns the error as a `String` because every caller prints it rather than matching on it: a
+/// fix that fails is reported and the install carries on, since none of these are required for a
+/// correct install -- they are conveniences for problems the parent could fix by hand.
+#[cfg(windows)]
+pub fn apply(remedy: &Remedy) -> Result<String, String> {
+    match remedy {
+        Remedy::Manual => Ok(String::new()),
+
+        // Documented as equivalent to the Unblock tick-box in the file's properties: it removes
+        // the Zone.Identifier alternate data stream and nothing else. Done natively rather than
+        // through `Unblock-File`, since deleting the stream IS the operation and a subprocess
+        // would only add a failure mode.
+        Remedy::UnblockFile(path) => {
+            let ads = format!("{}:Zone.Identifier", path.display());
+            match std::fs::remove_file(&ads) {
+                Ok(()) => Ok(format!("unblocked {}", path.display())),
+                // Already gone is success: the goal is the absence of the mark, not the deletion.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    Ok("already unblocked".into())
+                }
+                Err(e) => Err(format!("could not remove the mark: {e}")),
+            }
+        }
+
+        Remedy::MakeNetworkPrivate => {
+            let out = std::process::Command::new(crate::syspath::powershell())
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    "Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} | \
+                     Set-NetConnectionProfile -NetworkCategory Private",
+                ])
+                .output()
+                .map_err(|e| format!("could not run PowerShell: {e}"))?;
+            if !out.status.success() {
+                return Err(format!("PowerShell refused it: {}", tool_output(&out)));
+            }
+            // Confirm rather than assume: the cmdlet can exit 0 having matched nothing.
+            let left = crate::doctor::network_profiles();
+            if !left.is_empty() && left.iter().all(|p| p == "Public") {
+                return Err("the command ran but the network is still Public".into());
+            }
+            Ok("network set to Private".into())
+        }
+
+        Remedy::EnableService => {
+            let out = std::process::Command::new(crate::syspath::system32("sc.exe"))
+                .args(["config", crate::service::SERVICE_NAME, "start=", "auto"])
+                .output()
+                .map_err(|e| format!("could not run sc.exe: {e}"))?;
+            if out.status.success() {
+                Ok("service set to start automatically".into())
+            } else {
+                Err(format!("sc.exe refused it: {}", tool_output(&out)))
+            }
         }
     }
 }
@@ -267,17 +384,20 @@ fn check_existing_service(out: &mut Vec<Finding>) {
     if let Ok(cfg) = svc.query_config()
         && cfg.start_type == ServiceStartType::Disabled
     {
-        out.push(Finding::blocker(
-            format!("the existing '{name}' service is disabled"),
-            "Windows refuses to start a disabled service (error 1058), so this install would \n\
+        out.push(
+            Finding::blocker(
+                format!("the existing '{name}' service is disabled"),
+                "Windows refuses to start a disabled service (error 1058), so this install would \n\
              register everything and then fail at the last step. It is usually left this way by \n\
              a removal that did not finish.",
-            format!(
-                "Re-enable it:  sc config {name} start= auto\n\
+                format!(
+                    "Re-enable it:  sc config {name} start= auto\n\
                  Or remove it and let this install recreate it:  sc delete {name}\n\
                  A reboot clears a deletion that is still pending."
-            ),
-        ));
+                ),
+            )
+            .fixable(Remedy::EnableService),
+        );
     }
 
     if let Ok(status) = svc.query_status()
@@ -315,7 +435,8 @@ fn check_mark_of_the_web(out: &mut Vec<Finding>) {
                 exe.display(),
                 exe.display()
             ),
-        ));
+        )
+        .fixable(Remedy::UnblockFile(exe.clone())));
     }
 }
 
@@ -331,12 +452,13 @@ fn check_network_profile(out: &mut Vec<Finding>) {
     // Empty means the query failed, which is not the same as Public. Per adapter, because
     // Hyper-V, WSL and VPN adapters are routinely Public while the real Wi-Fi is fine.
     if !profiles.is_empty() && profiles.iter().all(|p| p == "Public") {
-        out.push(Finding::caution(
-            "this PC's network is set to Public",
-            "The firewall rule only applies on Private and Domain networks. On a Public one \n\
+        out.push(
+            Finding::caution(
+                "this PC's network is set to Public",
+                "The firewall rule only applies on Private and Domain networks. On a Public one \n\
              Windows blocks every incoming connection, so the dashboard address and the QR code \n\
              will time out from every device -- even though the service is running.",
-            "From this same elevated PowerShell, one line:\n\
+                "From this same elevated PowerShell, one line:\n\
              \n  \
              Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} |\n    \
                  Set-NetConnectionProfile -NetworkCategory Private\n\
@@ -348,7 +470,9 @@ fn check_network_profile(out: &mut Vec<Finding>) {
              Or by hand: Settings > Network & internet > (your Wi-Fi) > Network profile type.\n\
              Either way it takes effect immediately -- nothing needs reinstalling, and you do\n\
              not need to run install again.",
-        ));
+            )
+            .fixable(Remedy::MakeNetworkPrivate),
+        );
     }
 }
 
@@ -449,6 +573,50 @@ mod tests {
             lines[cmd - 1].is_empty(),
             "a blank line should separate the command from the prose above it:\n{out}"
         );
+    }
+
+    /// A fix must be offered only where one exists, and `fixable` is what the prompt iterates.
+    /// Getting this wrong in either direction is bad: a missed remedy means the parent is told to
+    /// run a command we could have run, and a spurious one means prompting to fix something we
+    /// cannot.
+    #[test]
+    fn only_findings_with_a_remedy_are_offered() {
+        let manual = Finding::blocker("port busy", "would exit", "stop the other program");
+        let auto = Finding::caution("network is Public", "unreachable", "set it to Private")
+            .fixable(Remedy::MakeNetworkPrivate);
+
+        assert_eq!(manual.remedy, Remedy::Manual);
+        assert_eq!(fixable(std::slice::from_ref(&manual)).len(), 0);
+        assert_eq!(fixable(&[manual, auto.clone()]).len(), 1);
+        assert_eq!(fixable(std::slice::from_ref(&auto)).len(), 1);
+        assert_eq!(fixable(&[]).len(), 0);
+    }
+
+    /// `Manual` must stay the default. A constructor that silently attached a real remedy would
+    /// make the installer act on a machine without being asked.
+    #[test]
+    fn findings_are_manual_until_told_otherwise() {
+        assert_eq!(
+            Finding::caution("a", "b", "c").remedy,
+            Remedy::Manual,
+            "a plain finding must never carry an automatic action"
+        );
+        assert_eq!(
+            Finding::blocker("a", "b", "c").remedy,
+            Remedy::Manual,
+            "a plain finding must never carry an automatic action"
+        );
+    }
+
+    /// Every fixable finding still has to explain the manual route. The fix can be declined, can
+    /// fail, and on a headless install is never offered at all -- so the words are the fallback,
+    /// not decoration.
+    #[test]
+    fn a_fixable_finding_still_explains_the_manual_route() {
+        let f = Finding::caution("network is Public", "unreachable", "set it to Private")
+            .fixable(Remedy::MakeNetworkPrivate);
+        assert!(!f.fix.trim().is_empty());
+        assert!(render(&[f]).contains("set it to Private"));
     }
 
     #[test]

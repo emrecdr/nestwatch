@@ -70,8 +70,31 @@ pub fn install() -> Result<()> {
     // before the password prompt, so a machine that cannot be installed on never asks for a
     // secret first. Every step below this point changes something: it stops the running service,
     // overwrites the binary, rewrites the firewall rule.
-    let findings = crate::preflight::gather(port);
+    let mut findings = crate::preflight::gather(port);
     print!("{}", crate::preflight::render(&findings));
+
+    // Offer to fix what we can, rather than printing a command and hoping. The first parent to
+    // use this scrolled past a correct Public-network warning twice, which is the expected
+    // outcome when the remedy is four levels into Settings and the install carries on regardless.
+    //
+    // Always asked, never assumed: these change the machine's configuration, and this runs as
+    // SYSTEM. `--fix` answers yes in advance, for a headless install where nobody is at the
+    // console to answer.
+    if !findings.is_empty() {
+        let assume_yes = args.iter().any(|a| a == "--fix");
+        // Only re-check if something was actually changed. Re-rendering unconditionally printed
+        // the whole report twice on the common path where nothing was fixable.
+        if offer_fixes(&findings, assume_yes)? {
+            findings = crate::preflight::gather(port);
+            if findings.is_empty() {
+                println!("All pre-flight checks pass now.\n");
+            } else {
+                println!("Still outstanding:");
+                print!("{}", crate::preflight::render(&findings));
+            }
+        }
+    }
+
     if crate::preflight::blocked(&findings) {
         // The findings have already been printed in full, with fixes. Repeating them in the error
         // would print each one twice; this line only has to stop the run.
@@ -321,6 +344,63 @@ pub fn ensure_elevated(action: &str, why: &str) -> Result<()> {
 /// Filename the binary is installed and registered under (low-profile, matches the service).
 #[cfg(windows)]
 const INSTALL_EXE_NAME: &str = "host-health.exe";
+
+/// Offer to apply the fixes we can, one at a time.
+///
+/// One prompt per problem rather than one for all of them: they are unrelated, and a parent who
+/// wants the network changed does not necessarily want a service re-enabled in the same breath.
+///
+/// Defaults to NO on every prompt. These alter the machine's configuration from a process running
+/// with full privileges, so silence must mean "don't".
+/// Returns whether anything was actually changed, so the caller knows whether re-checking is
+/// worth doing -- and, more importantly, worth *printing*.
+fn offer_fixes(findings: &[crate::preflight::Finding], assume_yes: bool) -> Result<bool> {
+    use std::io::Write as _;
+
+    let fixable = crate::preflight::fixable(findings);
+    if fixable.is_empty() {
+        return Ok(false);
+    }
+    let mut changed = false;
+
+    println!(
+        "{} of these can be fixed from here.\n",
+        if fixable.len() == 1 { "One" } else { "Some" }
+    );
+
+    for f in fixable {
+        let yes = if assume_yes {
+            println!("  {} — fixing (--fix)", f.what);
+            true
+        } else {
+            print!("  Fix \"{}\" now? [y/N] ", f.what);
+            std::io::stdout().flush().ok();
+            let mut line = String::new();
+            // A closed stdin (piped install, no console) reads as empty, which is "no" -- the
+            // safe direction, and the same as pressing Enter.
+            if std::io::stdin().read_line(&mut line).is_err() {
+                line.clear();
+            }
+            matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        };
+
+        if !yes {
+            println!("      skipped — the instructions above still apply.");
+            continue;
+        }
+        match crate::preflight::apply(&f.remedy) {
+            Ok(msg) => {
+                println!("      done: {msg}");
+                changed = true;
+            }
+            // A failed fix is not a failed install: every one of these is optional, and the
+            // written instructions are still there. Report and carry on.
+            Err(e) => println!("      could not: {e}\n      Do it by hand as described above."),
+        }
+    }
+    println!();
+    Ok(changed)
+}
 
 /// Ask for the password, and keep asking.
 ///
