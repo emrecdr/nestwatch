@@ -45,6 +45,7 @@ pub mod helper;
 pub mod install;
 pub mod jsonl;
 pub mod pairing;
+pub mod preflight;
 pub mod rules;
 pub mod screentime;
 pub mod security;

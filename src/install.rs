@@ -66,6 +66,18 @@ pub fn install() -> Result<()> {
         None => existing.as_ref().map(|c| c.port).unwrap_or(DEFAULT_PORT),
     };
 
+    // Everything that must already be true, checked together before anything is touched — and
+    // before the password prompt, so a machine that cannot be installed on never asks for a
+    // secret first. Every step below this point changes something: it stops the running service,
+    // overwrites the binary, rewrites the firewall rule.
+    let findings = crate::preflight::gather(port);
+    print!("{}", crate::preflight::render(&findings));
+    if crate::preflight::blocked(&findings) {
+        // The findings have already been printed in full, with fixes. Repeating them in the error
+        // would print each one twice; this line only has to stop the run.
+        bail!("pre-flight checks failed — nothing was installed.");
+    }
+
     // Interactive by default; NESTWATCH_PASSWORD allows a silent/headless install.
     let password = match std::env::var("NESTWATCH_PASSWORD") {
         // Headless: there is nobody to re-prompt, so a bad value has to fail — but it still says
@@ -519,7 +531,6 @@ fn deploy(port: u16) -> Result<()> {
     }
 
     println!("Binary: {}", dir.join(INSTALL_EXE_NAME).display());
-    warn_if_network_is_public();
     println!("Reminder: this resists a STANDARD user — ensure your son is not an administrator.");
     Ok(())
 }
@@ -622,39 +633,6 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
         waited.as_secs(),
         crate::service::SERVICE_NAME,
     )
-}
-
-/// Say so, loudly, when the firewall rule cannot possibly match.
-///
-/// The rule is scoped to `private,domain`. On a Public network it never applies, Windows' default
-/// block-all-inbound wins, and every device is refused — which presents purely as "I scanned the
-/// code and the page won't load", with an install that reported success and a service that is
-/// running perfectly.
-///
-/// This was a *reminder* printed on every install, next to an unrelated one about account types.
-/// A line that appears whether or not it applies is a line people learn to skip, and this one is
-/// the difference between working and not. `doctor` could already detect it; the installer just
-/// never asked. Same reader as `doctor` uses, so the two cannot disagree.
-#[cfg(windows)]
-fn warn_if_network_is_public() {
-    let profiles = crate::doctor::network_profiles();
-    // Empty means the query failed, which is not the same as Public and must not be reported as
-    // it. Per-adapter, because Hyper-V/WSL/VPN adapters are routinely Public while the real Wi-Fi
-    // is fine — only *all* of them being Public means nothing can get in.
-    if !profiles.is_empty() && profiles.iter().all(|p| p == "Public") {
-        println!(
-            "\n!! This PC's network is set to PUBLIC, so nothing can reach the dashboard yet.\n\
-             \n   \
-             The firewall rule added above only applies on Private and Domain networks. On a\n   \
-             Public one Windows blocks all incoming connections, so the address and QR code\n   \
-             below will time out from every device — the service itself is running fine.\n\
-             \n   \
-             Fix it: Settings > Network & internet > (your Wi-Fi) > Network profile type >\n   \
-             Private. Nothing needs reinstalling; it takes effect immediately.\n\
-             \n   \
-             Then check with: nestwatch.exe doctor"
-        );
-    }
 }
 
 /// The useful part of a failed command's output, for putting in an error message.
