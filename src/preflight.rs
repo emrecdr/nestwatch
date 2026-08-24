@@ -133,8 +133,14 @@ fn entry(n: usize, f: &Finding) -> String {
         s.lines()
             .enumerate()
             .map(|(i, l)| {
+                let line = l.trim_end();
+                // A blank separator line must not carry the padding, or it becomes a line of
+                // trailing spaces -- invisible on screen, and noise in anything that quotes it.
+                if line.is_empty() {
+                    return "\n".to_string();
+                }
                 let pad = if i == 0 { first } else { rest };
-                format!("{pad}{}\n", l.trim_end())
+                format!("{pad}{line}\n")
             })
             .collect()
     };
@@ -330,8 +336,18 @@ fn check_network_profile(out: &mut Vec<Finding>) {
             "The firewall rule only applies on Private and Domain networks. On a Public one \n\
              Windows blocks every incoming connection, so the dashboard address and the QR code \n\
              will time out from every device -- even though the service is running.",
-            "Settings > Network & internet > (your Wi-Fi) > Network profile type > Private.\n\
-             It takes effect immediately; nothing needs reinstalling.",
+            "From this same elevated PowerShell, one line:\n\
+             \n  \
+             Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} |\n    \
+                 Set-NetConnectionProfile -NetworkCategory Private\n\
+             \n\
+             (That switches every Public adapter on this machine to Private, which is what you\n\
+             want on a home PC. Run Get-NetConnectionProfile first if you would rather see them\n\
+             and pick one by -Name.)\n\
+             \n\
+             Or by hand: Settings > Network & internet > (your Wi-Fi) > Network profile type.\n\
+             Either way it takes effect immediately -- nothing needs reinstalling, and you do\n\
+             not need to run install again.",
         ));
     }
 }
@@ -402,6 +418,37 @@ mod tests {
             "why:\n{out}"
         );
         assert!(out.contains("-> pick another"), "fix:\n{out}");
+    }
+
+    /// Fix text is often several lines with a blank one separating a pasteable command from the
+    /// prose around it. A blank line must not come out as a line of spaces: invisible on screen,
+    /// and noise the moment anyone quotes the output into a message or an issue.
+    #[test]
+    fn no_line_ever_ends_in_whitespace() {
+        let f = Finding::caution(
+            "something",
+            "line one\n\nline three after a blank",
+            "do this\n\n  some-command --flag\n\nthen that",
+        );
+        let out = render(&[f]);
+        let bad: Vec<_> = out.lines().filter(|l| *l != l.trim_end()).collect();
+        assert!(
+            bad.is_empty(),
+            "lines with trailing whitespace: {bad:?}\n{out}"
+        );
+        // And the blank lines must survive as blanks -- dropping them would run the command
+        // into the prose. The command itself is indented under the fix, which is correct, so
+        // look for "a blank line, then a line whose content is the command" rather than
+        // hardcoding the padding.
+        let lines: Vec<&str> = out.lines().collect();
+        let cmd = lines
+            .iter()
+            .position(|l| l.trim() == "some-command --flag")
+            .expect("the command line should be present");
+        assert!(
+            lines[cmd - 1].is_empty(),
+            "a blank line should separate the command from the prose above it:\n{out}"
+        );
     }
 
     #[test]

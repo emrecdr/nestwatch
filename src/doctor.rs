@@ -392,8 +392,10 @@ fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
         checks.push(warn(
             "this PC's network is set to Public",
             "The firewall rule only applies on Private/Domain networks, so other devices\n\
-             can't reach the dashboard. Settings > Network & internet > (your Wi-Fi) >\n\
-             set the network profile to Private.",
+             can't reach the dashboard. Fix it from an elevated PowerShell:\n\
+             Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq 'Public'} |\n\
+             Set-NetConnectionProfile -NetworkCategory Private\n\
+             Or: Settings > Network & internet > (your Wi-Fi) > Network profile type.",
         ));
     } else {
         checks.push(ok(format!(
