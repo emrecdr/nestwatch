@@ -307,6 +307,12 @@ redeem a code the parent already chose to hand out — it cannot see or change a
 The tally and the report answer "how long", and — since foreground tracking — "at what". This is
 the most personal data the system holds, so it is worth stating exactly.
 
+**Status: designed and built, never run.** The half of foreground tracking that touches Windows —
+the watcher itself — has been compiled, linted and cross-checked, and has never executed on a real
+machine. What follows describes what the code is written to record. Treat it as the design's
+promise rather than an observation until
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) has been walked through on the device.
+
 **Per-app foreground time records process names.** The watcher emits a `foreground::Sample`, whose
 `apps` map is normalized process names (`"roblox.exe"`) to seconds. No path, no command line, no
 document name.
@@ -325,9 +331,11 @@ than a process name and less than a browsing history:
   as the child — without it, a script retitling a window in a loop grows the tally file without
   bound. It also means the record is a summary of where the time went, not a log of everything
   opened.
-- **It works in private browsing**, because window titles are not suppressed there. Worth knowing
-  before you assume Incognito is unobserved — and worth telling your child, since this project is
-  overt monitoring, not surveillance.
+- **It is expected to see private-browsing windows too**, because browsers do not suppress window
+  titles there. Expected, not confirmed: this is one of the open questions in
+  [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md), and it has not been checked on a real browser.
+  Worth knowing either way before assuming Incognito is unobserved — and worth telling your child,
+  since this project is overt monitoring, not surveillance.
 - **It is reported, never enforced.** No limit, lock or shutdown is ever decided by a page title.
   The watcher runs inside the child's session, so anything he can influence must not decide
   whether his machine locks.
