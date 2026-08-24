@@ -84,7 +84,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Pinned to a commit: this action downloads and executes binaries, so a moved tag would be
       # arbitrary code execution in CI.
-      - uses: taiki-e/install-action@7f4eb899022d8fe70b20c4f3de697aa85c309026 # v2
+      - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
         with:
           # Version-pinned too: the action is commit-pinned, but an unpinned `tool:` resolves to
           # @latest, so a cargo-deny release could change what this gate accepts with no commit
