@@ -474,6 +474,20 @@ pub async fn pair(
 }
 
 /// `GET /session` — lets the UI decide whether to show login or the dashboard.
+///
+/// Also carries the running version, so the dashboard can say which build is on that PC. Until
+/// now that was only answerable at the machine itself (`version`, or `doctor`'s header), which is
+/// the wrong place: the parent asking "is this up to date?" is holding a phone, somewhere else.
+///
+/// The *number* travels; nothing goes looking for a newer one. Checking would mean this machine
+/// contacting GitHub, and "nothing leaves the house" is a promise in the README, on the project
+/// page, and in `SECURITY.md`. It would also need `connect-src 'self'` widened, weakening a real
+/// control for a convenience. The dashboard shows the version beside a plain link to the releases
+/// page — following that link is the parent's browser doing it, on their own device.
+///
+/// Sent whether or not the caller is signed in: it is the same string printed at install, on the
+/// console, by an unauthenticated `version` command. It reveals nothing a LAN attacker could not
+/// read off the login page's own assets.
 pub async fn me(session: Session) -> Json<Value> {
     let authenticated = session
         .get::<bool>(AUTH_KEY)
@@ -481,7 +495,7 @@ pub async fn me(session: Session) -> Json<Value> {
         .ok()
         .flatten()
         .unwrap_or(false);
-    Json(json!({ "authenticated": authenticated }))
+    Json(json!({ "authenticated": authenticated, "version": crate::VERSION }))
 }
 
 /// Session key holding the last time we refreshed the expiry (unix seconds). See [`require_auth`].

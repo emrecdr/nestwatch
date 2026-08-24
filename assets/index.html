@@ -785,6 +785,23 @@
             </div>
           </section>
         </main>
+
+        <!-- Which build is on this PC, and where to see whether it is current.
+             A plain link, not a check: fetching a version list would mean this machine making an
+             outbound request, and "nothing leaves the house" is promised in the README, on the
+             project page and in SECURITY.md. Clicking the link is the parent's own browser, on
+             the parent's own device. It also needs no CSP change -- `connect-src 'self'` still
+             forbids the page from calling out, and navigation is not connect-src. -->
+        <footer class="mx-auto w-full max-w-5xl px-4 pb-6 text-center text-xs opacity-60
+                       xl:max-w-7xl 2xl:max-w-[110rem]">
+          Nestwatch <span x-text="version || '—'"></span> on this PC ·
+          <a class="link"
+             href="https://github.com/emrecdr/nestwatch/releases/latest"
+             target="_blank" rel="noopener noreferrer">see the latest release</a>
+          <span class="block pt-1 opacity-75">
+            Nothing here contacts the internet — the link opens on the device you are reading this on.
+          </span>
+        </footer>
       </div>
     </template>
 
@@ -912,12 +929,16 @@
           pwNew: "",
           savingPw: false,
           toasts: [],
+          version: "",
 
           async init() {
             try {
               const r = await fetch("/session");
               const j = await r.json();
               this.authed = !!j.authenticated;
+              // The build running on the monitored PC. Displayed only -- nothing here goes
+              // looking for a newer one, because that would mean this machine reaching out.
+              this.version = j.version || "";
             } catch {
               this.authed = false;
             }
