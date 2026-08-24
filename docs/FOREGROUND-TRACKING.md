@@ -195,7 +195,22 @@ written before this feature still parses (the key is simply absent).
 
 ### Web pages
 
-**Not tracked as domains. Tracked as browser time, by window title.**
+**Not tracked as domains. Tracked as page titles, from the window title.**
+
+The watcher runs a **second [`Tracker`] keyed by page title**, fed by `browser_page`, which strips a
+browser's own suffix off the window title. Time is credited to a page only while a recognised
+browser is in front; every other window yields `None`, and `Tracker::focus(None, _)` charges those
+seconds to nobody. So an hour in Notepad never appears in the page list.
+
+Two Trackers rather than one map with mixed keys, because the keys are different kinds of thing:
+`"chrome.exe"` is a program the enforcement tally also knows about, `"Roblox"` is whatever a tab
+happened to be called. Mixing them would let a page title collide with an app rule.
+
+**Page titles are capped, twice.** They are the only unbounded dimension here — every tab, video and
+renamed document is a new key — and they arrive from a process running as the child. `clamp` keeps
+the heaviest `MAX_PAGES` from each report, and the enforcer re-caps the running day, because forty
+*different* titles every thirty seconds would still reach thousands by bedtime in a map that is
+persisted to `usage_state.json` and rolled into a year of history.
 
 The watcher already has the foreground window; reading its title costs one `GetWindowTextW`. A
 browser's title carries the page title — `"Roblox - Google Chrome"` — which gives coarse attribution
@@ -329,6 +344,12 @@ target PC.
 8. Confirm Roblox is attributed under both the direct and Microsoft Store builds.
 9. Confirm the browser's window title reflects the active tab, and check what the Roblox app's own
    window title actually contains — **unverified**, and it decides how useful title capture is.
+9b. Open a browser and confirm page titles appear under "In the browser" — then open **Notepad** and
+    confirm it does *not*, which is the check that the page tracker is scoped to browsers rather
+    than crediting every window.
+9c. Play Roblox in the native app **and** through a cloud-gaming site in a tab. The first should
+    appear under its process name, the second under a page title. That split is the whole reason
+    page tracking exists.
 10. **Sign a second user in and fast-user-switch between them.** Both sessions must accrue to their
     own totals. This is the case `WTSGetActiveConsoleSessionId` would have silently lost.
 11. **Run an app elevated (as administrator) and confirm it is still identified.** This is the

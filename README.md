@@ -325,9 +325,12 @@ weighed and declined — so neither has to be rediscovered.
   monitored PC a way out.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
-- **Web/content filtering** — not built, and not planned in the blocking sense. The report names
-  what a browser window was showing, from its title; it does not stop anything, and it does not
-  collect the domains your children visit.
+- **Web/content filtering** — not built, and not planned in the blocking sense. The report breaks
+  browser time out by **page title** — what a tab was called — so an evening on a game site reads
+  differently from an evening on homework. It does not block anything, it does not record
+  addresses, and it does not build a browsing history. Getting the actual domains would mean
+  changing your children's browser DNS settings; **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)**
+  records why that was declined.
 - **Foreground-app-aware *limits*** (e.g. "earn time in a learning app") — the *measurement* now
   exists, but limits still count an app while it is **running**, on purpose: a game left idling in
   the background would otherwise stop consuming its limit. See

@@ -23,6 +23,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   confident zero.
   **Not yet verified on a real machine.** It compiles and its arithmetic is tested, but the part
   that talks to Windows has never been run. See [WINDOWS-TESTING.md](docs/WINDOWS-TESTING.md).
+- **The report says what the browser was showing, not just that a browser was open.** Roblox in its
+  own app was already named; Roblox streamed through a cloud-gaming site in a tab looked exactly
+  like homework, because both were "chrome.exe". Browser time is now broken out by **page title** —
+  what the tab was called.
+  Titles only, deliberately: **not addresses, and not a browsing history.** Reading the title of a
+  window that is already in front costs nothing, while collecting the domains your children visit
+  would have meant changing their browsers' DNS settings behind their backs. Titles also still work
+  in private browsing, where reading history does not. The list is capped at the heaviest few dozen
+  titles a day, so a page that retitles itself in a loop cannot bloat the stored history.
 - **[docs/MOBILE-APP.md](docs/MOBILE-APP.md) — what a phone app would and wouldn't buy.** Researched,
   not built. It would remove the certificate warning; it could not tell you about a time request
   while you're away from home, because that needs a cloud service this design refuses; and it would
