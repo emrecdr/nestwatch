@@ -325,14 +325,15 @@ weighed and declined — so neither has to be rediscovered.
   monitored PC a way out.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
-- **Web/content filtering** and **foreground-app-aware limits** (e.g. "earn time in a learning
-  app") — not yet. Both need Windows-specific work that must be verified on real hardware; today's
-  limits count an app as used while it's *running*, not only while it's focused.
-  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** is the design for measuring
-  focused time, and the reasoning for what it deliberately won't do — it reports, it never
-  enforces, and it reads window titles rather than reconfiguring your children's browsers to
-  harvest domains. Half of it is built; the part that has to run inside the child's session is
-  waiting on a real machine.
+- **Web/content filtering** — not built, and not planned in the blocking sense. The report names
+  what a browser window was showing, from its title; it does not stop anything, and it does not
+  collect the domains your children visit.
+- **Foreground-app-aware *limits*** (e.g. "earn time in a learning app") — the *measurement* now
+  exists, but limits still count an app while it is **running**, on purpose: a game left idling in
+  the background would otherwise stop consuming its limit. See
+  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)**, which also records why focus
+  figures are kept out of the enforcement path entirely — the helper that measures them runs as
+  your child.
 - **A phone app** — not built. The dashboard is a web page, and on a phone it stays one.
   **[docs/MOBILE-APP.md](docs/MOBILE-APP.md)** records what a native app would and wouldn't buy:
   it would remove the certificate warning, it could not notify you while you're away from home

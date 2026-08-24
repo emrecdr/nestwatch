@@ -727,6 +727,18 @@ function app() {
       return days.length ? days[days.length - 1] : null;
     },
 
+    // The most recent day carrying *focus* data, chosen independently of stRecentAppDay above.
+    //
+    // The two measure different things and a day can carry either, both, or neither: every day
+    // recorded before the watcher existed has apps and no focus, and so does any day it was dead
+    // for. Reusing the running-apps day would put an empty focus list under a heading naming a
+    // date that does have focus data somewhere else in the window — which reads as "he looked at
+    // nothing that day" rather than as "nothing was watching".
+    stRecentFocusDay() {
+      const days = this.screentime.days.filter(d => d.focused && d.focused.length);
+      return days.length ? days[days.length - 1] : null;
+    },
+
     // Shared by the "Today" panel banner and the screen-time card, so the two can never
     // disagree about what counts as stale.
     //

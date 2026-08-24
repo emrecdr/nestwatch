@@ -5,18 +5,24 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Added
-- **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md) — measuring which apps were actually
-  in front of your child.** Today's figures count an app while its process *runs*, so a minimised
-  game and a game being played look identical. This is the design for measuring focus instead, and
-  the groundwork for it: the day's rollup now carries a `focused` map beside `apps`, and
-  `GET /api/screentime` serves it. **Nothing is measured yet** — the watcher that would fill those
-  numbers has to run inside your child's session, which is the one kind of code neither the tests
-  nor the Windows cross-check can exercise, so it waits for a real machine. Until then the field is
-  present and empty, and an empty one reads as *not measured*, never as zero.
-  Two decisions are deliberate and written down: it **reports, it never enforces** (the watcher runs
-  as the child, so its numbers are the child's to choose — a test keeps them out of the code that
-  decides when the PC locks), and it identifies web use from **window titles only**, because the
-  alternative was reconfiguring your children's browsers to harvest the domains they visit.
+- **Per-app screen time now measures what was actually in front of your child.** Until now a
+  minimised game and a game being played looked identical — an app counted while its process ran.
+  A small helper runs inside your child's session, notices which window has focus, and reports it
+  back every 30 seconds; the daily report carries those minutes beside the old ones, so you can see
+  that Roblox was *open* for two hours and *played* for forty minutes.
+  Time spent away from the keyboard doesn't count, and the away-detection is exact rather than
+  approximate: Windows reports how long ago the last key or click was, so the moment your child
+  stopped being at the PC is known precisely instead of being guessed at when a timer trips.
+  Three deliberate limits, written down in
+  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)**: it **reports, it never enforces**
+  (per-app limits still count running time, and a test exists to keep focus figures out of the code
+  that decides when the PC locks — the helper runs as your child, so its numbers are your child's
+  to choose); it identifies web use from **window titles only**, because the alternative was
+  reconfiguring your children's browsers to harvest every domain they visit; and **an unmeasured
+  stretch stays unmeasured** — if the helper is killed, that time reads as unknown, never as a
+  confident zero.
+  **Not yet verified on a real machine.** It compiles and its arithmetic is tested, but the part
+  that talks to Windows has never been run. See [WINDOWS-TESTING.md](docs/WINDOWS-TESTING.md).
 - **[docs/MOBILE-APP.md](docs/MOBILE-APP.md) — what a phone app would and wouldn't buy.** Researched,
   not built. It would remove the certificate warning; it could not tell you about a time request
   while you're away from home, because that needs a cloud service this design refuses; and it would

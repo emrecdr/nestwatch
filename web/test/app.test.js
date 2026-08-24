@@ -296,3 +296,40 @@ test("fmtBytes scales units and shows a dash for nothing", () => {
   assert.equal(app.fmtBytes(1536), "1.5 KB");
   assert.equal(app.fmtBytes(5 * 1024 ** 3), "5.0 GB", "stops at GB");
 });
+
+// --- stRecentFocusDay ------------------------------------------------------
+//
+// Focus minutes and running minutes are two different measurements of the same day, and a day can
+// carry either, both, or neither. The screen-time card picks the most recent day that has focus
+// data to show, which must be chosen independently of the running-app data — a day can have apps
+// and no focus (recorded before the watcher existed, or while it was dead) and picking that one
+// would render an empty focus list under a heading claiming otherwise.
+
+test("stRecentFocusDay picks the newest day that actually has focus data", () => {
+  const app = withState({
+    screentime: {
+      days: [
+        { date: "2026-08-14", apps: [{ name: "a.exe", minutes: 5 }], focused: [{ name: "a.exe", minutes: 3 }] },
+        { date: "2026-08-15", apps: [{ name: "b.exe", minutes: 9 }], focused: [] },
+      ],
+    },
+  });
+
+  const day = app.stRecentFocusDay();
+  assert.ok(day, "a day with focus data exists");
+  assert.equal(day.date, "2026-08-14", "the newer day has no focus data, so it is not the one");
+});
+
+test("stRecentFocusDay is null when nothing has been measured", () => {
+  const app = withState({
+    screentime: {
+      days: [{ date: "2026-08-15", apps: [{ name: "b.exe", minutes: 9 }], focused: [] }],
+    },
+  });
+
+  assert.equal(
+    app.stRecentFocusDay(),
+    null,
+    "no focus data must render as absent, not as an empty list under a date heading",
+  );
+});

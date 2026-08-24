@@ -730,12 +730,32 @@
                 </div>
               </template>
 
+              <template x-if="stRecentFocusDay()">
+                <div class="mt-3">
+                  <span class="label-text"
+                        x-text="'Time actually looking at the screen (' + stRecentFocusDay().date + ')'"></span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="a in stRecentFocusDay().focused" :key="a.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" x-text="a.name"></span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> min focused</span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
               <p class="mt-3 text-xs opacity-60">
-                Counts time this PC was unlocked with an app running — not time spent looking at it,
-                and not per-account. Any account signed in at this machine adds to the same total,
-                and a minimised app still counts, so these figures are not comparable to phone
-                Screen Time. The per-app list above only includes apps that already have a limit
-                set — other apps still count toward the total but aren't broken out by name.
+                Two different measurements. <strong>Minutes</strong> counts time this PC was
+                unlocked with an app running, so a minimised app still counts;
+                <strong>focused</strong> counts only while the app was the window in front, and
+                stops while nobody is touching the keyboard. Per-app limits are enforced against
+                the first, not the second — a game left running in the background still uses up
+                its limit. Neither figure is per-account: any account signed in at this machine
+                adds to the same total. The per-app <em>minutes</em> list only names apps that
+                already have a limit set; the focused list names every app. A day with no focused
+                figures is one nothing was watching, which is not the same as a day nothing was
+                looked at.
               </p>
             </div>
           </section>
