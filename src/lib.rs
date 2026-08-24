@@ -40,6 +40,7 @@ pub mod countdown;
 pub mod curfew;
 pub mod doctor;
 pub mod error;
+pub mod foreground;
 pub mod heartbeat;
 pub mod helper;
 pub mod install;
