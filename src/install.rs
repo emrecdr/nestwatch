@@ -25,7 +25,7 @@ use crate::config::{self, Config, DEFAULT_PORT};
 pub(crate) const FIREWALL_RULE: &str = "HostHealthService";
 
 pub fn install() -> Result<()> {
-    println!("== nestwatch :: install ==\n");
+    println!("== nestwatch v{} :: install ==\n", crate::VERSION);
     // Fail fast (before prompting for a password or creating anything) if we're not elevated:
     // the ACL-hardening below would otherwise lock the data dir and then be unable to write the
     // config into it, leaving a confusing half-installed state. See `ensure_elevated`.
@@ -368,12 +368,44 @@ fn prepare_data_dir(dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))
 }
 
+/// Rights on the service handle the installer works through.
+///
+/// Named, and pinned by a test, because a missing right here does not fail where it is granted —
+/// it fails much later in whichever call needed it, as an opaque winapi error. This has happened
+/// twice. `DELETE` was missing once, so the rollback silently could not delete and "rolled back"
+/// was a lie. Then `QUERY_STATUS` was missing from the create path only, so `start_and_verify`
+/// could never read the status of a *freshly installed* service: every poll returned
+/// access-denied for the full timeout, and the installer rolled back services that had started
+/// perfectly well. Updates were unaffected, which is why it survived — [`UPDATE_ACCESS`] always
+/// had the right.
+///
+/// The two masks differ only where they must: an update needs `STOP` (to release the locked exe)
+/// and a new install needs `DELETE` (to roll itself back).
+#[cfg(windows)]
+const CREATE_ACCESS: windows_service::service::ServiceAccess = {
+    use windows_service::service::ServiceAccess as A;
+    A::QUERY_STATUS
+        .union(A::CHANGE_CONFIG)
+        .union(A::START)
+        .union(A::DELETE)
+};
+
+/// Rights used when an existing service is being upgraded in place.
+#[cfg(windows)]
+const UPDATE_ACCESS: windows_service::service::ServiceAccess = {
+    use windows_service::service::ServiceAccess as A;
+    A::QUERY_STATUS
+        .union(A::STOP)
+        .union(A::START)
+        .union(A::CHANGE_CONFIG)
+};
+
 #[cfg(windows)]
 fn deploy(port: u16) -> Result<()> {
     use std::ffi::{OsStr, OsString};
 
     use windows_service::service::{
-        ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType,
+        ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceType,
     };
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
@@ -391,15 +423,7 @@ fn deploy(port: u16) -> Result<()> {
 
     // If the service already exists, this is an update: stop it (to release the locked exe),
     // overwrite the binary, and reuse the registration.
-    let existing = manager
-        .open_service(
-            SERVICE_NAME,
-            ServiceAccess::QUERY_STATUS
-                | ServiceAccess::STOP
-                | ServiceAccess::START
-                | ServiceAccess::CHANGE_CONFIG,
-        )
-        .ok();
+    let existing = manager.open_service(SERVICE_NAME, UPDATE_ACCESS).ok();
     if let Some(svc) = &existing {
         stop_and_wait(svc)?;
     }
@@ -458,25 +482,20 @@ fn deploy(port: u16) -> Result<()> {
                 account_name: None, // LocalSystem
                 account_password: None,
             };
-            let service = manager
-                .create_service(
-                    &info,
-                    ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::DELETE,
-                )
-                .map_err(|e| {
-                    // 1072 = ERROR_SERVICE_MARKED_FOR_DELETE: a previous copy is still shutting
-                    // down, usually because Services/Task Manager is holding a handle open.
-                    // The raw message tells a parent nothing about what to do.
-                    if e.to_string().contains("1072") {
-                        anyhow::anyhow!(
-                            "a previous copy of the service is still being removed.\n\
+            let service = manager.create_service(&info, CREATE_ACCESS).map_err(|e| {
+                // 1072 = ERROR_SERVICE_MARKED_FOR_DELETE: a previous copy is still shutting
+                // down, usually because Services/Task Manager is holding a handle open.
+                // The raw message tells a parent nothing about what to do.
+                if e.to_string().contains("1072") {
+                    anyhow::anyhow!(
+                        "a previous copy of the service is still being removed.\n\
                              Close the Services window and Task Manager if they're open, wait a \
                              few seconds, and run this again (a reboot always clears it)."
-                        )
-                    } else {
-                        anyhow::anyhow!(e).context("creating service")
-                    }
-                })?;
+                    )
+                } else {
+                    anyhow::anyhow!(e).context("creating service")
+                }
+            })?;
             let _ = service.set_description(SERVICE_DESCRIPTION);
             configure_recovery();
             if let Err(e) = start_and_verify(&service, port) {
@@ -819,4 +838,75 @@ fn deploy(_port: u16) -> Result<()> {
 fn remove_service() -> Result<()> {
     println!("(service uninstall is Windows-only)");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `--port` is the one piece of argument handling here that is pure and platform-independent,
+    /// and it sits in the file with the worst on-hardware record. Cheap to pin, so pin it.
+    #[test]
+    fn port_flag_parses_or_explains() {
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+
+        assert_eq!(parse_port_flag(&args(&["install"])).unwrap(), None);
+        assert_eq!(
+            parse_port_flag(&args(&["install", "--port", "9443"])).unwrap(),
+            Some(9443)
+        );
+        // The boundaries of u16, which is what makes the bare `parse` safe.
+        assert_eq!(
+            parse_port_flag(&args(&["install", "--port", "65535"])).unwrap(),
+            Some(65535)
+        );
+        assert!(parse_port_flag(&args(&["install", "--port", "65536"])).is_err());
+        // Port 0 parses fine as a u16 and is not a port you can serve on.
+        assert!(parse_port_flag(&args(&["install", "--port", "0"])).is_err());
+        assert!(parse_port_flag(&args(&["install", "--port"])).is_err());
+        assert!(parse_port_flag(&args(&["install", "--port", "http"])).is_err());
+    }
+
+    /// Both service handles must carry `QUERY_STATUS`.
+    ///
+    /// A missing access right does not fail where it is granted. It fails later, inside whichever
+    /// call needed it, as an opaque winapi error a long way from the cause — so this is pinned
+    /// rather than left to review. It has gone wrong twice: `DELETE` missing made a rollback
+    /// silently not roll back, and `QUERY_STATUS` missing from the create path meant
+    /// `start_and_verify` could not read the status of a freshly installed service at all. Every
+    /// poll returned access-denied for the whole timeout, so the installer destroyed services
+    /// that had started correctly, and reported that they never started.
+    ///
+    /// Only the create path was affected, which is exactly why it lasted: upgrades worked.
+    ///
+    /// Needs no privileges — it only inspects bitflags — so it runs on the Windows CI runner
+    /// rather than waiting for someone to be standing at the machine.
+    #[cfg(windows)]
+    #[test]
+    fn both_service_handles_can_read_status() {
+        use windows_service::service::ServiceAccess;
+
+        assert!(
+            CREATE_ACCESS.contains(ServiceAccess::QUERY_STATUS),
+            "a new service must be queryable or start_and_verify can never confirm it started"
+        );
+        assert!(
+            UPDATE_ACCESS.contains(ServiceAccess::QUERY_STATUS),
+            "an updated service must be queryable for the same reason"
+        );
+        // The rights each path uniquely depends on, and which have gone missing before.
+        assert!(
+            CREATE_ACCESS.contains(ServiceAccess::DELETE),
+            "rollback deletes the service it just created"
+        );
+        assert!(
+            UPDATE_ACCESS.contains(ServiceAccess::STOP),
+            "an upgrade stops the old service to release the locked exe"
+        );
+        assert!(
+            CREATE_ACCESS.contains(ServiceAccess::START)
+                && UPDATE_ACCESS.contains(ServiceAccess::START),
+            "both paths start the service"
+        );
+    }
 }
