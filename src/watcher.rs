@@ -169,7 +169,12 @@ fn worker(rx: &Receiver<()>) {
     let started = Instant::now();
     let mut last_emit = Duration::ZERO;
 
-    let mut last_resolve = Instant::now() - MIN_GAP;
+    // `None` until the first read, rather than `Instant::now() - MIN_GAP`: subtracting a `Duration`
+    // from an `Instant` **panics** if it would land before the platform's monotonic origin, and a
+    // service starts at boot — precisely when `Instant::now()` can be younger than this gap. With
+    // `panic = "abort"` that would take the watcher down the moment it started, on the machines
+    // least able to report why.
+    let mut last_resolve: Option<Instant> = None;
 
     loop {
         // Either a focus change woke us or the reconciliation interval expired. Both lead to the
@@ -190,8 +195,8 @@ fn worker(rx: &Receiver<()>) {
         // wake-ups, so a skipped read delays attribution by at most this gap. Note the emit check
         // below sits *outside* this guard — `continue`ing here would let a burst of focus events
         // starve reporting for as long as the child cared to keep it up.
-        if last_resolve.elapsed() >= MIN_GAP {
-            last_resolve = Instant::now();
+        if last_resolve.is_none_or(|t| t.elapsed() >= MIN_GAP) {
+            last_resolve = Some(Instant::now());
 
             // Read the world once. Both trackers are fed from a single observation so they cannot
             // disagree about it: two `GetForegroundWindow` calls can straddle a focus change and
