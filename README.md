@@ -325,18 +325,25 @@ weighed and declined — so neither has to be rediscovered.
   monitored PC a way out.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
-- **Web/content filtering** — not built, and not planned in the blocking sense. The report breaks
-  browser time out by **page title** — what a tab was called — so an evening on a game site reads
-  differently from an evening on homework. It does not block anything, it does not record
-  addresses, and it does not build a browsing history. Getting the actual domains would mean
-  changing your children's browser DNS settings; **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)**
-  records why that was declined.
-- **Foreground-app-aware *limits*** (e.g. "earn time in a learning app") — the *measurement* now
-  exists, but limits still count an app while it is **running**, on purpose: a game left idling in
-  the background would otherwise stop consuming its limit. See
-  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)**, which also records why focus
-  figures are kept out of the enforcement path entirely — the helper that measures them runs as
-  your child.
+- **Web/content filtering** — not built, and not planned in the blocking sense. There is code to
+  break browser time out by **page title** — what a tab was called — but see the warning below
+  before relying on it. It blocks nothing, records no addresses, and builds no browsing history;
+  getting the actual domains would mean changing your children's browser DNS settings, and
+  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** records why that was declined.
+- **Foreground-app-aware *limits*** (e.g. "earn time in a learning app") — limits count an app while
+  it is **running**, on purpose: a game left idling in the background would otherwise stop consuming
+  its limit. Focused time is measured *for the report only* and never decides when the PC locks —
+  the helper that measures it runs as your child, so its figures are your child's to influence.
+  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** records the reasoning.
+- ⚠️ **Focused-time and page-title measurement has never run on a real machine.** It is written, it
+  compiles, and its arithmetic is tested — but the half that talks to Windows has not executed once,
+  here or anywhere. **Until you have worked through §D2 of
+  [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md), treat those two columns as unproven.**
+  This is called out here rather than left to the design notes because the failure is quiet: if the
+  watcher does not run on your PC, the focused and browser columns are simply empty — which looks
+  exactly like a child who used no browser, rather than like a feature that did not start. Nothing
+  else is affected. Screen-time totals, curfew, and every limit work as they always have; this part
+  only measures.
 - **A phone app** — not built. The dashboard is a web page, and on a phone it stays one.
   **[docs/MOBILE-APP.md](docs/MOBILE-APP.md)** records what a native app would and wouldn't buy:
   it would remove the certificate warning, it could not notify you while you're away from home

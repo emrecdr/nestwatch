@@ -5,11 +5,18 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Added
-- **Per-app screen time now measures what was actually in front of your child.** Until now a
-  minimised game and a game being played looked identical — an app counted while its process ran.
-  A small helper runs inside your child's session, notices which window has focus, and reports it
-  back every 30 seconds; the daily report carries those minutes beside the old ones, so you can see
-  that Roblox was *open* for two hours and *played* for forty minutes.
+- **Per-app screen time can now measure what was actually in front of your child — but this has
+  never run on a real machine.** ⚠️ The code is written and its arithmetic is tested; the half that
+  talks to Windows has not executed once, here or anywhere. **Work through §D2 of
+  [WINDOWS-TESTING.md](docs/WINDOWS-TESTING.md) before relying on it**, because the failure is
+  quiet: if it does not start on your PC the new columns are simply empty, which looks like a child
+  who used nothing rather than a feature that did not run. Nothing else is affected — totals,
+  curfew and every limit behave exactly as before; this only measures.
+  What it does when it works: until now a minimised game and a game being played looked identical,
+  because an app counted while its process ran. A small helper runs inside your child's session,
+  notices which window has focus, and reports back every 30 seconds; the daily report carries those
+  minutes beside the old ones, so you can see that Roblox was *open* for two hours and *played* for
+  forty minutes.
   Time spent away from the keyboard doesn't count, and the away-detection is exact rather than
   approximate: Windows reports how long ago the last key or click was, so the moment your child
   stopped being at the PC is known precisely instead of being guessed at when a timer trips.
@@ -21,12 +28,10 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   reconfiguring your children's browsers to harvest every domain they visit; and **an unmeasured
   stretch stays unmeasured** — if the helper is killed, that time reads as unknown, never as a
   confident zero.
-  **Not yet verified on a real machine.** It compiles and its arithmetic is tested, but the part
-  that talks to Windows has never been run. See [WINDOWS-TESTING.md](docs/WINDOWS-TESTING.md).
-- **The report says what the browser was showing, not just that a browser was open.** Roblox in its
-  own app was already named; Roblox streamed through a cloud-gaming site in a tab looked exactly
-  like homework, because both were "chrome.exe". Browser time is now broken out by **page title** —
-  what the tab was called.
+- **The report can say what the browser was showing, not just that a browser was open** — same
+  helper, so the same ⚠️ applies: **never run on a real machine.** Roblox in its own app was already
+  named; Roblox streamed through a cloud-gaming site in a tab looked exactly like homework, because
+  both were "chrome.exe". Browser time is broken out by **page title** — what the tab was called.
   Titles only, deliberately: **not addresses, and not a browsing history.** Reading the title of a
   window that is already in front costs nothing, while collecting the domains your children visit
   would have meant changing their browsers' DNS settings behind their backs. The list is capped at
