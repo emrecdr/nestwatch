@@ -460,12 +460,17 @@ fn deploy(port: u16) -> Result<()> {
 
     configure_firewall(port)?;
 
-    // Applied on BOTH paths: an upgrade used to keep whatever recovery config the existing
-    // service had, so a service installed before the failureflag existed never gained it.
-    configure_recovery();
-
+    // Applied on BOTH paths -- but on each one only *after* there is a service to apply it to.
+    //
+    // This used to run once here, before the match. On an upgrade that is fine, the service
+    // already exists. On a first install there is nothing registered yet, so both `sc` calls
+    // failed with 1060 (service does not exist), and the call inside the None arm below then
+    // quietly did the real work. Harmless, and invisible, until failures started being reported
+    // properly -- at which point a successful install printed two alarming notes about settings
+    // that had in fact been applied a moment later.
     match existing {
         Some(svc) => {
+            configure_recovery();
             start_and_verify(&svc, port).context("restarting the updated service")?;
             println!("Updated and restarted service '{SERVICE_NAME}'.");
         }
@@ -514,8 +519,8 @@ fn deploy(port: u16) -> Result<()> {
     }
 
     println!("Binary: {}", dir.join(INSTALL_EXE_NAME).display());
-    println!("Reminder: this resists a STANDARD user — ensure your son is not an administrator,");
-    println!("and that this PC's network is set to 'Private' (not 'Public') so the rule applies.");
+    warn_if_network_is_public();
+    println!("Reminder: this resists a STANDARD user — ensure your son is not an administrator.");
     Ok(())
 }
 
@@ -617,6 +622,39 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
         waited.as_secs(),
         crate::service::SERVICE_NAME,
     )
+}
+
+/// Say so, loudly, when the firewall rule cannot possibly match.
+///
+/// The rule is scoped to `private,domain`. On a Public network it never applies, Windows' default
+/// block-all-inbound wins, and every device is refused — which presents purely as "I scanned the
+/// code and the page won't load", with an install that reported success and a service that is
+/// running perfectly.
+///
+/// This was a *reminder* printed on every install, next to an unrelated one about account types.
+/// A line that appears whether or not it applies is a line people learn to skip, and this one is
+/// the difference between working and not. `doctor` could already detect it; the installer just
+/// never asked. Same reader as `doctor` uses, so the two cannot disagree.
+#[cfg(windows)]
+fn warn_if_network_is_public() {
+    let profiles = crate::doctor::network_profiles();
+    // Empty means the query failed, which is not the same as Public and must not be reported as
+    // it. Per-adapter, because Hyper-V/WSL/VPN adapters are routinely Public while the real Wi-Fi
+    // is fine — only *all* of them being Public means nothing can get in.
+    if !profiles.is_empty() && profiles.iter().all(|p| p == "Public") {
+        println!(
+            "\n!! This PC's network is set to PUBLIC, so nothing can reach the dashboard yet.\n\
+             \n   \
+             The firewall rule added above only applies on Private and Domain networks. On a\n   \
+             Public one Windows blocks all incoming connections, so the address and QR code\n   \
+             below will time out from every device — the service itself is running fine.\n\
+             \n   \
+             Fix it: Settings > Network & internet > (your Wi-Fi) > Network profile type >\n   \
+             Private. Nothing needs reinstalling; it takes effect immediately.\n\
+             \n   \
+             Then check with: nestwatch.exe doctor"
+        );
+    }
 }
 
 /// The useful part of a failed command's output, for putting in an error message.

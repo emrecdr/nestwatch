@@ -346,16 +346,18 @@ pub fn run() -> Result<()> {
 // Windows-specific checks
 // ---------------------------------------------------------------------------
 
+/// The network category of every adapter, one entry each.
+///
+/// Shared with the installer, which needs the same answer for the same reason and must not reach
+/// a different one — the same rule already applied to `firewall_rule_is_subnet_scoped`.
+///
+/// One line PER ADAPTER on purpose. Hyper-V, WSL, VirtualBox and VPN adapters routinely report
+/// Public, so a substring test over the joined output cried wolf about a perfectly good Wi-Fi
+/// connection. Empty means the query failed, which is not the same as "Public" and must not be
+/// reported as it.
 #[cfg(windows)]
-fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
-    use std::process::Command;
-
-    // The firewall rule is scoped to private+domain profiles; on a "Public" network it simply
-    // never matches, which presents as "I can't connect from my phone" with no other symptom.
-    // One line PER ADAPTER. Hyper-V, WSL, VirtualBox and VPN adapters routinely report Public, so
-    // a substring test on the joined output cried wolf about a perfectly fine Wi-Fi connection —
-    // and the multi-line value corrupted the report layout, since only `fix` text is line-split.
-    let profiles: Vec<String> = Command::new(crate::syspath::powershell())
+pub(crate) fn network_profiles() -> Vec<String> {
+    std::process::Command::new(crate::syspath::powershell())
         .args([
             "-NoProfile",
             "-Command",
@@ -370,7 +372,19 @@ fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
                 .filter(|l| !l.is_empty())
                 .collect()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+#[cfg(windows)]
+fn platform_network_checks(port: u16, checks: &mut Vec<Check>) {
+    use std::process::Command;
+
+    // The firewall rule is scoped to private+domain profiles; on a "Public" network it simply
+    // never matches, which presents as "I can't connect from my phone" with no other symptom.
+    // One line PER ADAPTER. Hyper-V, WSL, VirtualBox and VPN adapters routinely report Public, so
+    // a substring test on the joined output cried wolf about a perfectly fine Wi-Fi connection —
+    // and the multi-line value corrupted the report layout, since only `fix` text is line-split.
+    let profiles = network_profiles();
 
     if profiles.is_empty() {
         checks.push(warn(
