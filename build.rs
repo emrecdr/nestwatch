@@ -9,6 +9,8 @@
 use std::path::Path;
 
 fn main() {
+    warn_on_toolchain_mismatch();
+
     let css = Path::new("assets/app.css");
     let html = Path::new("assets/index.html");
     if !css.exists() {
@@ -26,6 +28,57 @@ fn main() {
     // staleness check above actually re-runs when it matters.
     println!("cargo:rerun-if-changed=assets/app.css");
     println!("cargo:rerun-if-changed=assets/index.html");
+}
+
+/// Warn when the compiler running this build is not the one `rust-toolchain.toml` pins.
+///
+/// The pin only takes effect through rustup's shims. If another `cargo`/`rustc` comes first on
+/// PATH — a Homebrew or distro install, say — the pin is silently ignored and the build happens
+/// on whatever that toolchain is. Nothing announces this: the build succeeds, the tests pass, and
+/// the version CI uses is simply not the version being used here. It cost a real session, where a
+/// lint that only exists on the newer compiler appeared to be a defect in the code.
+///
+/// A warning, never an error. A contributor deliberately trying another compiler should not be
+/// blocked; they should just be told which one they are actually on.
+fn warn_on_toolchain_mismatch() {
+    println!("cargo:rerun-if-changed=rust-toolchain.toml");
+
+    let Ok(manifest) = std::fs::read_to_string("rust-toolchain.toml") else {
+        return;
+    };
+    // `channel = "1.96.0"`. Only a pinned *version* is checkable — "stable" and "nightly" are
+    // moving targets and comparing against them would warn on every correct build.
+    let Some(pinned) = manifest
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| l.strip_prefix("channel"))
+        .and_then(|rest| rest.split('"').nth(1))
+        .filter(|c| c.starts_with(|ch: char| ch.is_ascii_digit()))
+    else {
+        return;
+    };
+
+    // Cargo passes the compiler it is actually driving; that is the one whose version matters,
+    // not whatever `rustc` resolves to in this build script's own PATH.
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
+    let Ok(out) = std::process::Command::new(rustc).arg("--version").output() else {
+        return;
+    };
+    let version = String::from_utf8_lossy(&out.stdout);
+    // "rustc 1.96.0 (ac68faa20 2026-05-25)" -> "1.96.0"
+    let Some(actual) = version.split_whitespace().nth(1) else {
+        return;
+    };
+
+    if actual != pinned {
+        println!(
+            "cargo:warning=building with rustc {actual}, but rust-toolchain.toml pins {pinned}. \
+             The pin works through rustup's shims, so something earlier on PATH is shadowing \
+             them (check `command -v cargo` — it should be under ~/.cargo/bin). CI uses {pinned}, \
+             so lints and errors here may not match it."
+        );
+    }
 }
 
 /// Whether `a`'s mtime is strictly newer than `b`'s. Any I/O failure (missing file, unsupported
