@@ -253,6 +253,16 @@ pub struct Usage {
     /// Per-group seconds today (only for groups with a limit), keyed by group name.
     #[serde(default)]
     pub per_group_secs: BTreeMap<String, u64>,
+    /// Per-app seconds **with focus** today, for every app seen — not just limited ones.
+    ///
+    /// Report-only, and deliberately so: it is fed by a watcher running as the child, which makes
+    /// every number here attacker-chosen. Nothing in [`RulesEnforcer::decide`] may read it. See
+    /// `docs/FOREGROUND-TRACKING.md` and `foreground_time_cannot_trigger_a_per_app_limit`.
+    ///
+    /// `#[serde(default)]` so a tally written before this field existed still parses — otherwise
+    /// `load_or_default` would swallow the error and hand the child a zeroed budget on upgrade day.
+    #[serde(default)]
+    pub foreground_secs: BTreeMap<String, u64>,
 }
 
 /// Rule-derived, normalized enforcement targets for one tick — built once by `decide` and shared
@@ -306,6 +316,9 @@ impl Usage {
             self.total_secs = 0;
             self.per_app_secs.clear();
             self.per_group_secs.clear();
+            // Cleared with the rest: the day's focus figures belong to the day that just ended,
+            // and `decide_after_snapshot` has already taken the copy the rollup row is built from.
+            self.foreground_secs.clear();
         }
         self.total_secs = self.total_secs.saturating_add(delta_secs);
         for name in running {
@@ -497,6 +510,7 @@ pub struct PreRollover {
     pub day: Option<NaiveDate>,
     pub total_secs: u64,
     pub per_app_secs: BTreeMap<String, u64>,
+    pub foreground_secs: BTreeMap<String, u64>,
 }
 
 /// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
@@ -582,6 +596,7 @@ impl RulesEnforcer {
             day: self.usage.day,
             total_secs: self.usage.total_secs,
             per_app_secs: self.usage.per_app_secs.clone(),
+            foreground_secs: self.usage.foreground_secs.clone(),
         };
         (prev, self.decide(rules, procs, t))
     }
@@ -737,6 +752,7 @@ fn rollup_row(
     total_secs: u64,
     budget: Option<u32>,
     per_app_secs: &BTreeMap<String, u64>,
+    foreground_secs: &BTreeMap<String, u64>,
 ) -> Value {
     let mut row = serde_json::Map::new();
     row.insert("date".into(), Value::from(date.to_string()));
@@ -745,6 +761,14 @@ fn rollup_row(
         row.insert("budget".into(), Value::from(b));
     }
     row.insert("apps".into(), Value::Object(per_app_minutes(per_app_secs)));
+    // A second map rather than a richer `apps` value: a row written by an older build has no
+    // `focused` key at all, and `screentime::parse_row` reads its absence as "not measured"
+    // rather than as zero focus. Nesting both under `apps` would have made every historical row
+    // parse as though the child stared at nothing.
+    row.insert(
+        "focused".into(),
+        Value::Object(per_app_minutes(foreground_secs)),
+    );
     Value::Object(row)
 }
 
@@ -858,7 +882,13 @@ pub async fn run_rules_enforcer(
         if let Some(pd) = prev.day
             && pd != today
         {
-            let row = rollup_row(pd, prev.total_secs, prev_budget, &prev.per_app_secs);
+            let row = rollup_row(
+                pd,
+                prev.total_secs,
+                prev_budget,
+                &prev.per_app_secs,
+                &prev.foreground_secs,
+            );
             usage_log.record("screentime_daily", row.clone());
             // The durable copy, in a file noisy events cannot rotate away.
             screentime_log.record(row);
@@ -1201,6 +1231,62 @@ mod tests {
         );
     }
 
+    /// A tally written before foreground tracking existed must still load. Failing this bricks
+    /// the enforcer on upgrade: `load_or_default` swallows the parse error and silently returns a
+    /// zeroed tally, handing the child a fresh budget on the day of the update.
+    #[test]
+    fn a_tally_written_before_foreground_tracking_still_loads() {
+        let legacy = r#"{"day":null,"total_secs":120,"per_app_secs":{"roblox.exe":60}}"#;
+        let u: Usage = serde_json::from_str(legacy).expect("a pre-foreground tally must still load");
+        assert_eq!(u.total_secs, 120);
+        assert_eq!(u.per_app_secs.get("roblox.exe"), Some(&60));
+        assert!(
+            u.foreground_secs.is_empty(),
+            "an absent field means no focus data, not zero focus"
+        );
+    }
+
+    /// The whole safety argument for this feature in one test.
+    ///
+    /// Foreground figures come from a process running as the child, so they are attacker-chosen.
+    /// They are for the report only — no enforcement path may read them. If this ever fails, a
+    /// child can either free themselves from a limit or lock themselves out of the machine by
+    /// lying to the watcher.
+    #[test]
+    fn foreground_time_cannot_trigger_a_per_app_limit() {
+        let rules = Rules {
+            app_limits: [("game.exe".to_string(), 1u32)].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        // A wildly-inflated focus figure for the very app that has a limit.
+        e.usage
+            .foreground_secs
+            .insert("game.exe".to_string(), 99_999);
+
+        let actions = e.decide(&rules, &[proc(1, "game.exe")], tk(Instant::now(), 0));
+
+        assert!(
+            !actions.iter().any(|a| matches!(a, RuleAction::Kill(_))),
+            "enforcement must read running time, never focused time"
+        );
+    }
+
+    /// Both numbers survive into the stored row, under distinct keys.
+    #[test]
+    fn the_rollup_row_carries_focused_minutes_beside_running_minutes() {
+        let running: BTreeMap<String, u64> = [("roblox.exe".to_string(), 3600)].into();
+        let focused: BTreeMap<String, u64> = [("roblox.exe".to_string(), 2400)].into();
+
+        let row = rollup_row(day(), 3600, Some(180), &running, &focused);
+
+        assert_eq!(row["apps"]["roblox.exe"], 60, "60 minutes with the app open");
+        assert_eq!(
+            row["focused"]["roblox.exe"], 40,
+            "40 of those minutes actually looking at it"
+        );
+    }
+
     /// Regression: budget arithmetic must saturate, not wrap.
     ///
     /// Release builds don't check overflow, so `daily_budget_mins: u32::MAX` plus a single granted
@@ -1314,7 +1400,7 @@ mod tests {
     #[test]
     fn rollup_row_omits_budget_when_unknown() {
         let per_app = BTreeMap::new();
-        let row = rollup_row(day(), 7_200, None, &per_app);
+        let row = rollup_row(day(), 7_200, None, &per_app, &BTreeMap::new());
 
         assert!(
             row.as_object().unwrap().get("budget").is_none(),
@@ -1325,7 +1411,7 @@ mod tests {
     #[test]
     fn rollup_row_includes_budget_when_known() {
         let per_app = BTreeMap::new();
-        let row = rollup_row(day(), 7_200, Some(120), &per_app);
+        let row = rollup_row(day(), 7_200, Some(120), &per_app, &BTreeMap::new());
 
         assert_eq!(row["budget"], 120);
     }
@@ -1340,7 +1426,7 @@ mod tests {
         let mut per_app = BTreeMap::new();
         per_app.insert("game.exe".to_string(), 3_600u64);
 
-        let row = rollup_row(day(), 7_530, Some(90), &per_app);
+        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new());
 
         // Read it back the way the report does, with a window ending on the day just written.
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
@@ -1357,7 +1443,7 @@ mod tests {
     /// never as a zero that would read as "no limit" or flag a false over-budget day.
     #[test]
     fn a_row_written_without_a_budget_round_trips_as_no_verdict() {
-        let row = rollup_row(day(), 14_400, None, &BTreeMap::new()); // 240 min, budget unknown
+        let row = rollup_row(day(), 14_400, None, &BTreeMap::new(), &BTreeMap::new()); // 240 min, budget unknown
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
 
         assert_eq!(report.days[0].minutes_used, Some(240));
@@ -1376,7 +1462,7 @@ mod tests {
         per_app.insert("game.exe".to_string(), 3_600u64); // 60 min
         per_app.insert("blip.exe".to_string(), 30u64); // 0 min — dropped, same as per_app_minutes
 
-        let row = rollup_row(day(), 7_530, Some(90), &per_app); // 7530s = 125.5 min -> 125
+        let row = rollup_row(day(), 7_530, Some(90), &per_app, &BTreeMap::new()); // 7530s = 125.5 min -> 125
 
         assert_eq!(row["date"], day().to_string());
         assert_eq!(
@@ -1792,6 +1878,7 @@ mod tests {
             total_secs: 47 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            foreground_secs: Default::default(),
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
@@ -1817,6 +1904,7 @@ mod tests {
             total_secs: 90 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            foreground_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage, Some(12));
         assert_eq!(s["budget_mins"], 0);
@@ -1834,6 +1922,7 @@ mod tests {
             total_secs: 10 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            foreground_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 30, &usage, Some(12)); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
@@ -1852,6 +1941,7 @@ mod tests {
             total_secs: 30 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            foreground_secs: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage, Some(12));
         assert_eq!(s["budget_mins"], 90);
@@ -1873,6 +1963,7 @@ mod tests {
             total_secs: 0,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            foreground_secs: Default::default(),
         };
 
         let fresh = today_summary(&rules, day(), 0, &usage, Some(7));

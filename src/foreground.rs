@@ -89,6 +89,74 @@ pub fn clamp(sample: Sample, elapsed_secs: u64) -> BTreeMap<String, u64> {
     bounded.into_iter().filter(|(_, secs)| *secs > 0).collect()
 }
 
+/// Fold one tick's bounded figures into the running daily map.
+///
+/// Separate from [`clamp`] so the bound cannot be skipped by a caller that only wanted to
+/// accumulate: the only way to obtain the map this takes is to have gone through `clamp`.
+pub fn accrue(running: &mut BTreeMap<String, u64>, bounded: BTreeMap<String, u64>) {
+    for (name, secs) in bounded {
+        let slot = running.entry(name).or_insert(0);
+        *slot = slot.saturating_add(secs);
+    }
+}
+
+/// What a browser window's title reveals, once the browser's own suffix is stripped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserPage {
+    /// The page title as the browser rendered it.
+    pub page: String,
+    /// Which browser, by its title suffix.
+    pub browser: &'static str,
+}
+
+/// Recognise a browser window by its title suffix and pull the page title out of it.
+///
+/// This is the whole of the "what was he looking at on the web" feature, and its limits are the
+/// point: a page *title*, never a URL and never a domain. `"Roblox - Google Chrome"` says the tab
+/// said Roblox, which is enough to separate an evening of Roblox from an evening of homework, and
+/// not enough to reconstruct browsing history. Getting domains would mean reconfiguring the
+/// child's browsers; see `docs/FOREGROUND-TRACKING.md`.
+///
+/// Returns `None` for any window that is not a recognised browser, which is the common case.
+pub fn browser_page(title: &str) -> Option<BrowserPage> {
+    /// Title suffixes, longest-first where one could shadow another. Firefox is listed twice
+    /// because it separates with an em dash, and matching only `" - "` would miss every Firefox
+    /// window — which reads as "he never used Firefox" rather than as a bug.
+    const SUFFIXES: &[(&str, &str)] = &[
+        (" - Google Chrome", "Google Chrome"),
+        (" — Mozilla Firefox", "Mozilla Firefox"),
+        (" - Mozilla Firefox", "Mozilla Firefox"),
+        (" - Microsoft Edge", "Microsoft Edge"),
+        (" - Brave", "Brave"),
+    ];
+
+    let (page, browser) = SUFFIXES
+        .iter()
+        .find_map(|(suffix, name)| Some((title.strip_suffix(suffix)?, *name)))?;
+
+    Some(BrowserPage {
+        page: strip_tab_count(page).to_string(),
+        browser,
+    })
+}
+
+/// Drop Edge's `" and 3 more pages"` tail. That is window chrome describing how many tabs are
+/// open, not part of what the child was reading, and leaving it in would make the same page look
+/// like a different one every time another tab opened.
+fn strip_tab_count(page: &str) -> &str {
+    for tail in [" more pages", " more page"] {
+        if let Some(head) = page.strip_suffix(tail)
+            && let Some((rest, count)) = head.rsplit_once(' ')
+            && !count.is_empty()
+            && count.chars().all(|c| c.is_ascii_digit())
+            && let Some(stripped) = rest.strip_suffix(" and")
+        {
+            return stripped;
+        }
+    }
+    page
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +245,70 @@ mod tests {
     fn a_zero_length_tick_charges_nothing() {
         let got = clamp(sample(&[("roblox.exe", 30)]), 0);
         assert!(got.is_empty(), "no elapsed time means nothing to charge");
+    }
+
+    #[test]
+    fn accrual_adds_to_what_is_already_there() {
+        let mut running: BTreeMap<String, u64> = BTreeMap::new();
+        accrue(&mut running, clamp(sample(&[("roblox.exe", 20)]), 30));
+        accrue(
+            &mut running,
+            clamp(sample(&[("roblox.exe", 10), ("chrome.exe", 5)]), 30),
+        );
+
+        assert_eq!(running.get("roblox.exe"), Some(&30), "20 + 10");
+        assert_eq!(running.get("chrome.exe"), Some(&5));
+    }
+
+    /// Saturating, for the same reason every other accumulator in this codebase is: a release
+    /// build does not check overflow, and a wrapped total reads as a small, believable number.
+    #[test]
+    fn accrual_saturates_instead_of_wrapping() {
+        let mut running: BTreeMap<String, u64> = BTreeMap::new();
+        running.insert("roblox.exe".into(), u64::MAX);
+        accrue(&mut running, clamp(sample(&[("roblox.exe", 30)]), 30));
+        assert_eq!(running.get("roblox.exe"), Some(&u64::MAX));
+    }
+
+    #[test]
+    fn a_chrome_window_yields_its_page_title() {
+        let got = browser_page("Roblox - Google Chrome").expect("Chrome must be recognised");
+        assert_eq!(got.page, "Roblox");
+        assert_eq!(got.browser, "Google Chrome");
+    }
+
+    /// Firefox separates with an em dash, not a hyphen. Matching only `" - "` silently misses
+    /// every Firefox window, which would look like "he never used Firefox" rather than a bug.
+    #[test]
+    fn firefox_uses_an_em_dash() {
+        let got = browser_page("Wikipedia — Mozilla Firefox").expect("Firefox must be recognised");
+        assert_eq!(got.page, "Wikipedia");
+        assert_eq!(got.browser, "Mozilla Firefox");
+    }
+
+    /// Edge appends a tab count when several are open; it is chrome, not page title.
+    #[test]
+    fn edge_drops_its_and_n_more_pages_suffix() {
+        let got = browser_page("Roblox and 3 more pages - Microsoft Edge")
+            .expect("Edge must be recognised");
+        assert_eq!(got.page, "Roblox");
+    }
+
+    #[test]
+    fn a_non_browser_window_is_not_a_page() {
+        assert_eq!(browser_page("Untitled - Notepad"), None);
+        assert_eq!(browser_page("Roblox"), None, "the game itself is not a page");
+        assert_eq!(browser_page(""), None);
+    }
+
+    /// A page whose own title ends in a browser name must not be mistaken for chrome.
+    #[test]
+    fn only_the_trailing_suffix_counts() {
+        let got = browser_page("How to uninstall Google Chrome - Google Chrome")
+            .expect("still a Chrome window");
+        assert_eq!(
+            got.page, "How to uninstall Google Chrome",
+            "only the final suffix is the browser's"
+        );
     }
 }

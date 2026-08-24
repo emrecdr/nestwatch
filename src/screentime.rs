@@ -75,7 +75,11 @@ pub struct DayRow {
     pub minutes_used: Option<u64>,
     pub budget: Option<u32>,
     pub over_budget: bool,
+    /// Minutes each app was **running**. What the per-app limits are enforced against.
     pub apps: Vec<AppMinutes>,
+    /// Minutes each app actually had **focus**. Empty when the day predates foreground tracking,
+    /// or when the watcher wasn't running — which is unknown focus, not zero focus.
+    pub focused: Vec<AppMinutes>,
 }
 
 impl DayRow {
@@ -92,6 +96,7 @@ impl DayRow {
                 .budget
                 .is_some_and(|b| b > 0 && row.minutes_used > u64::from(b)),
             apps: row.apps.clone(),
+            focused: row.focused.clone(),
         }
     }
 
@@ -105,6 +110,7 @@ impl DayRow {
             budget: None,
             over_budget: false,
             apps: Vec::new(),
+            focused: Vec::new(),
         }
     }
 }
@@ -133,6 +139,17 @@ struct ParsedRow {
     minutes_used: u64,
     budget: Option<u32>,
     apps: Vec<AppMinutes>,
+    focused: Vec<AppMinutes>,
+}
+
+impl ParsedRow {
+    /// How much per-app detail this row carries, for picking a winner when the same date arrives
+    /// from both logs. Counts **both** maps: a row holding the same apps plus focus data is
+    /// strictly richer, and comparing app counts alone let a legacy row win the tie and drop the
+    /// focus figures without trace.
+    fn detail(&self) -> usize {
+        self.apps.len() + self.focused.len()
+    }
 }
 
 /// Parse one stored row. Returns `None` for anything malformed — a corrupt line must not be able
@@ -145,8 +162,25 @@ fn parse_row(v: &Value) -> Option<(NaiveDate, ParsedRow)> {
         .and_then(Value::as_u64)
         .map(|b| u32::try_from(b).unwrap_or(u32::MAX));
 
+    Some((
+        date,
+        ParsedRow {
+            minutes_used,
+            budget,
+            apps: app_minutes(v, "apps"),
+            focused: app_minutes(v, "focused"),
+        },
+    ))
+}
+
+/// Read one `{name: minutes}` map out of a stored row, heaviest app first.
+///
+/// An **absent** key yields an empty vec, which callers must read as "not recorded" rather than
+/// as zero — every row written before foreground tracking existed has no `focused` key at all,
+/// and rendering those as a confident zero would misreport a year of history.
+fn app_minutes(v: &Value, key: &str) -> Vec<AppMinutes> {
     let mut apps: Vec<AppMinutes> = v
-        .get("apps")
+        .get(key)
         .and_then(Value::as_object)
         .map(|m| {
             m.iter()
@@ -161,15 +195,7 @@ fn parse_row(v: &Value) -> Option<(NaiveDate, ParsedRow)> {
         .unwrap_or_default();
     // Heaviest first, then by name so the order is stable for equal minutes.
     apps.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
-
-    Some((
-        date,
-        ParsedRow {
-            minutes_used,
-            budget,
-            apps,
-        },
-    ))
+    apps
 }
 
 /// Sum the measured minutes over an inclusive date range.
@@ -228,7 +254,7 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
         // The same day can arrive from both logs. Prefer the richer row so the per-app detail in
         // screentime.jsonl wins over a legacy usage.jsonl row that has none.
         match by_date.get(&date) {
-            Some(existing) if existing.apps.len() >= parsed.apps.len() => {}
+            Some(existing) if existing.detail() >= parsed.detail() => {}
             _ => {
                 by_date.insert(date, parsed);
             }
@@ -405,6 +431,42 @@ mod tests {
         assert_eq!(r.daily_avg_mins, Some(60));
     }
 
+    /// A day's row carries both numbers: how long each app was open, and how much of that the
+    /// child was actually looking at it.
+    #[test]
+    fn focused_minutes_are_reported_beside_running_minutes() {
+        let row = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "budget": 180,
+            "apps": {"roblox.exe": 60},
+            "focused": {"roblox.exe": 40},
+        });
+        let r = build_report(&[row], d("2026-08-17"), 1);
+
+        assert_eq!(r.days[0].apps[0].minutes, 60, "60 minutes with it open");
+        assert_eq!(
+            r.days[0].focused[0].minutes, 40,
+            "40 of them actually looking at it"
+        );
+        assert_eq!(r.days[0].focused[0].name, "roblox.exe");
+    }
+
+    /// Every row written before this feature existed lacks the key entirely. That must read as
+    /// "nobody was watching", not as "he looked at nothing" — the same distinction `measured`
+    /// draws for the day as a whole. Reporting a confident zero for a year of history would be
+    /// the most misleading thing this feature could do.
+    #[test]
+    fn a_row_predating_foreground_tracking_claims_no_focus_data() {
+        let legacy = row("2026-08-16", 90, 180);
+        let r = build_report(&[legacy], d("2026-08-17"), 1);
+
+        assert!(
+            r.days[0].focused.is_empty(),
+            "an absent key is unknown focus, never measured-zero focus"
+        );
+        assert_eq!(r.days[0].minutes_used, Some(90), "the day itself is still measured");
+    }
+
     #[test]
     fn today_is_excluded_because_its_rollup_has_not_run() {
         let rows = vec![row("2026-08-17", 999, 180), row("2026-08-16", 60, 180)];
@@ -441,6 +503,35 @@ mod tests {
         assert_eq!(r.total_mins, 90, "a duplicated day must be counted once");
         assert_eq!(r.days[0].apps.len(), 1);
         assert_eq!(r.days[0].apps[0].name, "game.exe");
+    }
+
+    /// The same day arrives from both logs, and only one of the two carries focus data.
+    ///
+    /// `rollup_row` writes an identical row to `usage.jsonl` and `screentime.jsonl`, so on an
+    /// install that upgraded mid-life a given date can have a legacy row (no `focused`) and a new
+    /// one (with it), holding the same apps. Collapsing on app count alone lets the legacy row win
+    /// a tie and silently discards the focus data — invisible, because the day still renders.
+    #[test]
+    fn a_tie_on_apps_is_broken_by_whichever_row_has_focus_data() {
+        let legacy = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "budget": 180, "apps": {"roblox.exe": 60},
+        });
+        let with_focus = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "budget": 180,
+            "apps": {"roblox.exe": 60}, "focused": {"roblox.exe": 40},
+        });
+
+        // Legacy first, so it is the incumbent when the richer row arrives.
+        let r = build_report(&[legacy, with_focus], d("2026-08-17"), 1);
+
+        assert_eq!(r.total_mins, 90, "still counted once");
+        assert_eq!(
+            r.days[0].focused.len(),
+            1,
+            "the row that knows about focus must win the tie"
+        );
     }
 
     #[test]
