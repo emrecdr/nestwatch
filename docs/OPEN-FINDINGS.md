@@ -169,6 +169,33 @@ held. Do it alongside the next change that already opens `SystemControl`, not on
 build 1803, so a session-0 service cannot reach user-session windows at all; it would need a helper
 resident in the child's session, well beyond the existing on-demand screenshot helper.
 
+**The foreground half is now designed and half-built — see
+[FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md).** That estimate above was right, and checking it
+against primary sources made it sharper: `SetWinEventHook` is scoped to a **desktop**, not a
+session, so no arrangement of a session-0 service can observe the child's windows. A resident
+helper is forced, not chosen.
+
+Shipped: the whole data path except the watcher — `Usage::foreground_secs`, a `focused` map in the
+rollup row, and `DayRow.focused` out through `GET /api/screentime`, plus the pure aggregation that
+bounds what the watcher reports. Still open: the watcher itself, which waits on
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) for the reason O4 gives.
+
+Three things learned while designing it are worth not re-deriving:
+
+- **A hook alone under-counts.** Every shipping *tracker* (ActivityWatch, Cobalt, screenpipe) polls
+  or hybridises; the hook-only design is what tiling window managers do. Hooks miss transitions and
+  `GetForegroundWindow` returns `NULL` during UAC and the lock screen — for a window manager that
+  is a cosmetic glitch, for screen-time accounting it is a silent under-count that always favours
+  the child.
+- **`WTSGetActiveConsoleSessionId` is the wrong primitive for this** (it is the right one for the
+  screenshot helper). It returns exactly one session, so a second child logged in under fast user
+  switching would have no screen time at all.
+- **Focused time must not enforce.** The watcher runs *as the child*, so its figures are
+  attacker-chosen. They are report-only, and `foreground_time_cannot_trigger_a_per_app_limit` keeps
+  them that way.
+
+**The per-account half of this entry is unchanged and still open.**
+
 ### O8 · The dashboard's logic is the least-verified code that ships
 
 **Two of three steps are done.** The scripts are now `assets/app.js` (744 lines) and
