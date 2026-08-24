@@ -110,7 +110,7 @@ fn bound(map: BTreeMap<String, u64>, elapsed_secs: u64) -> BTreeMap<String, u64>
         .values()
         .fold(0u64, |acc, secs| acc.saturating_add(*secs));
 
-    let bounded = if claimed > elapsed_secs {
+    let mut bounded = if claimed > elapsed_secs {
         // Scale every entry by elapsed/claimed. `u128` because the numerator is a product of two
         // attacker-influenced `u64`s; the division floors, so the result understates.
         //
@@ -127,7 +127,10 @@ fn bound(map: BTreeMap<String, u64>, elapsed_secs: u64) -> BTreeMap<String, u64>
         map
     };
 
-    bounded.into_iter().filter(|(_, secs)| *secs > 0).collect()
+    // In place: the honest path leaves this map untouched, where rebuilding it would move every
+    // key and reallocate every node twice a tick for nothing.
+    bounded.retain(|_, secs| *secs > 0);
+    bounded
 }
 
 /// Fold one tick's bounded figures into the running daily map.
@@ -141,15 +144,6 @@ pub fn accrue(running: &mut BTreeMap<String, u64>, bounded: BTreeMap<String, u64
     }
 }
 
-/// What a browser window's title reveals, once the browser's own suffix is stripped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrowserPage {
-    /// The page title as the browser rendered it.
-    pub page: String,
-    /// Which browser, by its title suffix.
-    pub browser: &'static str,
-}
-
 /// Recognise a browser window by its title suffix and pull the page title out of it.
 ///
 /// This is the whole of the "what was he looking at on the web" feature, and its limits are the
@@ -159,26 +153,25 @@ pub struct BrowserPage {
 /// child's browsers; see `docs/FOREGROUND-TRACKING.md`.
 ///
 /// Returns `None` for any window that is not a recognised browser, which is the common case.
-pub fn browser_page(title: &str) -> Option<BrowserPage> {
-    /// Title suffixes, longest-first where one could shadow another. Firefox is listed twice
-    /// because it separates with an em dash, and matching only `" - "` would miss every Firefox
-    /// window — which reads as "he never used Firefox" rather than as a bug.
-    const SUFFIXES: &[(&str, &str)] = &[
-        (" - Google Chrome", "Google Chrome"),
-        (" — Mozilla Firefox", "Mozilla Firefox"),
-        (" - Mozilla Firefox", "Mozilla Firefox"),
-        (" - Microsoft Edge", "Microsoft Edge"),
-        (" - Brave", "Brave"),
+/// The page is borrowed from `title` — which browser it was is deliberately not returned, because
+/// nothing displays it and an unread field is a thing to keep correct for no one.
+pub fn browser_page(title: &str) -> Option<&str> {
+    /// Title suffixes. Firefox appears twice because it separates with an em dash, and matching
+    /// only `" - "` would miss every Firefox window — which reads as "he never used Firefox"
+    /// rather than as a bug.
+    const SUFFIXES: &[&str] = &[
+        " - Google Chrome",
+        " — Mozilla Firefox",
+        " - Mozilla Firefox",
+        " - Microsoft Edge",
+        " - Brave",
     ];
 
-    let (page, browser) = SUFFIXES
+    let page = SUFFIXES
         .iter()
-        .find_map(|(suffix, name)| Some((title.strip_suffix(suffix)?, *name)))?;
+        .find_map(|suffix| title.strip_suffix(suffix))?;
 
-    Some(BrowserPage {
-        page: strip_tab_count(page).to_string(),
-        browser,
-    })
+    Some(strip_tab_count(page))
 }
 
 /// Drop Edge's `" and 3 more pages"` tail. That is window chrome describing how many tabs are
@@ -272,10 +265,16 @@ impl Tracker {
         if now_ms > *since {
             *since = now_ms;
         }
-        let app = app.clone();
+        // Clone inside the guard, not before it. The idle and zero-delta paths are the common ones
+        // — the watcher banks up to four times a wake, per tracker, and most of those add nothing.
         if delta > 0 {
-            let slot = self.millis.entry(app).or_insert(0);
-            *slot = slot.saturating_add(delta);
+            match self.millis.get_mut(app.as_str()) {
+                Some(slot) => *slot = slot.saturating_add(delta),
+                None => {
+                    let app = app.clone();
+                    self.millis.insert(app, delta);
+                }
+            }
         }
     }
 
@@ -340,16 +339,11 @@ impl Default for Tracker {
 /// both produce zero minutes, and only the first of those is a fact. [`Feed::drain`] returns
 /// `None` for the second, so the day is recorded as *not measured* rather than as measured-zero —
 /// the same distinction `screentime::DayRow` already draws, for the same reason.
+/// `None` means no watcher has reported since the last drain. That is the whole point of the type,
+/// so it is the shape of the type: there is no separate flag to keep in step with the maps, and no
+/// way to accumulate a report without also recording that one arrived.
 #[derive(Clone, Default)]
-pub struct Feed(std::sync::Arc<std::sync::Mutex<FeedState>>);
-
-#[derive(Default)]
-struct FeedState {
-    pending: BTreeMap<String, u64>,
-    pending_pages: BTreeMap<String, u64>,
-    /// Set by any report at all, including an empty one. Cleared by a drain.
-    heard: bool,
-}
+pub struct Feed(std::sync::Arc<std::sync::Mutex<Option<Sample>>>);
 
 impl Feed {
     pub fn new() -> Self {
@@ -366,25 +360,17 @@ impl Feed {
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.heard = true;
-        accrue(&mut state.pending, sample.apps);
-        accrue(&mut state.pending_pages, sample.pages);
+        let pending = state.get_or_insert_with(Sample::default);
+        accrue(&mut pending.apps, sample.apps);
+        accrue(&mut pending.pages, sample.pages);
     }
 
     /// Take everything reported since the last drain, or `None` if no watcher has reported at all.
     pub fn drain(&self) -> Option<Sample> {
-        let mut state = self
-            .0
+        self.0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !state.heard {
-            return None;
-        }
-        state.heard = false;
-        Some(Sample {
-            apps: std::mem::take(&mut state.pending),
-            pages: std::mem::take(&mut state.pending_pages),
-        })
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 }
 
@@ -510,8 +496,7 @@ mod tests {
     #[test]
     fn a_chrome_window_yields_its_page_title() {
         let got = browser_page("Roblox - Google Chrome").expect("Chrome must be recognised");
-        assert_eq!(got.page, "Roblox");
-        assert_eq!(got.browser, "Google Chrome");
+        assert_eq!(got, "Roblox");
     }
 
     /// Firefox separates with an em dash, not a hyphen. Matching only `" - "` silently misses
@@ -519,8 +504,7 @@ mod tests {
     #[test]
     fn firefox_uses_an_em_dash() {
         let got = browser_page("Wikipedia — Mozilla Firefox").expect("Firefox must be recognised");
-        assert_eq!(got.page, "Wikipedia");
-        assert_eq!(got.browser, "Mozilla Firefox");
+        assert_eq!(got, "Wikipedia");
     }
 
     /// Edge appends a tab count when several are open; it is chrome, not page title.
@@ -528,7 +512,7 @@ mod tests {
     fn edge_drops_its_and_n_more_pages_suffix() {
         let got = browser_page("Roblox and 3 more pages - Microsoft Edge")
             .expect("Edge must be recognised");
-        assert_eq!(got.page, "Roblox");
+        assert_eq!(got, "Roblox");
     }
 
     #[test]
@@ -777,7 +761,7 @@ mod tests {
         let got = browser_page("How to uninstall Google Chrome - Google Chrome")
             .expect("still a Chrome window");
         assert_eq!(
-            got.page, "How to uninstall Google Chrome",
+            got, "How to uninstall Google Chrome",
             "only the final suffix is the browser's"
         );
     }

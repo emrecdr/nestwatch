@@ -299,7 +299,7 @@ fn observe() -> Seen {
     let page = window_title(hwnd)
         .as_deref()
         .and_then(crate::foreground::browser_page)
-        .map(|p| p.page);
+        .map(str::to_string);
 
     Seen {
         app: process_name(hwnd),
