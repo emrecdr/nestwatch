@@ -133,6 +133,32 @@ fn bound(map: BTreeMap<String, u64>, elapsed_secs: u64) -> BTreeMap<String, u64>
     bounded
 }
 
+/// Decide whether the user counts as away, and **as of when**, from how long ago their last input
+/// was. Returns the pair [`Tracker::set_idle`] takes.
+///
+/// This is what makes idle handling exact rather than approximate, and it is subtle enough to be
+/// worth stating. The obvious implementation flips a flag once the threshold trips — which credits
+/// the whole grace period twice over, once as it elapses and again on every poll until something
+/// notices. But the OS reports how long ago the last input was, so the instant presence ended is
+/// known: `last_input + grace`. Handing the tracker *that* timestamp credits the grace exactly
+/// once and nothing after it.
+///
+/// It lives here rather than beside the `GetLastInputInfo` call that feeds it because that call
+/// sits in a Windows-only module the dev machine never compiles — which would leave the one piece
+/// of genuinely tricky arithmetic in this feature as the one piece with no test. Taking the idle
+/// span as a plain number moves it back where it can be pinned.
+pub fn idle_state(now_ms: u64, idle_ms: u64, idle_after_ms: u64) -> (bool, u64) {
+    if idle_ms < idle_after_ms {
+        return (false, now_ms);
+    }
+    // Saturating both ways: the tick counter this comes from wraps every ~49.7 days and is
+    // documented as "not guaranteed to be incremental", so a nonsense span must clamp to "credited
+    // nothing since before now" rather than wrap into a timestamp in the future — which the
+    // tracker would then refuse to move backwards from, freezing accounting for the session.
+    let credited_until = now_ms.saturating_sub(idle_ms).saturating_add(idle_after_ms);
+    (true, credited_until.min(now_ms))
+}
+
 /// Fold one tick's bounded figures into the running daily map.
 ///
 /// Separate from [`clamp`] so the bound cannot be skipped by a caller that only wanted to
@@ -461,6 +487,45 @@ mod tests {
             "a zero carries no information and would let a forged report pad the map"
         );
         assert_eq!(got.get("roblox.exe"), Some(&5));
+    }
+
+    #[test]
+    fn an_active_user_is_credited_right_up_to_now() {
+        assert_eq!(idle_state(100_000, 0, 180_000), (false, 100_000));
+        assert_eq!(
+            idle_state(100_000, 179_999, 180_000),
+            (false, 100_000),
+            "one millisecond short of the threshold is still present"
+        );
+    }
+
+    /// The moment the threshold is crossed, the whole grace period has just elapsed — so everything
+    /// up to now was within it and everything up to now is credited.
+    #[test]
+    fn crossing_the_threshold_credits_the_entire_grace_period() {
+        assert_eq!(idle_state(200_000, 180_000, 180_000), (true, 200_000));
+    }
+
+    /// The back-dating that makes this exact rather than approximate. Two minutes past the
+    /// threshold means presence ended two minutes ago, not now — a flag flipped at detection time
+    /// would credit those two minutes to whatever was on screen.
+    #[test]
+    fn a_long_absence_is_credited_only_to_where_presence_ended() {
+        // Away for 300s with a 180s grace: credited until 120s ago.
+        assert_eq!(idle_state(500_000, 300_000, 180_000), (true, 380_000));
+    }
+
+    /// Defence in depth: `GetLastInputInfo` is documented as "not guaranteed to be incremental",
+    /// and its tick counter wraps. A reported idle span longer than the process has been running
+    /// must clamp rather than wrap into an enormous future timestamp.
+    #[test]
+    fn an_absurd_idle_reading_clamps_instead_of_wrapping() {
+        let (idle, at) = idle_state(1_000, u64::MAX, 180_000);
+        assert!(idle);
+        assert!(
+            at <= 1_000 + 180_000,
+            "a wrapped reading must not credit into the future, got {at}"
+        );
     }
 
     /// A tick that took no time can charge no time — and must not divide by zero doing it.

@@ -206,8 +206,10 @@ fn worker(rx: &Receiver<()>) {
             let seen = observe();
 
             // Idle first, so the focus updates below bank against the correct active/away state.
-            apply_idle(&mut apps, seen.idle_ms, now_ms);
-            apply_idle(&mut pages, seen.idle_ms, now_ms);
+            let (away, since) =
+                crate::foreground::idle_state(now_ms, seen.idle_ms, IDLE_AFTER.as_millis() as u64);
+            apps.set_idle(away, since);
+            pages.set_idle(away, since);
 
             apps.focus(seen.app.as_deref(), now_ms);
             pages.focus(seen.page.as_deref(), now_ms);
@@ -220,27 +222,6 @@ fn worker(rx: &Receiver<()>) {
             });
             last_emit = elapsed;
         }
-    }
-}
-
-/// Tell the tracker whether the user is away, **back-dating the transition to when input actually
-/// stopped**.
-///
-/// This is what makes idle handling exact rather than approximate. Naively flipping a flag when the
-/// threshold is crossed credits the whole grace period twice over — once as it elapses, and again
-/// on every poll until somebody notices. Because `GetLastInputInfo` reports how long ago the last
-/// input was, the moment the user stopped being present is known precisely: it is
-/// `last_input + IDLE_AFTER`. Handing the tracker that timestamp credits exactly the grace period
-/// and not one second more, and [`Tracker`] never moves its marker backwards, so a late detection
-/// cannot retroactively take away time already earned.
-fn apply_idle(tracker: &mut Tracker, idle_ms: u64, now_ms: u64) {
-    if idle_ms >= IDLE_AFTER.as_millis() as u64 {
-        let credited_until = now_ms
-            .saturating_sub(idle_ms)
-            .saturating_add(IDLE_AFTER.as_millis() as u64);
-        tracker.set_idle(true, credited_until);
-    } else {
-        tracker.set_idle(false, now_ms);
     }
 }
 
