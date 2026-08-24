@@ -512,6 +512,7 @@ pub enum RuleAction {
 ///
 /// Produced only by [`RulesEnforcer::decide_after_snapshot`], which is the point: these values are
 /// unrecoverable once `decide` has run, so there is no way to ask for them too late.
+#[derive(Default)]
 pub struct PreRollover {
     pub day: Option<NaiveDate>,
     pub total_secs: u64,
@@ -607,6 +608,49 @@ impl RulesEnforcer {
             page_secs: self.usage.page_secs.clone(),
         };
         (prev, self.decide(rules, procs, t))
+    }
+
+    /// Fold one watcher report into the day's **report-only** tallies.
+    ///
+    /// Lives here, beside [`decide`](Self::decide), rather than inline in the enforcer loop,
+    /// because it carries a three-part ordering invariant that was previously stated only in
+    /// prose — bound before accruing, accrue before re-capping — and every part of it could be
+    /// broken with the whole suite green. It is pure, so the tests below drive it directly.
+    ///
+    /// **Call this after [`decide`](Self::decide), never before.** `decide` clears the day's maps
+    /// on a rollover and `decide_after_snapshot` has already copied the outgoing day's figures for
+    /// the row about to be written; folding in first would add this tick's seconds to yesterday
+    /// and then watch them be wiped.
+    ///
+    /// Nothing here is read by any enforcement path. The watcher runs as the child, so these
+    /// numbers are the child's to influence — see `foreground_time_cannot_trigger_a_per_app_limit`.
+    pub fn record_foreground(&mut self, sample: crate::foreground::Sample, elapsed: Duration) {
+        // Bound first: these figures are attacker-chosen, and only one window holds focus at a
+        // time, so neither map can legitimately exceed the interval that just elapsed.
+        let bounded = crate::foreground::clamp(sample, elapsed.as_secs());
+
+        // Key app names through `norm` at this boundary rather than trusting the watcher to have
+        // done it. `norm` is the one definition of how a process name is keyed, and the dashboard
+        // renders `apps` and `focused` side by side on it — if the two disagree, one app silently
+        // becomes two rows. Colliding keys merge rather than overwrite.
+        let apps = bounded.apps.into_iter().fold(
+            BTreeMap::<String, u64>::new(),
+            |mut acc, (name, secs)| {
+                let slot = acc.entry(norm(&name)).or_insert(0);
+                *slot = slot.saturating_add(secs);
+                acc
+            },
+        );
+        crate::foreground::accrue(&mut self.usage.foreground_secs, apps);
+
+        // Page titles are deliberately **not** normalised: they are display text shown back to the
+        // parent, not keys matched against a rule.
+        crate::foreground::accrue(&mut self.usage.page_secs, bounded.pages);
+
+        // Re-cap the running day, not just the report. `clamp` bounds each report to `MAX_PAGES`,
+        // but forty *different* titles every tick would still reach thousands by bedtime, and this
+        // map is persisted and rolled up.
+        crate::foreground::retain_top(&mut self.usage.page_secs, crate::foreground::MAX_PAGES);
     }
 
     pub fn decide(&mut self, rules: &Rules, procs: &[ProcessInfo], t: Tick) -> Vec<RuleAction> {
@@ -755,34 +799,33 @@ fn per_app_minutes(per_app_secs: &BTreeMap<String, u64>) -> serde_json::Map<Stri
 /// budget used to write a verdict about a day it was never true for — e.g. a Sunday with a
 /// 300-minute budget, rolled over into a Monday with 120, rendered as Sunday "over budget"
 /// though the child never came close. Unknown budget, no claim — never a wrong claim.
-fn rollup_row(
-    date: NaiveDate,
-    total_secs: u64,
-    budget: Option<u32>,
-    per_app_secs: &BTreeMap<String, u64>,
-    foreground_secs: &BTreeMap<String, u64>,
-    page_secs: &BTreeMap<String, u64>,
-) -> Value {
+fn rollup_row(prev: &PreRollover, date: NaiveDate, budget: Option<u32>) -> Value {
     let mut row = serde_json::Map::new();
     row.insert("date".into(), Value::from(date.to_string()));
-    row.insert("minutes_used".into(), Value::from(total_secs / 60));
+    row.insert("minutes_used".into(), Value::from(prev.total_secs / 60));
     if let Some(b) = budget {
         row.insert("budget".into(), Value::from(b));
     }
-    row.insert("apps".into(), Value::Object(per_app_minutes(per_app_secs)));
+    row.insert(
+        "apps".into(),
+        Value::Object(per_app_minutes(&prev.per_app_secs)),
+    );
     // A second map rather than a richer `apps` value: a row written by an older build has no
     // `focused` key at all, and `screentime::parse_row` reads its absence as "not measured"
     // rather than as zero focus. Nesting both under `apps` would have made every historical row
     // parse as though the child stared at nothing.
     row.insert(
         "focused".into(),
-        Value::Object(per_app_minutes(foreground_secs)),
+        Value::Object(per_app_minutes(&prev.foreground_secs)),
     );
     // Browser page titles, same shape and same absent-means-unknown rule as `focused`. Sub-minute
     // entries are dropped by `per_app_minutes`, which matters more here than anywhere else: a day
     // of browsing touches hundreds of titles for a few seconds each, and none of them is a fact
     // worth storing for a year.
-    row.insert("pages".into(), Value::Object(per_app_minutes(page_secs)));
+    row.insert(
+        "pages".into(),
+        Value::Object(per_app_minutes(&prev.page_secs)),
+    );
     Value::Object(row)
 }
 
@@ -884,48 +927,14 @@ pub async fn run_rules_enforcer(
                 active,
             },
         );
-        // Fold in what the foreground watcher reported, **after** `decide` has run.
+        // Fold in what the foreground watcher reported, **after** `decide` — see
+        // `record_foreground` for why the order is load-bearing.
         //
-        // The order is load-bearing. `decide` calls `accrue`, which clears the day's maps on a
-        // rollover, and `decide_after_snapshot` has already copied the outgoing day's figures for
-        // the row about to be written. Draining the feed before that point would add this tick's
-        // seconds to yesterday and then watch them be wiped; draining after adds them to the day
-        // they belong to.
-        //
-        // `drain` returning `None` means no watcher has reported at all — the helper is dead, or
-        // nobody is signed in. That must leave the map untouched rather than write zeros, so an
-        // unmeasured stretch stays unmeasured. `clamp` bounds the rest against real elapsed time,
-        // because these numbers come from a process running as the child.
+        // `drain` returning `None` means no watcher has reported at all: the helper is dead, or
+        // nobody is signed in. That leaves the maps untouched rather than writing zeros, so an
+        // unmeasured stretch stays unmeasured rather than becoming a confident nothing.
         if let Some(sample) = foreground.drain() {
-            let bounded = crate::foreground::clamp(sample, elapsed.as_secs());
-
-            // Key app names through `norm` **here**, at the trust boundary, rather than trusting
-            // the watcher to have done it. `norm` is the one definition of how a process name is
-            // keyed, and the dashboard renders `apps` and `focused` side by side on it — if the
-            // two ever disagree, one app silently becomes two rows. Doing it on ingest means that
-            // cannot happen however the helper behaves, which matters because the helper runs as
-            // the child. Colliding keys merge rather than overwrite.
-            //
-            // Page titles are deliberately **not** normalised: they are display text shown back to
-            // the parent, not keys matched against a rule, and lowercasing them would render
-            // "Roblox" as "roblox" for no benefit.
-            let apps = bounded.apps.into_iter().fold(
-                BTreeMap::<String, u64>::new(),
-                |mut acc, (name, secs)| {
-                    let slot = acc.entry(norm(&name)).or_insert(0);
-                    *slot = slot.saturating_add(secs);
-                    acc
-                },
-            );
-            crate::foreground::accrue(&mut enforcer.usage.foreground_secs, apps);
-            crate::foreground::accrue(&mut enforcer.usage.page_secs, bounded.pages);
-            // Re-cap the running day, not just the tick. `clamp` bounds each report to
-            // `MAX_PAGES`, but forty *different* titles every thirty seconds would still reach
-            // thousands by bedtime, and this map is persisted and rolled up.
-            crate::foreground::retain_top(
-                &mut enforcer.usage.page_secs,
-                crate::foreground::MAX_PAGES,
-            );
+            enforcer.record_foreground(sample, elapsed);
         }
 
         save_tally_if_changed(&enforcer.usage, &tally_path, &mut last_saved_tally).await;
@@ -941,14 +950,7 @@ pub async fn run_rules_enforcer(
         if let Some(pd) = prev.day
             && pd != today
         {
-            let row = rollup_row(
-                pd,
-                prev.total_secs,
-                prev_budget,
-                &prev.per_app_secs,
-                &prev.foreground_secs,
-                &prev.page_secs,
-            );
+            let row = rollup_row(&prev, pd, prev_budget);
             usage_log.record("screentime_daily", row.clone());
             // The durable copy, in a file noisy events cannot rotate away.
             screentime_log.record(row);
@@ -1333,13 +1335,95 @@ mod tests {
         );
     }
 
+    /// The security boundary for watcher input, pinned.
+    ///
+    /// The figures arrive from a process running as the child, so a report claiming more time than
+    /// the tick actually lasted must be scaled down before it reaches a tally the parent reads.
+    /// Skipping the clamp here is invisible — the number simply looks large.
+    #[test]
+    fn a_forged_report_is_bounded_before_it_reaches_the_tally() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let mut sample = crate::foreground::Sample::default();
+        for i in 0..20 {
+            sample.apps.insert(format!("app{i}.exe"), 30);
+        }
+
+        e.record_foreground(sample, Duration::from_secs(30));
+
+        let total: u64 = e.usage.foreground_secs.values().sum();
+        assert!(
+            total <= 30,
+            "20 apps each claiming the full tick must not sum to 600s, got {total}"
+        );
+    }
+
+    /// Keys are normalised on the way in, so the watcher cannot split one app across two rows by
+    /// sending a differently-cased name than the enforcement tally uses.
+    #[test]
+    fn watcher_keys_are_normalised_on_ingest() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let mut sample = crate::foreground::Sample::default();
+        sample.apps.insert("  Roblox.EXE  ".to_string(), 10);
+
+        e.record_foreground(sample, Duration::from_secs(30));
+
+        assert_eq!(e.usage.foreground_secs.get("roblox.exe"), Some(&10));
+        assert_eq!(
+            e.usage.foreground_secs.len(),
+            1,
+            "no second casing survives"
+        );
+    }
+
+    /// The day-level cap, not just the per-report one. Forty *different* titles every tick would
+    /// otherwise reach thousands by bedtime in a map that is persisted and rolled up.
+    #[test]
+    fn page_titles_stay_capped_across_a_whole_day() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        for tick in 0..50 {
+            let mut sample = crate::foreground::Sample::default();
+            for i in 0..40 {
+                sample.pages.insert(format!("tick {tick} page {i}"), 1);
+            }
+            e.record_foreground(sample, Duration::from_secs(30));
+        }
+
+        assert!(
+            e.usage.page_secs.len() <= crate::foreground::MAX_PAGES,
+            "day-level cap failed: {} titles stored",
+            e.usage.page_secs.len()
+        );
+    }
+
+    /// Page titles are display text, not match keys — lowercasing them would render "Roblox" as
+    /// "roblox" for no benefit.
+    #[test]
+    fn page_titles_keep_their_original_case() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let mut sample = crate::foreground::Sample::default();
+        sample.pages.insert("Roblox".to_string(), 10);
+
+        e.record_foreground(sample, Duration::from_secs(30));
+
+        assert_eq!(e.usage.page_secs.get("Roblox"), Some(&10));
+    }
+
     /// Both numbers survive into the stored row, under distinct keys.
     #[test]
     fn the_rollup_row_carries_focused_minutes_beside_running_minutes() {
         let running: BTreeMap<String, u64> = [("roblox.exe".to_string(), 3600)].into();
         let focused: BTreeMap<String, u64> = [("roblox.exe".to_string(), 2400)].into();
 
-        let row = rollup_row(day(), 3600, Some(180), &running, &focused, &BTreeMap::new());
+        let row = rollup_row(
+            &PreRollover {
+                total_secs: 3600,
+                per_app_secs: running.clone(),
+                foreground_secs: focused.clone(),
+                ..Default::default()
+            },
+            day(),
+            Some(180),
+        );
 
         assert_eq!(
             row["apps"]["roblox.exe"], 60,
@@ -1465,12 +1549,13 @@ mod tests {
     fn rollup_row_omits_budget_when_unknown() {
         let per_app = BTreeMap::new();
         let row = rollup_row(
+            &PreRollover {
+                total_secs: 7_200,
+                per_app_secs: per_app.clone(),
+                ..Default::default()
+            },
             day(),
-            7_200,
             None,
-            &per_app,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
         );
 
         assert!(
@@ -1483,12 +1568,13 @@ mod tests {
     fn rollup_row_includes_budget_when_known() {
         let per_app = BTreeMap::new();
         let row = rollup_row(
+            &PreRollover {
+                total_secs: 7_200,
+                per_app_secs: per_app.clone(),
+                ..Default::default()
+            },
             day(),
-            7_200,
             Some(120),
-            &per_app,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
         );
 
         assert_eq!(row["budget"], 120);
@@ -1505,12 +1591,13 @@ mod tests {
         per_app.insert("game.exe".to_string(), 3_600u64);
 
         let row = rollup_row(
+            &PreRollover {
+                total_secs: 7_530,
+                per_app_secs: per_app.clone(),
+                ..Default::default()
+            },
             day(),
-            7_530,
             Some(90),
-            &per_app,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
         );
 
         // Read it back the way the report does, with a window ending on the day just written.
@@ -1529,12 +1616,13 @@ mod tests {
     #[test]
     fn a_row_written_without_a_budget_round_trips_as_no_verdict() {
         let row = rollup_row(
+            &PreRollover {
+                total_secs: 14_400,
+                per_app_secs: BTreeMap::new(),
+                ..Default::default()
+            },
             day(),
-            14_400,
             None,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
         ); // 240 min, budget unknown
         let report = crate::screentime::build_report(&[row], day().succ_opt().unwrap(), 1);
 
@@ -1555,12 +1643,13 @@ mod tests {
         per_app.insert("blip.exe".to_string(), 30u64); // 0 min — dropped, same as per_app_minutes
 
         let row = rollup_row(
+            &PreRollover {
+                total_secs: 7_530,
+                per_app_secs: per_app.clone(),
+                ..Default::default()
+            },
             day(),
-            7_530,
             Some(90),
-            &per_app,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
         ); // 7530s = 125.5 min -> 125
 
         assert_eq!(row["date"], day().to_string());
