@@ -157,6 +157,160 @@ fn strip_tab_count(page: &str) -> &str {
     page
 }
 
+/// Turns a stream of focus changes into per-app time.
+///
+/// The whole of the measurement, and deliberately free of Win32: it takes an app name and a
+/// millisecond timestamp, both injected. The watcher supplies real ones; the tests supply chosen
+/// ones. That split is what makes the accounting provable on a machine that isn't Windows, which
+/// matters here because the Win32 half can only ever be checked by running it on the target PC.
+///
+/// Time is carried in **milliseconds** and only rounded down to whole seconds when a sample is
+/// drained, with the remainder kept. Flooring on every drain instead would quietly lose up to a
+/// second per app per interval — at a 30-second cadence that is up to two minutes a day, per app,
+/// always in the direction of under-reporting.
+pub struct Tracker {
+    /// The app holding focus, and when it took it. `None` while no window is foreground at all —
+    /// the lock screen, the UAC secure desktop, or the moment after a window closes.
+    current: Option<(String, u64)>,
+    /// Whether the user is currently idle. Time does not accrue while idle: an app left open in
+    /// front of an empty chair is not screen time, and counting it is how a tracker ends up
+    /// reporting an eight-hour Roblox session for a PC nobody touched.
+    idle: bool,
+    /// Whole milliseconds banked per app since the last drain, including sub-second carry.
+    millis: BTreeMap<String, u64>,
+}
+
+impl Tracker {
+    pub fn new() -> Self {
+        Self {
+            current: None,
+            idle: false,
+            millis: BTreeMap::new(),
+        }
+    }
+
+    /// Credit the focused app for the time since it was last accounted, and move the marker to
+    /// `now_ms`. The single place time is ever added, so every entry point below can only
+    /// under-count by forgetting to call it — never double-count by calling it twice.
+    fn bank(&mut self, now_ms: u64) {
+        let Some((app, since)) = &mut self.current else {
+            return;
+        };
+        // Idle time is measured but not credited: the marker still advances, so the seconds an
+        // absent user "spent" are dropped rather than banked when they return.
+        let delta = if self.idle {
+            0
+        } else {
+            now_ms.saturating_sub(*since)
+        };
+        // Never move the marker backwards. `clock.rs` already anchors the wall clock; this is the
+        // same defence one level down, so a clock that jumps back cannot turn into credit later.
+        if now_ms > *since {
+            *since = now_ms;
+        }
+        let app = app.clone();
+        if delta > 0 {
+            let slot = self.millis.entry(app).or_insert(0);
+            *slot = slot.saturating_add(delta);
+        }
+    }
+
+    /// Note that `app` now holds focus (`None` when nothing does). Banks whatever the previous app
+    /// earned up to `now_ms`.
+    pub fn focus(&mut self, app: Option<&str>, now_ms: u64) {
+        self.bank(now_ms);
+        self.current = app.map(|a| (a.to_string(), now_ms));
+    }
+
+    /// Note that the user went idle or came back. Banks time up to `now_ms` before the transition
+    /// takes effect, so the boundary second is charged to the side it belongs to.
+    pub fn set_idle(&mut self, idle: bool, now_ms: u64) {
+        self.bank(now_ms);
+        self.idle = idle;
+    }
+
+    /// Take everything banked so far as whole seconds, keeping sub-second remainders for next time.
+    /// The currently-focused app keeps its focus — a drain is a reporting boundary, not a reset.
+    pub fn drain(&mut self, now_ms: u64) -> Sample {
+        self.bank(now_ms);
+
+        let mut apps = BTreeMap::new();
+        for (name, remaining) in &mut self.millis {
+            let secs = *remaining / 1000;
+            if secs > 0 {
+                apps.insert(name.clone(), secs);
+                *remaining %= 1000;
+            }
+        }
+        // Entries that carried nothing forward are dropped, so the map stays bounded by the apps
+        // actually in use rather than every app touched since the process started.
+        self.millis.retain(|_, remaining| *remaining > 0);
+
+        Sample { apps }
+    }
+}
+
+impl Default for Tracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Where the watcher's samples wait between the reader thread that receives them and the enforcer
+/// tick that folds them into the day's tally.
+///
+/// Cheap to clone (one `Arc`), because the reader thread and the enforcer each hold one.
+///
+/// The important thing this type gets right is telling **"the watcher reported nothing"** apart
+/// from **"there is no watcher"**. A child at an idle desktop and a child who killed the helper
+/// both produce zero minutes, and only the first of those is a fact. [`Feed::drain`] returns
+/// `None` for the second, so the day is recorded as *not measured* rather than as measured-zero —
+/// the same distinction `screentime::DayRow` already draws, for the same reason.
+#[derive(Clone, Default)]
+pub struct Feed(std::sync::Arc<std::sync::Mutex<FeedState>>);
+
+#[derive(Default)]
+struct FeedState {
+    pending: BTreeMap<String, u64>,
+    /// Set by any report at all, including an empty one. Cleared by a drain.
+    heard: bool,
+}
+
+impl Feed {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one report from the watcher. Called on the reader thread.
+    ///
+    /// An **empty** sample still counts as having been heard: that is the watcher saying "I am here
+    /// and the machine was idle", which is exactly the message that must not be confused with
+    /// silence.
+    pub fn submit(&self, sample: Sample) {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.heard = true;
+        accrue(&mut state.pending, sample.apps);
+    }
+
+    /// Take everything reported since the last drain, or `None` if no watcher has reported at all.
+    pub fn drain(&self) -> Option<Sample> {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.heard {
+            return None;
+        }
+        state.heard = false;
+        Some(Sample {
+            apps: std::mem::take(&mut state.pending),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +453,146 @@ mod tests {
         assert_eq!(browser_page("Untitled - Notepad"), None);
         assert_eq!(browser_page("Roblox"), None, "the game itself is not a page");
         assert_eq!(browser_page(""), None);
+    }
+
+    #[test]
+    fn one_app_held_for_the_whole_interval_earns_all_of_it() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+        assert_eq!(t.drain(30_000).apps.get("roblox.exe"), Some(&30));
+    }
+
+    #[test]
+    fn time_is_split_at_the_moment_focus_changes() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+        t.focus(Some("chrome.exe"), 10_000);
+        let s = t.drain(30_000);
+
+        assert_eq!(s.apps.get("roblox.exe"), Some(&10));
+        assert_eq!(s.apps.get("chrome.exe"), Some(&20));
+    }
+
+    /// An app in front of an empty chair is not screen time. Charging it is how a tracker reports
+    /// an eight-hour session for a PC nobody touched.
+    #[test]
+    fn idle_time_is_not_charged_to_the_focused_app() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+        t.set_idle(true, 5_000);
+        let s = t.drain(30_000);
+
+        assert_eq!(
+            s.apps.get("roblox.exe"),
+            Some(&5),
+            "only the 5s before going idle counts"
+        );
+    }
+
+    #[test]
+    fn coming_back_from_idle_resumes_the_focused_app() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+        t.set_idle(true, 5_000);
+        t.set_idle(false, 20_000);
+        let s = t.drain(30_000);
+
+        assert_eq!(
+            s.apps.get("roblox.exe"),
+            Some(&15),
+            "5s before idle plus 10s after returning"
+        );
+    }
+
+    /// `GetForegroundWindow` returns nothing during UAC, at the lock screen, and briefly after a
+    /// window closes. Those seconds belong to no app.
+    #[test]
+    fn no_foreground_window_charges_nothing() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+        t.focus(None, 10_000);
+        let s = t.drain(30_000);
+
+        assert_eq!(s.apps.get("roblox.exe"), Some(&10));
+        assert_eq!(s.apps.len(), 1, "the other 20s belong to nobody");
+    }
+
+    /// The accuracy property. Flooring on every drain would lose up to a second per app per
+    /// interval; at 30s that is minutes a day, always under-reporting.
+    #[test]
+    fn sub_second_remainders_survive_across_drains() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+
+        // Three drains at 1.5s each. Flooring each time gives 1+1+1=3; carrying gives 1+2+1=4.
+        let mut total = 0;
+        for i in 1..=3 {
+            total += t.drain(1_500 * i).apps.get("roblox.exe").copied().unwrap_or(0);
+        }
+
+        assert_eq!(total, 4, "4.5s of focus must report as 4s, not 3s");
+    }
+
+    #[test]
+    fn a_drain_does_not_stop_the_clock_on_the_focused_app() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 0);
+        t.drain(10_000);
+        let s = t.drain(20_000);
+
+        assert_eq!(
+            s.apps.get("roblox.exe"),
+            Some(&10),
+            "focus continues across a reporting boundary"
+        );
+    }
+
+    /// Defence in depth behind `clock.rs`: a timestamp that goes backwards must bank nothing
+    /// rather than underflow into an enormous duration.
+    #[test]
+    fn a_backwards_clock_banks_nothing() {
+        let mut t = Tracker::new();
+        t.focus(Some("roblox.exe"), 10_000);
+        let s = t.drain(5_000);
+        assert!(s.apps.is_empty(), "time cannot run backwards into credit");
+    }
+
+    /// Silence is not zero. A day with no watcher must record as *not measured*, or a child who
+    /// kills the helper renders exactly like a child who did not touch the PC.
+    #[test]
+    fn a_feed_nobody_reported_to_drains_to_nothing_at_all() {
+        let feed = Feed::new();
+        assert!(
+            feed.drain().is_none(),
+            "no watcher must be unknown, never a measured zero"
+        );
+    }
+
+    /// The other half of that distinction: the watcher saying "I am here and nothing happened" is
+    /// a fact, and must not be mistaken for silence.
+    #[test]
+    fn an_empty_report_still_counts_as_having_been_heard() {
+        let feed = Feed::new();
+        feed.submit(Sample::default());
+
+        let drained = feed.drain().expect("an empty report is still a report");
+        assert!(drained.apps.is_empty());
+    }
+
+    #[test]
+    fn reports_accumulate_between_drains_and_reset_after() {
+        let feed = Feed::new();
+        feed.submit(sample(&[("roblox.exe", 10)]));
+        feed.submit(sample(&[("roblox.exe", 5), ("chrome.exe", 3)]));
+
+        let first = feed.drain().expect("two reports were submitted");
+        assert_eq!(first.apps.get("roblox.exe"), Some(&15));
+        assert_eq!(first.apps.get("chrome.exe"), Some(&3));
+
+        assert!(
+            feed.drain().is_none(),
+            "a drained feed has heard nothing since; the next tick must not re-count"
+        );
     }
 
     /// A page whose own title ends in a browser name must not be mistaken for chrome.

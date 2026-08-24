@@ -9,9 +9,13 @@ and it retires half of the "foreground-app-aware limits — not yet" line in the
 *Not included*. The other half — making limits *enforce* on focused time — is deliberately still not
 built; see [Deliberately not done](#deliberately-not-done).
 
-**Status: designed, partially built.** The pure aggregation is implemented and unit-tested. The
-resident watcher that feeds it is **not** built, because it cannot be verified by anything this
-project runs today — see [What CI cannot check](#what-ci-cannot-check).
+**Status: built, and not yet verified on a real machine.** Every piece exists — the watcher
+(`src/watcher.rs`), the supervisor that keeps it alive (`session::run_watcher_supervisor`), the
+collector (`foreground::Feed`), the accounting (`foreground::Tracker`), and the path into the daily
+report. The accounting is unit-tested and mutation-checked; the Win32 half compiles and passes
+clippy for the Windows target and **has never been executed**. Until someone works through
+[the checklist](#on-device-checklist) on the target PC, treat it as untested code that builds —
+which, on this project, is the state that has twice shipped something broken.
 
 ---
 
@@ -25,7 +29,7 @@ Most of this feature is already shipped. Only collection is missing.
 | Report | **Done.** `screentime::parse_row` reads that map into `DayRow.apps` as `AppMinutes`. |
 | API | **Done.** `GET /api/screentime` serves it; `GET /api/usage/today` serves today's per-app figures. |
 | Dashboard | **Done.** Per-app bars on the Today card, per-app list under the 30-day chart. |
-| Collection | **Missing.** `Usage::accrue` charges an app whenever its process is *running*, and only for apps in `Targets::app_limits` — apps with no limit are never named. |
+| Collection | **Built, unverified.** `helper --watch` measures focus; the enforcer folds it in each tick. Previously `Usage::accrue` charged an app whenever its process was *running*, and only for apps in `Targets::app_limits`. That still happens, and still drives enforcement — the focus figures are a second, separate number. |
 
 So this is not a new subsystem bolted on. It is one new input feeding a pipeline that is already
 built, already tested, and already rendered.
@@ -101,6 +105,20 @@ unverified on Windows 10/11. Triggers: service start, any session change, a 30�
 helper exit.
 
 Lock, unlock, and a fast-user-switch disconnect **idle** a helper; they never kill it.
+
+### Idle is back-dated, not thresholded
+
+The obvious way to handle "away from the keyboard" is a flag: once `GetLastInputInfo` reports more
+than three minutes of silence, stop counting. That over-counts every idle episode by the whole
+grace period, because the seconds between the user leaving and the threshold tripping have already
+been banked.
+
+`GetLastInputInfo` reports *how long ago* the last input was, so the moment presence ended is known
+exactly: `last_input + IDLE_AFTER`. The watcher hands the tracker that timestamp rather than "now",
+so the grace period is credited exactly once and nothing after it is credited at all.
+`Tracker::bank` never moves its marker backwards, so noticing late cannot claw back time already
+and correctly earned. The result is exact idle accounting with no threshold error, from an API call
+the loop was making anyway.
 
 ```
 SYSTEM service (session 0)                 Child's session (winsta0\default)
@@ -292,9 +310,11 @@ the watcher dies at the lock screen or merely goes quiet. None of it is reachabl
 `clippy`, or the Windows cross-compile — the three gates that were **all green** when `install`
 failed on real hardware, and again when the screen-time chart shipped rendering nothing.
 
-**This is why the watcher is not built yet.** Per [O4/O6's standing rule](OPEN-FINDINGS.md), code in
-this tier waits for [WINDOWS-TESTING.md](WINDOWS-TESTING.md) rather than shipping on the strength of
-a green pipeline.
+The watcher is written and compiles clean for the Windows target under `clippy -D warnings`, which
+is worth exactly what it is worth: it proves the API calls exist with the signatures used, and
+nothing about whether the thing works. Per [O4/O6's standing rule](OPEN-FINDINGS.md), code in this
+tier is not trusted until [WINDOWS-TESTING.md](WINDOWS-TESTING.md) has been walked through on the
+target PC.
 
 ### On-device checklist
 

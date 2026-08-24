@@ -157,14 +157,29 @@ pub async fn serve_with_handle(
         });
     }
 
+    // Per-app foreground time. The watcher lives in the child's session (a Session-0 service
+    // cannot see their desktop at all), reports over a pipe, and is respawned by the supervisor
+    // when the child kills it or signs out. On a non-Windows dev build there is no watcher, so the
+    // feed simply never reports — and a feed that never reports records the day as *unmeasured*
+    // rather than as zero, which is the behaviour we want anyway.
+    let foreground = crate::foreground::Feed::new();
+    #[cfg(windows)]
+    {
+        let feed = foreground.clone();
+        // A plain OS thread, not a tokio task: it blocks on a pipe read for the life of a login
+        // session, which would park a runtime worker indefinitely.
+        std::thread::spawn(move || crate::session::run_watcher_supervisor(feed));
+    }
+
     // Usage-rules enforcement (screen-time budget, blocklist, per-app limits) runs in parallel.
     {
         let control = state.control.clone();
         let config = state.config.clone();
         let usage = state.usage.clone();
         let screentime = state.screentime.clone();
+        let foreground = foreground.clone();
         tokio::spawn(async move {
-            crate::rules::run_rules_enforcer(control, config, usage, screentime).await;
+            crate::rules::run_rules_enforcer(control, config, usage, screentime, foreground).await;
             tracing::error!(
                 "rules enforcer exited unexpectedly — usage rules are no longer enforced"
             );

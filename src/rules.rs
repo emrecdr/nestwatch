@@ -779,6 +779,7 @@ pub async fn run_rules_enforcer(
     config: Arc<RwLock<Config>>,
     usage_log: Arc<crate::usage::UsageLog>,
     screentime_log: Arc<crate::screentime::ScreentimeLog>,
+    foreground: crate::foreground::Feed,
 ) {
     let tally_path = usage_state_path();
     let mut enforcer = RulesEnforcer::new(Usage::load_or_default(&tally_path));
@@ -869,6 +870,23 @@ pub async fn run_rules_enforcer(
                 active,
             },
         );
+        // Fold in what the foreground watcher reported, **after** `decide` has run.
+        //
+        // The order is load-bearing. `decide` calls `accrue`, which clears the day's maps on a
+        // rollover, and `decide_after_snapshot` has already copied the outgoing day's figures for
+        // the row about to be written. Draining the feed before that point would add this tick's
+        // seconds to yesterday and then watch them be wiped; draining after adds them to the day
+        // they belong to.
+        //
+        // `drain` returning `None` means no watcher has reported at all — the helper is dead, or
+        // nobody is signed in. That must leave the map untouched rather than write zeros, so an
+        // unmeasured stretch stays unmeasured. `clamp` bounds the rest against real elapsed time,
+        // because these numbers come from a process running as the child.
+        if let Some(sample) = foreground.drain() {
+            let bounded = crate::foreground::clamp(sample, elapsed.as_secs());
+            crate::foreground::accrue(&mut enforcer.usage.foreground_secs, bounded);
+        }
+
         save_tally_if_changed(&enforcer.usage, &tally_path, &mut last_saved_tally).await;
 
         let budget = rules.effective_budget_mins(today, extra);

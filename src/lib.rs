@@ -67,6 +67,9 @@ pub mod session;
 #[cfg(windows)]
 pub mod syspath;
 
+#[cfg(windows)]
+pub mod watcher;
+
 use anyhow::{Context, Result};
 
 /// The build's own version, from `Cargo.toml` at compile time.
@@ -207,8 +210,11 @@ fn run_helper(args: &[String]) -> Result<()> {
             }
         },
         Some("--lock") => helper::lock(),
+        Some("--watch") => helper::watch(),
         _ => {
-            eprintln!("usage: nestwatch helper --capture-stdout | --capture <path> | --lock");
+            eprintln!(
+                "usage: nestwatch helper --capture-stdout | --capture <path> | --lock | --watch"
+            );
             std::process::exit(2);
         }
     }

@@ -42,3 +42,25 @@ pub fn lock() -> Result<()> {
         .map_err(|e| anyhow::anyhow!(e.to_string()))
         .context("lock failed")
 }
+
+/// Watch which app has focus, reporting a JSON line to stdout every 30 seconds.
+///
+/// Unlike the other three subcommands this one is **resident** — it runs for as long as the child
+/// is signed in. See `crate::watcher` for why it cannot live in the service, and
+/// `docs/FOREGROUND-TRACKING.md` for what it does and deliberately does not measure.
+///
+/// Like `--capture-stdout`, it owns stdout: tracing is not initialized for `helper`, so nothing
+/// can interleave with the JSON lines the service is parsing.
+pub fn watch() -> Result<()> {
+    #[cfg(windows)]
+    {
+        crate::watcher::main()
+    }
+    // Every other platform builds the whole server against `FakeControl`, and the watcher is the
+    // one piece with no fake worth having: a foreground window on the developer's Mac says nothing
+    // about the child's PC. Fail loudly rather than silently reporting an empty desktop forever.
+    #[cfg(not(windows))]
+    {
+        anyhow::bail!("the foreground watcher is Windows-only")
+    }
+}

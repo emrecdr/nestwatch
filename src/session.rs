@@ -245,11 +245,86 @@ fn spawn_lock(exe: &str) -> Result<(), ControlError> {
     }
 }
 
+/// Keep a foreground watcher alive in the interactive session, feeding everything it reports into
+/// `feed`. Runs forever on its own thread; the caller spawns it once at startup.
+///
+/// **Respawns, with backoff.** The watcher runs as the child, in a session the child controls, so
+/// it can be killed from Task Manager at any moment — and it legitimately dies at every sign-out.
+/// Neither may end screen-time measurement for good. The backoff is what stops a watcher that
+/// cannot start (no user signed in, a broken build) from becoming a spawn loop.
+///
+/// Note what is deliberately *not* done here: a failure is never fatal and never blocks. If no
+/// interactive user exists, this sleeps and tries again — that is the normal state of a PC sitting
+/// at the sign-in screen.
+pub fn run_watcher_supervisor(feed: crate::foreground::Feed) {
+    /// Backoff bounds. The floor keeps a legitimate sign-out/sign-in cheap; the ceiling keeps a
+    /// permanently-failing spawn down to twice a minute.
+    const MIN_BACKOFF: Duration = Duration::from_secs(5);
+    const MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+    let mut backoff = MIN_BACKOFF;
+    loop {
+        match std::env::current_exe() {
+            Ok(exe) => match pump_watcher(&exe.to_string_lossy(), &feed) {
+                // A clean exit means the session ended: retry promptly, the child may be signing
+                // straight back in.
+                Ok(()) => backoff = MIN_BACKOFF,
+                Err(e) => {
+                    tracing::debug!(error = %e, "foreground watcher stopped");
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                }
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot locate own exe to start the watcher");
+                backoff = MAX_BACKOFF;
+            }
+        }
+        std::thread::sleep(backoff);
+    }
+}
+
+/// Spawn one watcher and read its output until the pipe closes. Returns when it exits.
+fn pump_watcher(exe: &str, feed: &crate::foreground::Feed) -> Result<(), ControlError> {
+    use std::io::BufRead;
+
+    let (reader, proc_info) = spawn_piped(exe, "helper --watch")?;
+    let mut lines = std::io::BufReader::new(reader).lines();
+
+    while let Some(Ok(line)) = lines.next() {
+        // A malformed line is skipped, never fatal: this pipe can be cut mid-write by a session
+        // ending, so a partial line is expected rather than exceptional.
+        if let Some(sample) = crate::foreground::parse_sample(&line) {
+            feed.submit(sample);
+        }
+    }
+
+    // SAFETY: both handles were produced by `CreateProcessAsUserW` in `spawn_piped` and are closed
+    // exactly once, here, after the pipe has reached EOF.
+    unsafe {
+        let _ = CloseHandle(proc_info.hProcess);
+        let _ = CloseHandle(proc_info.hThread);
+    }
+    Ok(())
+}
+
 /// Launch `<exe> helper --capture-stdout` in the active console session with stdout wired to
 /// a pipe, and return the PNG bytes it writes.
-fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
-    // SAFETY: Win32 token/pipe/process FFI. Every handle acquired is released on all paths
-    // (the read end is handed to a File which closes it on drop).
+/// Launch `<exe> <args>` in the active console session with stdout wired to a pipe, and hand back
+/// the read end plus the process handles.
+///
+/// Shared by the screenshot helper (which reads one PNG and lets a watchdog bound it) and the
+/// foreground watcher (which streams JSON lines for the life of the session). The difference
+/// between those two is entirely in what the caller does with the pipe — so the token, pipe,
+/// environment block and desktop handling live here once rather than being copied and drifting.
+///
+/// The caller owns both returned handles and must `CloseHandle` them; the `File` closes the read
+/// end on drop.
+fn spawn_piped(
+    exe: &str,
+    args: &str,
+) -> Result<(std::fs::File, PROCESS_INFORMATION), ControlError> {
+    // SAFETY: Win32 token/pipe/process FFI. Every handle acquired here is either released before
+    // returning or handed to the caller, and the read end becomes a File that closes on drop.
     unsafe {
         let primary = active_session_token().map_err(ControlError::Capture)?;
 
@@ -272,8 +347,8 @@ fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
         let have_env = CreateEnvironmentBlock(&mut env_block, Some(primary), false).is_ok();
 
         let mut desktop = to_wide(r"winsta0\default");
-        // hStdError/hStdInput are left null by `..Default::default()`: the helper writes only
-        // the PNG to stdout, so nothing can corrupt the byte stream.
+        // hStdError/hStdInput are left null by `..Default::default()`: the helper writes only its
+        // payload to stdout, so nothing can corrupt the stream.
         let startup = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
             lpDesktop: PWSTR(desktop.as_mut_ptr()),
@@ -282,7 +357,7 @@ fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
             ..Default::default()
         };
 
-        let mut cmdline = to_wide(&format!("\"{exe}\" helper --capture-stdout"));
+        let mut cmdline = to_wide(&format!("\"{exe}\" {args}"));
         let mut proc_info = PROCESS_INFORMATION::default();
         let spawn = CreateProcessAsUserW(
             Some(primary),
@@ -311,6 +386,16 @@ fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
             return Err(cap("CreateProcessAsUserW", e));
         }
 
+        Ok((std::fs::File::from_raw_handle(read.0), proc_info))
+    }
+}
+
+fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
+    let (mut file, proc_info) = spawn_piped(exe, "helper --capture-stdout")?;
+
+    // SAFETY: Win32 process FFI. `proc_info`'s handles come from `spawn_piped` and are closed
+    // exactly once, below, after the watchdog has finished using them.
+    unsafe {
         // Watchdog: kill the helper if it outruns the timeout (unblocks the read via EOF).
         let proc_raw = proc_info.hProcess.0 as isize;
         let watchdog = std::thread::spawn(move || {
@@ -321,7 +406,6 @@ fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
         });
 
         // Read the PNG from the pipe (File owns the read handle and closes it on drop).
-        let mut file = std::fs::File::from_raw_handle(read.0);
         let mut buf = Vec::new();
         let read_result = file.read_to_end(&mut buf);
         drop(file);
