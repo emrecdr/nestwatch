@@ -13,6 +13,12 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **Denying a request could have granted it.** The approve/deny handler took a yes/no flag, and
+  anything that was not literally "no" counted as yes — so a wrong value granted the child the
+  minutes instead of refusing them. The two buttons on the page always passed the right thing, so
+  this was never wrong in normal use; it is fixed because the direction it failed in is the wrong
+  one for a parental control, and because the mistake is invisible at the call site. The decision
+  is now spelled out, and anything unrecognised denies.
 - **The dashboard could tell you enforcement was fine when it could not reach the PC at all.**
   The "enforcement may not be running" warning is the one that matters most — every other number
   on the page looks normal when the limits have quietly stopped being applied. It was suppressed
@@ -57,7 +63,7 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   into `assets/app.js` and `assets/ask.js`. Beyond the policy change above, this is what made it
   possible to test them at all. Three source scans guard the shapes that would silently undo it:
   no inline script, no `<template>` inside `<svg>`, and `scope` on every column header.
-- **21 tests for the dashboard's own logic**, where there were none — the version comparison, the
+- **25 tests for the dashboard's own logic**, where there were none — the version comparison, the
   enforcement-staleness check, the chart's bar heights, the shared day formatting, and the
   "any limits set" check. They run on `node:test`, which ships with Node, so nothing was added to
   the project's dependencies; `npm test` in `web/` runs them, and CI runs them on both Linux and

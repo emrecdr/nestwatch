@@ -27,15 +27,19 @@ export const APP_JS = join(here, "..", "..", "assets", "app.js");
  * returning undefined, which is the intent: it marks that method as needing a browser, not as
  * passing.
  */
-export function loadApp() {
+export function loadApp(globals = {}) {
   const source = readFileSync(APP_JS, "utf8");
   const sandbox = {
     // A method that hits the network in a test is a bug in the test, so make it loud rather
-    // than letting it hang or silently resolve.
+    // than letting it hang or silently resolve. Override via `globals` to test a method that
+    // legitimately fetches — see the resolveTimeRequest tests, which record the URL it chose.
     fetch() {
       throw new Error("fetch() called: this method is not pure and must not be tested here");
     },
+    ...globals,
   };
+  // The script runs in its own realm, so assigning `globalThis.fetch` from the test's realm does
+  // not reach it — anything the code under test should see has to be in this object.
   sandbox.globalThis = sandbox;
   const context = createContext(sandbox);
   // `; app` makes the declared function the completion value, the same way the browser would

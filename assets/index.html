@@ -534,8 +534,8 @@
                         <td x-text="r.minutes"></td>
                         <td class="truncate" x-text="r.reason || '—'"></td>
                         <td class="text-right whitespace-nowrap">
-                          <button class="btn btn-success btn-xs" @click="resolveTimeRequest(r.id, true)">Approve</button>
-                          <button class="btn btn-error btn-xs" @click="resolveTimeRequest(r.id, false)">Deny</button>
+                          <button class="btn btn-success btn-xs" @click="resolveTimeRequest(r.id, 'approve')">Approve</button>
+                          <button class="btn btn-error btn-xs" @click="resolveTimeRequest(r.id, 'deny')">Deny</button>
                         </td>
                       </tr>
                     </template>

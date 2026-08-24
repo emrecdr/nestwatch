@@ -140,6 +140,38 @@ test("enforcementDetail never renders NaN, whatever the age is", () => {
   }
 });
 
+// --- resolveTimeRequest ----------------------------------------------------
+//
+// Not a pure method — it posts — so what is tested is only which endpoint it decides on. That is
+// the part that went wrong: the parameter was a boolean, so any truthy value approved, and the
+// string "deny" is truthy. Approving a request a parent denied is the wrong direction to fail in.
+
+/** An app whose fetch records the URLs it was given and always reports failure. */
+function appRecordingFetch() {
+  const calls = [];
+  const app = loadApp({ fetch: async (url) => (calls.push(url), { ok: false }) });
+  app.toast = () => {};
+  return { app, calls };
+}
+
+test("resolveTimeRequest denies anything that is not exactly an approval", async () => {
+  const { app, calls } = appRecordingFetch();
+  const decisions = ["deny", "", null, undefined, "nonsense", true, 1, {}];
+  for (const decision of decisions) {
+    await app.resolveTimeRequest("req-1", decision);
+  }
+  assert.equal(calls.length, decisions.length, "every call reached the endpoint");
+  const approved = calls.filter((u) => u.endsWith("/approve"));
+  assert.deepEqual(approved, [], `these decisions approved: ${JSON.stringify(approved)}`);
+});
+
+test("resolveTimeRequest approves on the literal approval", async () => {
+  const { app, calls } = appRecordingFetch();
+  await app.resolveTimeRequest("req-1", "approve");
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].endsWith("/req-1/approve"), `posted to ${calls[0]}`);
+});
+
 // --- stBarPct --------------------------------------------------------------
 //
 // The chart's heights, including the 3% floor that app.js documents at length and tells you not

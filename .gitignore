@@ -26,3 +26,7 @@
 
 # Playwright MCP scratch output (snapshots, console logs, screenshots from UI checks).
 /.playwright-mcp/
+
+# Knowledge-graph cache from the graphify tooling. Local scratch, regenerated on demand —
+# untracked but noisy in `git status` until it is named here.
+/graphify-out/

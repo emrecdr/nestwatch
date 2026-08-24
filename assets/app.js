@@ -631,7 +631,14 @@ function app() {
       }
     },
 
-    async resolveTimeRequest(id, approve) {
+    // `decision` is the literal "approve" or "deny", not a boolean. It was a boolean, and the
+    // wrong-argument case granted the child time: any truthy value — including the *string*
+    // "deny" — took the approve branch. That is the wrong direction to fail in for a parental
+    // control, and it is not hypothetical; it happened while exercising this page, and the log
+    // recorded an approval for a request that had been denied. Anything not exactly "approve"
+    // now denies.
+    async resolveTimeRequest(id, decision) {
+      const approve = decision === "approve";
       const verb = approve ? "approve" : "deny";
       try {
         const r = await fetch(`/api/time-requests/${id}/${verb}`, { method: "POST" });

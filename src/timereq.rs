@@ -189,7 +189,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nw-timereq-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        (TimeRequests::new(dir.join("timereq.jsonl")), dir)
+        (TimeRequests::new(dir.join("time_requests.jsonl")), dir)
     }
 
     /// Regression: a parent double-tapping Approve must grant the minutes once.
@@ -254,7 +254,7 @@ mod tests {
     fn submit_pending_resolve_roundtrip() {
         let dir = std::env::temp_dir().join(format!("nw-timereq-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let q = TimeRequests::new(dir.join("timereq.jsonl"));
+        let q = TimeRequests::new(dir.join("time_requests.jsonl"));
 
         let id = q.submit(30, "homework done").unwrap();
         let pending = q.pending();
@@ -274,7 +274,7 @@ mod tests {
     fn pending_cap_is_enforced() {
         let dir = std::env::temp_dir().join(format!("nw-timereq-cap-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let q = TimeRequests::new(dir.join("timereq.jsonl"));
+        let q = TimeRequests::new(dir.join("time_requests.jsonl"));
         for _ in 0..MAX_PENDING {
             assert!(q.submit(10, "").is_some());
         }
