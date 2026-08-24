@@ -170,6 +170,29 @@ pub fn accrue(running: &mut BTreeMap<String, u64>, bounded: BTreeMap<String, u64
     }
 }
 
+/// Whether `exe` is a browser whose window title is worth reading, given an already-normalised
+/// process name (see `rules::norm`).
+///
+/// This is the half of page attribution that cannot be forged. A window title is chosen by the
+/// process that owns it, so `browser_page` alone would let anything claim page time by calling
+/// itself `"Roblox - Google Chrome"` — injecting pages the child never visited, or filling the
+/// capped list to evict the real ones. Requiring the executable to agree costs one comparison
+/// against a fixed list and takes the decision out of the child's hands.
+///
+/// It also saves a `GetWindowTextW` and a `String` on every non-browser window, which is most of
+/// them — but that is the smaller reason.
+pub fn is_browser(exe: &str) -> bool {
+    const BROWSERS: &[&str] = &[
+        "chrome.exe",
+        "msedge.exe",
+        "firefox.exe",
+        "brave.exe",
+        "opera.exe",
+        "vivaldi.exe",
+    ];
+    BROWSERS.contains(&exe)
+}
+
 /// Recognise a browser window by its title suffix and pull the page title out of it.
 ///
 /// This is the whole of the "what was he looking at on the web" feature, and its limits are the
@@ -818,6 +841,30 @@ mod tests {
             30,
         );
         assert_eq!(got.pages.get("Roblox"), Some(&30));
+    }
+
+    /// Title suffixes are attacker-chosen, so they cannot be the only evidence a window is a
+    /// browser. Any process can set its window title to `"Roblox - Google Chrome"`; a child
+    /// scripting that could inject pages they never visited, or flood the capped list to push real
+    /// entries out of it. The executable has to agree.
+    #[test]
+    fn only_a_real_browser_process_can_contribute_a_page() {
+        assert!(is_browser("chrome.exe"));
+        assert!(is_browser("msedge.exe"));
+        assert!(is_browser("firefox.exe"));
+
+        assert!(!is_browser("notepad.exe"), "a title alone must not qualify");
+        assert!(
+            !is_browser("roblox - google chrome.exe"),
+            "naming the executable after a browser must not qualify either"
+        );
+        assert!(!is_browser(""));
+    }
+
+    /// Matching is on the already-normalised name, so casing and stray spacing cannot slip past.
+    #[test]
+    fn browser_matching_uses_the_normalised_name() {
+        assert!(is_browser(&crate::rules::norm("  CHROME.EXE  ")));
     }
 
     /// A page whose own title ends in a browser name must not be mistaken for chrome.

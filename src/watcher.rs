@@ -175,6 +175,7 @@ fn worker(rx: &Receiver<()>) {
     // `panic = "abort"` that would take the watcher down the moment it started, on the machines
     // least able to report why.
     let mut last_resolve: Option<Instant> = None;
+    let mut resolver = Resolver::default();
 
     loop {
         // Either a focus change woke us or the reconciliation interval expired. Both lead to the
@@ -203,7 +204,7 @@ fn worker(rx: &Receiver<()>) {
             // attribute the app and the page title to different windows, and two
             // `GetLastInputInfo` calls can leave one tracker idle while the other is active.
             // Cheaper too, but coherence is the reason.
-            let seen = observe();
+            let seen = observe(&mut resolver);
 
             // Idle first, so the focus updates below bank against the correct active/away state.
             let (away, since) =
@@ -264,7 +265,36 @@ struct Seen {
 
 /// Take one reading. A single `GetForegroundWindow` serves both the app and the page, so the two
 /// always describe the same window — see the note at the call site.
-fn observe() -> Seen {
+/// Remembers the last window resolved, so an unchanged foreground costs nothing to re-identify.
+///
+/// Keyed on the `HWND` **and** its process id: window handles are recycled, so a handle alone
+/// could hand back the previous window's name after that window closed and its number was reused.
+#[derive(Default)]
+struct Resolver {
+    last: Option<(isize, u32, String)>,
+}
+
+impl Resolver {
+    /// The executable behind `hwnd`, from cache when the window has not changed.
+    ///
+    /// Worth caching because the miss path is the expensive one — `OpenProcess`,
+    /// `QueryFullProcessImageNameW`, a UTF-16 decode and a lowercase — and the common case is a
+    /// child looking at one thing for an hour, which is 720 wakes resolving the same string.
+    fn resolve(&mut self, hwnd: HWND, pid: u32) -> Option<String> {
+        let key = hwnd.0 as isize;
+        if let Some((h, p, name)) = &self.last
+            && *h == key
+            && *p == pid
+        {
+            return Some(name.clone());
+        }
+        let name = process_name(hwnd, pid)?;
+        self.last = Some((key, pid, name.clone()));
+        Some(name)
+    }
+}
+
+fn observe(resolver: &mut Resolver) -> Seen {
     let idle_ms = idle_millis();
 
     // SAFETY: Win32 window FFI; `hwnd` is an opaque token, never dereferenced.
@@ -280,31 +310,36 @@ fn observe() -> Seen {
         };
     }
 
-    // A page is only credited while a *browser* is in front. `browser_page` returns `None` for
-    // every other window, so time in Notepad never lands in the page list.
-    let page = window_title(hwnd)
+    let mut pid = 0u32;
+    // SAFETY: Win32 window FFI; `pid` is a plain out-parameter owned by this frame.
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    let app = if pid == 0 {
+        None
+    } else {
+        resolver.resolve(hwnd, pid)
+    };
+
+    // Read the title **only** once the process is known to be a browser. A window title is chosen
+    // by whatever owns the window, so trusting the title alone would let any process claim page
+    // time by naming itself `"Roblox - Google Chrome"`. Both must agree.
+    let page = app
+        .as_deref()
+        .filter(|exe| crate::foreground::is_browser(exe))
+        .and_then(|_| window_title(hwnd))
         .as_deref()
         .and_then(crate::foreground::browser_page)
         .map(str::to_string);
 
-    Seen {
-        app: process_name(hwnd),
-        page,
-        idle_ms,
-    }
+    Seen { app, page, idle_ms }
 }
 
 /// The executable name behind `hwnd`, keyed through [`crate::rules::norm`] so it matches the
 /// enforcement tally exactly.
-fn process_name(hwnd: HWND) -> Option<String> {
+fn process_name(hwnd: HWND, pid: u32) -> Option<String> {
     // SAFETY: Win32 window/process FFI. The process handle is closed on every path; `hwnd` is only
     // used as an opaque token and is never dereferenced.
     unsafe {
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == 0 {
-            return None;
-        }
+        let _ = hwnd; // the window is identified by its pid from here on
 
         // LIMITED, not PROCESS_QUERY_INFORMATION. The wider right FAILS against an elevated
         // process, and ActivityWatch's well-known 5-30% CPU burn on Windows is exactly that
