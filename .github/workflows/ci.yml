@@ -5,6 +5,20 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  # Weekly, because the supply-chain gate below is the only thing that reports a new advisory
+  # and it cannot report one on its own. `cargo deny check advisories` fails the build on a
+  # vulnerable crate — but only when a build happens. Dependabot opens a PR when a *newer
+  # version* exists, which is a different event from "an advisory landed against the version
+  # you already pin": nothing about the repo changes, so nothing triggers, so nothing runs.
+  # This is a tool installed on a family PC and left alone for months at a time; without this
+  # line the detection window is however long the maintainer goes without pushing.
+  #
+  # It also re-runs `fmt` and `clippy`, which use `dtolnay/rust-toolchain@stable` — a moving
+  # target. A new stable's lints then surface on a quiet Monday instead of inside an unrelated PR.
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  # So the same checks can be demanded on the spot, without pushing an empty commit.
+  workflow_dispatch:
 
 # Least privilege: CI only reads the repo. (Without this, the workflow inherits the repository
 # default, which on older repos is read/write for every scope.) The release workflow declares
@@ -92,9 +106,14 @@ jobs:
           tool: cargo-deny@0.20.2
       - run: cargo deny check advisories sources licenses bans
 
-  # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push).
+  # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push), and not
+  # on the weekly run: `test (windows-latest)` already builds and tests on Windows there, so this
+  # job would only re-package an artifact nobody downloads. A scheduled run reports `github.ref`
+  # as the default branch, so without the event check it would match the condition below.
   windows-release:
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    if: >-
+      github.event_name != 'schedule'
+      && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
     runs-on: windows-latest
     needs: [test]
     steps:
