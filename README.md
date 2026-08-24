@@ -310,10 +310,14 @@ weighed and declined — so neither has to be rediscovered.
   own VPN — unsupported, and only *partly* compatible: the app-layer allowlist admits RFC1918
   (`10/8`, `172.16/12`, `192.168/16`) plus loopback, and nothing else. A VPN that puts you on the
   home subnet (WireGuard routing you into `192.168.x.x`, or your router's own VPN) works.
-  **Tailscale does not** — it assigns from the carrier-grade-NAT range `100.64.0.0/10`, which is
-  not RFC1918, so you'll get a `403` even though the tunnel itself is fine. That's the allowlist
-  failing closed rather than a bug; widening it would extend the trust boundary past the home
-  network for every install.
+  **Tailscale installed on the monitored PC does not** — it assigns from the carrier-grade-NAT
+  range `100.64.0.0/10`, which is not RFC1918, so you'll get a `403` even though the tunnel itself
+  is fine. That's the allowlist failing closed rather than a bug; widening it would extend the
+  trust boundary past the home network for every install. Tailscale run as a **subnet router on a
+  different always-on machine** is a separate case and does work — it masquerades routed traffic
+  to its own LAN address by default, so requests reach this service from `192.168.x.x` like any
+  other. That is also the arrangement worth wanting: the tunnel software stays off the monitored
+  PC, which keeps making no outbound connection of its own.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
 - **Web/content filtering** and **foreground-app-aware limits** (e.g. "earn time in a learning

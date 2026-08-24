@@ -2,6 +2,35 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Improved
+- **The dashboard is readable with a screen reader.** Its six tables had no column headers as far
+  as assistive software was concerned — the header row was styled, not labelled, so a figure was
+  read out without the column it belonged to. And the two panels that refresh by themselves every
+  minute, today's usage and the more-time requests, changed silently: you were told the numbers
+  once, on load, and never again. Both fixed, and a test now refuses a seventh table that repeats
+  the first mistake.
+
+### Fixed
+- **A new security advisory could go unnoticed for as long as nobody pushed.** The check that fails
+  the build on a vulnerable dependency only ran when something else triggered a build, and GitHub's
+  own alerting was switched off for the repository — so for a tool that gets installed and then left
+  alone for months, nothing was watching in between. Alerts are on, advisories now open a pull
+  request by themselves, and the full check also runs every Monday.
+- **The build now notices when the compiled stylesheet is older than the toolchain that compiles
+  it.** It already warned when the CSS was older than the markup. It could not see a Tailwind or
+  daisyUI bump, so a build here could be styled by one version while the release was styled by
+  another — which is exactly what had happened: 0.2.3 shipped with 4.3.3 against a local 4.3.2.
+- Four `unsafe` blocks in the Windows code kept their safety reasoning in the function's
+  documentation rather than beside the block. The reasoning was right; it was in the place a reader
+  scrolling to the block does not look. All eight now match, and the lint that catches it is on.
+
+### Internal
+- Lint policy moved from CI's command line into `Cargo.toml`, so `cargo clippy` and the editor
+  enforce what CI enforces. Turning on `undocumented_unsafe_blocks` is what found the four above —
+  it is allow-by-default, so `-D warnings` had never switched it on.
+
 ## [0.2.3] — 2026-08-24
 
 ### Added

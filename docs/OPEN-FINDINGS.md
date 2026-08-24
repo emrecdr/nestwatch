@@ -169,6 +169,26 @@ held. Do it alongside the next change that already opens `SystemControl`, not on
 build 1803, so a session-0 service cannot reach user-session windows at all; it would need a helper
 resident in the child's session, well beyond the existing on-demand screenshot helper.
 
+### O8 · The dashboard's logic is the least-verified code that ships
+
+`assets/index.html` carries a 732-line inline `<script>`. Against 231 Rust tests there are **zero**
+JavaScript tests, and no linter runs over it: the polling loop, the countdown, the screenshot
+lifecycle, and every error path the parent actually sees are unverified by anything except looking
+at them.
+
+The CSP consequence is already recorded on `security::CSP` — the inline script and Alpine's
+attribute expressions are what force `'unsafe-inline'`/`'unsafe-eval'`, and tightening means the
+`@alpinejs/csp` build plus externalizing the script. That note frames it as a security cost.
+
+**The point here is that it is the same fix twice.** Moving the script to `assets/app.js` is what
+makes it both lintable/testable *and* CSP-tightenable; neither is worth the migration alone, and
+together they probably are. Filed separately because the testability half has a cost the security
+note does not mention: `@alpinejs/csp` forbids inline expressions, so every `x-text`/`x-show` in
+1,650 lines of markup has to move into the component object. That is the real size of this job, and
+it is why it is not a cleanup-pass item.
+
+**Trigger.** Do this before the dashboard grows another panel, or the migration cost grows with it.
+
 ---
 
 ## Fixed
@@ -231,6 +251,8 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 | **Separating the child's `/time-request` audit line, to stop log eviction** | Raised as a live hole; **refuted by reading the code**. The concern was that an unauthenticated child could append audit lines at 5/min until the 2 MB log and its single `.jsonl.1` backup rolled every login and kill off disk. `api.rs` already audits **only submissions that joined the queue**, and the queue caps at `MAX_PENDING` — so further growth requires a *parent* action to resolve one. The comment there records it as the fourth site of that defect class, after `login`, `pair` and `logout`. Nothing to do. |
 | **Moving `heartbeat::beat()` to the end of the enforcer loops** | The doc said it was called at the end "so it proves the tick finished"; the code calls it at the top. The tempting fix is to move the code. **Don't** — `run_rules_enforcer` has two early `continue` paths, and one of them is the parent pressing **Pause**, so beating at the end would report enforcement as dead every time the feature is used. The doc was corrected instead; see `heartbeat.rs`. |
 | **Widening `is_lan` to admit CGNAT (`100.64.0.0/10`)** | Confirmed by running: `Ipv4Addr::is_private()` excludes that range, so a parent tunnelling in over Tailscale is rejected by the app-layer gate. Declined anyway — the tool is LAN-only by design, and admitting a range no home network uses would extend the trust boundary for every install to fix an explicitly unsupported setup. Documented in the README instead, so it reads as a boundary rather than a bug. |
+| Adopting `clippy::unused_qualifications` | Clean everywhere except 9 sites, all of them in `curfew.rs` and `rules.rs` — the enforcement path, including the pure function a previous pass already declined to restructure during cleanup. A style lint is not a reason to touch it. The other lints adopted in `Cargo.toml`'s `[lints]` were each verified to produce zero warnings first, so none of them opened a cleanup. Same for `missing_docs` (84) and `clippy::str_to_string` (36). |
+| Widening `is_lan` — **second look, still no** | The original row below stands, and the case for widening got weaker, not stronger: Tailscale run as a *subnet router* on another machine already reaches this service from `192.168.x.x`, because subnet routers masquerade routed traffic to their own LAN address by default. So a working Tailscale arrangement exists without touching the allowlist — and it is the better one anyway, since it keeps the tunnel daemon off the monitored PC. README corrected, which had claimed Tailscale simply does not work. |
 | An `Enforcer` trait unifying the two background loops | The genuinely shared skeleton is ~6 lines. The blocks that *look* duplicated aren't: curfew calls `disarm()` when a shutdown fails so it retries with a fresh countdown; the rules enforcer deliberately doesn't, and returns as the uncancellable `ShutdownNow`. A shared helper would extract the boilerplate and leave the divergent part behind. |
 
 ---
