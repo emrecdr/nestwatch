@@ -77,6 +77,13 @@ jobs:
         # --locked so a test run can never silently resolve different versions than the
         # release build, which already uses it.
         run: cargo test --all-targets --locked
+      # The dashboard's own logic. `node --test` ships with Node, so this adds no dependency to
+      # the one that was already installed above to build the CSS. It runs on both matrix legs
+      # deliberately: the harness reads assets/app.js off disk, and a Windows checkout hands it
+      # CRLF — the difference that has already broken one file-reading test in this repo.
+      - name: Test the dashboard script
+        working-directory: web
+        run: npm test
 
   # Supply-chain gate. BLOCKING, with no ignore list.
   #

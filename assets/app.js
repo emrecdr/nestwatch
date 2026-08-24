@@ -36,6 +36,9 @@ function app() {
     savingRoutine: false,
     today: { day: null, enabled: true, budget_mins: 0, used_mins: 0, remaining_mins: null, extra_mins: 0, per_app: [], groups: [] },
     loadingToday: false,
+    // Whether the first /api/usage/today attempt has finished, succeeded or not. Distinguishes
+    // "nothing known yet" from "asked, and the answer is missing" — see isEnforcerStale.
+    todayAsked: false,
     grantingExtra: false,
     _lastPerDay: null, // remembers the per-day array while single-limit mode is active
     audit: [],
@@ -569,7 +572,12 @@ function app() {
 
     loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", "Failed to load access log"); },
     loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", "Failed to load usage history"); },
-    loadToday() { return this.loadList("/api/usage/today", "today", "loadingToday"); },
+    async loadToday() {
+      await this.loadList("/api/usage/today", "today", "loadingToday");
+      // Set even when the fetch failed: loadList swallows that error, and a failure is exactly
+      // when the staleness warning needs to be reachable.
+      this.todayAsked = true;
+    },
     loadScreentime() { return this.loadList("/api/screentime", "screentime", "loadingScreentime", "Failed to load screen-time report"); },
 
     async grantExtra(mins) {
@@ -712,19 +720,44 @@ function app() {
       return days.length ? days[days.length - 1] : null;
     },
 
-    // Shared by the "Today" panel banner (above) and the screen-time card, so the two can
-    // never disagree about what counts as stale. Strict `=== null`, not `== null`: the
-    // initial `today` object has no `enforcer_age_secs` key at all, so a loose check treats
-    // `undefined` the same as `null` and the warning flashes on every page load until
-    // `loadToday()` resolves.
+    // Shared by the "Today" panel banner and the screen-time card, so the two can never
+    // disagree about what counts as stale.
+    //
+    // `== null`, so an absent age counts as stale alongside an explicit null. This used to be
+    // `=== null` to stop the warning flashing on every page load, because the initial `today`
+    // literal carries no `enforcer_age_secs` key and `undefined` would have matched. That
+    // suppressed the flash and the real signal together: `loadToday()` routes through
+    // `loadList`, which swallows a failed fetch, so a load that never succeeds leaves `today`
+    // at its initial value forever — and the dashboard reported healthy enforcement for a
+    // service it could not reach at all. The flash is now prevented by `todayAsked` below,
+    // which says whether an answer has been *attempted*, rather than by reading "no answer" as
+    // "a good answer".
     isEnforcerStale(age) {
-      return age === null || age > ENFORCER_STALE_SECS;
+      return age == null || age > ENFORCER_STALE_SECS;
     },
 
     // The enforcer heartbeat, already served by /api/usage/today. A stale or absent value
     // means the figures below may be missing days rather than showing light use.
+    //
+    // Silent until the first attempt finishes, so the warning never appears on a page that
+    // simply has not loaded yet. After that it reports honestly, including when the load failed.
     stEnforcementStale() {
-      return this.isEnforcerStale(this.today?.enforcer_age_secs);
+      return this.todayAsked && this.isEnforcerStale(this.today?.enforcer_age_secs);
+    },
+
+    // The sentence after "Enforcement may not be running." Three states, not two, and they point
+    // at different things: a service that answered and is late, a service that answered and has
+    // never ticked, and a service that did not answer at all. The third only became reachable
+    // when the staleness check stopped reading "no answer" as a good answer — and the markup then
+    // rendered "No check-in for NaN min.", because it divided an absent age by 60.
+    //
+    // Returns the whole sentence so the markup is a bare method call: no template literal and no
+    // `Math` in an attribute, which is also the form the CSP build needs (O8).
+    enforcementDetail() {
+      const age = this.today?.enforcer_age_secs;
+      if (age === undefined) return "The dashboard could not reach the service to ask.";
+      if (age === null) return "The background checks haven't reported yet.";
+      return `No check-in for ${Math.round(age / 60)} min.`;
     },
 
     fmtTime(ts) {

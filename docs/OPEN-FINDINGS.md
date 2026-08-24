@@ -171,16 +171,27 @@ resident in the child's session, well beyond the existing on-demand screenshot h
 
 ### O8 · The dashboard's logic is the least-verified code that ships
 
-**Step one is done; the finding stands on the half that is left.** The scripts are now
-`assets/app.js` (744 lines) and `assets/ask.js` (136), out of the markup, and `script-src` no
-longer admits `'unsafe-inline'` as a result — an inline `<script>` can no longer run on either
-page, which is the directive that matters most where injected content would land.
-`no_inline_script_on_any_served_page` holds that shape, since the failure mode is silent.
+**Two of three steps are done.** The scripts are now `assets/app.js` (744 lines) and
+`assets/ask.js` (136), out of the markup, and `script-src` no longer admits `'unsafe-inline'` as a
+result — an inline `<script>` can no longer run on either page, which is the directive that
+matters most where injected content would land. `no_inline_script_on_any_served_page` holds that
+shape, since the failure mode is silent.
 
-What has not changed is the reason this entry exists: against 233 Rust tests there are still
-**zero** JavaScript tests, and no linter runs over those two files. The polling loop, the
-countdown, the screenshot lifecycle and every error path the parent actually sees are verified by
-nothing but looking at them — which is exactly how O9 shipped.
+**There are now 21 JavaScript tests**, on `node:test` — no framework installed, so the addition
+costs the project nothing it was not already carrying. They cover the pure decision and formatting
+methods: `compareVersions`, `isEnforcerStale`, `stBarPct`, `stDayLabel`, `stBarClass`,
+`anyRulesSet`, `fmtBytes`. All five mutations tried against them fail at least one test.
+
+Writing them found O10 on the first run — the staleness indicator reporting healthy enforcement
+for a service the page could not reach. That is the argument for this entry, made concrete: the
+first tests ever run against this file found a safety-relevant bug in it.
+
+**What remains.** No linter over the two files, and the DOM-facing half is still untested — the
+polling loop, the screenshot lifecycle, the error paths. Testing those needs a DOM (jsdom or a
+headless browser), which is a materially larger dependency decision than `node:test` was, and is
+the kind of thing to decide deliberately rather than adopt in passing. Note it would *not* have
+caught O9 either: that was a namespace bug in the markup, which is why the guard for it is a
+source scan.
 
 **The point here is that it is the same fix twice.** Moving the script to `assets/app.js` is what
 makes it both lintable/testable *and* CSP-tightenable; neither is clearly worth the migration alone,
@@ -207,13 +218,12 @@ retired four template literals along with the SVG chart). That changes the concl
 was never the markup, it is that **233 Rust tests sit beside zero JavaScript tests**, so a runtime
 swap under the parent's only interface has nothing to catch a regression.
 
-**What is left, in order.** The relocation is done. Next is a linter and some tests over the two
-JavaScript files — which means choosing a toolchain and adding devDependencies to `web/`, a
-deliberate step for a project that has kept its build to one CSS compile, and so not something to
-adopt silently. *Then* `@alpinejs/csp`, with something in place to catch what breaks. Doing the
-runtime swap first would change how every directive on the page is evaluated with no way to tell
-whether it still works — on the interface a parent depends on, and on a machine none of this has
-run on. `'unsafe-eval'` is what remains of the policy cost until that lands.
+**What is left, in order.** The relocation and the unit tests are done. Next is `@alpinejs/csp`,
+which is what `'unsafe-eval'` is still paying for. It is now a bounded job — 14 of 264 directives
+— and the tests above cover the methods those directives call, so a swap that broke the component
+object would be caught. What would *not* be caught is a directive that stops evaluating, since
+nothing tests the rendered DOM; a headless smoke test of both pages is the honest prerequisite,
+and it is the same tooling decision the paragraph above defers.
 
 **Trigger.** Do this before the dashboard grows another panel, or the migration cost grows with it.
 
@@ -239,6 +249,35 @@ heartbeat at the edge alongside its other I/O. The function is pure for real, an
 `today_summary_passes_the_enforcer_heartbeat_through` asserts all three cases — fresh, stale, and
 `None` (never reported, which after one tick's uptime means the loops never started). Confirmed by
 mutation: hardcoding the field to `None` fails that test while the other four stay green.
+
+### ~~O10 · The dashboard reported healthy enforcement for a service it could not reach~~ — **fixed**
+
+Found by the first JavaScript test ever run against `app.js`, on the first run.
+
+`isEnforcerStale(age)` returned `age === null || age > ENFORCER_STALE_SECS`. The strict `===` was
+deliberate and documented: the initial `today` literal carries no `enforcer_age_secs` key, so a
+loose check would read `undefined` as stale and flash the warning on every page load until
+`loadToday()` resolved. The comment said exactly that.
+
+**The cost of that trade was not written down.** `loadToday()` routes through `loadList`, which
+catches a failed fetch and — with no `errMsg` passed — does nothing with it. So a load that never
+succeeds leaves `today` at its initial value permanently, `enforcer_age_secs` stays `undefined`,
+and `undefined === null` is false while `undefined > 150` is also false. The function answered
+**"enforcement is fine"** for a dashboard that could not reach the service at all. `heartbeat.rs`
+calls a silently dead enforcer "the worst failure this product can have"; this is the browser
+under-reporting exactly that, and the failing case is the one where the service is down — which
+is when the warning is the whole point.
+
+**Fix.** Split the two questions the `===` was conflating. `isEnforcerStale` now uses `== null`,
+so an absent age counts as stale like an explicit one — matching how the rest of the file already
+tests for absence. The flash is prevented instead by `todayAsked`, set once the first attempt
+finishes whether it succeeded or not, and `stEnforcementStale()` stays quiet until then. The
+"Today" banner was calling `isEnforcerStale` directly, bypassing the gate; both banners now go
+through `stEnforcementStale()`, which is what the shared helper's own comment said it was for.
+
+**Verified by mutation**: restoring `=== null` fails two tests, and removing the `todayAsked` gate
+fails a third. Both properties — no flash before the first load, honest reporting after it — are
+asserted, so neither can be traded away for the other again without a test going red.
 
 ### ~~O9 · The screen-time chart rendered no bars at all~~ — **fixed**
 

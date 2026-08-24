@@ -13,6 +13,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **The dashboard could tell you enforcement was fine when it could not reach the PC at all.**
+  The "enforcement may not be running" warning is the one that matters most — every other number
+  on the page looks normal when the limits have quietly stopped being applied. It was suppressed
+  in exactly the case it exists for: if the dashboard's request to the service failed, the page
+  kept its starting values, read the missing answer as a good one, and showed nothing. It now
+  stays quiet only until the first answer has been *attempted*, and reports honestly after that —
+  including when the attempt failed. Both banners go through the same check, so they cannot
+  disagree.
 - **The screen-time chart drew nothing.** Thirty days of data, an empty chart, and no message to
   say why — the figures above it and the day-by-day table below it were right the whole time, so
   the page looked merely bare rather than broken. Shipped in 0.2.3, found by opening the dashboard
@@ -46,10 +54,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   enforce what CI enforces. Turning on `undocumented_unsafe_blocks` is what found the four above —
   it is allow-by-default, so `-D warnings` had never switched it on.
 - The dashboard's 744-line script and the child page's 136-line script moved out of the markup
-  into `assets/app.js` and `assets/ask.js`. Beyond the policy change above, this is what makes it
-  possible to lint or test them at all — there are still no JavaScript tests, which is why the
-  chart could break unnoticed. Three source scans now guard the shapes that would silently undo
-  it: no inline script, no `<template>` inside `<svg>`, and `scope` on every column header.
+  into `assets/app.js` and `assets/ask.js`. Beyond the policy change above, this is what made it
+  possible to test them at all. Three source scans guard the shapes that would silently undo it:
+  no inline script, no `<template>` inside `<svg>`, and `scope` on every column header.
+- **21 tests for the dashboard's own logic**, where there were none — the version comparison, the
+  enforcement-staleness check, the chart's bar heights, the shared day formatting, and the
+  "any limits set" check. They run on `node:test`, which ships with Node, so nothing was added to
+  the project's dependencies; `npm test` in `web/` runs them, and CI runs them on both Linux and
+  Windows. The first run is what found the staleness bug above.
 
 ## [0.2.3] — 2026-08-24
 

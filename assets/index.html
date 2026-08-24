@@ -239,13 +239,11 @@
               <!-- Enforcement liveness. Both enforcers stamp a heartbeat each tick; if neither
                    has reported recently the limits below are not being applied, and nothing else
                    on this page would look any different. -->
-              <template x-if="isEnforcerStale(today.enforcer_age_secs)">
+              <template x-if="stEnforcementStale()">
                 <div class="alert alert-error mt-1">
                   <span class="text-sm">
                     <strong>Enforcement may not be running.</strong>
-                    <span x-show="today.enforcer_age_secs !== null"
-                          x-text="`No check-in for ${Math.round(today.enforcer_age_secs / 60)} min.`"></span>
-                    <span x-show="today.enforcer_age_secs === null">The background checks haven't reported yet.</span>
+                    <span x-text="enforcementDetail()"></span>
                     Limits and curfew may not be applied right now — run
                     <span class="font-mono">nestwatch doctor</span> on the PC.
                   </span>
