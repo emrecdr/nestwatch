@@ -483,18 +483,12 @@ fn deploy(port: u16) -> Result<()> {
                 account_password: None,
             };
             let service = manager.create_service(&info, CREATE_ACCESS).map_err(|e| {
-                // 1072 = ERROR_SERVICE_MARKED_FOR_DELETE: a previous copy is still shutting
-                // down, usually because Services/Task Manager is holding a handle open.
-                // The raw message tells a parent nothing about what to do.
-                if e.to_string().contains("1072") {
-                    anyhow::anyhow!(
-                        "a previous copy of the service is still being removed.\n\
-                             Close the Services window and Task Manager if they're open, wait a \
-                             few seconds, and run this again (a reboot always clears it)."
-                    )
-                } else {
-                    anyhow::anyhow!(e).context("creating service")
-                }
+                // Every code is decoded now, so 1072 no longer needs its own branch --
+                // matching on the *text* of an error message was fragile anyway.
+                anyhow::anyhow!(
+                    "could not register the service.\n  {}",
+                    describe_service_error(&e)
+                )
             })?;
             let _ = service.set_description(SERVICE_DESCRIPTION);
             configure_recovery();
@@ -503,7 +497,15 @@ fn deploy(port: u16) -> Result<()> {
                 // for this to work — without it `delete()` fails with access-denied, the error
                 // was swallowed, and the message below ("rolled back") was simply untrue.
                 if let Err(del) = service.delete() {
-                    tracing::warn!(error = %del, "could not roll back the new service");
+                    // Printed, not logged: this contradicts the "rolled back" in the error about
+                    // to be returned, and a tracing warning is invisible in a console install.
+                    println!(
+                        "\nWARNING: could not remove the service that was just created --\n  {}\n\
+                         It is registered but not running. `sc delete {}` removes it, and a \
+                         reboot clears a pending deletion.",
+                        describe_service_error(&del),
+                        crate::service::SERVICE_NAME,
+                    );
                 }
                 return Err(e).context("starting the new service (rolled back)");
             }
@@ -541,9 +543,12 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
 
     use windows_service::service::ServiceState;
 
-    service
-        .start(&[] as &[&OsStr])
-        .context("starting service")?;
+    service.start(&[] as &[&OsStr]).map_err(|e| {
+        anyhow::anyhow!(
+            "Windows refused to start the service.\n  {}",
+            describe_service_error(&e)
+        )
+    })?;
 
     let waited = VERIFY_INTERVAL * VERIFY_POLLS;
     let logs = config::data_paths().dir.display().to_string();
@@ -584,7 +589,10 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
             }
             Err(e) => {
                 running_streak = 0;
-                last_seen = format!("the status could not be read ({e})");
+                last_seen = format!(
+                    "the status could not be read --\n     {}",
+                    describe_service_error(&e)
+                );
             }
         }
     }
@@ -609,6 +617,99 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
         waited.as_secs(),
         crate::service::SERVICE_NAME,
     )
+}
+
+/// The useful part of a failed command's output, for putting in an error message.
+///
+/// Windows CLI tools split themselves between stdout and stderr inconsistently — `icacls` reports
+/// failures on stdout, `sc` on both — so take whichever has content. Collapsed to one line
+/// because it is being embedded in a sentence, and trimmed because these tools pad with blanks.
+#[cfg(windows)]
+fn tool_output(out: &std::process::Output) -> String {
+    let pick = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+    let (o, e) = (pick(&out.stdout), pick(&out.stderr));
+    let text = match (o.is_empty(), e.is_empty()) {
+        (false, false) => format!("{o} {e}"),
+        (false, true) => o,
+        (true, false) => e,
+        (true, true) => return "(it printed nothing)".into(),
+    };
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Translate a Windows service error into something that identifies the problem.
+///
+/// `windows_service::Error`'s own message is the text of its doc comment — "IO error in winapi
+/// call" — which discards the `io::Error` it is carrying and with it the Win32 code that says
+/// what actually went wrong. That message cost a real install: the code underneath was 5,
+/// access-denied, because the service handle had been created without `QUERY_STATUS`, and
+/// nothing on screen said so. The OS knew; we threw it away.
+#[cfg(windows)]
+fn describe_service_error(err: &windows_service::Error) -> String {
+    let windows_service::Error::Winapi(io) = err else {
+        return err.to_string();
+    };
+    let Some(code) = io.raw_os_error() else {
+        return io.to_string();
+    };
+
+    // Only the codes a service install can realistically produce. An unknown code still reports
+    // its number and the OS's own text, which is strictly more than the old message gave.
+    let explain = match code {
+        2 => Some((
+            "ERROR_FILE_NOT_FOUND",
+            "Windows could not find the program the service points at. The registered path may              be wrong, or the file was removed or quarantined after it was registered.",
+        )),
+        5 => Some((
+            "ERROR_ACCESS_DENIED",
+            "Refused for lack of permission. Either this console is not elevated, or the handle              the installer is using was opened without the right it needs for this call.",
+        )),
+        193 | 216 => Some((
+            "ERROR_BAD_EXE_FORMAT",
+            "The executable is not a program this machine can run — a 32/64-bit mismatch, or a              truncated or corrupted download.",
+        )),
+        1053 => Some((
+            "ERROR_SERVICE_REQUEST_TIMEOUT",
+            "The service did not report back in the time Windows allows. Usually the process              could not launch at all: antivirus holding the file, or a missing dependency.",
+        )),
+        1056 => Some((
+            "ERROR_SERVICE_ALREADY_RUNNING",
+            "It is already running. Nothing is wrong, but this install did not start it.",
+        )),
+        1058 => Some((
+            "ERROR_SERVICE_DISABLED",
+            "The service exists but its start type is Disabled, so Windows refuses to start it.              This normally follows a half-finished removal. Re-running install after a reboot              clears it; `sc config HostHealthService start= auto` fixes it in place.",
+        )),
+        1060 => Some((
+            "ERROR_SERVICE_DOES_NOT_EXIST",
+            "No service by that name is registered. Expected during a first install; a problem              anywhere else.",
+        )),
+        1062 => Some(("ERROR_SERVICE_NOT_ACTIVE", "The service is not running.")),
+        1069 => Some((
+            "ERROR_SERVICE_LOGON_FAILED",
+            "Windows could not start it under its configured account.",
+        )),
+        1072 => Some((
+            "ERROR_SERVICE_MARKED_FOR_DELETE",
+            "A previous copy is still being deleted, and will not finish while anything holds a              handle to it. Close the Services window and Task Manager, wait a few seconds, and              run install again. A reboot always clears it.",
+        )),
+        1073 => Some((
+            "ERROR_SERVICE_EXISTS",
+            "A service with this name is already registered.",
+        )),
+        1077 => Some((
+            "ERROR_SERVICE_NEVER_STARTED",
+            "Windows has not attempted to start it since the last boot.",
+        )),
+        _ => None,
+    };
+
+    match explain {
+        Some((name, meaning)) => format!(
+            "Windows error {code} ({name})\n     {meaning}\n                                               Windows says: {io}"
+        ),
+        None => format!("Windows error {code}\n     Windows says: {io}"),
+    }
 }
 
 /// Render a service exit code as something worth printing, or nothing.
@@ -690,11 +791,18 @@ fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
     for grant in grants {
         cmd.arg("/grant:r").arg(grant);
     }
-    let status = cmd.status().context("running icacls")?;
-    if !status.success() {
+    // `.output()` rather than `.status()`: icacls prints "processed file: ..." and
+    // "Successfully processed 1 files" on every run. That is its progress, not ours, and it made
+    // a normal install look like it was reporting on something. Kept and shown only on failure,
+    // where it is the only description of what went wrong.
+    let out = cmd.output().context("running icacls")?;
+    if !out.status.success() {
         bail!(
-            "failed to ACL-harden {} (icacls exited {status}); refusing to continue",
-            path.display()
+            "could not lock down {} -- refusing to continue, because the password hash, TLS key \
+             and logs would be readable by any user.\n  icacls exited {}\n  {}",
+            path.display(),
+            out.status,
+            tool_output(&out),
         );
     }
     Ok(())
@@ -703,10 +811,13 @@ fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
 /// Delete the app's firewall rule if present (best-effort; used on (re)install and uninstall).
 #[cfg(windows)]
 fn delete_firewall_rule() {
+    // Captured, not inherited: netsh prints "Deleted 1 rule(s)." or "No rules match the
+    // specified criteria." and both are noise during a reinstall. A failure here is genuinely
+    // fine -- the rule is about to be recreated -- so nothing is reported either way.
     let _ = std::process::Command::new(crate::syspath::system32("netsh.exe"))
         .args(["advfirewall", "firewall", "delete", "rule"])
         .arg(format!("name={FIREWALL_RULE}"))
-        .status();
+        .output();
 }
 
 /// Recreate an inbound TCP rule scoped to the local subnet on Private/Domain networks, then
@@ -721,18 +832,21 @@ fn configure_firewall(port: u16) -> Result<()> {
     // Idempotent: delete any stale rule (possibly on an old port) first.
     delete_firewall_rule();
 
-    let status = Command::new(crate::syspath::system32("netsh.exe"))
+    let added = Command::new(crate::syspath::system32("netsh.exe"))
         .args(["advfirewall", "firewall", "add", "rule"])
         .arg(format!("name={FIREWALL_RULE}"))
         .args(["dir=in", "action=allow", "protocol=TCP"])
         .arg(format!("localport={port}"))
         .args(["profile=private,domain", "remoteip=LocalSubnet"])
-        .status()
+        .output()
         .context("running netsh")?;
-    if !status.success() {
+    if !added.status.success() {
         println!(
-            "WARNING: could not add firewall rule (netsh exited {status}); the app-layer LAN \
-             allowlist still applies, but remote access may be blocked."
+            "WARNING: could not add the firewall rule -- netsh exited {} and said:\n  {}\n\
+             The app-layer LAN allowlist still applies, so this is not a security hole, but \
+             other devices may not be able to reach the dashboard.",
+            added.status,
+            tool_output(&added),
         );
         return Ok(());
     }
@@ -776,20 +890,44 @@ pub(crate) fn firewall_rule_is_subnet_scoped() -> bool {
 #[cfg(windows)]
 fn configure_recovery() {
     use crate::service::SERVICE_NAME;
-    let _ = std::process::Command::new(crate::syspath::system32("sc.exe"))
-        .args([
+
+    // Both of these used `.status()`, so sc.exe printed straight to the console -- including
+    // "[SC] ChangeServiceConfig2 FAILED 1072" on a real install, which the installer then
+    // ignored and carried on. An alarming line that the program itself disregards is worse than
+    // either reporting it or not running it. Capture, and say plainly what a failure costs.
+    let run = |args: &[&str], what: &str| match std::process::Command::new(
+        crate::syspath::system32("sc.exe"),
+    )
+    .args(args)
+    .output()
+    {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => println!(
+            "\nNote: could not {what}.\n  sc.exe exited {}\n  {}\n  \
+                 The service still installs and runs; it just will not restart itself \
+                 automatically if it dies. Re-running install once the cause is fixed sets it.",
+            out.status,
+            tool_output(&out),
+        ),
+        Err(e) => println!("\nNote: could not run sc.exe to {what} ({e})."),
+    };
+
+    run(
+        &[
             "failure",
             SERVICE_NAME,
             "reset=",
             "86400",
             "actions=",
             "restart/5000/restart/5000/restart/5000",
-        ])
-        .status();
+        ],
+        "set the service to restart itself after a failure",
+    );
     // Restart on a non-zero exit code too, not only on an unreported death.
-    let _ = std::process::Command::new(crate::syspath::system32("sc.exe"))
-        .args(["failureflag", SERVICE_NAME, "1"])
-        .status();
+    run(
+        &["failureflag", SERVICE_NAME, "1"],
+        "set the service to restart after an error exit as well as a crash",
+    );
 }
 
 #[cfg(windows)]
@@ -865,6 +1003,75 @@ mod tests {
         assert!(parse_port_flag(&args(&["install", "--port", "0"])).is_err());
         assert!(parse_port_flag(&args(&["install", "--port"])).is_err());
         assert!(parse_port_flag(&args(&["install", "--port", "http"])).is_err());
+    }
+
+    /// The decoder must name the codes a real install actually produced.
+    ///
+    /// These four are not hypothetical: 5 is what made a fresh install impossible (the service
+    /// handle lacked `QUERY_STATUS`, so every status poll was refused), and 1072, 1058 and 1060
+    /// all appeared in one failing install on a real machine. Each must come back with its
+    /// number, its Win32 name, and something the reader can act on.
+    #[cfg(windows)]
+    #[test]
+    fn service_errors_are_decoded_not_just_reported() {
+        use std::io;
+        let decode = |code: i32| {
+            describe_service_error(&windows_service::Error::Winapi(
+                io::Error::from_raw_os_error(code),
+            ))
+        };
+
+        for (code, name, must_mention) in [
+            (5, "ERROR_ACCESS_DENIED", "elevated"),
+            (1072, "ERROR_SERVICE_MARKED_FOR_DELETE", "reboot"),
+            (1058, "ERROR_SERVICE_DISABLED", "Disabled"),
+            (1060, "ERROR_SERVICE_DOES_NOT_EXIST", "registered"),
+        ] {
+            let msg = decode(code);
+            assert!(
+                msg.contains(&code.to_string()),
+                "{code}: must state the number\n{msg}"
+            );
+            assert!(msg.contains(name), "{code}: must name the constant\n{msg}");
+            assert!(
+                msg.contains(must_mention),
+                "{code}: must say something actionable containing {must_mention:?}\n{msg}"
+            );
+        }
+
+        // An unrecognised code must still be more useful than the old message, which said only
+        // "IO error in winapi call" no matter what the OS reported.
+        let unknown = decode(4321);
+        assert!(
+            unknown.contains("4321"),
+            "unknown codes still report the number\n{unknown}"
+        );
+        assert!(
+            !unknown.contains("IO error in winapi call"),
+            "must not fall back to the message that hid the cause\n{unknown}"
+        );
+    }
+
+    /// Failed tool output has to survive into the message, since for icacls and netsh it is the
+    /// only description of what went wrong.
+    #[cfg(windows)]
+    #[test]
+    fn tool_output_prefers_whichever_stream_spoke() {
+        use std::os::windows::process::ExitStatusExt;
+        let out = |o: &str, e: &str| std::process::Output {
+            status: std::process::ExitStatus::from_raw(1),
+            stdout: o.as_bytes().to_vec(),
+            stderr: e.as_bytes().to_vec(),
+        };
+        assert_eq!(tool_output(&out("on stdout", "")), "on stdout");
+        assert_eq!(tool_output(&out("", "on stderr")), "on stderr");
+        assert_eq!(tool_output(&out("a", "b")), "a b");
+        assert_eq!(tool_output(&out("", "")), "(it printed nothing)");
+        // sc.exe pads with blank lines; the result is embedded in a sentence.
+        assert_eq!(
+            tool_output(&out("[SC] ChangeServiceConfig2 FAILED 1072:\n\n", "")),
+            "[SC] ChangeServiceConfig2 FAILED 1072:"
+        );
     }
 
     /// Both service handles must carry `QUERY_STATUS`.
