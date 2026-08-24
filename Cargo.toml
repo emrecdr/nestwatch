@@ -23,7 +23,7 @@ axum-server = { version = "0.8", default-features = false, features = ["tls-rust
 # this declaration is what pulls the rest in.
 image = { version = "0.25", default-features = false, features = ["png"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
-pem = "3"
+pem = "4"
 # Renders the pairing URL as a QR in the install console. `default-features = false` drops its
 # image/SVG renderers (which would pull `image`'s decode stack back in) and leaves it with ZERO
 # transitive dependencies — we only use the built-in unicode half-block renderer.
