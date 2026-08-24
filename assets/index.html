@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="dark light" />
     <title>Host Health</title>
+    <!-- Inline so there is no second request and no 404 on every page load, which is what the
+         browser did before this. Matches the heading on the sign-in screen, and stays as
+         non-committal as the <title> deliberately is. -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%A9%BA%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/app.css" />
     <script defer src="/alpine.min.js"></script>
   </head>
@@ -31,6 +35,7 @@
                 x-model="password"
                 :disabled="busy"
                 autofocus
+                autocomplete="current-password"
                 class="input input-bordered w-full"
                 placeholder="••••••••"
               />
@@ -770,21 +775,30 @@
             <div class="card-body">
               <h2 class="card-title text-base">Change password</h2>
               <p class="text-sm opacity-70">Update the control password without reinstalling.</p>
-              <div class="mt-2 flex flex-wrap items-end gap-3">
+              <!-- A real <form> with autocomplete tokens, matching the sign-in form above.
+                   Two password inputs loose in a <div> are not a password change as far as the
+                   browser is concerned — Chrome says so out loud ("Password field is not
+                   contained in a form") — so a password manager neither fills the current one nor
+                   offers to store the new one. Since the guidance here is to use a manager rather
+                   than a memorable password, the page should be legible to one. Submitting via
+                   the form rather than @click also makes Enter work, as it already does on the
+                   sign-in screen. -->
+              <form class="mt-2 flex flex-wrap items-end gap-3" @submit.prevent="changePassword()">
                 <label class="form-control">
                   <span class="label-text mb-1">Current</span>
-                  <input type="password" x-model="pwCurrent" class="input input-bordered" placeholder="••••••••" />
+                  <input type="password" x-model="pwCurrent" autocomplete="current-password"
+                         class="input input-bordered" placeholder="••••••••" />
                 </label>
                 <label class="form-control">
                   <span class="label-text mb-1">New</span>
-                  <input type="password" x-model="pwNew" class="input input-bordered" placeholder="at least 8 characters" />
+                  <input type="password" x-model="pwNew" autocomplete="new-password"
+                         class="input input-bordered" placeholder="at least 8 characters" />
                 </label>
-                <button class="btn btn-primary" @click="changePassword()"
-                        :disabled="savingPw || !pwCurrent || !pwNew">
+                <button class="btn btn-primary" :disabled="savingPw || !pwCurrent || !pwNew">
                   <span x-show="savingPw" class="loading loading-spinner loading-sm"></span>
                   Update
                 </button>
-              </div>
+              </form>
             </div>
           </section>
         </main>
