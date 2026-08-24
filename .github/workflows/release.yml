@@ -93,10 +93,46 @@ jobs:
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: target/release/nestwatch.exe
+      # Build the release notes from CHANGELOG.md plus a fixed verification footer.
+      #
+      # With no body, `action-gh-release` publishes an empty release -- a tag and two files, and
+      # nothing saying what changed. v0.1.0 through v0.2.1 all looked like that while a perfectly
+      # good changelog sat in the repo. The release page is where someone lands when downloading,
+      # so it carries this tag's section and the checks to run before executing an .exe as SYSTEM.
+      #
+      # This FAILS the release when the changelog has no section for the tag. An empty body is
+      # how this went wrong the first time, so it must not be able to happen quietly again.
+      #
+      # The footer lives in .github/release-footer.md rather than inline: a PowerShell here-string
+      # has to start at column 0, which would end the YAML block scalar this runs in.
+      - name: Release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $lines = Get-Content CHANGELOG.md
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^##\s+\[$([regex]::Escape($version))\]") { $start = $i + 1; break }
+          }
+          if ($start -lt 0) {
+            throw "CHANGELOG.md has no '## [$version]' section. Add one before tagging."
+          }
+          $body = @()
+          for ($i = $start; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^##\s+\[') { break }
+            $body += $lines[$i]
+          }
+          $text = ($body -join "`n").Trim()
+          if (-not $text) { throw "The '## [$version]' section in CHANGELOG.md is empty." }
+          $footer = (Get-Content .github/release-footer.md -Raw) -replace '__COMMIT__', '${{ github.sha }}'
+          ($text + "`n" + $footer) | Out-File -Encoding utf8 RELEASE_NOTES.md
+          Write-Host "----- release notes -----"
+          Get-Content RELEASE_NOTES.md
       # Pinned to a commit: this action holds a token that can publish releases, so a moved tag
       # would be able to publish on our behalf.
       - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          body_path: RELEASE_NOTES.md
           files: |
             target/release/nestwatch.exe
             nestwatch.exe.sha256
