@@ -4,6 +4,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ## [Unreleased]
 
+### Added
+- **[docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md) — reaching the dashboard from outside the
+  house.** Off-LAN access is still not a feature and still unsupported; what the guide adds is an
+  answer to the question people ask anyway. Which arrangements work (a VPN that puts you on the
+  home subnet), which quietly don't (port-forwarding, and tunnels that terminate at somebody
+  else's server), why the monitored PC must never be the one running the tunnel, and what each
+  choice costs — including what it does to the source addresses in your access log.
+
 ### Improved
 - **The dashboard is readable with a screen reader.** Its six tables had no column headers as far
   as assistive software was concerned — the header row was styled, not labelled, so a figure was

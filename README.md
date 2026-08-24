@@ -10,9 +10,9 @@ device on your own home network. No cloud, no accounts, no telemetry, no keylogg
 
 [![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-blue)](#requirements)
 [![rust](https://img.shields.io/badge/rust-1.96.0-orange?logo=rust)](rust-toolchain.toml)
-[![dependencies audited](https://img.shields.io/badge/dependencies-cargo--deny%20on%20every%20push-success)](.github/workflows/ci.yml)
+[![dependencies audited](https://img.shields.io/badge/dependencies-cargo--deny%20every%20push%20%2B%20weekly-success)](.github/workflows/ci.yml)
 
-**[Install guide →](https://emrecdr.github.io/nestwatch/)** · [Releases](https://github.com/emrecdr/nestwatch/releases/latest) · [Security model](docs/SECURITY.md) · [Known limits](docs/OPEN-FINDINGS.md)
+**[Install guide →](https://emrecdr.github.io/nestwatch/)** · [Releases](https://github.com/emrecdr/nestwatch/releases/latest) · [Security model](docs/SECURITY.md) · [Known limits](docs/OPEN-FINDINGS.md) · [Remote update](docs/REMOTE-UPDATE.md) · [Off-LAN access](docs/REMOTE-ACCESS.md)
 
 ---
 
@@ -262,16 +262,25 @@ On macOS or Linux the app uses `FakeControl` (synthetic processes, placeholder s
 no-op shutdown), so you can run and click through everything:
 
 ```bash
+cd web && npm ci && npm run build && cd ..   # once: compiles assets/app.css, which is gitignored
 NESTWATCH_PASSWORD=dev-password cargo run -- install   # 8+ chars, or install refuses
 cargo run -- run        # https://localhost:8443
 cargo test              # unit + HTTP integration tests (run on any OS)
+cd web && npm test      # the dashboard's own logic (node:test, no framework installed)
 ```
+
+Skip the CSS build and the UI serves unstyled — `build.rs` warns, it is not an error. It also
+warns when `assets/app.css` is older than the markup, the scripts, or `web/package-lock.json`,
+because all four are inputs to it.
 
 **Verification status**, in three tiers — worth stating precisely, because the middle one is
 easy to under-use:
 
 1. **Cross-platform core** (auth, routing, curfew logic + enforcement, handlers) — unit and
-   integration tested, and verified live on macOS via `FakeControl`.
+   integration tested, and verified live on macOS via `FakeControl`. The dashboard's own logic
+   (version comparison, enforcement-staleness, chart heights, shared formatting) is covered by
+   `web/test/`, which CI runs on both Linux and Windows. Its DOM and network paths are **not**
+   covered — the bugs found by opening the page in a browser were all in that half.
 2. **Windows code that needs no privileges** — genuinely *executed* on real Windows. CI runs
    `cargo test --all-targets` on a `windows-latest` runner, so a `#[cfg(windows)] #[test]` runs
    there on every push. That is stronger than the cross-compile check below, and anything that
@@ -307,17 +316,13 @@ weighed and declined — so neither has to be rediscovered.
 
 - **Keylogging / covert monitoring** — never. This is overt parental control, not spyware.
 - **Off-LAN access** — by design you must be on the home network. Want remote reach? Bring your
-  own VPN — unsupported, and only *partly* compatible: the app-layer allowlist admits RFC1918
-  (`10/8`, `172.16/12`, `192.168/16`) plus loopback, and nothing else. A VPN that puts you on the
-  home subnet (WireGuard routing you into `192.168.x.x`, or your router's own VPN) works.
-  **Tailscale installed on the monitored PC does not** — it assigns from the carrier-grade-NAT
-  range `100.64.0.0/10`, which is not RFC1918, so you'll get a `403` even though the tunnel itself
-  is fine. That's the allowlist failing closed rather than a bug; widening it would extend the
-  trust boundary past the home network for every install. Tailscale run as a **subnet router on a
-  different always-on machine** is a separate case and does work — it masquerades routed traffic
-  to its own LAN address by default, so requests reach this service from `192.168.x.x` like any
-  other. That is also the arrangement worth wanting: the tunnel software stays off the monitored
-  PC, which keeps making no outbound connection of its own.
+  own VPN: unsupported, and only *partly* compatible, because the app-layer allowlist admits
+  RFC1918 (`10/8`, `172.16/12`, `192.168/16`) plus loopback and nothing else. A VPN that puts you
+  on the home subnet works; a tunnel that gives you an address outside those ranges gets a `403`
+  even though the tunnel itself is fine — the allowlist failing closed, not a bug.
+  **[docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)** covers which arrangements work, which ones
+  quietly don't, and what each costs. Short version: give yourself a way in, never give the
+  monitored PC a way out.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
 - **Web/content filtering** and **foreground-app-aware limits** (e.g. "earn time in a learning

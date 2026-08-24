@@ -177,10 +177,10 @@ result — an inline `<script>` can no longer run on either page, which is the d
 matters most where injected content would land. `no_inline_script_on_any_served_page` holds that
 shape, since the failure mode is silent.
 
-**There are now 21 JavaScript tests**, on `node:test` — no framework installed, so the addition
+**There are now 25 JavaScript tests**, on `node:test` — no framework installed, so the addition
 costs the project nothing it was not already carrying. They cover the pure decision and formatting
 methods: `compareVersions`, `isEnforcerStale`, `stBarPct`, `stDayLabel`, `stBarClass`,
-`anyRulesSet`, `fmtBytes`. All five mutations tried against them fail at least one test.
+`anyRulesSet`, `fmtBytes`, and the approve/deny decision. Every mutation tried against them fails at least one test.
 
 Writing them found O10 on the first run — the staleness indicator reporting healthy enforcement
 for a service the page could not reach. That is the argument for this entry, made concrete: the
@@ -215,7 +215,8 @@ attributes in `index.html`, **14** are incompatible:
 
 So this is roughly 5% of the directives, not all of them (it was 17 of 268 before O9's fix
 retired four template literals along with the SVG chart). That changes the conclusion: the blocker
-was never the markup, it is that **233 Rust tests sit beside zero JavaScript tests**, so a runtime
+was never the markup, it is that until this entry's second step there were **233 Rust tests and no
+JavaScript tests at all**, so a runtime
 swap under the parent's only interface has nothing to catch a regression.
 
 **What is left, in order.** The relocation and the unit tests are done. Next is `@alpinejs/csp`,

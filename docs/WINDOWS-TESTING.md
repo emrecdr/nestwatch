@@ -12,9 +12,9 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these seven first
 
-The full list is 100 items, which is why it keeps not happening. These seven are the ones whose
-answers change what you'd do next — about fifteen minutes, and worth more than the other
-ninety-three combined. Each links to its full entry below.
+The full list is 104 items, which is why it keeps not happening. These seven are the ones whose
+answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
+Each links to its full entry below.
 
 1. **Is his account a standard user?** (§0) — `net localgroup Administrators`. If he is listed,
    stop: every other check on this list is measuring something that a local administrator can
@@ -31,9 +31,11 @@ ninety-three combined. Each links to its full entry below.
 6. **Every dashboard card still works from a real browser** (§C) — the origin check
    fails *silently*, as buttons that do nothing rather than an error. A test client cannot catch
    this; only a browser can.
-7. **A day the PC was off shows as "not measured", not as a zero** (§D) — the screen-time chart
-   has never been seen rendered. If those two states look alike, a stopped enforcer reads exactly
-   like a well-behaved week, which is the failure the feature exists to prevent.
+7. **A day the PC was off shows as "not measured", not as a zero** (§D) — if those two states
+   look alike, a stopped enforcer reads exactly like a well-behaved week, which is the failure the
+   feature exists to prevent. The chart *has* now been seen rendered, in Chrome on macOS with
+   seeded data covering all three states — which is how the bug that made it draw nothing at all
+   through 0.2.3 was found. It has still never been seen on Windows, with real data, on a phone.
 
 Everything below is worth doing eventually. Nothing below is worth doing before these.
 
@@ -170,10 +172,18 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
       completing without an ACL or firewall warning covers the other three. If any of those
       started failing with "program not found" after upgrading, that is this change and it should
       be reported — not worked around.
-- [ ] **Screen-time report (new).** After the PC has been through at least one midnight with the
+- [ ] **The screen-time chart draws bars at all.** Check this before anything subtler about it:
+      the Screen time card must show a row of columns, not an empty space above the legend. Through
+      0.2.3 it drew **nothing** — thirty days of data and a blank chart — while the total, the
+      average and the day-by-day table below it were all correct, so the card looked merely sparse.
+      If it is blank here, that regression is back.
+- [ ] **Screen-time report.** After the PC has been through at least one midnight with the
       service running, the Screen time card shows a bar for that day and "Measured days" counts it.
       Days the PC was off must appear **hatched** ("not measured"), never as a zero bar — that
-      distinction is the difference between "he didn't use it" and "we weren't watching".
+      distinction is the difference between "he didn't use it" and "we weren't watching". A day he
+      was signed in but used nothing is a third case: a thin bar you can still hover, not a hatch.
+- [ ] **Hovering a column names the day and its figure** — the tooltip is how the chart is read at
+      all on a phone, and it moved from an SVG element to a plain `title` in this release.
 - [ ] **Per-app rows are plausible.** The most-recent-measured-day list should roughly match what
       he actually ran. Remember it counts apps that are *running*, not focused, so a launcher left
       open all evening will look large — that is expected, not a bug.
@@ -295,11 +305,19 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
 ## E4. Enforcement is visibly alive
 
 - [ ] **The dashboard proves enforcement is running.** With the service up, the **Today's screen
-      time** card shows no warning banner. Then as admin `sc stop HostHealthService` and reload
-      the dashboard from your phone — you can't (the server is down), which is itself the signal.
-      The banner matters for the subtler case: if the service is *up* but its background checks
-      have died, the card shows **"Enforcement may not be running"**. There's no easy way to stage
-      that by hand; just know the banner exists and take it seriously if you ever see it.
+      time** card shows no warning banner.
+- [ ] **The banner appears when the dashboard loses the service** — and this *is* stageable now,
+      unlike in earlier versions. Open the dashboard on your phone and leave it open. As admin,
+      `sc stop HostHealthService`. Within a minute (the page refreshes itself on a timer) the card
+      must show **"Enforcement may not be running. The dashboard could not reach the service to
+      ask."** Start the service again and the banner must clear on the next refresh.
+      **If the banner does not appear, that is the bug this release fixed reappearing**, and it is
+      the one worth reporting: until now the page read "no answer" as a good answer and stayed
+      silent, which is exactly backwards for the warning that matters most.
+- [ ] **A stale-but-alive enforcer also shows it.** Harder to stage — it needs the service up with
+      its background loops wedged — so treat this as knowing the wording rather than a step to
+      perform: the same banner reads **"No check-in for N min."** instead. Any of the three
+      messages means the limits below it may not be being applied.
 - [ ] **Sleep doesn't burn the day's budget.** With a daily limit set and some minutes used, note
       the figure, sleep the PC for 30+ minutes, wake it, and check **Today's screen time** within a
       minute. The used-minutes figure must have grown by at most a minute or two — not by the whole
