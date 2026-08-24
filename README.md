@@ -264,6 +264,21 @@ easy to under-use:
    there on every push. That is stronger than the cross-compile check below, and anything that
    can be tested this way should be: `tests/spawn_paths.rs` uses it to confirm every system
    binary the code asks for actually exists.
+**Typecheck the Windows-only code before pushing.** Most of `install.rs`, `doctor.rs`,
+`session.rs` and `control/windows.rs` sits behind `#[cfg(windows)]`, so a host build never
+compiles it and neither does host clippy — four separate breakages reached CI this way in one
+sitting, each invisible locally. One command prevents all of them:
+
+```bash
+rustup target add x86_64-pc-windows-gnu     # once; needs `brew install mingw-w64` for ring's C
+cargo check --target x86_64-pc-windows-gnu  # then, before every push that touches cfg(windows)
+```
+
+It typechecks the real code — verified by reintroducing a known breakage, which the host check
+passed and this one caught. Use rustup's `cargo`, not a distro or Homebrew one: those ignore
+`rust-toolchain.toml`, and the pinned toolchain is where the target is installed (`build.rs`
+warns if the compiler and the pin disagree).
+
 3. **Everything else Windows-only** — the SYSTEM service, the `CreateProcessAsUser` session
    helper, ACL hardening, WTS session state, SCM restart semantics, and recovery-mode boot
    paths. These are

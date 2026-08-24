@@ -715,24 +715,6 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
     )
 }
 
-/// The useful part of a failed command's output, for putting in an error message.
-///
-/// Windows CLI tools split themselves between stdout and stderr inconsistently — `icacls` reports
-/// failures on stdout, `sc` on both — so take whichever has content. Collapsed to one line
-/// because it is being embedded in a sentence, and trimmed because these tools pad with blanks.
-#[cfg(windows)]
-fn tool_output(out: &std::process::Output) -> String {
-    let pick = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
-    let (o, e) = (pick(&out.stdout), pick(&out.stderr));
-    let text = match (o.is_empty(), e.is_empty()) {
-        (false, false) => format!("{o} {e}"),
-        (false, true) => o,
-        (true, false) => e,
-        (true, true) => return "(it printed nothing)".into(),
-    };
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// Translate a Windows service error into something that identifies the problem.
 ///
 /// `windows_service::Error`'s own message is the text of its doc comment — "IO error in winapi
@@ -898,7 +880,7 @@ fn run_icacls(path: &Path, grants: &[&str]) -> Result<()> {
              and logs would be readable by any user.\n  icacls exited {}\n  {}",
             path.display(),
             out.status,
-            tool_output(&out),
+            crate::preflight::tool_output(&out),
         );
     }
     Ok(())
@@ -942,7 +924,7 @@ fn configure_firewall(port: u16) -> Result<()> {
              The app-layer LAN allowlist still applies, so this is not a security hole, but \
              other devices may not be able to reach the dashboard.",
             added.status,
-            tool_output(&added),
+            crate::preflight::tool_output(&added),
         );
         return Ok(());
     }
@@ -1003,7 +985,7 @@ fn configure_recovery() {
                  The service still installs and runs; it just will not restart itself \
                  automatically if it dies. Re-running install once the cause is fixed sets it.",
             out.status,
-            tool_output(&out),
+            crate::preflight::tool_output(&out),
         ),
         Err(e) => println!("\nNote: could not run sc.exe to {what} ({e})."),
     };
@@ -1145,28 +1127,6 @@ mod tests {
         assert!(
             !unknown.contains("IO error in winapi call"),
             "must not fall back to the message that hid the cause\n{unknown}"
-        );
-    }
-
-    /// Failed tool output has to survive into the message, since for icacls and netsh it is the
-    /// only description of what went wrong.
-    #[cfg(windows)]
-    #[test]
-    fn tool_output_prefers_whichever_stream_spoke() {
-        use std::os::windows::process::ExitStatusExt;
-        let out = |o: &str, e: &str| std::process::Output {
-            status: std::process::ExitStatus::from_raw(1),
-            stdout: o.as_bytes().to_vec(),
-            stderr: e.as_bytes().to_vec(),
-        };
-        assert_eq!(tool_output(&out("on stdout", "")), "on stdout");
-        assert_eq!(tool_output(&out("", "on stderr")), "on stderr");
-        assert_eq!(tool_output(&out("a", "b")), "a b");
-        assert_eq!(tool_output(&out("", "")), "(it printed nothing)");
-        // sc.exe pads with blank lines; the result is embedded in a sentence.
-        assert_eq!(
-            tool_output(&out("[SC] ChangeServiceConfig2 FAILED 1072:\n\n", "")),
-            "[SC] ChangeServiceConfig2 FAILED 1072:"
         );
     }
 
