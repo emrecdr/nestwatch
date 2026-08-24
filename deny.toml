@@ -19,6 +19,31 @@ version = 2
 # Duplicate versions are informational — a few are unavoidable transitively.
 multiple-versions = "warn"
 
+# "Nothing leaves the house" is the product. SECURITY.md states it as a fact about this repo —
+# "`src/` contains no HTTP client" — and until now nothing checked it. The dashboard's update
+# check runs in the parent's browser and is constrained by the CSP, which a test pins; but a CSP
+# is enforced by the *browser* and says nothing about the service. Adding one convenient outbound
+# call to `src/` would keep every existing gate green while breaking the promise the whole design
+# rests on.
+#
+# So the check lives where a dependency actually enters: `cargo deny check bans` already runs as a
+# blocking CI job with no ignores. Adding a crate below is now a deliberate act with a review
+# attached, which is the point — this is a tripwire, not a security boundary.
+#
+# `hyper` is absent from this list on purpose: axum serves on it, so it cannot be banned. Someone
+# determined could still reach for its client. This catches the realistic case — a contributor
+# reaching for the obvious crate — not an adversary inside the repo.
+deny = [
+  { crate = "reqwest", reason = "HTTP client — the monitored PC must make no outbound request" },
+  { crate = "ureq", reason = "HTTP client — see above" },
+  { crate = "isahc", reason = "HTTP client — see above" },
+  { crate = "attohttpc", reason = "HTTP client — see above" },
+  { crate = "surf", reason = "HTTP client — see above" },
+  { crate = "minreq", reason = "HTTP client — see above" },
+  { crate = "curl", reason = "HTTP client — see above" },
+  { crate = "curl-sys", reason = "HTTP client — see above" },
+]
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
