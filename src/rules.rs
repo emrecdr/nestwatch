@@ -489,7 +489,6 @@ pub enum RuleAction {
     TimeWarning(u32),
 }
 
-/// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
 /// The day's tally as it stood *before* a tick ran — the numbers a rollover row describes.
 ///
 /// Produced only by [`RulesEnforcer::decide_after_snapshot`], which is the point: these values are
@@ -500,6 +499,7 @@ pub struct PreRollover {
     pub per_app_secs: BTreeMap<String, u64>,
 }
 
+/// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
 pub struct RulesEnforcer {
     pub usage: Usage,
     /// When set, the budget is over and this is the grace deadline (Lock) or the expected
