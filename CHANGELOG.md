@@ -2,6 +2,33 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [0.2.2] — 2026-08-24
+
+### Added
+- **Install checks everything before it changes anything.** It used to find problems as it hit
+  them, part-way through registering a service and overwriting files — so a machine with three
+  problems cost three separate attempts, each ending somewhere different. Now every precondition
+  is checked first, together, and *before* the password prompt:
+  - the port is free (otherwise the service starts, can't bind, and exits within a second)
+  - the Windows tools it needs are present
+  - no leftover service is sitting disabled or still being deleted
+  - the file isn't still marked as downloaded-from-the-internet
+  - the network is Private, not Public
+
+  Anything that would stop the install is reported **before a single change is made**, so it can
+  say — truthfully — that nothing on the machine was touched. Anything that only *affects* the
+  result is reported and the install continues.
+
+### Fixed
+- **The most common reason the dashboard "doesn't load" is now caught at install.** The firewall
+  rule only applies on Private and Domain networks. On a Public one Windows blocks every
+  incoming connection, so the address and QR code time out from every device — while the install
+  reports success and the service runs perfectly. Previously this was a reminder printed on
+  every install, next to an unrelated one, whether or not it applied.
+- **A first install no longer prints two alarming errors about settings that were applied.** The
+  restart-on-failure configuration ran once before the service existed (failing with "the
+  specified service does not exist") and again afterwards, where it quietly worked.
+
 ## [0.2.1] — 2026-08-24
 
 ### Fixed
