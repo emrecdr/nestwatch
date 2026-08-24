@@ -39,6 +39,13 @@ Each links to its full entry below.
 
 Everything below is worth doing eventually. Nothing below is worth doing before these.
 
+**One addition since this list was written.** Foreground tracking (§D2) is new code that has never
+executed anywhere — not on this machine, not on any machine. It is not in the seven above because
+nothing depends on it: it measures and reports, it never enforces, so if all of it is broken the
+locks and limits behave exactly as they do today. That is also why it is safe to leave until after
+the seven. But it is the largest untested surface in the build, so when you do reach it, expect
+failures rather than being surprised by them.
+
 ---
 
 ## 0. Prerequisites
@@ -185,8 +192,51 @@ Everything below is worth doing eventually. Nothing below is worth doing before 
 - [ ] **Hovering a column names the day and its figure** — the tooltip is how the chart is read at
       all on a phone, and it moved from an SVG element to a plain `title` in this release.
 - [ ] **Per-app rows are plausible.** The most-recent-measured-day list should roughly match what
-      he actually ran. Remember it counts apps that are *running*, not focused, so a launcher left
-      open all evening will look large — that is expected, not a bug.
+      he actually ran. The **Minutes** figure counts apps that are *running*, not focused, so a
+      launcher left open all evening will look large — that is expected, not a bug. The separate
+      **focused** figure is the one that should match what he was actually doing.
+
+## D2. Foreground tracking (never run on any machine)
+
+Everything in this section is **new code that has compiled and linted and has never executed**. It
+is the largest untested surface in the build, and unlike the rest of this document it has no track
+record at all — treat a failure here as expected rather than surprising. The design and the
+reasoning are in [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md).
+
+- [ ] **`nestwatch helper --watch` is running as him.** Task Manager → Details, while he is signed
+      in. If it is absent, nothing below can pass and the report will show no focused minutes at
+      all — which correctly renders as *not measured* rather than as zero.
+- [ ] **Alt-tab between two apps for a few minutes.** Both accrue focused minutes, and the totals
+      track wall-clock rather than drifting.
+- [ ] **A minimised app accrues no focused time** while still accruing running minutes. That
+      difference is the entire point of the feature.
+- [ ] **Lock the PC (Win+L) for two minutes.** Focused time does not advance across the lock.
+- [ ] **Walk away for four minutes without locking.** Focused time stops after about three — the
+      away threshold — and does not resume until input does.
+- [ ] **Trigger a UAC prompt.** The watcher survives it, and no time is attributed to the secure
+      desktop.
+- [ ] **Kill `helper --watch` from Task Manager as him.** Two things must both happen: the gap
+      shows as *not measured* rather than as zero minutes, and the service respawns the helper
+      within about a minute.
+- [ ] **Sign a second user in and fast-user-switch.** Both accounts accrue to their own totals.
+      This is the case the single-console-session approach would have lost silently.
+- [ ] **Run something elevated (as administrator)** and confirm it is still named in the report.
+      If it is not, that is an evasion route, not a cosmetic gap.
+- [ ] **Roblox is named under both builds** — the direct download (`RobloxPlayerBeta.exe`) and the
+      Microsoft Store build (`Windows10Universal.exe`). Switching between them is the obvious dodge.
+- [ ] **Browser pages appear under "In the browser"**, and **Notepad does not**. The second half is
+      the real check: it proves page tracking is scoped to browsers rather than crediting every
+      window's title.
+- [ ] **Roblox played natively vs. streamed through a cloud-gaming site in a tab** land in
+      *different* places — the app under its process name, the tab under a page title. That split
+      is why page tracking exists at all.
+- [ ] **Open a private/Incognito window.** Does its title still appear? **This is an open question,
+      not a known answer** — the expectation is yes, since private modes hide history rather than
+      window titles, but nothing has confirmed it. Whatever you observe, write it down: a parent
+      may be relying on this to decide whether Incognito is a blind spot.
+- [ ] **Measure the cost.** Task Manager → Details → CPU and Memory for `helper --watch` over a
+      normal evening. Every performance figure in the design document is extrapolated from other
+      people's programs; this is the first real one, and nothing should be published until it exists.
 
 ## E. Curfew (the enforcement feature)
 
