@@ -90,12 +90,15 @@ fn a_sample_line_claiming_a_url_does_not_keep_it() {
 /// cannot grow the tally file without bound, and that what is kept is "a summary of where the time
 /// went, not a log of everything opened". A cap raised to, say, 5,000 would keep the first promise
 /// and quietly break the second.
-#[test]
-fn the_page_title_cap_stays_a_summary() {
-    assert!(
-        nestwatch::foreground::MAX_PAGES <= 100,
-        "MAX_PAGES is {}, which is a browsing log rather than a summary. docs/SECURITY.md \
-         promises the parent the record is the latter; change the promise or keep the cap.",
-        nestwatch::foreground::MAX_PAGES,
-    );
-}
+///
+/// A compile-time assertion rather than a `#[test]`, for two reasons. Both sides are constants, so
+/// a runtime check is constant-folded and `clippy::assertions_on_constants` rejects it — correctly,
+/// since the answer never depends on anything the test does. And failing the *build* is the
+/// stronger outcome for a promise made to a parent: the cap cannot be raised and shipped, even by
+/// someone running no tests.
+const _: () = assert!(
+    nestwatch::foreground::MAX_PAGES <= 100,
+    "MAX_PAGES is now large enough to be a browsing log rather than a summary. \
+     docs/SECURITY.md promises the parent it is the latter — change that promise in the same \
+     commit, or keep the cap."
+);
