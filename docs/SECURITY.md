@@ -81,7 +81,19 @@ open the door on its own.
 
 ### 3. Authentication
 - A single password, stored only as an **Argon2id** hash (memory-hard), verified off the async
-  runtime. Minimum 10 characters at install.
+  runtime. **Minimum 8 characters**, with no composition rules and a small blocklist of the
+  passwords an attacker reaches first (`12345678`, `password123`, a repeated character, a short
+  block repeated). NIST SP 800-63B Rev 4 (final, July 2025) prohibits requiring mixed character
+  classes and requires a blocklist instead, so digits-only is accepted: eight digits is 10^8
+  against a memory-hard hash behind the throttling below, which is not the weak link — `12345678`
+  is, and that is what the blocklist stops.
+- **On the length**: Rev 4 asks for 15 characters where a password is the *only* factor, which
+  this is. Eight is a deliberate departure, because the exposure differs from the internet-facing
+  systems that guidance is written for: an attacker must already be on the home network before
+  the prompt is reachable at all, and then meets serialized Argon2id plus per-IP throttling. The
+  practical failure here is a password too long to recall ending up on a sticky note beside the
+  machine the child uses, which is a worse outcome than a short one the parent remembers.
+  Recorded rather than quietly chosen, so the trade is visible.
 - The verification is **serialized** (one at a time process-wide), which by itself caps online
   guessing to a handful per second regardless of anything else.
 - **Per-IP rate limiting** (`src/auth.rs::LoginLimiter`): after repeated wrong passwords, only

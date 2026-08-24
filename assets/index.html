@@ -758,7 +758,7 @@
                 </label>
                 <label class="form-control">
                   <span class="label-text mb-1">New</span>
-                  <input type="password" x-model="pwNew" class="input input-bordered" placeholder="at least 10 chars" />
+                  <input type="password" x-model="pwNew" class="input input-bordered" placeholder="at least 8 characters" />
                 </label>
                 <button class="btn btn-primary" @click="changePassword()"
                         :disabled="savingPw || !pwCurrent || !pwNew">
@@ -1246,7 +1246,14 @@
               } else if (r.status === 401) {
                 this.toast("Current password is wrong", "error");
               } else if (r.status === 400) {
-                this.toast("New password too short (min 10)", "error");
+                // The server explains exactly what is wrong (how many characters it counted, or
+                // which guessable pattern it matched). This used to repeat a fixed "too short",
+                // which told the parent the wrong thing whenever length was not the problem.
+                // `postJSON` hands back the raw Response, so read the body -- guarded, because a
+                // non-JSON error body must not turn a rejection into a thrown exception.
+                let detail = "";
+                try { detail = (await r.json())?.error || ""; } catch {}
+                this.toast(detail || "That password was rejected", "error");
               } else {
                 this.toast("Could not change password", "error");
               }

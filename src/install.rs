@@ -68,22 +68,17 @@ pub fn install() -> Result<()> {
 
     // Interactive by default; NESTWATCH_PASSWORD allows a silent/headless install.
     let password = match std::env::var("NESTWATCH_PASSWORD") {
-        Ok(pw) if !pw.is_empty() => pw,
-        _ => {
-            let pw = rpassword::prompt_password("Set a control password: ")?;
-            let confirm = rpassword::prompt_password("Confirm password:      ")?;
-            if pw != confirm {
-                bail!("passwords do not match");
+        // Headless: there is nobody to re-prompt, so a bad value has to fail — but it still says
+        // exactly what was wrong with it, and names the variable, because the value is invisible
+        // here in a way a typed one is not.
+        Ok(pw) if !pw.is_empty() => {
+            if let Err(problem) = auth::check_password(&pw) {
+                bail!("NESTWATCH_PASSWORD is not usable: {}", problem.message());
             }
             pw
         }
+        _ => prompt_for_password()?,
     };
-    if password.chars().count() < auth::MIN_PASSWORD_LEN {
-        bail!(
-            "please choose a password of at least {} characters (a passphrase is ideal)",
-            auth::MIN_PASSWORD_LEN
-        );
-    }
 
     let paths = config::data_paths();
     // Create + lock down the data dir BEFORE writing any secret into it.
@@ -315,6 +310,43 @@ pub fn ensure_elevated(action: &str, why: &str) -> Result<()> {
 #[cfg(windows)]
 const INSTALL_EXE_NAME: &str = "host-health.exe";
 
+/// Ask for the password, and keep asking.
+///
+/// This used to `bail!` on the first mismatch or short entry, which aborted the whole install
+/// over a typo in the confirmation — after which the parent re-runs an elevated command and
+/// starts again. Nothing has been written to disk at this point, so re-prompting is free.
+///
+/// Every rejection says what was measured, not only what was required. The report that prompted
+/// this was "I am entering 10 characters and it says I need 10": a message that only restates the
+/// rule cannot resolve that, and a message carrying the count resolves it immediately.
+fn prompt_for_password() -> Result<String> {
+    const TRIES: u32 = 5;
+    for attempt in 1..=TRIES {
+        let pw = rpassword::prompt_password("Set a control password: ")?;
+        let confirm = rpassword::prompt_password("Confirm password:      ")?;
+
+        let complaint = if pw != confirm {
+            Some(auth::describe_mismatch(&pw, &confirm))
+        } else {
+            auth::check_password(&pw).err().map(|p| p.message())
+        };
+
+        match complaint {
+            None => {
+                if let Some(note) = auth::password_caution(&pw) {
+                    println!("{note}");
+                }
+                return Ok(pw);
+            }
+            Some(msg) if attempt < TRIES => {
+                println!("\n{msg}\nLet's try again ({} left).\n", TRIES - attempt);
+            }
+            Some(msg) => bail!("{msg}\n\nNo attempts left — run `install` again when ready."),
+        }
+    }
+    unreachable!("loop returns or bails on the final attempt")
+}
+
 #[cfg(windows)]
 fn install_dir() -> std::path::PathBuf {
     use std::path::PathBuf;
@@ -467,8 +499,13 @@ fn deploy(port: u16) -> Result<()> {
 }
 
 /// How long to watch a freshly started service before believing it.
+///
+/// 30 seconds, matching the SCM's own default start timeout (`ServicesPipeTimeout`), so the
+/// installer never gives up on a service Windows itself is still willing to wait for. It was 6,
+/// which is under the time Defender can spend scanning a freshly written, unsigned executable on
+/// its first launch — the installer would roll back a service that was about to come up fine.
 #[cfg(windows)]
-const VERIFY_POLLS: u32 = 12;
+const VERIFY_POLLS: u32 = 60;
 #[cfg(windows)]
 const VERIFY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -489,7 +526,16 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
         .start(&[] as &[&OsStr])
         .context("starting service")?;
 
+    let waited = VERIFY_INTERVAL * VERIFY_POLLS;
+    let logs = config::data_paths().dir.display().to_string();
+
+    // Remember the last thing we actually saw. On timeout this is the whole diagnosis: still
+    // StartPending means the process never finished handing control to `service_main`, while a
+    // query that keeps erroring means we could not read the service at all. Reporting neither —
+    // which is what "did not reach a running state" did — leaves nothing to act on.
     let mut running_streak = 0;
+    let mut last_seen = String::from("no status reported at all");
+
     for _ in 0..VERIFY_POLLS {
         std::thread::sleep(VERIFY_INTERVAL);
         match service.query_status() {
@@ -502,20 +548,66 @@ fn start_and_verify(service: &windows_service::service::Service, port: u16) -> R
             }
             Ok(s) if s.current_state == ServiceState::Stopped => {
                 bail!(
-                    "the service started and then stopped immediately.\n\
-                     The usual cause is that port {port} is already in use by another program \
-                     (check with `netstat -ano | findstr :{port}`).\n\
-                     The reason is logged in the newest service.<date>.log in {} (readable as \
-                     Administrator); or re-run with `install --port <other>`.",
-                    config::data_paths().dir.display()
+                    "the service started and then stopped immediately{}.\n\n\
+                     Most likely: port {port} is already used by another program.\n  \
+                     check:   netstat -ano | findstr :{port}\n  \
+                     or use:  install --port <other-port>\n\n\
+                     The reason it stopped is in the newest service.<date>.log in\n  \
+                     {logs}\n\
+                     (readable as Administrator).",
+                    exit_detail(&s.exit_code),
                 );
             }
-            // StartPending or a transient query failure — keep watching.
-            Ok(_) => running_streak = 0,
-            Err(_) => running_streak = 0,
+            // StartPending or a transient query failure — keep watching, but remember which.
+            Ok(s) => {
+                running_streak = 0;
+                last_seen = format!("{:?}", s.current_state);
+            }
+            Err(e) => {
+                running_streak = 0;
+                last_seen = format!("the status could not be read ({e})");
+            }
         }
     }
-    bail!("the service did not reach a running state within 6 seconds")
+
+    bail!(
+        "the service did not start within {}s.\n\n\
+         Last state seen: {last_seen}\n\n\
+         It never reported Running, and it never reported Stopped either — so it is not the \
+         port being busy (that shows up as an immediate stop). The service reports Running \
+         before it reads any configuration, so this usually means the process could not be \
+         launched at all.\n\n\
+         Most likely causes, in order:\n  \
+         1. Antivirus is holding or blocking the freshly written executable. Check your \
+            protection history for host-health.exe, and allow it.\n  \
+         2. The file was still marked as downloaded-from-the-internet. Right-click the original \
+            .exe -> Properties -> tick Unblock, then install again.\n\n\
+         What to look at:\n  \
+         sc query {}\n  \
+         Event Viewer -> Windows Logs -> System, filter Source = Service Control Manager\n  \
+         the newest service.<date>.log in {logs}\n\n\
+         Nothing was left installed -- this rolled back, so it is safe to fix and re-run.",
+        waited.as_secs(),
+        crate::service::SERVICE_NAME,
+    )
+}
+
+/// Render a service exit code as something worth printing, or nothing.
+///
+/// A zero Win32 code carries no information and reads as noise beside "stopped immediately";
+/// anything else is the single most useful number in the whole failure.
+#[cfg(windows)]
+fn exit_detail(code: &windows_service::service::ServiceExitCode) -> String {
+    use windows_service::service::ServiceExitCode;
+    match code {
+        ServiceExitCode::Win32(0) => String::new(),
+        ServiceExitCode::Win32(c) => format!(" (Windows error {c})"),
+        // `service.rs` reports ServiceSpecific(1) when it dies from an error rather than a
+        // requested stop, so this arm means the app itself failed and logged why.
+        ServiceExitCode::ServiceSpecific(c) => {
+            format!(" (the app exited with its own error code {c}, which it will have logged)")
+        }
+    }
 }
 
 /// Stop a service and wait until it reports Stopped (so its exe file is released).

@@ -24,7 +24,207 @@ use crate::state::AppState;
 const AUTH_KEY: &str = "authenticated";
 
 /// Minimum control-password length, enforced at install and on password change.
-pub const MIN_PASSWORD_LEN: usize = 10;
+///
+/// Eight, not more, on purpose. This password guards a LAN-only service behind an Argon2id hash
+/// with per-IP throttling — an attacker has to already be on the home network to try it at all,
+/// and gets a handful of guesses a minute. A longer minimum mostly buys a password on a sticky
+/// note, which is a worse outcome than a short one the parent can actually recall.
+pub const MIN_PASSWORD_LEN: usize = 8;
+
+/// Why a proposed password was rejected — with the numbers, so the message can name them.
+///
+/// Length is counted in `char`s, not bytes: a password of eight accented letters is eight
+/// characters to the person typing it and up to sixteen bytes to `len()`. Reporting bytes would
+/// tell a parent their eight-character password is "sixteen characters", which is worse than
+/// saying nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PasswordProblem {
+    /// Nothing was entered.
+    Empty,
+    /// Shorter than [`MIN_PASSWORD_LEN`]; carries the count actually measured.
+    TooShort { got: usize },
+    /// Long enough, but a password an attacker would reach early. Carries the pattern named, so
+    /// the message can say *which* rule it tripped rather than "too weak".
+    Guessable { why: &'static str },
+}
+
+impl PasswordProblem {
+    /// The message shown to the parent. States what was measured rather than only what was
+    /// required: "at least 8 characters" cannot be acted on by someone who believes they typed
+    /// ten, which is exactly the report that prompted this. A count they can compare against
+    /// their own turns an argument into an observation.
+    pub fn message(&self) -> String {
+        match self {
+            Self::Empty => format!(
+                "no password entered — nestwatch needs at least {MIN_PASSWORD_LEN} characters.\n\
+                 If you were pasting, the terminal may not have received it; try typing it."
+            ),
+            Self::TooShort { got } => {
+                let short_by = MIN_PASSWORD_LEN - got;
+                format!(
+                    "that password is too short.\n  \
+                     counted:  {got} character{}\n  \
+                     minimum:  {MIN_PASSWORD_LEN} characters\n  \
+                     add {short_by} more character{}.\n\
+                     If that count is lower than what you typed, a keystroke did not reach the \
+                     terminal — retype it slowly rather than pasting.",
+                    if *got == 1 { "" } else { "s" },
+                    if short_by == 1 { "" } else { "s" },
+                )
+            }
+            Self::Guessable { why } => format!(
+                "that password is long enough, but {why}.\n\
+                 It is not the length that is the problem — a guess like that is tried in the \
+                 first handful of attempts.\n\
+                 Two or three unrelated words work well: \"kettle-harbour-91\"."
+            ),
+        }
+    }
+}
+
+/// Passwords an attacker tries first. Deliberately short: this is the head of the distribution,
+/// not a dictionary. A full breach corpus is megabytes, and the shipped binary is optimised for
+/// size — the patterns below plus per-IP throttling cover the realistic case, which is someone
+/// guessing by hand at the console rather than running a wordlist over the LAN.
+const COMMON: &[&str] = &[
+    "password",
+    "passw0rd",
+    "p@ssword",
+    "p@ssw0rd",
+    "letmein",
+    "welcome",
+    "iloveyou",
+    "sunshine",
+    "princess",
+    "football",
+    "baseball",
+    "superman",
+    "batman",
+    "dragon",
+    "monkey",
+    "trustno1",
+    "qwerty",
+    "qwertyuiop",
+    "azerty",
+    "asdfgh",
+    "asdfghjkl",
+    "zxcvbnm",
+    "1q2w3e4r",
+    "qazwsx",
+    "abc123",
+    "123abc",
+    "admin",
+    "administrator",
+    "changeme",
+    "default",
+    "secret",
+    "master",
+    "computer",
+    "internet",
+    "whatever",
+    "freedom",
+    "starwars",
+    "pokemon",
+    "minecraft",
+    "roblox",
+    "nestwatch",
+    "hosthealth",
+    "parent",
+    "family",
+    "screentime",
+];
+
+/// Reject the passwords a child at the keyboard would actually try, without imposing composition
+/// rules.
+///
+/// NIST SP 800-63B Rev 4 (final, July 2025) *prohibits* requiring mixed character classes and
+/// requires a blocklist instead — so there is deliberately no "must contain a digit" rule here.
+/// An all-digit password is allowed: eight digits is 10^8, and against Argon2id behind per-IP
+/// throttling that is not the weak link. `12345678` is, and that is what this catches.
+fn guessable(pw: &str) -> Option<&'static str> {
+    let lower = pw.to_lowercase();
+
+    if COMMON.contains(&lower.as_str()) {
+        return Some("it is one of the passwords tried first in any guessing attempt");
+    }
+    // A common word with digits pinned on the end ("password123", "dragon2024") is the same
+    // guess with one more step, so strip a trailing run of digits and re-check.
+    let stem = lower.trim_end_matches(|c: char| c.is_ascii_digit());
+    if stem.len() >= 4 && COMMON.contains(&stem) {
+        return Some("it is a common password with digits added, which is guessed just as early");
+    }
+    let chars: Vec<char> = lower.chars().collect();
+    if chars.windows(2).all(|w| w[0] == w[1]) {
+        return Some("it is the same character repeated");
+    }
+    // Runs in either direction: 12345678, 87654321, abcdefgh.
+    let run = |step: i32| {
+        chars
+            .windows(2)
+            .all(|w| (w[1] as i32) - (w[0] as i32) == step)
+    };
+    if run(1) || run(-1) {
+        return Some("it is a single run of consecutive characters");
+    }
+    // A short block repeated to reach the length ("abcabcabc", "12121212") has only as much
+    // variety as the block.
+    for block in 1..=chars.len() / 2 {
+        if chars.len().is_multiple_of(block) && chars.chunks(block).all(|c| c == &chars[..block]) {
+            return Some("it is a short sequence repeated to fill the length");
+        }
+    }
+    None
+}
+
+/// Check a proposed password, returning what is wrong with it rather than a bare bool.
+pub fn check_password(pw: &str) -> Result<(), PasswordProblem> {
+    let got = pw.chars().count();
+    if got == 0 {
+        return Err(PasswordProblem::Empty);
+    }
+    if got < MIN_PASSWORD_LEN {
+        return Err(PasswordProblem::TooShort { got });
+    }
+    if let Some(why) = guessable(pw) {
+        return Err(PasswordProblem::Guessable { why });
+    }
+    Ok(())
+}
+
+/// A warning about a password that is *acceptable* but probably not what the parent meant.
+///
+/// Never rejects and never rewrites: silently trimming a password would mean the one that works
+/// at install is not the one they typed. Leading and trailing spaces are invisible in a masked
+/// prompt and are the classic paste artifact, so they are worth naming out loud.
+pub fn password_caution(pw: &str) -> Option<String> {
+    let lead = pw.starts_with(char::is_whitespace);
+    let trail = pw.ends_with(char::is_whitespace);
+    let where_ = match (lead, trail) {
+        (true, true) => "starts and ends",
+        (true, false) => "starts",
+        (false, true) => "ends",
+        (false, false) => return None,
+    };
+    Some(format!(
+        "note: your password {where_} with a space. That is allowed and it counts as a \
+         character — but it is invisible, and you will have to type it every time you sign in."
+    ))
+}
+
+/// Explain why two entries differ, without echoing either of them.
+///
+/// The lengths are safe to show: the parent is at their own console, has just typed both, and
+/// "12 vs 11" points straight at a trailing keystroke while "both 12" points at a typo in the
+/// middle. Bailing with a bare "passwords do not match" makes them guess.
+pub fn describe_mismatch(first: &str, second: &str) -> String {
+    let (a, b) = (first.chars().count(), second.chars().count());
+    let detail = if a == b {
+        format!("both are {a} characters, so one character differs somewhere in the middle")
+    } else {
+        format!("the first is {a} characters, the confirmation is {b}")
+    };
+    format!("the two entries do not match — {detail}.")
+}
 
 // ---------------------------------------------------------------------------
 // Password hashing (Argon2id)
@@ -322,6 +522,130 @@ pub async fn require_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The boundary itself, pinned in both directions.
+    ///
+    /// A parent reported entering ten characters and being told they needed ten. The rule was
+    /// never off by one — this proves the exact-minimum case passes — which is what established
+    /// that the input was not what it appeared, and why every rejection now reports the count it
+    /// actually measured.
+    #[test]
+    fn exactly_the_minimum_is_accepted_and_one_short_is_not() {
+        // Not a run and not a repeat: the blocklist rejects those regardless of length, and an
+        // earlier draft of this test used "abcdefgh" and was rejected for exactly that.
+        let at_min: String = "kw7pxq2mzv".chars().take(MIN_PASSWORD_LEN).collect();
+        assert_eq!(at_min.chars().count(), MIN_PASSWORD_LEN);
+        assert_eq!(
+            check_password(&at_min),
+            Ok(()),
+            "exactly the minimum must pass"
+        );
+
+        let one_short: String = at_min.chars().take(MIN_PASSWORD_LEN - 1).collect();
+        assert_eq!(
+            check_password(&one_short),
+            Err(PasswordProblem::TooShort {
+                got: MIN_PASSWORD_LEN - 1
+            }),
+        );
+    }
+
+    /// The reported count must be characters, not bytes. Eight accented letters are eight
+    /// characters to the person typing them and sixteen bytes to `len()`; reporting bytes would
+    /// tell a parent their eight-character password is sixteen characters long.
+    #[test]
+    fn length_is_counted_in_characters_not_bytes() {
+        // Distinct accented letters, so this exercises the byte-vs-char count and not the
+        // repeated-character rule.
+        let pw: String = "éàüñöçèìâô".chars().take(MIN_PASSWORD_LEN).collect();
+        assert_eq!(pw.chars().count(), MIN_PASSWORD_LEN);
+        assert!(pw.len() > MIN_PASSWORD_LEN, "precondition: multibyte");
+        assert_eq!(check_password(&pw), Ok(()));
+
+        let short: String = pw.chars().take(MIN_PASSWORD_LEN - 2).collect();
+        assert_eq!(
+            check_password(&short),
+            Err(PasswordProblem::TooShort {
+                got: MIN_PASSWORD_LEN - 2
+            }),
+            "the count in the message must match what the parent typed",
+        );
+    }
+
+    /// The message has to carry the measured number, or it cannot resolve the disagreement that
+    /// prompted it.
+    #[test]
+    fn the_too_short_message_states_the_measured_count() {
+        let msg = PasswordProblem::TooShort { got: 6 }.message();
+        assert!(msg.contains('6'), "must name what it counted; got:\n{msg}");
+        assert!(
+            msg.contains(&MIN_PASSWORD_LEN.to_string()),
+            "must name the minimum; got:\n{msg}"
+        );
+    }
+
+    /// NIST SP 800-63B Rev 4 prohibits composition rules, so digits-only is allowed — but the
+    /// guesses an attacker actually starts with are not.
+    #[test]
+    fn guessable_patterns_are_rejected_but_composition_is_not_required() {
+        for bad in [
+            "12345678",
+            "87654321",
+            "abcdefgh",
+            "aaaaaaaa",
+            "abcabcabc",
+            "12121212",
+            "password",
+            "PASSWORD",
+            "password123",
+            "qwertyuiop",
+            "nestwatch",
+        ] {
+            assert!(
+                matches!(check_password(bad), Err(PasswordProblem::Guessable { .. })),
+                "{bad:?} should be rejected as guessable"
+            );
+        }
+
+        // All lowercase, no digits, no symbols — allowed, because requiring otherwise is exactly
+        // what Rev 4 prohibits.
+        assert_eq!(check_password("kettleharbour"), Ok(()));
+        // All digits, but not a pattern: 10^8 behind Argon2id and per-IP throttling is not the
+        // weak link, so this is a real password even though it looks like one.
+        assert_eq!(check_password("83920147"), Ok(()));
+    }
+
+    /// A mismatch message that only says "they do not match" makes the parent guess which entry
+    /// was wrong. Different lengths point at a stray keystroke; equal lengths point at a typo.
+    #[test]
+    fn mismatch_explains_which_way_without_echoing_the_password() {
+        let m = describe_mismatch("kettle-harbour", "kettle-harbou");
+        assert!(
+            m.contains("14") && m.contains("13"),
+            "should give both lengths; got: {m}"
+        );
+        assert!(
+            !m.contains("kettle"),
+            "must never echo the password itself; got: {m}"
+        );
+
+        let same = describe_mismatch("kettle-harbour", "kettle-harbouX");
+        assert!(
+            same.contains("somewhere in the middle"),
+            "equal lengths should point at a character difference; got: {same}"
+        );
+    }
+
+    /// Invisible whitespace is the classic paste artifact. Warn, never trim: a password silently
+    /// rewritten at install is not the one the parent typed.
+    #[test]
+    fn whitespace_is_flagged_but_never_removed() {
+        assert!(password_caution(" kettleharbour").is_some());
+        assert!(password_caution("kettleharbour ").is_some());
+        assert!(password_caution("kettleharbour").is_none());
+        // Still a valid password — the caution is advice, not a rejection.
+        assert_eq!(check_password(" kettleharbour"), Ok(()));
+    }
 
     #[test]
     fn hash_then_verify_round_trips() {

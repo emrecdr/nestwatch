@@ -594,11 +594,10 @@ pub async fn change_password(
     session: Session,
     Json(body): Json<PasswordChange>,
 ) -> Result<Json<Value>, AppError> {
-    if body.new.chars().count() < crate::auth::MIN_PASSWORD_LEN {
-        return Err(AppError::BadRequest(format!(
-            "new password must be at least {} characters",
-            crate::auth::MIN_PASSWORD_LEN
-        )));
+    // Same checker and the same wording as `install`, so the dashboard and the console cannot
+    // disagree about what makes a password acceptable — or describe the same rejection two ways.
+    if let Err(problem) = crate::auth::check_password(&body.new) {
+        return Err(AppError::BadRequest(problem.message()));
     }
 
     // Verify the current password off the async runtime (Argon2 is memory-hard).
