@@ -722,9 +722,16 @@ function app() {
     // apps entry, because per-app tracking only exists for apps with a limit set (see the
     // footnote below the card). Returns null if no day in the window has any, so the
     // heading's date makes the substitution visible instead of silently showing an older day.
-    stRecentAppDay() {
-      const days = this.screentime.days.filter(d => d.apps && d.apps.length);
+    // "The newest day whose `key` list has anything in it" — the rule behind the three helpers
+    // below, held in one place. They differ only in which list they ask about, and each has its
+    // own reason for existing, so they stay as named methods the markup and tests can call.
+    stRecentDayWith(key) {
+      const days = this.screentime.days.filter(d => d[key] && d[key].length);
       return days.length ? days[days.length - 1] : null;
+    },
+
+    stRecentAppDay() {
+      return this.stRecentDayWith('apps');
     },
 
     // The most recent day carrying *focus* data, chosen independently of stRecentAppDay above.
@@ -735,15 +742,13 @@ function app() {
     // date that does have focus data somewhere else in the window — which reads as "he looked at
     // nothing that day" rather than as "nothing was watching".
     stRecentFocusDay() {
-      const days = this.screentime.days.filter(d => d.focused && d.focused.length);
-      return days.length ? days[days.length - 1] : null;
+      return this.stRecentDayWith('focused');
     },
 
     // The most recent day carrying browser page titles, chosen independently again — a day can
     // have focused apps and no browser time at all, which is a normal evening rather than a gap.
     stRecentPageDay() {
-      const days = this.screentime.days.filter(d => d.pages && d.pages.length);
-      return days.length ? days[days.length - 1] : null;
+      return this.stRecentDayWith('pages');
     },
 
     // Shared by the "Today" panel banner and the screen-time card, so the two can never

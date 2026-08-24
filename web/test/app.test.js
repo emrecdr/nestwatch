@@ -351,3 +351,20 @@ test("stRecentPageDay is null when no browser time was recorded", () => {
   const app = withState({ screentime: { days: [{ date: "2026-08-15", pages: [] }] } });
   assert.equal(app.stRecentPageDay(), null);
 });
+
+// The rule the three stRecent*Day helpers share, stated once. Worth its own test because a change
+// to it — days no longer sorted oldest-first, or "carries data" becoming a flag rather than a
+// non-empty list — is otherwise a three-place edit with no signal if you miss one.
+test("stRecentDayWith returns the newest day whose named list has entries", () => {
+  const app = withState({
+    screentime: {
+      days: [
+        { date: "2026-08-13", apps: [{ name: "a.exe", minutes: 1 }] },
+        { date: "2026-08-14", apps: [] },
+      ],
+    },
+  });
+
+  assert.equal(app.stRecentDayWith("apps").date, "2026-08-13", "newest with data, not newest");
+  assert.equal(app.stRecentDayWith("focused"), null, "a key no day carries is absent, not empty");
+});

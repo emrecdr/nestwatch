@@ -40,7 +40,7 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use windows::Win32::Foundation::{CloseHandle, HWND};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -171,20 +171,19 @@ fn worker(rx: &Receiver<()>) {
         let elapsed = started.elapsed();
         let now_ms = elapsed.as_millis() as u64;
 
+        // Read the world once. Both trackers are fed from a single observation so they cannot
+        // disagree about it: two `GetForegroundWindow` calls can straddle a focus change and
+        // attribute the app and the page title to different windows, and two `GetLastInputInfo`
+        // calls can leave one tracker idle while the other is active. Cheaper too, but coherence
+        // is the reason.
+        let seen = observe();
+
         // Idle first, so the focus updates below bank against the correct active/away state.
-        apply_idle(&mut apps, now_ms);
-        apply_idle(&mut pages, now_ms);
+        apply_idle(&mut apps, seen.idle_ms, now_ms);
+        apply_idle(&mut pages, seen.idle_ms, now_ms);
 
-        apps.focus(foreground_app().as_deref(), now_ms);
-
-        // A page is only credited while a *browser* is in front. `browser_page` returns `None` for
-        // every other window, and `Tracker::focus(None, _)` charges those seconds to nobody — so
-        // time in Notepad never lands in the page list.
-        let page = foreground_title()
-            .as_deref()
-            .and_then(crate::foreground::browser_page)
-            .map(|p| p.page);
-        pages.focus(page.as_deref(), now_ms);
+        apps.focus(seen.app.as_deref(), now_ms);
+        pages.focus(seen.page.as_deref(), now_ms);
 
         if elapsed.saturating_sub(last_emit) >= EMIT {
             emit(&crate::foreground::Sample {
@@ -206,8 +205,7 @@ fn worker(rx: &Receiver<()>) {
 /// `last_input + IDLE_AFTER`. Handing the tracker that timestamp credits exactly the grace period
 /// and not one second more, and [`Tracker`] never moves its marker backwards, so a late detection
 /// cannot retroactively take away time already earned.
-fn apply_idle(tracker: &mut Tracker, now_ms: u64) {
-    let idle_ms = idle_millis();
+fn apply_idle(tracker: &mut Tracker, idle_ms: u64, now_ms: u64) {
     if idle_ms >= IDLE_AFTER.as_millis() as u64 {
         let credited_until = now_ms
             .saturating_sub(idle_ms)
@@ -243,20 +241,56 @@ fn idle_millis() -> u64 {
     u64::from(now.wrapping_sub(info.dwTime))
 }
 
-/// The executable name of whatever currently holds focus, lowercased to match how `rules::norm`
-/// keys the enforcement tally. `None` when nothing does.
-fn foreground_app() -> Option<String> {
+/// One reading of the desktop: what has focus, what its window is called, and how long the user
+/// has been away. Everything the loop needs from Win32, taken at one instant.
+struct Seen {
+    /// Executable name of the focused window's process, keyed the same way the enforcement tally
+    /// keys it. `None` when nothing holds focus.
+    app: Option<String>,
+    /// The page title, when the focused window is a recognised browser. `None` otherwise.
+    page: Option<String>,
+    /// Milliseconds since the last keyboard or mouse input in this session.
+    idle_ms: u64,
+}
+
+/// Take one reading. A single `GetForegroundWindow` serves both the app and the page, so the two
+/// always describe the same window — see the note at the call site.
+fn observe() -> Seen {
+    let idle_ms = idle_millis();
+
+    // SAFETY: Win32 window FFI; `hwnd` is an opaque token, never dereferenced.
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        // Routine, not exceptional: the lock screen, the UAC secure desktop, and the instant after
+        // a window closes all report no foreground window. Those seconds belong to no app, and
+        // `Tracker::focus(None, _)` is how they get charged to nobody.
+        return Seen {
+            app: None,
+            page: None,
+            idle_ms,
+        };
+    }
+
+    // A page is only credited while a *browser* is in front. `browser_page` returns `None` for
+    // every other window, so time in Notepad never lands in the page list.
+    let page = window_title(hwnd)
+        .as_deref()
+        .and_then(crate::foreground::browser_page)
+        .map(|p| p.page);
+
+    Seen {
+        app: process_name(hwnd),
+        page,
+        idle_ms,
+    }
+}
+
+/// The executable name behind `hwnd`, keyed through [`crate::rules::norm`] so it matches the
+/// enforcement tally exactly.
+fn process_name(hwnd: HWND) -> Option<String> {
     // SAFETY: Win32 window/process FFI. The process handle is closed on every path; `hwnd` is only
     // used as an opaque token and is never dereferenced.
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            // Routine, not exceptional: the lock screen, the UAC secure desktop, and the instant
-            // after a window closes all report no foreground window. Those seconds belong to no
-            // app, and `Tracker::focus(None, _)` is how they get charged to nobody.
-            return None;
-        }
-
         let mut pid = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == 0 {
@@ -282,30 +316,22 @@ fn foreground_app() -> Option<String> {
         let _ = CloseHandle(handle);
 
         let path = name?;
-        // Just the file name: the enforcement tally is keyed on `"roblox.exe"`, not a full path,
-        // and the two must agree for the dashboard to show them side by side.
-        Some(
-            path.rsplit(['\\', '/'])
-                .next()
-                .unwrap_or(&path)
-                .trim()
-                .to_lowercase(),
-        )
+        // Just the file name: the enforcement tally is keyed on `"roblox.exe"`, not a full path.
+        // `norm` rather than an inline `to_lowercase` because it is the single definition of how a
+        // process name is keyed — the dashboard shows `apps` and `focused` side by side on it, and
+        // a second copy of that rule here is a second thing to keep in step.
+        let file = path.rsplit(['\\', '/']).next().unwrap_or(&path);
+        Some(crate::rules::norm(file))
     }
 }
 
-/// The foreground window's title, for browser page attribution. Currently unused by the emitted
-/// sample; kept because reading it is one call and `foreground::browser_page` already parses it.
+/// The window's title, for browser page attribution.
 ///
 /// Safe to call cross-process: `GetWindowTextW` only blocks when asked about a window owned by the
 /// *calling* thread, which this never is.
-fn foreground_title() -> Option<String> {
+fn window_title(hwnd: HWND) -> Option<String> {
     // SAFETY: Win32 window FFI; `buf` is owned by this frame and `hwnd` is an opaque token.
     unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
-        }
         let mut buf = [0u16; 512];
         let len = GetWindowTextW(hwnd, &mut buf);
         (len > 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
@@ -327,9 +353,4 @@ fn emit(sample: &crate::foreground::Sample) {
         // sample it never sees.
         let _ = out.flush();
     }
-}
-
-/// Entry point for `helper --watch`.
-pub fn main() -> Result<()> {
-    run().context("foreground watcher failed")
 }

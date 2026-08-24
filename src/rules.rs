@@ -726,7 +726,7 @@ impl RulesEnforcer {
 }
 
 /// Normalize a process name for matching: trimmed + lowercased (`"Chrome.exe"` == `"chrome.exe"`).
-fn norm(name: &str) -> String {
+pub(crate) fn norm(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
@@ -898,7 +898,26 @@ pub async fn run_rules_enforcer(
         // because these numbers come from a process running as the child.
         if let Some(sample) = foreground.drain() {
             let bounded = crate::foreground::clamp(sample, elapsed.as_secs());
-            crate::foreground::accrue(&mut enforcer.usage.foreground_secs, bounded.apps);
+
+            // Key app names through `norm` **here**, at the trust boundary, rather than trusting
+            // the watcher to have done it. `norm` is the one definition of how a process name is
+            // keyed, and the dashboard renders `apps` and `focused` side by side on it — if the
+            // two ever disagree, one app silently becomes two rows. Doing it on ingest means that
+            // cannot happen however the helper behaves, which matters because the helper runs as
+            // the child. Colliding keys merge rather than overwrite.
+            //
+            // Page titles are deliberately **not** normalised: they are display text shown back to
+            // the parent, not keys matched against a rule, and lowercasing them would render
+            // "Roblox" as "roblox" for no benefit.
+            let apps = bounded.apps.into_iter().fold(
+                BTreeMap::<String, u64>::new(),
+                |mut acc, (name, secs)| {
+                    let slot = acc.entry(norm(&name)).or_insert(0);
+                    *slot = slot.saturating_add(secs);
+                    acc
+                },
+            );
+            crate::foreground::accrue(&mut enforcer.usage.foreground_secs, apps);
             crate::foreground::accrue(&mut enforcer.usage.page_secs, bounded.pages);
             // Re-cap the running day, not just the tick. `clamp` bounds each report to
             // `MAX_PAGES`, but forty *different* titles every thirty seconds would still reach

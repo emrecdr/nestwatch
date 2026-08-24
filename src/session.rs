@@ -307,8 +307,6 @@ fn pump_watcher(exe: &str, feed: &crate::foreground::Feed) -> Result<(), Control
     Ok(())
 }
 
-/// Launch `<exe> helper --capture-stdout` in the active console session with stdout wired to
-/// a pipe, and return the PNG bytes it writes.
 /// Launch `<exe> <args>` in the active console session with stdout wired to a pipe, and hand back
 /// the read end plus the process handles.
 ///
@@ -390,6 +388,8 @@ fn spawn_piped(
     }
 }
 
+/// Launch `<exe> helper --capture-stdout` in the active console session and return the PNG bytes
+/// it writes, bounded by a watchdog so a wedged helper cannot block the caller forever.
 fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
     let (mut file, proc_info) = spawn_piped(exe, "helper --capture-stdout")?;
 

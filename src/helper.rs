@@ -54,7 +54,7 @@ pub fn lock() -> Result<()> {
 pub fn watch() -> Result<()> {
     #[cfg(windows)]
     {
-        crate::watcher::main()
+        crate::watcher::run().context("foreground watcher failed")
     }
     // Every other platform builds the whole server against `FakeControl`, and the watcher is the
     // one piece with no fake worth having: a foreground window on the developer's Mac says nothing
