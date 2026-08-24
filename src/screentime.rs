@@ -148,12 +148,20 @@ struct ParsedRow {
 }
 
 impl ParsedRow {
-    /// How much per-app detail this row carries, for picking a winner when the same date arrives
-    /// from both logs. Counts **both** maps: a row holding the same apps plus focus data is
-    /// strictly richer, and comparing app counts alone let a legacy row win the tie and drop the
-    /// focus figures without trace.
-    fn detail(&self) -> usize {
-        self.apps.len() + self.focused.len() + self.pages.len()
+    /// How rich this row is, for picking a winner when the same date arrives from both logs.
+    ///
+    /// Ordered as a tuple rather than a single count, because the two questions are not
+    /// commensurable. **Whether a row knows about focus at all** comes first: rows written before
+    /// foreground tracking have no `focused` or `pages` key, and one of those naming forty apps
+    /// would otherwise outrank a modern row naming one — the richer row losing the tie and having
+    /// its extra dimensions discarded, invisibly, because the day still renders. Only within the
+    /// same generation does the field count decide.
+    fn detail(&self) -> (bool, usize) {
+        let knows_focus = !self.focused.is_empty() || !self.pages.is_empty();
+        (
+            knows_focus,
+            self.apps.len() + self.focused.len() + self.pages.len(),
+        )
     }
 }
 
@@ -561,6 +569,39 @@ mod tests {
             1,
             "the row that knows about focus must win the tie"
         );
+    }
+
+    /// A wide legacy row must not outrank a narrow modern one.
+    ///
+    /// Counting fields alone, a row with many apps and no focus data beats a row with fewer apps
+    /// *plus* focus and page data — so the richer row loses the tie and its extra dimensions are
+    /// discarded. Silent, because the day still renders; only the detail goes missing.
+    #[test]
+    fn a_row_carrying_focus_data_wins_however_few_apps_it_names() {
+        let mut wide = serde_json::Map::new();
+        for i in 0..40 {
+            wide.insert(format!("app{i}.exe"), serde_json::json!(1));
+        }
+        let legacy = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "apps": wide,
+        });
+        let modern = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90,
+            "apps": {"roblox.exe": 60},
+            "focused": {"roblox.exe": 40},
+            "pages": {"Roblox": 20},
+        });
+
+        let r = build_report(&[legacy, modern], d("2026-08-17"), 1);
+
+        assert_eq!(
+            r.days[0].focused.len(),
+            1,
+            "the row that knows about focus must win, even naming 39 fewer apps"
+        );
+        assert_eq!(r.days[0].pages.len(), 1);
     }
 
     #[test]
