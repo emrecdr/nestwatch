@@ -70,6 +70,12 @@ const EMIT: Duration = Duration::from_secs(30);
 /// PC abandoned with a game open stops accruing.
 const IDLE_AFTER: Duration = Duration::from_secs(180);
 
+/// Shortest gap between two reads of the desktop, however many focus events arrive.
+///
+/// Well below any interval a person perceives, so alt-tabbing is still caught promptly, and far
+/// above the rate a script could otherwise drive this loop at.
+const MIN_GAP: Duration = Duration::from_millis(250);
+
 /// Wake channel from the hook callback to the worker. A [`OnceLock`] because a `WinEventProc` is a
 /// bare `extern "system"` fn with no user-data parameter — there is nowhere else to put it.
 static WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
@@ -159,9 +165,11 @@ fn worker(rx: &Receiver<()>) {
     // `"chrome.exe"` is a program the enforcement tally also knows about, `"Roblox"` is what a tab
     // happened to say — and because the second is unbounded where the first is not.
     let mut apps = Tracker::new();
-    let mut pages = Tracker::new();
+    let mut pages = Tracker::capped(crate::foreground::MAX_PAGES);
     let started = Instant::now();
     let mut last_emit = Duration::ZERO;
+
+    let mut last_resolve = Instant::now() - MIN_GAP;
 
     loop {
         // Either a focus change woke us or the reconciliation interval expired. Both lead to the
@@ -171,19 +179,34 @@ fn worker(rx: &Receiver<()>) {
         let elapsed = started.elapsed();
         let now_ms = elapsed.as_millis() as u64;
 
-        // Read the world once. Both trackers are fed from a single observation so they cannot
-        // disagree about it: two `GetForegroundWindow` calls can straddle a focus change and
-        // attribute the app and the page title to different windows, and two `GetLastInputInfo`
-        // calls can leave one tracker idle while the other is active. Cheaper too, but coherence
-        // is the reason.
-        let seen = observe();
+        // Floor how often the desktop is actually read. `sync_channel(1)` coalesces *queued*
+        // wake-ups but does not rate-limit: if events arrive faster than a resolution takes, this
+        // loop runs back to back for as long as they keep coming. A child can produce them with a
+        // three-line `SetForegroundWindow` loop that costs them almost nothing and costs the
+        // watcher an `OpenProcess`, a `QueryFullProcessImageNameW` and a `GetWindowTextW` every
+        // time — the tracked process setting the watcher's CPU, which is the wrong way round.
+        //
+        // Skipping costs no accuracy: focus time comes from timestamp deltas, not from counting
+        // wake-ups, so a skipped read delays attribution by at most this gap. Note the emit check
+        // below sits *outside* this guard — `continue`ing here would let a burst of focus events
+        // starve reporting for as long as the child cared to keep it up.
+        if last_resolve.elapsed() >= MIN_GAP {
+            last_resolve = Instant::now();
 
-        // Idle first, so the focus updates below bank against the correct active/away state.
-        apply_idle(&mut apps, seen.idle_ms, now_ms);
-        apply_idle(&mut pages, seen.idle_ms, now_ms);
+            // Read the world once. Both trackers are fed from a single observation so they cannot
+            // disagree about it: two `GetForegroundWindow` calls can straddle a focus change and
+            // attribute the app and the page title to different windows, and two
+            // `GetLastInputInfo` calls can leave one tracker idle while the other is active.
+            // Cheaper too, but coherence is the reason.
+            let seen = observe();
 
-        apps.focus(seen.app.as_deref(), now_ms);
-        pages.focus(seen.page.as_deref(), now_ms);
+            // Idle first, so the focus updates below bank against the correct active/away state.
+            apply_idle(&mut apps, seen.idle_ms, now_ms);
+            apply_idle(&mut pages, seen.idle_ms, now_ms);
+
+            apps.focus(seen.app.as_deref(), now_ms);
+            pages.focus(seen.page.as_deref(), now_ms);
+        }
 
         if elapsed.saturating_sub(last_emit) >= EMIT {
             emit(&crate::foreground::Sample {

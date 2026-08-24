@@ -15,7 +15,7 @@
 
 use std::io::Read;
 use std::os::windows::io::FromRawHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
     CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation, WAIT_TIMEOUT,
@@ -248,10 +248,20 @@ fn spawn_lock(exe: &str) -> Result<(), ControlError> {
 /// Keep a foreground watcher alive in the interactive session, feeding everything it reports into
 /// `feed`. Runs forever on its own thread; the caller spawns it once at startup.
 ///
-/// **Respawns, with backoff.** The watcher runs as the child, in a session the child controls, so
-/// it can be killed from Task Manager at any moment — and it legitimately dies at every sign-out.
-/// Neither may end screen-time measurement for good. The backoff is what stops a watcher that
-/// cannot start (no user signed in, a broken build) from becoming a spawn loop.
+/// **Respawns, with backoff keyed on how long it stayed up.** The watcher runs as the child, in a
+/// session the child controls, so it can be killed from Task Manager at any moment — and it
+/// legitimately dies at every sign-out. Neither may end screen-time measurement for good.
+///
+/// The backoff has to be driven by **uptime, not exit status**, and getting that wrong is easy:
+/// `pump_watcher` returns `Ok(())` whenever the pipe reaches EOF, which is equally what a clean
+/// sign-out and an instant crash look like from here. Resetting the delay on `Ok(())` therefore
+/// left the only case the backoff exists for — a watcher that cannot start at all — respawning
+/// every five seconds forever, each cycle paying a `WTSQueryUserToken`, a profile-environment load
+/// and a cross-session `CreateProcessAsUserW`. Child-triggerable, and it would not have shown up
+/// as anything but idle CPU.
+///
+/// So a run only counts as healthy if it lasted [`HEALTHY_RUN`]. Anything shorter doubles the
+/// delay, whichever way it ended.
 ///
 /// Note what is deliberately *not* done here: a failure is never fatal and never blocks. If no
 /// interactive user exists, this sleeps and tries again — that is the normal state of a PC sitting
@@ -261,24 +271,34 @@ pub fn run_watcher_supervisor(feed: crate::foreground::Feed) {
     /// permanently-failing spawn down to twice a minute.
     const MIN_BACKOFF: Duration = Duration::from_secs(5);
     const MAX_BACKOFF: Duration = Duration::from_secs(30);
+    /// How long a watcher must survive before its exit reads as "it was working and the session
+    /// ended" rather than "it cannot run here".
+    const HEALTHY_RUN: Duration = Duration::from_secs(60);
+
+    // Hoisted: a process cannot change its own path, and if we cannot find it there is nothing to
+    // retry — sleeping on that forever would be a spin with no path to recovery.
+    let Ok(exe) = std::env::current_exe() else {
+        tracing::error!("cannot locate own exe — the foreground watcher will not run this session");
+        return;
+    };
+    let exe = exe.to_string_lossy().into_owned();
 
     let mut backoff = MIN_BACKOFF;
     loop {
-        match std::env::current_exe() {
-            Ok(exe) => match pump_watcher(&exe.to_string_lossy(), &feed) {
-                // A clean exit means the session ended: retry promptly, the child may be signing
-                // straight back in.
-                Ok(()) => backoff = MIN_BACKOFF,
-                Err(e) => {
-                    tracing::debug!(error = %e, "foreground watcher stopped");
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot locate own exe to start the watcher");
-                backoff = MAX_BACKOFF;
-            }
+        let started = Instant::now();
+        let outcome = pump_watcher(&exe, &feed);
+        let uptime = started.elapsed();
+
+        if let Err(e) = &outcome {
+            tracing::debug!(error = %e, "foreground watcher could not start");
         }
+        if outcome.is_ok() && uptime >= HEALTHY_RUN {
+            backoff = MIN_BACKOFF;
+        } else {
+            tracing::debug!(?uptime, "foreground watcher exited early — backing off");
+            backoff = (backoff * 2).min(MAX_BACKOFF);
+        }
+
         std::thread::sleep(backoff);
     }
 }
@@ -301,6 +321,12 @@ fn pump_watcher(exe: &str, feed: &crate::foreground::Feed) -> Result<(), Control
     // SAFETY: both handles were produced by `CreateProcessAsUserW` in `spawn_piped` and are closed
     // exactly once, here, after the pipe has reached EOF.
     unsafe {
+        // EOF means every write end of the pipe closed, which normally means the child exited —
+        // but not necessarily: a child that closed stdout and kept running would otherwise be
+        // orphaned here and never reaped, and the supervisor would start another beside it. Each
+        // orphan holds a desktop-wide WinEvent hook, so they accumulate into exactly the drag this
+        // whole design is trying to avoid. Terminating is a no-op on an already-dead process.
+        let _ = TerminateProcess(proc_info.hProcess, 0);
         let _ = CloseHandle(proc_info.hProcess);
         let _ = CloseHandle(proc_info.hThread);
     }

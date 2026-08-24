@@ -219,15 +219,38 @@ pub struct Tracker {
     idle: bool,
     /// Whole milliseconds banked per app since the last drain, including sub-second carry.
     millis: BTreeMap<String, u64>,
+    /// Largest number of keys to carry between drains, when the keyspace is unbounded.
+    ///
+    /// `None` for executables — a closed set, and dropping one would lose real measured time.
+    /// `Some` for page titles, where every tab is a new key and nothing limits how many there can
+    /// be. Without it the prune below only ever drops a key whose carry lands exactly on a whole
+    /// second, so a briefly-focused title is kept for the life of the process.
+    cap: Option<usize>,
 }
 
 impl Tracker {
+    /// A tracker over a bounded keyspace — executables.
     pub fn new() -> Self {
         Self {
             current: None,
             idle: false,
             millis: BTreeMap::new(),
+            cap: None,
         }
+    }
+
+    /// A tracker over an unbounded keyspace, keeping at most `cap` keys between drains.
+    pub fn capped(cap: usize) -> Self {
+        Self {
+            cap: Some(cap),
+            ..Self::new()
+        }
+    }
+
+    /// How many keys are carrying time forward. Exists for the tests that pin the cap.
+    #[cfg(test)]
+    fn tracked_keys(&self) -> usize {
+        self.millis.len()
     }
 
     /// Credit the focused app for the time since it was last accounted, and move the marker to
@@ -279,16 +302,23 @@ impl Tracker {
         self.bank(now_ms);
 
         let mut whole = BTreeMap::new();
-        for (name, remaining) in &mut self.millis {
-            let secs = *remaining / 1000;
-            if secs > 0 {
-                whole.insert(name.clone(), secs);
+        // One pass: report the whole seconds, keep the remainder, drop anything carrying nothing.
+        self.millis.retain(|name, remaining| {
+            if *remaining >= 1000 {
+                whole.insert(name.clone(), *remaining / 1000);
                 *remaining %= 1000;
             }
+            *remaining > 0
+        });
+
+        // That prune alone is weaker than it looks: it only drops a key whose carry happens to land
+        // on an exact second, so a key focused for a fraction of a second is kept indefinitely. For
+        // executables that is harmless — the keyspace is closed. For page titles it is a slow leak
+        // in the one process whose memory footprint this feature is judged on, so a capped tracker
+        // keeps only the heaviest keys. The cost is under a second of carry per dropped key, once.
+        if let Some(cap) = self.cap {
+            retain_top(&mut self.millis, cap);
         }
-        // Entries that carried nothing forward are dropped, so the map stays bounded by what is
-        // actually in use rather than everything touched since the process started.
-        self.millis.retain(|_, remaining| *remaining > 0);
 
         whole
     }
@@ -588,6 +618,48 @@ mod tests {
         }
 
         assert_eq!(total, 4, "4.5s of focus must report as 4s, not 3s");
+    }
+
+    /// The hole `MAX_PAGES` did not previously close.
+    ///
+    /// `clamp` bounds each report and the enforcer re-caps the stored day, but the watcher's own
+    /// tracker had no cap — and its prune only drops keys whose carry lands exactly on a whole
+    /// second, so a key that never accrues a full second is kept forever. Every distinct page
+    /// title focused all session stayed resident in the process whose memory footprint is the
+    /// entire point of the constraint.
+    #[test]
+    fn a_capped_tracker_does_not_grow_without_bound() {
+        let mut t = Tracker::capped(3);
+
+        // 500 distinct titles, each focused briefly — a retitling loop, or just a long evening.
+        for i in 0..500u64 {
+            t.focus(Some(&format!("page {i}")), i * 100);
+        }
+        t.drain(50_000);
+
+        assert!(
+            t.tracked_keys() <= 3,
+            "capped tracker kept {} keys",
+            t.tracked_keys()
+        );
+    }
+
+    /// The app tracker is deliberately uncapped: its keys are installed programs, a closed set, and
+    /// silently dropping one would lose real measured time.
+    #[test]
+    fn an_uncapped_tracker_keeps_every_key() {
+        let mut t = Tracker::new();
+        // 1,500ms each, so every key carries a 500ms remainder and stays. (An exact multiple of a
+        // second would be dropped by the prune, correctly — it carried nothing forward.)
+        for i in 0..100u64 {
+            t.focus(Some(&format!("app{i}.exe")), i * 1_500);
+        }
+        t.drain(150_000);
+        assert!(
+            t.tracked_keys() > 3,
+            "uncapped must keep every key that carries a remainder, got {}",
+            t.tracked_keys()
+        );
     }
 
     #[test]
