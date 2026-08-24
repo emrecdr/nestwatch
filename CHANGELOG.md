@@ -29,9 +29,12 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   what the tab was called.
   Titles only, deliberately: **not addresses, and not a browsing history.** Reading the title of a
   window that is already in front costs nothing, while collecting the domains your children visit
-  would have meant changing their browsers' DNS settings behind their backs. Titles also still work
-  in private browsing, where reading history does not. The list is capped at the heaviest few dozen
-  titles a day, so a page that retitles itself in a loop cannot bloat the stored history.
+  would have meant changing their browsers' DNS settings behind their backs. The list is capped at
+  the heaviest few dozen titles a day, so a page that retitles itself in a loop cannot bloat the
+  stored history.
+  **Do not assume private browsing is covered.** Reading a window title *should* work there, since
+  private modes hide history rather than window titles — but that has not been confirmed on a
+  running machine, and until it is, treat Incognito as a gap rather than as watched.
 - **[docs/MOBILE-APP.md](docs/MOBILE-APP.md) — what a phone app would and wouldn't buy.** Researched,
   not built. It would remove the certificate warning; it could not tell you about a time request
   while you're away from home, because that needs a cloud service this design refuses; and it would

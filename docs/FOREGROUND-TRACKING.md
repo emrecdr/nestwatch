@@ -214,8 +214,14 @@ persisted to `usage_state.json` and rolled into a year of history.
 
 The watcher already has the foreground window; reading its title costs one `GetWindowTextW`. A
 browser's title carries the page title — `"Roblox - Google Chrome"` — which gives coarse attribution
-for free, works in private browsing (titles are not suppressed), and requires nothing to be
-installed or configured.
+for free and requires nothing to be installed or configured.
+
+Private browsing is **expected** to be covered, on the reasoning that private modes suppress
+*history*, not window titles — but that has never been observed on a running machine, and the
+[open questions](#unverified) say so. It is called out here rather than left implicit because it is
+the one claim in this document a parent might rely on to decide Incognito is not a blind spot, and
+an unconfirmed "yes" is the wrong thing to lean on for that. Confirm it on-device before repeating
+it anywhere a parent reads.
 
 What it does **not** give is the domain. Getting that would mean writing browser policy into `HKLM`
 to disable each browser's built-in DNS resolver, because Chromium's `kAsyncDns` is enabled by
