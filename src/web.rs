@@ -47,3 +47,59 @@ fn serve_asset(path: &str) -> Response {
         None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Every column header carries `scope`, on both served pages.
+    ///
+    /// A `<th>` without `scope` leaves the header-to-cell association to the screen reader's
+    /// guesswork. It guesses well on a simple grid and badly on anything else, and the dashboard's
+    /// tables are the part a parent reads for facts — which app burned the time, when a request
+    /// came in, what the audit trail says. Six tables here had none; this keeps the seventh from
+    /// shipping the same way, which is the actual regression mode (a new panel, copied from an
+    /// old one).
+    ///
+    /// Scans the markup rather than asserting a count, so adding a table is caught rather than
+    /// merely changing a number nobody updates. Attribute-presence based, so it is indifferent to
+    /// line endings — a Windows checkout rewrites these files to CRLF, which has already broken
+    /// one source-scanning test in this repo (`tests/spawn_paths.rs`).
+    #[test]
+    fn every_table_header_says_which_column_it_heads() {
+        for (name, html) in [
+            ("index.html", include_str!("../assets/index.html")),
+            ("ask.html", include_str!("../assets/ask.html")),
+        ] {
+            let mut rest = html;
+            let mut seen = 0usize;
+            while let Some(at) = rest.find("<th") {
+                rest = &rest[at..];
+                let end = rest
+                    .find('>')
+                    .unwrap_or_else(|| panic!("{name}: unterminated <th"));
+                let tag = &rest[..end];
+                // `<thead>` shares the prefix. A cell header is `<th>` or `<th ...>`, so the
+                // character after the name decides — without this the scan demands `scope` on
+                // every `<thead>` and fails on correct markup.
+                if !matches!(tag.as_bytes().get(3), None | Some(b' ') | Some(b'\t')) {
+                    rest = &rest[end..];
+                    continue;
+                }
+                assert!(
+                    tag.contains("scope="),
+                    "{name}: this <th> does not say which column it heads — add \
+                     scope=\"col\":\n  {tag}>",
+                );
+                seen += 1;
+                rest = &rest[end..];
+            }
+            // `ask.html` is the child's page and has no tables; only assert coverage where the
+            // scan found something, so this cannot silently pass by matching nothing at all.
+            if name == "index.html" {
+                assert!(
+                    seen > 0,
+                    "{name}: found no <th> at all — did the scan break?"
+                );
+            }
+        }
+    }
+}
