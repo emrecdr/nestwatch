@@ -63,7 +63,14 @@
           </div>
         </div>
 
-        <main class="mx-auto grid max-w-5xl gap-4 p-4 md:grid-cols-2">
+        <!-- Width steps up with the screen instead of stopping at 1024px. Eight of the ten
+             cards below are md:col-span-2, and almost all of them hold tables, charts or rows of
+             controls -- content that reads better wide, unlike prose. Still capped rather than
+             full-bleed: on a 4K monitor an uncapped grid gives one 3800px-wide table row, where
+             the eye loses which value belongs to which column. -->
+        <main
+          class="mx-auto grid w-full max-w-5xl gap-4 p-4 md:grid-cols-2 xl:max-w-7xl 2xl:max-w-[110rem]"
+        >
           <!-- Screenshot -->
           <section class="card bg-base-100 shadow">
             <div class="card-body">
@@ -75,6 +82,10 @@
                     <input type="checkbox" class="toggle toggle-primary toggle-sm"
                            x-model="autoRefresh" @change="toggleAutoRefresh()" />
                   </label>
+                  <button class="btn btn-ghost btn-sm" @click="shotFull = true"
+                          :disabled="!shotUrl" title="Expand to fill the window (Esc to close)">
+                    ⤢ Expand
+                  </button>
                   <button class="btn btn-primary btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
                     <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
                     Take screenshot
@@ -86,7 +97,12 @@
                   <span class="opacity-50">No screenshot yet</span>
                 </template>
                 <template x-if="shotUrl">
-                  <img :src="shotUrl" alt="screen" class="max-h-96 w-full rounded-lg object-contain" />
+                  <!-- The thumbnail is deliberately capped: this card shares a row, and a 4K
+                       desktop shrunk into it is unreadable anyway. Clicking opens the full-size
+                       view, which is where you actually look at what he is doing. -->
+                  <img :src="shotUrl" alt="screen of the monitored PC — click to enlarge"
+                       class="max-h-96 w-full cursor-zoom-in rounded-lg object-contain"
+                       @click="shotFull = true" />
                 </template>
               </div>
             </div>
@@ -799,6 +815,36 @@
       </div>
     </div>
 
+    <!-- ── Screenshot, full size ────────────────────────────────────
+         Not a DaisyUI modal-box: that is width-constrained, which is the exact problem. A plain
+         fixed overlay lets the image use the whole window, and `object-contain` keeps the aspect
+         ratio so a 16:9 desktop is never stretched.
+
+         Live refresh keeps working while open -- `shotUrl` is the same reactive value the
+         thumbnail binds to, so the toggle updates this view too. -->
+    <div x-show="shotFull" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2"
+         @click="closeShotFull()"
+         @keydown.escape.window="closeShotFull()"
+         role="dialog" aria-modal="true" aria-label="Screenshot, full size">
+      <!-- .stop so clicking the picture does not dismiss it; only the backdrop does. -->
+      <img :src="shotUrl" alt="screen of the monitored PC"
+           class="max-h-full max-w-full object-contain" @click.stop />
+      <div class="absolute right-4 top-4 flex gap-2" @click.stop>
+        <button class="btn btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
+          <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
+          Refresh
+        </button>
+        <button class="btn btn-sm" @click="toggleBrowserFullscreen($el.closest('[role=dialog]'))">
+          ⛶ Fullscreen
+        </button>
+        <button class="btn btn-sm btn-ghost text-white" @click="closeShotFull()">✕ Close</button>
+      </div>
+      <p class="absolute bottom-3 left-0 right-0 text-center text-xs text-white/50">
+        Esc or click the backdrop to close
+      </p>
+    </div>
+
     <!-- ── Toasts ───────────────────────────────────────────────────── -->
     <div class="toast toast-end">
       <template x-for="t in toasts" :key="t.id">
@@ -836,6 +882,7 @@
           _refreshMs: 3000,
           killTarget: null,
           confirmShutdown: false,
+          shotFull: false,
           curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60, windows: [] },
           savingCurfew: false,
           rules: { enabled: true, daily_budget_mins: 0, budget_by_weekday: null, blocklist: [], app_limits: {}, app_groups: [], warn_secs: 60, budget_action: "lock" },
@@ -1223,6 +1270,27 @@
               this.toast(r.ok ? "Shutting down…" : "Shutdown failed", r.ok ? "success" : "error");
             } catch {
               this.toast("Shutdown request failed", "error");
+            }
+          },
+
+          // Close the full-size view, and leave real fullscreen if we entered it -- otherwise the
+          // browser stays fullscreen over a dashboard the parent can no longer see the chrome of.
+          closeShotFull() {
+            this.shotFull = false;
+            if (document.fullscreenElement) {
+              document.exitFullscreen().catch(() => {});
+            }
+          },
+
+          // True fullscreen, for "as big as the monitor gets". Separate from the overlay on
+          // purpose: the overlay always works, while requestFullscreen needs a user gesture and
+          // can be refused outright by policy. If it fails the overlay is still up and usable,
+          // so the failure costs nothing and does not need reporting.
+          toggleBrowserFullscreen(el) {
+            if (document.fullscreenElement) {
+              document.exitFullscreen().catch(() => {});
+            } else if (el?.requestFullscreen) {
+              el.requestFullscreen().catch(() => {});
             }
           },
 

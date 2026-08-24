@@ -23,3 +23,6 @@
 
 # macOS directory metadata. Untracked so far by luck, not by rule.
 .DS_Store
+
+# Playwright MCP scratch output (snapshots, console logs, screenshots from UI checks).
+/.playwright-mcp/
