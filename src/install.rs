@@ -280,9 +280,8 @@ fn parse_port_flag(args: &[String]) -> Result<Option<u16>> {
 /// Also used by `doctor`, which must not mistake "the data folder is locked to Administrators"
 /// for "nothing is installed".
 ///
-/// SAFETY: Win32 token FFI; the process-token handle is closed on every path. Returns `false`
-/// if the query itself fails — callers treat that as "assume not elevated", which is the safe
-/// direction for both a refusal and a diagnostic.
+/// Returns `false` if the query itself fails — callers treat that as "assume not elevated",
+/// which is the safe direction for both a refusal and a diagnostic.
 #[cfg(windows)]
 pub fn is_elevated() -> bool {
     use windows::Win32::Foundation::{CloseHandle, HANDLE};
@@ -291,6 +290,7 @@ pub fn is_elevated() -> bool {
     };
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
+    // SAFETY: Win32 token FFI; the process-token handle is closed on every path.
     unsafe {
         let mut token = HANDLE::default();
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {

@@ -72,8 +72,12 @@ fn cap(context: &str, e: impl std::fmt::Display) -> ControlError {
 /// and must `CloseHandle` it. Errors are returned as plain strings so each caller can wrap
 /// them in the right [`ControlError`] variant.
 ///
-/// SAFETY: Win32 token FFI; the intermediate `user_token` is always closed before returning.
+/// # Safety
+///
+/// Callers own the returned handle and must `CloseHandle` it; leaking it holds a primary token
+/// for the child's session open for the life of the service.
 unsafe fn active_session_token() -> Result<HANDLE, String> {
+    // SAFETY: Win32 token FFI; the intermediate `user_token` is always closed before returning.
     unsafe {
         let session_id = WTSGetActiveConsoleSessionId();
         if session_id == u32::MAX {
@@ -104,10 +108,9 @@ unsafe fn active_session_token() -> Result<HANDLE, String> {
 /// Maps to [`SessionState`]: no console session or no logged-on user → `NoUser`; a logged-on
 /// user with the workstation locked → `Locked`; otherwise → `Active`. On any query failure the
 /// error is returned so the caller can fail toward enforcement.
-///
-/// SAFETY: Win32 WTS FFI. The buffer returned by `WTSQuerySessionInformationW` is freed with
-/// `WTSFreeMemory` on every path before returning.
 pub fn active_session_state() -> Result<SessionState, ControlError> {
+    // SAFETY: Win32 WTS FFI. The buffer returned by `WTSQuerySessionInformationW` is freed with
+    // `WTSFreeMemory` on every path before returning.
     unsafe {
         let session_id = WTSGetActiveConsoleSessionId();
         if session_id == u32::MAX {
@@ -162,10 +165,9 @@ pub fn active_session_state() -> Result<SessionState, ControlError> {
 /// child's session by id, so it appears on *their* desktop — no user-session helper needed.
 /// `bWait = false` returns immediately (the box auto-dismisses after [`NOTIFY_TIMEOUT_SECS`]),
 /// so the enforcer never blocks waiting for a click.
-///
-/// SAFETY: Win32 WTS FFI. The wide buffers are borrowed for the duration of this synchronous
-/// call only; no handle is retained.
 pub fn notify_active_session(title: &str, body: &str) -> Result<(), ControlError> {
+    // SAFETY: Win32 WTS FFI. The wide buffers are borrowed for the duration of this synchronous
+    // call only; no handle is retained.
     unsafe {
         let session_id = WTSGetActiveConsoleSessionId();
         if session_id == u32::MAX {

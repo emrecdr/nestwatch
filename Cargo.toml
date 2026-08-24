@@ -9,6 +9,42 @@ rust-version = "1.96.0"
 # Private tool — guard against accidental `cargo publish` to crates.io.
 publish = false
 
+# Lint policy lives here, not only on CI's command line.
+#
+# CI runs `cargo clippy --all-targets -- -D warnings`, which binds *there*. A `-D` flag cannot
+# bind here: locally `cargo clippy` warns where CI fails, and rust-analyzer — the surface these
+# lints are actually read on, while typing — never sees the policy at all. That is the same
+# local/CI divergence `build.rs` already warns about for the toolchain, and for the same reason:
+# a rule that only exists in the pipeline is discovered at push time instead of at write time.
+#
+# Each entry below is a property this codebase already holds; every one was verified to produce
+# zero warnings before being added, so these lock in the status quo rather than opening a
+# cleanup. Lints that would have required edits elsewhere were deliberately left out —
+# `unused_qualifications` (9 sites, all in `curfew.rs`/`rules.rs`) is real but lands in the
+# enforcement path, and `missing_docs` (84) / `str_to_string` (36) are churn for a binary crate
+# nobody depends on. Adopt those with their own change, if at all — not as a side effect of this.
+[lints.rust]
+# Edition 2024 makes this a warning. It is a denial here because every `unsafe` in this crate is
+# FFI into Win32, where the unmarked-operation case is exactly the one worth failing on.
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# Allow-by-default (a `restriction` lint), so CI's `-D warnings` never switched it on. Turning it
+# on found four of the crate's eight `unsafe` blocks putting their justification in the function's
+# `///` doc comment rather than a `// SAFETY:` line above the block — the reasoning was written,
+# just not where the block is read, and not where the two blocks in `spawn_lock`/`spawn_and_capture`
+# already put it. All eight now match. Note this only bites under `--target x86_64-pc-windows-gnu`:
+# every `unsafe` here is `#[cfg(windows)]`, so a host-target clippy run sees none of them.
+undocumented_unsafe_blocks = "deny"
+# A stub that compiles is worse here than one that doesn't: an unreached `todo!()` on the
+# enforcement path means the limit silently isn't applied, which looks identical to a well-behaved
+# child until the bill arrives.
+todo = "deny"
+unimplemented = "deny"
+# This ships as a SYSTEM service writing to a log the parent reads. `dbg!` output there is noise
+# in the one file consulted when something is wrong.
+dbg_macro = "deny"
+
 [dependencies]
 anyhow = "1.0.103"
 argon2 = "0.5"
