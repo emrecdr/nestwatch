@@ -13,6 +13,12 @@ fn main() {
 
     let css = Path::new("assets/app.css");
     let html = Path::new("assets/index.html");
+    // The other input to the CSS: bump Tailwind or daisyUI and the *same* markup compiles to
+    // different output. Checking only the markup misses that entirely, and the miss is silent —
+    // CI runs `npm ci && npm run build` on every job, so releases get the new compiler while the
+    // developer keeps a stale local file and never learns the two disagree. Caught exactly that
+    // way: a shipped 0.2.3 .exe carried Tailwind 4.3.3 while `assets/app.css` here was 4.3.2.
+    let lock = Path::new("web/package-lock.json");
     if !css.exists() {
         println!(
             "cargo:warning=assets/app.css is missing — run `cd web && npm install && npm run build` \
@@ -23,11 +29,18 @@ fn main() {
             "cargo:warning=assets/app.css is older than assets/index.html — run `cd web && npm run \
              build` or the UI may render with classes missing from the compiled CSS."
         );
+    } else if newer(lock, css) {
+        println!(
+            "cargo:warning=assets/app.css is older than web/package-lock.json — the CSS toolchain \
+             moved since it was built. Run `cd web && npm ci && npm run build`, or this build's UI \
+             is compiled by a different Tailwind/daisyUI than the release's."
+        );
     }
-    // Rebuild if either the compiled CSS or the markup it's compiled from changes, so the
-    // staleness check above actually re-runs when it matters.
+    // Rebuild if any input to the staleness check changes, so the check above actually re-runs
+    // when it matters.
     println!("cargo:rerun-if-changed=assets/app.css");
     println!("cargo:rerun-if-changed=assets/index.html");
+    println!("cargo:rerun-if-changed=web/package-lock.json");
 }
 
 /// Warn when the compiler running this build is not the one `rust-toolchain.toml` pins.
