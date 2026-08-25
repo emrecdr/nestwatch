@@ -152,6 +152,34 @@ mod tests {
         out
     }
 
+    /// Every Alpine directive on a page, as `(attribute, value)`.
+    ///
+    /// `x-`, `@` and `:` attributes only — those are the ones Alpine evaluates. A plain `class` or
+    /// `href` is inert text as far as the expression parser is concerned.
+    fn alpine_directives(html: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let bytes = html.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let Some(eq) = html[i..].find("=\"") else {
+                break;
+            };
+            let at = i + eq;
+            // Walk back over the attribute name.
+            let start = html[..at]
+                .rfind(|c: char| c.is_whitespace())
+                .map_or(0, |p| p + 1);
+            let name = &html[start..at];
+            let rest = &html[at + 2..];
+            let Some(end) = rest.find('"') else { break };
+            if name.starts_with("x-") || name.starts_with('@') || name.starts_with(':') {
+                out.push((name.to_string(), rest[..end].to_string()));
+            }
+            i = at + 2 + end + 1;
+        }
+        out
+    }
+
     /// The stylesheet that ships, so the scan below compares markup against what a browser will
     /// actually receive — not against what Tailwind *could* generate from a fresh build.
     ///
@@ -170,6 +198,66 @@ mod tests {
                  guard that quietly passes when its input is missing is worse than no guard.)"
             )
         })
+    }
+
+    /// No served page uses an Alpine expression its CSP build cannot parse.
+    ///
+    /// `script-src` is `'self'` with no `'unsafe-eval'`, which is only possible because the CSP
+    /// build parses attribute expressions with its own small parser instead of `new Function`.
+    /// That parser is stricter than JavaScript, and the failure mode is the one this codebase keeps
+    /// meeting: the page renders, nothing throws in Rust, and one directive silently stops
+    /// evaluating.
+    ///
+    /// The four constructs below were established by probing the build, not by reading about it —
+    /// the documentation is silent on two of them, and the entry that tracked this work (O8)
+    /// records an earlier confident claim about `x-model` that turned out to be false. What the
+    /// parser reports:
+    ///
+    /// * `?.`         — `CSP Parser Error: Unexpected token: PUNCTUATION "."`
+    /// * `??`         — `CSP Parser Error: Unexpected token: PUNCTUATION "?"`
+    /// * a backtick   — `CSP Parser Error: Unexpected token: OPERATOR`
+    /// * `[...spread]` — no error at all; the loop simply renders nothing
+    ///
+    /// The last is why this test exists rather than a reliance on the console: a construct that
+    /// fails *silently* is exactly what shipped a chart with no bars once already.
+    ///
+    /// Everything else Alpine's own expressions need still works in an attribute — property paths,
+    /// ternaries, comparisons, method calls with arguments, assignment, `x-model`, array literals.
+    /// The fix for anything caught here is a getter or a method on the component, never widening
+    /// the policy.
+    #[test]
+    fn no_alpine_expression_needs_more_than_the_csp_build_can_parse() {
+        // (pattern, what the CSP parser does with it)
+        const FORBIDDEN: &[(&str, &str)] = &[
+            ("`", "template literal — Unexpected token: OPERATOR"),
+            ("...", "spread — renders nothing, silently"),
+            (
+                "?.",
+                "optional chaining — Unexpected token: PUNCTUATION \".\"",
+            ),
+            (
+                "??",
+                "nullish coalescing — Unexpected token: PUNCTUATION \"?\"",
+            ),
+        ];
+
+        let mut bad = Vec::new();
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            for (attr, value) in alpine_directives(&html) {
+                for (pattern, why) in FORBIDDEN {
+                    if value.contains(pattern) {
+                        bad.push(format!("{name}: {attr}=\"{value}\" — {why}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "these expressions cannot be parsed by Alpine's CSP build, so the directive would \
+             quietly stop working while `script-src` stays tight.\nMove the expression into a \
+             getter or method on the component:\n{bad:#?}",
+        );
     }
 
     /// A `<summary>` never contains a control of its own.

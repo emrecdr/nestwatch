@@ -124,6 +124,25 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **Updating over an existing install could silently do nothing.** If anyone was signed in to the PC,
+  the update failed to replace the program file and quietly restarted the old version instead — so you
+  would run the installer, see it finish, and still be on the previous build. The cause was a
+  background process left over from the running version, which keeps the program file open; the
+  installer now closes it first. It never showed up in testing because it only happens when someone
+  is actually logged in, which is most evenings and no test machine.
+- **Uninstall could report success while leaving parts of itself behind.** Same cause: a file it could
+  not delete produced a note in passing and an otherwise cheerful ending. It now stops and tells you
+  exactly what is still there and how to finish the job. Getting this wrong in the reassuring
+  direction is the worst option available — you would walk away believing the controls were gone.
+  It also now checks the end state rather than each step: the firewall rule is confirmed gone
+  (removing it was previously fire-and-forget, so a failure was silent), and a service that Windows
+  has only *marked* for removal — which happens whenever the Services window is open — is reported
+  while you are still looking at the uninstall, instead of surfacing later as an unexplained error
+  on your next install.
+- **`doctor` now tells you if you are running a different build from the one installed.** Copying a
+  new version onto the PC does not update the service, so it was possible to download a fix, run the
+  check from the download, and be told everything was fine about a service still running the old
+  code. It now says which build is installed and which one you just ran.
 - **The switch beside "Curfew" now says what it is doing.** It was a bare toggle: you could see that
   it did *something* and had to guess what. It now reads **Off**, **On**, or **On — no hours set**,
   matching the switch on the screen-time card, which has always shown its state. The third case is
@@ -227,6 +246,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   scrolling to the block does not look. All eight now match, and the lint that catches it is on.
 
 ### Security
+- **The dashboard can no longer run code built from a string.** `script-src` is now `'self'` alone
+  — earlier this release it stopped allowing inline scripts, and it now also refuses `eval` and
+  anything like it. That closes the last route by which injected text on the page could become
+  running code.
+  The interface library was the reason it was ever allowed: its normal build turns every expression
+  written in the markup into a function at runtime. The page now ships that library's strict build,
+  which reads those expressions with its own parser and cannot reach anything outside the component.
+  Twenty-six expressions moved out of the markup to suit it. Verified with the tighter rule actually
+  in force: the dashboard loads with no errors and everything still works.
 - **A tampered-with screen-time helper can no longer grow the service's memory or your disk without
   limit.** The helper that measures which window is in front has to run as your child to see your
   child's windows, so everything it reports is treated as something your child could have chosen —

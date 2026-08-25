@@ -11,13 +11,13 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%A9%BA%3C/text%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/app.css" />
     <!-- app.js before alpine.min.js, and this order is load-bearing: both are deferred, deferred
-         scripts run in document order, and `x-data="app()"` needs the global to exist by the time
+         scripts run in document order, and `x-data="app"` needs the global to exist by the time
          Alpine starts. Reversed, the dashboard renders blank. Externalised so the script can be
          linted and tested, and so `script-src` no longer needs 'unsafe-inline'. -->
     <script defer src="/app.js"></script>
     <script defer src="/alpine.min.js"></script>
   </head>
-  <body class="min-h-screen bg-base-200" x-data="app()" x-init="init()" x-cloak>
+  <body class="min-h-screen bg-base-200" x-data="app" x-init="init()" x-cloak>
     <!-- ── Loading gate ─────────────────────────────────────────────── -->
     <template x-if="authed === null">
       <div class="flex min-h-screen items-center justify-center">
@@ -289,7 +289,7 @@
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">
                   Today's screen time
-                  <span class="badge badge-warning badge-sm" x-show="today?.enabled === false">Paused</span>
+                  <span class="badge badge-warning badge-sm" x-show="isPaused">Paused</span>
                 </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadToday()" :disabled="loadingToday">
                   <span x-show="loadingToday" class="loading loading-spinner loading-xs"></span>
@@ -327,10 +327,10 @@
                     <span><span class="font-semibold" x-text="today.used_mins"></span> of
                       <span x-text="today.budget_mins"></span> min used</span>
                     <span class="opacity-70"><span x-text="today.remaining_mins"></span> min left<span
-                      x-show="today.extra_mins > 0" x-text="` (incl. +${today.extra_mins} bonus)`"></span></span>
+                      x-show="today.extra_mins > 0" x-text="bonusLabel()"></span></span>
                   </div>
                   <progress class="progress w-full mt-1"
-                            :aria-label="`Screen time: ${today.used_mins} of ${today.budget_mins} minutes used`"
+                            :aria-label="todayBarLabel()"
                             :class="today.remaining_mins === 0 ? 'progress-error' : (today.remaining_mins <= 15 ? 'progress-warning' : 'progress-primary')"
                             :value="today.used_mins" :max="today.budget_mins"></progress>
                 </div>
@@ -349,7 +349,7 @@
               <template x-if="today && !(today.budget_mins > 0)">
                 <div class="mt-1">
                   <p class="text-sm">
-                    <span class="font-semibold" x-text="today.used_mins ?? 0"></span> min used today
+                    <span class="font-semibold" x-text="todayUsedOrZero()"></span> min used today
                   </p>
                   <p class="text-sm opacity-70">
                     No daily limit set — tracking only. Set one under
@@ -368,7 +368,7 @@
               </div>
 
               <!-- Per-app usage -->
-              <template x-if="today?.per_app?.length">
+              <template x-if="hasPerApp">
                 <div class="mt-2">
                   <span class="text-sm">Per-app usage today</span>
                   <div class="mt-1 flex flex-col gap-1">
@@ -376,7 +376,7 @@
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <progress class="progress flex-1"
-                                  :aria-label="`${a.name}: ${a.used_mins} of ${a.limit_mins} minutes`"
+                                  :aria-label="limitLabel(a)"
                                   :class="a.used_mins >= a.limit_mins ? 'progress-error' : 'progress-primary'"
                                   :value="a.used_mins" :max="a.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="a.used_mins"></span>/<span
@@ -393,7 +393,7 @@
                    they describe. Guarded on `today?.` because `today` is null until the first
                    response arrives; an unguarded read here throws at runtime where no Rust test can
                    see it, which is how the chart shipped drawing nothing. -->
-              <template x-if="today?.focus_missing">
+              <template x-if="focusMissing">
                 <p class="mt-2 text-sm opacity-70">
                   No focus figures today. Time in front of each app is measured by a helper running
                   in your child's own session — if it is not running, this stays empty even on a
@@ -401,7 +401,7 @@
                 </p>
               </template>
 
-              <template x-if="today?.focused?.length">
+              <template x-if="hasFocused">
                 <div class="mt-2">
                   <span class="text-sm">In front today</span>
                   <div class="mt-1 flex flex-col gap-1">
@@ -421,7 +421,7 @@
                 </div>
               </template>
 
-              <template x-if="today?.pages?.length">
+              <template x-if="hasPages">
                 <div class="mt-2">
                   <span class="text-sm">In the browser today</span>
                   <div class="mt-1 flex flex-col gap-1">
@@ -439,7 +439,7 @@
               </template>
 
               <!-- Group (shared pool) usage -->
-              <template x-if="today?.groups?.length">
+              <template x-if="hasGroups">
                 <div class="mt-2">
                   <span class="text-sm">App groups today</span>
                   <div class="mt-1 flex flex-col gap-1">
@@ -447,7 +447,7 @@
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="g.name"></span>
                         <progress class="progress flex-1"
-                                  :aria-label="`${g.name}: ${g.used_mins} of ${g.limit_mins} minutes`"
+                                  :aria-label="limitLabel(g)"
                                   :class="g.used_mins >= g.limit_mins ? 'progress-error' : 'progress-primary'"
                                   :value="g.used_mins" :max="g.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="g.used_mins"></span>/<span
@@ -647,7 +647,7 @@
                      behind it. -->
                 <h2 class="card-title text-base" aria-live="polite" aria-atomic="true">
                   More-time requests
-                  <span class="badge badge-primary" x-text="requestCount() ?? '?'"></span>
+                  <span class="badge badge-primary" x-text="requestBadgeCount()"></span>
                 </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadTimeRequests()">Refresh</button>
               </div>
@@ -666,7 +666,7 @@
                     <tr><th scope="col">Time</th><th scope="col">Minutes</th><th scope="col">Reason</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
                   </thead>
                   <tbody>
-                    <template x-for="r in timeRequests ?? []" :key="r.id">
+                    <template x-for="r in timeRequestRows" :key="r.id">
                       <tr>
                         <td class="whitespace-nowrap" x-text="fmtTime(r.ts)"></td>
                         <td x-text="r.minutes"></td>
@@ -814,13 +814,13 @@
 
               <div class="mt-2 flex flex-wrap gap-4 text-sm">
                 <div><span class="opacity-70">Total</span>
-                  <span class="ml-1 font-semibold" x-text="`${screentime.total_mins} min`"></span></div>
+                  <span class="ml-1 font-semibold" x-text="stTotalLabel()"></span></div>
                 <div><span class="opacity-70">Daily average</span>
                   <span class="ml-1 font-semibold"
-                        x-text="screentime.daily_avg_mins == null ? '—' : `${screentime.daily_avg_mins} min`"></span></div>
+                        x-text="stAvgLabel()"></span></div>
                 <div><span class="opacity-70">Measured days</span>
                   <span class="ml-1 font-semibold"
-                        x-text="`${screentime.measured_days}/${screentime.days.length}`"></span></div>
+                        x-text="stMeasuredLabel()"></span></div>
                 <div class="opacity-70" x-text="stChangeLabel()"></div>
               </div>
 
@@ -877,7 +877,7 @@
                     <tr><th scope="col">Date</th><th scope="col">Minutes</th></tr>
                   </thead>
                   <tbody>
-                    <template x-for="d in [...screentime.days].reverse()" :key="d.date">
+                    <template x-for="d in stDaysNewestFirst" :key="d.date">
                       <tr>
                         <td class="whitespace-nowrap" x-text="d.date"></td>
                         <td :class="d.minutes_used == null ? 'opacity-50' : (d.over_budget ? 'text-error' : '')"
@@ -894,7 +894,7 @@
                    and days recorded before groups were written to history contribute none. -->
               <template x-if="screentime.group_totals && screentime.group_totals.length">
                 <div class="mt-3">
-                  <span class="text-sm" x-text="`By category over ${stDays} days`"></span>
+                  <span class="text-sm" x-text="stTotalsHeading('By category')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="t in screentime.group_totals" :key="t.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -912,7 +912,7 @@
                    Summed over measured days only, so a gap contributes nothing rather than a zero. -->
               <template x-if="screentime.app_totals && screentime.app_totals.length">
                 <div class="mt-3">
-                  <span class="text-sm" x-text="`Most-used apps over ${stDays} days`"></span>
+                  <span class="text-sm" x-text="stTotalsHeading('Most-used apps')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="t in screentime.app_totals" :key="t.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -926,7 +926,7 @@
 
               <template x-if="screentime.focus_totals && screentime.focus_totals.length">
                 <div class="mt-3">
-                  <span class="text-sm" x-text="`Most time in front over ${stDays} days`"></span>
+                  <span class="text-sm" x-text="stTotalsHeading('Most time in front')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="t in screentime.focus_totals" :key="t.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -940,7 +940,7 @@
 
               <template x-if="screentime.page_totals && screentime.page_totals.length">
                 <div class="mt-3">
-                  <span class="text-sm" x-text="`Most browser time over ${stDays} days`"></span>
+                  <span class="text-sm" x-text="stTotalsHeading('Most browser time')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="t in screentime.page_totals" :key="t.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -956,7 +956,7 @@
                 <div class="mt-3">
                   <span class="text-sm" x-text="stHeading('apps')"></span>
                   <div class="mt-1 flex flex-col gap-1">
-                    <template x-for="a in stDayFor('apps').apps ?? []" :key="a.name">
+                    <template x-for="a in stRows('apps')" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
@@ -973,7 +973,7 @@
                 <div class="mt-3">
                   <span class="text-sm" x-text="stHeading('focused')"></span>
                   <div class="mt-1 flex flex-col gap-1">
-                    <template x-for="a in stDayFor('focused').focused ?? []" :key="a.name">
+                    <template x-for="a in stRows('focused')" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <span class="opacity-70"><span x-text="a.minutes"></span> min focused</span>
@@ -990,7 +990,7 @@
                 <div class="mt-3">
                   <span class="text-sm" x-text="stHeading('pages')"></span>
                   <div class="mt-1 flex flex-col gap-1">
-                    <template x-for="p in stDayFor('pages').pages ?? []" :key="p.name">
+                    <template x-for="p in stRows('pages')" :key="p.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="p.name"></span>
                         <span class="opacity-70"><span x-text="p.minutes"></span> min</span>
@@ -1145,8 +1145,8 @@
       <div class="modal-box">
         <h3 class="text-lg font-bold">Close app?</h3>
         <p class="py-2">
-          Terminate <span class="font-semibold" x-text="killTarget?.name"></span>
-          (PID <span x-text="killTarget?.pid"></span>)? Unsaved work may be lost.
+          Terminate <span class="font-semibold" x-text="killTargetName"></span>
+          (PID <span x-text="killTargetPid"></span>)? Unsaved work may be lost.
         </p>
         <div class="modal-action">
           <button class="btn btn-ghost" @click="killTarget = null">Cancel</button>

@@ -125,7 +125,7 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
 | Service / FFI | windows-service 0.8, windows 0.62 (WTS + CreateProcessAsUser) |
 | Time | chrono 0.4 (local-time curfew windows + daily screen-time reset) |
 | Cert | rcgen 0.14 |
-| UI | Alpine.js 3.15, Tailwind CSS v4.3, daisyUI 5.7 (built to `assets/app.css`). Follows the viewing device's light/dark setting. |
+| UI | Alpine.js 3.16 **CSP build**, Tailwind CSS v4.3, daisyUI 5.7 (built to `assets/app.css`). The CSP build is what lets `script-src` be `'self'` alone — no `'unsafe-inline'`, no `'unsafe-eval'`. Follows the viewing device's light/dark setting, with a switch to override it. |
 
 ## Tamper-resistance — and its limits
 

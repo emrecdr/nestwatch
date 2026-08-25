@@ -109,9 +109,20 @@ fn is_same_origin(site: Option<&str>, mode: Option<&str>, method: &Method) -> bo
 /// arrives in the markup — which is the directive that matters most here, since the markup is
 /// where injected content would land.
 ///
-/// `'unsafe-eval'` stays: Alpine compiles its attribute expressions with `new Function`. Removing
-/// it means the `@alpinejs/csp` build, which is O8 — measured at 14 of 264 directives needing
-/// rework, and gated on there being any JavaScript tests at all rather than on the markup.
+/// **`'unsafe-eval'` is gone too.** It was there because Alpine's standard build compiles every
+/// attribute expression with `new Function`. The page now ships Alpine's **CSP build**, which
+/// parses those expressions with its own small parser instead and reaches no globals at all — so
+/// `script-src` is `'self'` and nothing on either page can evaluate a string as code.
+///
+/// The cost was 26 directives, moved into getters and methods on the component: 11 template
+/// literals, 1 spread, and 14 uses of `?.`/`??`. Those four constructs are the only ones the CSP
+/// parser rejects — property paths, ternaries, comparisons, method calls with arguments,
+/// assignment, `x-model` and array literals all still work in an attribute.
+///
+/// Two of the four are undocumented, and were established by probing the build rather than reading
+/// about it. `web::tests::no_alpine_expression_needs_more_than_the_csp_build_can_parse` holds the
+/// line, and matters more than most guards here because a spread fails *silently* — no console
+/// error, the loop simply renders nothing, which is how a chart shipped with no bars once before.
 ///
 /// `style-src` keeps `'unsafe-inline'`: the `[x-cloak]` rule is still an inline `<style>`, and
 /// Alpine writes `style` attributes for `x-show` and `:style`. `img-src` allows `blob:`
@@ -127,7 +138,7 @@ fn is_same_origin(site: Option<&str>, mode: Option<&str>, method: &Method) -> bo
 /// screenshot, kill a process, shut the machine down — so exfiltration to one more host is not
 /// the marginal risk. `default-src 'none'` still blocks every other destination.
 const CSP: &str = "default-src 'none'; \
-     script-src 'self' 'unsafe-eval'; \
+     script-src 'self'; \
      style-src 'self' 'unsafe-inline'; \
      img-src 'self' blob: data:; \
      connect-src 'self' https://api.github.com; \

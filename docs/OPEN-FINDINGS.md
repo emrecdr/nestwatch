@@ -22,6 +22,16 @@ That second pass is also why several entries in *Considered and declined* record
 with the code, so what was checked and found false is worth as much shelf space as what was found
 true.
 
+A third pass (2026-08-25) added **O16-O24**, from a research review of per-app and web-page tracking
+against primary sources — Win32 documentation, Chromium's `ax_mode.h`, and Microsoft's own XInput
+guidance. Each entry states how it was established, because they are not equally solid: O18, O19, O21
+and O22 are read directly off the tree and are facts about code that exists; O16, O17 and O20 rest on
+primary sources plus a mechanism, and each names the one on-device observation that would confirm or
+kill it. **None of them has been seen happen**, which is the same tier the watcher itself sits in and
+the reason O23 exists at all. One finding from this pass was dropped before it reached the file: a
+suspected doc-to-code drift on Roblox's Store-build naming turned out to be implemented after all, in
+`appLabel` — the drift is O16's, and it is the opposite of what it first looked like.
+
 ---
 
 ## Open
@@ -184,7 +194,390 @@ Three things learned while designing it are worth not re-deriving:
 
 **The per-account half of this entry is unchanged and still open.**
 
-### O8 · The dashboard's logic is the least-verified code that ships
+### O16 · UWP windows resolve to `ApplicationFrameHost.exe`, not to the app
+
+The watcher identifies an app by taking `GetForegroundWindow`, asking it for a pid, and reading that
+process's image name (`watcher.rs:297-334`). For a **packaged UWP app** that chain returns
+`applicationframehost.exe`. The OS hosts UWP windows in a frame process; the app's own
+`Windows.UI.Core.CoreWindow` is a *child* window owned by a different process.
+
+Why this one matters more than it looks: [WINDOWS-TESTING.md](WINDOWS-TESTING.md) §237 asks the
+tester to confirm Roblox is attributed under **both** the direct download (`RobloxPlayerBeta.exe`)
+and the Microsoft Store build (`Windows10Universal.exe`), calling switching between them "the obvious
+dodge". [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) repeats the claim, and `assets/app.js:1056`
+maps `windows10universal.exe` to the label "Roblox". If the Store build is a CoreWindow UWP then
+**that key can never arrive** — the watcher reports `applicationframehost.exe` — the label mapping is
+dead code, and the dodge the checklist names is the dodge that works. Every Store app would also pile
+into one meaningless row.
+
+Two sessions checked this independently. `applicationframehost|uwp|winui|store app` returns **zero
+hits** across `src/`, `docs/` and `assets/`: not handled, and not recorded as a known gap either.
+ActivityWatch has carried the same defect for years, so it is not an exotic case.
+
+**Deliberately not asserted:** whether Roblox's current Store build is a CoreWindow UWP or an
+MSIX-packaged Win32 app. Only the first is affected. That is one glance at Task Manager on the target
+PC, and it decides whether this entry is urgent or moot — which is why the checklist step comes first.
+
+**Fix.** When the resolved name is `applicationframehost.exe`, `EnumChildWindows` the frame window
+and take the first child whose pid differs. Known limit: a *minimised* UWP app's frame holds no such
+child — irrelevant here, because a minimised window is never the foreground window.
+
+**Trigger.** §D2, before any further doc claims the Store build is covered.
+
+### O17 · Gamepad play reads as idle, so console-style sessions stop accruing
+
+Idle is decided solely by `GetLastInputInfo` (`watcher.rs:234-252`), and `Tracker::bank` credits
+**zero** while idle (`foreground.rs:417`). `GetLastInputInfo` reports keyboard and mouse only. A
+Valve engineer states that Steam Input and gamepad-emulating overlays "don't generate events that
+`GetLastInputInfo` would read".
+
+So a child playing with an Xbox controller goes idle after `IDLE_AFTER` (180s) and accrues **nothing**
+for the rest of the session. The failure direction is the one that matters: a silent under-count that
+favours the child, on exactly the long uninterrupted session a budget exists to bound.
+[FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) rejected a pure event-driven design in as many words
+for producing "a silent under-count that always favours the child" — that reasoning was never carried
+across to idle.
+
+It also surfaces as a visible contradiction, because enforcement counts *running* time and is
+unaffected: a controller session renders as "Apps running 3 h / Time in front 20 min", with the
+smaller and more wrong number being the one labelled as what the child actually did.
+
+**Fix.** Register for Raw Input (`RegisterRawInputDevices`, HID usage page `0x01`, usages `0x04`/`0x05`)
+with `RIDEV_INPUTSINK`, and feed `WM_INPUT` arrivals into the same last-input timestamp. Event-driven,
+so it costs nothing when nobody is playing, and the watcher **already runs a message pump**. It needs
+one message-only window, because `RIDEV_INPUTSINK` requires an `hwndTarget` and the pump currently has
+no window.
+
+**Not `XInputGetState` polling.** Microsoft's own guidance is not to call it for empty user slots every
+frame, and 10–15% CPU losses have been measured doing exactly that. The cheap-looking fix is the
+expensive one.
+
+**Trigger.** Alongside O18 — same file, same measurement, and §D2 can then test both in one sitting
+with a controller on the desk.
+
+### O18 · Idle time is discarded rather than reported, so passive viewing vanishes
+
+Same mechanism as O17, different victim. Because `bank` credits zero while idle, **any** use that
+generates no keyboard or mouse input disappears after 180 seconds: a 40-minute YouTube video counts as
+about three minutes. For a product whose report answers "what has he been doing all evening", video is
+not an edge case.
+
+The deeper problem is not the threshold, it is that the seconds are **thrown away**. This codebase
+draws a careful line everywhere else between "measured zero" and "not measured" — `measured` on
+`DayRow`, `focus_missing` on the today card, `null` rather than `0` for an absent helper — and states
+the reason: collapsing them "would let a dead enforcer render exactly like a well-behaved child".
+Idle time is the one place that distinction is silently dropped.
+
+**Preferred fix, and it needs no new Win32 at all:** bank idle seconds into a third bucket and report
+them, so the card reads "2 h active · 40 min unattended (app open, no input)". That converts a silent
+under-count into an honest visible number, costs one map, and is consistent with the pattern the rest
+of the codebase already follows. A parent can then interpret it; today they cannot, because they
+cannot see it.
+
+**Considered and not recommended:** detecting playback via `IAudioSessionManager2` +
+`IAudioMeterInformation` peak values, checked only once input-idle has tripped (so zero cost on the
+active path). It misattributes in the case that matters most — Chrome's audio session belongs to a
+separate utility process, not the process owning the foreground window — and it misses muted video.
+Worth revisiting only if the third bucket proves insufficient in practice.
+
+**The general form, which is worth more than this entry.** On this codebase, **"no input" and
+"nothing happening" are different facts**, and treating them as one is a recurring mistake rather
+than a one-off. This entry and O17 are two instances; a third was caught in the capture path, where
+skipping a screenshot while `GetLastInputInfo` reports idle looked like free savings and would have
+frozen the live view during exactly the activity a parent most wants to see — a child watching a
+video generates no input for an hour while the screen changes continuously.
+
+The enforcement path already knows this and is the model to copy: `session_state()` distinguishes
+`Locked` from `NoUser` rather than collapsing both into "away". Any future optimisation keyed on idle
+should be read against that.
+
+**Trigger.** With O17.
+
+### O19 · An unrecognised browser silently yields no page data
+
+`BROWSERS` (`foreground.rs:307`) lists four executables: `chrome.exe`, `msedge.exe`, `firefox.exe`,
+`brave.exe`. `is_browser` gates the title read, so anything else — Opera, **Opera GX**, Vivaldi, Arc,
+any Chromium fork — produces no page attribution at all.
+
+The list being short is deliberate and the reasoning is sound (an entry that never matches is
+indistinguishable from a child who never opened it). The finding is the **failure mode**, not the
+length: the dashboard shows `opera.exe` under "Apps running" and nothing under "In the browser", which
+is pixel-identical to an evening of not browsing. So it is an evasion route that requires no
+privilege, no scripting and no admin — install Opera GX, which is marketed squarely at exactly this
+product's demographic, and web visibility silently drops to zero.
+
+**Fix.** Not "add more browsers" — that loses the same way one version later. Either (a) detect that
+the foreground app is a browser the watcher cannot parse and surface it as *unrecognised browser —
+page titles unavailable*, so absence is visible, or (b) fall back to the raw window title with the
+browser suffix left on when the exe is unknown-but-browser-shaped. (a) is honest and cheap; (b) is
+more useful and needs a rule for what counts as browser-shaped.
+
+**Trigger.** Next change to page attribution; also worth one line in §D2 to confirm the empty-state is
+distinguishable.
+
+### O20 · Domain capture is cheaper than FOREGROUND-TRACKING.md assumed — re-open the decision
+
+[FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) declines domain tracking, and the DNS half of that
+reasoning **validates**: Chrome's built-in async resolver bypasses the Windows DNS client, so
+`Microsoft-Windows-DNS-Client` ETW sees nothing without writing browser policy into `HKLM`. That
+decision should stand and does not need re-arguing.
+
+What the document never evaluates is reading the **omnibox via UI Automation**, and the assumption
+that it would be too expensive does not survive checking the source. Chromium's `ax_mode.h` defines
+`kNativeAPIs` as indicating "a third-party client accessing Chrome via accessibility APIs" and states
+that without additional modes "the contents of web pages will not be accessible". The expensive
+renderer tree is `kWebContents` and above. **The address bar is browser-native UI, not web content.**
+Since Chrome 138, Chromium enables native UIA by default, removing the old MSAA emulation layer.
+
+**What is confirmed is the flag semantics, not the behaviour.** Nobody has observed which AXMode Chrome
+actually enters when a client queries only the omnibox. On this codebase's record that gap is the whole
+finding, not a footnote — the claim is "worth one measurement", not "safe to build".
+
+Costs that are real either way: COM plus `UIAutomationCore.dll` in a process that currently loads
+neither (RAM); fragility, since the target is `"Address and search bar"` by name or `addressEditBox` by
+AutomationId and vendors who do this commercially warn that browser versions and Windows locales break
+it; and a genuine **privacy escalation** — capturing only the focused tab's eTLD+1 and discarding path
+and query keeps most of the posture the "no browser history reading" decision protects, but it is a
+parent-facing decision, not an installer detail.
+
+**Fix.** Prototype, measure Chrome's CPU/RSS with and without the query attached, and only then decide.
+If Chrome escalates past `kNativeAPIs`, drop it and keep page titles.
+
+**Trigger.** Only after §D2 — measuring a second thing on a subsystem that has never run once is the
+wrong order.
+
+### O22 · Page attribution is sampled at 5 s, so short tab visits round away
+
+`POLL` is 5 seconds (`watcher.rs:62`) and the page title is re-read on each resolve. Focus *time* is
+computed from timestamp deltas so totals do not drift — but the **title** attached to those seconds is
+whatever the last sample saw, so a tab visited for less than a poll interval may be credited to the
+neighbouring page or missed entirely.
+
+For app-level accounting this is fine and by design. For page titles it is weaker than it looks,
+because tab switching is far more frequent than app switching — which is exactly why page titles are
+the higher-cardinality dimension the caps exist for.
+
+`FOREGROUND-TRACKING.md`'s own *Unverified* section already reaches the right idea and stops short of
+committing: re-register a **PID-scoped `EVENT_OBJECT_NAMECHANGE` hook on each foreground change**, so
+title edges are caught precisely while a background browser autoplaying video generates no events at
+all. It notes this "combines two proven patterns but matches no existing tracker", which is the honest
+reason it is a prototype rather than a change.
+
+**Fix.** Prototype the scoped NAMECHANGE hook and measure event volume before adopting. Unscoped
+NAMECHANGE is a firehose — it fires per control — and komorebi's source says plainly "this spams the
+message queue, but I don't know what else to do."
+
+**Trigger.** Only if §D2 shows page figures that look wrong. Do not do this speculatively.
+
+### O23 · "Minimum resources" is the stated design target and no number has ever been taken
+
+[FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) is admirably direct that **no figure in its resource
+table is measured**, and that the numbers usually quoted (komorebi under 1% CPU, `aw-server-rust` at
+9 MB idle) describe somebody else's program. That honesty is right, and it leaves the project's stated
+constraint — maximum tracking, minimum CPU and RAM — currently unverifiable.
+
+This is recorded as a task rather than a caveat because it gates several entries above. O20 cannot be
+decided without a baseline to compare against; O17's fix is chosen partly on cost grounds; and every
+optimisation proposed for this subsystem is otherwise an argument between two guesses.
+
+**Fix.** Take four numbers on the target PC over one normal evening: watcher CPU %, watcher RSS,
+`ApplicationFrameHost`/browser CPU delta with any UIA query attached, and the count of resolve
+wake-ups per hour. Publish them in the resource table with the date and the machine, replacing the
+prose that currently stands in for them.
+
+**How to take them, learned the expensive way on the capture path.** A peer session benchmarking PNG
+encoding nearly published two confounded numbers, and the failure mode transfers directly:
+
+- **Vary one thing at a time, and print the config you used.** An RGB-vs-RGBA comparison changed the
+  compression level *and* the channel count together, and credited the whole 62% to the alpha
+  channel. Isolated properly, alpha was 10% and compression was the rest.
+- **A suspiciously round or suspiciously identical number is the tell, not a result.** One
+  configuration produced byte-identical output for four different images — 960×540×3 exactly. It was
+  emitting stored DEFLATE blocks. Not a measurement, an artefact.
+- **Check what a library's "default" actually is.** `image`'s `CompressionType` *defaults* to `Fast`,
+  while the variant *named* `Default` is a different and slower setting — so "compare against the
+  default" and "compare against `Default`" are opposite instructions. That API shape will catch the
+  next person too.
+
+**Trigger.** §D2 step 12, which already asks for this. It has simply never been done.
+
+### O24 · Game portals are identifiable from page titles at zero syscall cost
+
+The product goal named in [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) is separating "an evening of
+Roblox from an evening of homework". Native Roblox is already measured exactly by process name. Browser
+portals — now.gg, Poki, CrazyGames, coolmathgames — are not, and today they land as undifferentiated
+page titles in a list capped at `MAX_PAGES`.
+
+But those titles are highly regular ("Poki — Free Online Games"), and the watcher **already has the
+title**. Classifying it costs no additional Win32 call, no COM, no browser reconfiguration and no
+privacy escalation. This is the cheapest available answer to the question the feature exists to answer,
+and it is independent of O20 — worth doing whether or not domain capture ever happens.
+
+**Honest limits, which belong on the dashboard and not just here:** a renamed tab defeats it, and so
+does any portal not on the list. It is a *label* on data already collected, never a claim of coverage —
+so it must not be presented as "no game sites visited". Absence of a match means nothing was
+recognised, which is the same null-vs-zero rule as everywhere else.
+
+**Fix.** A small static title→category table, applied at render time in `screentime.rs`/the dashboard
+rather than at collection, so the stored data stays raw and the list can change without a re-collection
+or a migration.
+
+**Trigger.** Any time; it touches no Win32 and cannot regress measurement. Lowest-risk entry here.
+
+### O41 · The screen-capture path has a Windows floor the README does not admit to
+
+Any move from GDI `BitBlt` to Windows.Graphics.Capture needs `GraphicsCaptureItem::CreateForMonitor`,
+which is **Windows 10 1903 (build 18362)**. The README promises "Windows 10 or 11" with no floor, so
+an unconditional switch would silently stop working on 1809 — a build that is still out there on
+hand-me-down family PCs, which is most of this product's market.
+
+**The trap is the number.** This codebase already cites **1803** twice, correctly, for the removal of
+Interactive Service Detection. 1803 is therefore the version in everyone's head here, and it is the
+wrong one for this API. Anyone reasoning from memory rather than checking will be off by one release
+in the direction that ships a broken build.
+
+**There is no fallback to fall back to, and that is the sharp part.** The obvious fix — runtime
+`GraphicsCaptureSession::IsSupported()` with a GDI fallback — **cannot be built on `xcap`**, which is
+the crate in use. Its two capture paths are mutually exclusive *at compile time*
+(`xcap-0.9.8/src/windows/mod.rs:5` is `#[cfg(not(feature = "wgc"))] mod gdi;` against `mod.rs:8`
+`#[cfg(feature = "wgc")] mod wgc;`), and `IsSupported` appears nowhere in the crate. Enabling `wgc`
+therefore **deletes** the GDI path rather than sitting in front of it. Keeping both would need a
+second capture crate or hand-written WinRT/D3D11 FFI.
+
+That inverts the finding: with no fallback available, the version floor stops being a graceful
+degradation and becomes a **hard requirement**, which is what makes the 1803-vs-1903 confusion above
+worth writing down.
+
+**Also checked and disqualified:** DXGI Desktop Duplication, the one alternative that would give
+correct capture without WGC's yellow border. It fails `DXGI_ERROR_UNSUPPORTED` against the discrete
+GPU on a hybrid-GPU system — which describes every gaming laptop, i.e. precisely the machine this
+product cares about.
+
+**Fix.** WGC only, failing loudly, with the OS build checked in `preflight` — never an unconditional
+switch, and never a fallback, which cannot exist. Either state the floor in the README or keep the
+README's promise true.
+
+Found by a peer session's validation pass and recorded here because that pass was report-only. The
+fix line above is its **second** version: the first said "runtime `IsSupported()` with a GDI
+fallback", which reads as obviously correct and does not compile. Verified against the vendored
+source before rewriting, which is the only reason it was caught.
+
+### O42 · Helper lifetime is reconstructed at teardown instead of established at spawn
+
+`session.rs`'s `spawn_piped` calls `CreateProcessAsUserW` with `CREATE_UNICODE_ENVIRONMENT |
+CREATE_NO_WINDOW` and **no job object**, so the service creates a child and immediately forgets it is
+the parent. O21's fix then re-derives "which processes are mine" from the process table at install
+and uninstall time.
+
+That fix is correct and stays. This entry is about its *depth*. The cost of answering the question
+late rather than never losing the answer:
+
+- ~190 lines of Win32 in `install.rs` — `process_image_path`, `processes_named`, `terminate_and_wait`,
+  `terminate_resident_helpers` — of which only the selection predicate and the name-buffer parse can
+  run off Windows.
+- A new crate surface (`Win32_System_Diagnostics_ToolHelp`).
+- **A security question that exists only because the answer was discarded:** "which same-named
+  process may an elevated installer terminate?" It costs a paragraph of prose and two dedicated
+  tests. Under a job object, membership *is* the identity and is unforgeable, so the question does
+  not arise.
+- Residual over-breadth: selection is on the image path, so it also matches a short-lived screenshot
+  helper or an admin's own `doctor` run from the install directory. Harmless today, and the shape of
+  a fix that must infer what it should have been told.
+
+**The deeper fix:** one unnamed job object for the service process's lifetime with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and every `spawn_piped` child assigned into it
+(`CREATE_SUSPENDED` → `AssignProcessToJobObject` → `ResumeThread`). Two things were checked because
+they are the usual objections: job objects are **not** session-scoped (session affinity applies to
+the *named* object namespace, and this handle would be unnamed and passed directly), and the handle
+table is torn down on **any** process exit — crash, `panic = "abort"`, SCM force-kill — which is
+exactly the set of cases a cooperative shutdown signal cannot cover.
+
+**Honest costs, which are why this is filed rather than done:**
+- More untestable FFI in `session.rs`, and unlike `helpers_to_terminate` there is no pure predicate
+  to extract from it.
+- `CREATE_SUSPENDED` widens the error paths: a failed assign must terminate the suspended child, and
+  getting *that* wrong leaves a permanently-suspended orphan — worse than the leak being fixed.
+- `spawn_piped` passes `bInheritHandles = TRUE`. The job handle **must** be non-inheritable or the
+  child inherits a handle to its own job and `KILL_ON_JOB_CLOSE` never fires. `CreateJobObjectW(None,
+  None)` is non-inheritable by default, so it is right for free — which is precisely the
+  silent-failure shape this project keeps meeting.
+- It does not delete the installer-side code, only shrinks it: job termination is *initiated*, so
+  `deploy` still needs to confirm the image is free before `fs::copy`. `terminate_resident_helpers`
+  becomes a wait.
+
+**Trigger.** Not before §D2. Adding a large piece of unverified Win32 to the spawn path of the
+service that locks a child's PC, on top of a release nobody has watched run, is the exact stacking
+O2 and O4 both decline — when something misbehaves on the device there would be no way to tell the
+feature from the refactor.
+
+**Related and deliberately not treated as the fix:** `run_watcher_supervisor` is a detached
+`std::thread::spawn` (`server.rs`) with no shutdown signal, which is a genuine root cause but a
+*shallower* one — it covers `sc stop` and OS shutdown only, not a crash, not `panic = "abort"`, not
+the `nestwatch run` CLI path. Worth doing for hygiene; not a substitute. If done, the seam is the
+`axum_server::Handle` already held in `server.rs`, not the `mpsc` in `service.rs`, which is
+single-receiver and already consumed.
+
+### O43 · The certificate's recorded SANs come from a different probe than the certificate
+
+`install()` calls `cert::reachable_hosts()` and records the result as `cfg.cert_sans`; the SANs
+actually baked into the certificate come from a **separate** `reachable_hosts()` call inside
+`cert::generate`. If the machine's address changes between those two moments, the config
+permanently claims SANs the certificate does not carry.
+
+Why that matters more than a stale field: the next install decides whether to reuse the certificate
+with `covered = cfg.cert_sans == hosts`. That comparison is the only thing standing between a routine
+upgrade and re-issuing the certificate — which invalidates the exception every paired phone and
+laptop accepted, and, as the comment there says, trains the parent to click through trust warnings.
+A wrong `cert_sans` makes that decision on a list that was never true.
+
+**Fix.** Probe once in `install()` and pass the list into `cert::generate`, so what is written to the
+config is by construction what is in the certificate.
+
+**Trigger.** Next change to the certificate path. Pre-existing; found during a cleanup review of the
+uninstall work and recorded rather than fixed, because it is not that change.
+
+---
+
+## Fixed
+
+### ~~O21 · An orphaned watcher never exits, so service restarts leak helpers~~ — **fixed**
+
+`emit` wrote a sample and **discarded the write error**: `if writeln!(...).is_ok()` with no `else`.
+Nothing else in `run()` could end the process — the pump exits only on `WM_QUIT`, which nothing
+posts — so when the service went away (crash, upgrade, `sc stop`) the helper kept running forever,
+holding a `SetWinEventHook` and waking every 5 seconds to write into a pipe nobody was reading.
+`spawn_piped` uses no job object, so nothing bound its lifetime to the service's. One orphan per
+service restart, accumulating until sign-out.
+
+**The consequence was larger than the leak, and is why this was fixed rather than filed.** The
+helper's image *is* the installed binary, and Windows holds a running executable open. So a leftover
+helper made `std::fs::copy` fail on upgrade and `remove_dir_all` fail on uninstall — meaning an
+update silently never applied, and an uninstall left the binary behind while reporting success. The
+codebase already half-knew: `deploy` named "a lingering helper process" as a likely cause of a failed
+copy and did nothing about it.
+
+**Fixed on both ends**, because either alone leaves a window open:
+- The sample write moved to `foreground::write_sample`, which **returns** its error; `watcher::emit`
+  exits the process when it fails. Extracted rather than fixed in place so the broken-pipe path is
+  unit-tested on a machine with no Windows — it was otherwise the one path only the target could
+  exercise. Mutation-checked: restoring the original swallow fails two tests.
+- `install` terminates any resident helper still running the installed binary **before** overwriting
+  it (`deploy`) and before deleting it (`remove_service`), and waits for each to actually die —
+  `TerminateProcess` only initiates termination, so returning early would reintroduce the same
+  sharing violation intermittently.
+
+Selection is on the **full image path**, never the file name: a child can put a file called
+`host-health.exe` anywhere they can write, and matching by name would let them choose what an
+elevated installer terminates. `helpers_to_terminate` is pure and tested on every platform for
+exactly that reason, including that it never selects the installer's own pid.
+
+**Still unverified on Windows**, like everything else in this tier. §D2 gained steps for it.
+
+Raised here, then resolved. Kept rather than deleted, so nobody re-derives a question already
+answered — and because *how* a finding was proved fixed is worth more than the fact that it was.
+Each was confirmed by mutation: break the fix, watch the named test fail, restore.
+
+### ~~O8 · The dashboard's logic is the least-verified code that ships~~ — **fixed**
 
 **Two of three steps are done.** The scripts are now `assets/app.js` (744 lines) and
 `assets/ask.js` (136), out of the markup, and `script-src` no longer admits `'unsafe-inline'` as a
@@ -192,7 +585,7 @@ result — an inline `<script>` can no longer run on either page, which is the d
 matters most where injected content would land. `no_inline_script_on_any_served_page` holds that
 shape, since the failure mode is silent.
 
-**The JavaScript now has tests** — 39 of them as this is written, on `node:test` — no framework
+**The JavaScript now has tests** — 81 of them, on `node:test` — no framework
 installed, so the addition
 costs the project nothing it was not already carrying. They cover the pure decision and formatting
 methods: `compareVersions`, `isEnforcerStale`, `stBarPct`, `stDayLabel`, `stBarClass`,
@@ -245,21 +638,44 @@ JavaScript tests at all**, so a runtime
 swap under the parent's only interface has nothing to catch a regression.
 
 **What is left, in order.** The relocation and the unit tests are done. Next is `@alpinejs/csp`,
-which is what `'unsafe-eval'` is still paying for. It is now a bounded job — 14 of 264 directives
+which is what `'unsafe-eval'` was still paying for. It looked, at the time this was written, like a bounded job — 14 of 264 directives
 — and the tests above cover the methods those directives call, so a swap that broke the component
 object would be caught. What would *not* be caught is a directive that stops evaluating, since
 nothing tests the rendered DOM; a headless smoke test of both pages is the honest prerequisite,
 and it is the same tooling decision the paragraph above defers.
 
-**Trigger.** Do this before the dashboard grows another panel, or the migration cost grows with it.
+**Fixed, 2026-08-25.** `script-src` is now `'self'` — no `'unsafe-inline'`, no `'unsafe-eval'`.
+The page ships Alpine's CSP build (3.16.3, 69,625 bytes against the standard build's 46,346), which
+parses attribute expressions with its own parser rather than `new Function` and reaches no globals.
+`x-data="app()"` became `Alpine.data("app", app)` plus `x-data="app"`, since a global is exactly
+what the build cannot see.
 
----
+**The cost was 26 directives of 351, not 14 of 264 — and the page had grown in between.** Eleven
+template literals, one spread, and fourteen uses of `?.`/`??`, each moved into a getter or method.
+Nothing else changed: property paths, ternaries, comparisons, method calls with arguments,
+assignment, `x-model` and array literals all still work in an attribute.
 
-## Fixed
+**The two undocumented categories were settled by probing the build, not by reading.** A throwaway
+page against the real CSP build reported, in its own words: `?.` → *Unexpected token: PUNCTUATION
+"."*; `??` → *Unexpected token: PUNCTUATION "?"*; a backtick → *Unexpected token: OPERATOR*. That
+matters because this entry already records one confident claim — that `x-model` does not work,
+sourced from a GitHub discussion — which the documentation and now the build both contradict.
+Reading about this build has been wrong twice; running it has been right twice.
 
-Raised here, then resolved. Kept rather than deleted, so nobody re-derives a question already
-answered — and because *how* a finding was proved fixed is worth more than the fact that it was.
-Each was confirmed by mutation: break the fix, watch the named test fail, restore.
+**The spread is the dangerous one and it is why there is a guard rather than a console check.** It
+produces *no error at all* — the loop simply renders nothing, which is precisely how O9 shipped a
+chart with thirty days of data and no bars.
+`no_alpine_expression_needs_more_than_the_csp_build_can_parse` fails the build on any of the four,
+confirmed by injecting each in turn.
+
+**Verified by running it under the tightened policy**, which is the only check that means anything
+here: with `script-src 'self'` actually served, the dashboard renders with **zero console errors**,
+and the range selector, day pinning, theme switch and collapsible cards all still work — each of
+which exercises expressions that were migrated.
+
+**What remains open from this entry** is narrower than it was: there is still no linter over the two
+scripts, and Alpine's own rendering is still only checked by a person driving a browser rather than
+by anything automatic. Both are smaller questions than the one this entry was really about.
 
 ### ~~O1 · Curfew's per-tick state has two owners~~ — **fixed**
 

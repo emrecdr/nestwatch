@@ -157,11 +157,25 @@ open the door on its own.
   the markup is where injected content would land. A source scan
   (`web::tests::no_inline_script_on_any_served_page`) fails the build if an inline script returns,
   since the browser refuses it silently.
-- **What is still permitted, and why:** `'unsafe-eval'`, because Alpine compiles its attribute
-  expressions with `new Function`. Removing it means adopting the `@alpinejs/csp` build — measured
-  at 14 of 264 directives needing rework, tracked as O8 in
-  [OPEN-FINDINGS.md](OPEN-FINDINGS.md). `style-src` keeps `'unsafe-inline'`: the `[x-cloak]` rule
+- **`script-src` does not admit `'unsafe-eval'` either — it is `'self'` alone.** It used to, because
+  Alpine's standard build compiles every attribute expression with `new Function`. The dashboard now
+  ships Alpine's **CSP build**, which parses those expressions with its own parser and cannot reach
+  a global at all, so nothing on either page can turn a string into running code. `x-data="app()"`
+  became `Alpine.data("app", app)` for the same reason — a global is exactly what that build cannot
+  see.
+  The migration was 26 directives of 351: eleven template literals, one spread, and fourteen uses of
+  `?.`/`??`, each moved into a getter or method. Those four constructs are the *only* ones the CSP
+  parser rejects; property paths, ternaries, comparisons, method calls with arguments, assignment,
+  `x-model` and array literals all still work in an attribute.
+  Two of the four are undocumented, and were settled by probing the build rather than reading about
+  it. `web::tests::no_alpine_expression_needs_more_than_the_csp_build_can_parse` fails the build if
+  any returns — which matters more than most guards here, because a spread produces **no error at
+  all**: the loop simply renders nothing, the same silent shape that once shipped a chart with
+  thirty days of data and no bars.
+- **What is still permitted, and why:** `style-src` keeps `'unsafe-inline'` — the `[x-cloak]` rule
   is an inline `<style>`, and Alpine writes `style` attributes for `x-show` and `:style`.
+  `connect-src` allows `api.github.com`, for the update check behind a button the parent presses;
+  nothing contacts it otherwise.
 
 ### 6. Auditing / visibility
 - Security-relevant events are appended as JSON lines to `audit.jsonl` in the ACL-hardened data

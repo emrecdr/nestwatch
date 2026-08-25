@@ -31,6 +31,33 @@ pub fn install() -> Result<()> {
     // config into it, leaving a confusing half-installed state. See `ensure_elevated`.
     ensure_elevated("install", SERVICE_ELEVATION_REASON)?;
 
+    // Say what this run is doing to what is already here, before it does it. Printed rather than
+    // acted on: nothing branches on this yet, and the first thing worth knowing when a machine
+    // starts misbehaving after an update is which version it came from.
+    match classify_install(&read_stamp(), crate::VERSION) {
+        InstallKind::Fresh => {}
+        InstallKind::Reinstall => {
+            println!(
+                "{} is already installed; this run reinstalls it.\n",
+                crate::VERSION
+            )
+        }
+        InstallKind::Upgrade { from } => println!(
+            "{from} is installed; this run updates it to {}.\n",
+            crate::VERSION
+        ),
+        InstallKind::Downgrade { from } => println!(
+            "WARNING: {from} is already installed and is NEWER than this build ({}).\n\
+             Settings written by the newer version may not survive being read and rewritten by \
+             this one.\n",
+            crate::VERSION
+        ),
+        InstallKind::Unknown => println!(
+            "NOTE: an install record exists but could not be read.\n\
+             Continuing, but this cannot tell whether that was an older or newer build.\n"
+        ),
+    }
+
     let args: Vec<String> = std::env::args().collect();
 
     // Distinguish "no config yet" (a fresh install — fine) from "there IS a config and it won't
@@ -178,6 +205,14 @@ pub fn install() -> Result<()> {
 
     deploy(cfg.port)?;
 
+    // After `deploy`, never before: the stamp records what is *installed*, and deploy is the step
+    // that can fail and roll back to the previous binary. Writing it earlier would leave a machine
+    // claiming a version it is not running. Not fatal on its own — a missing stamp costs the next
+    // install its "updating X -> Y" line, which is not worth failing an otherwise good install for.
+    if let Err(e) = write_stamp() {
+        println!("(could not record the installed version: {e})");
+    }
+
     println!("\nInstalled.");
     print_access_block(cfg.port);
     println!("\nTLS cert SHA-256 — verify this the first time your browser warns, so you know");
@@ -186,25 +221,49 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+/// Remove everything `install` put on this machine.
+///
+/// **Fails if anything survived.** This used to print `(could not remove ...)` and return `Ok(())`,
+/// so a half-finished uninstall reported success — the worst direction to be wrong in here, because
+/// the parent walks away believing the controls are gone while a service or a hooked watcher is
+/// still running. Every removal is attempted, and the ones that failed are reported together at the
+/// end; see [`render_leftovers`].
 pub fn uninstall() -> Result<()> {
     ensure_elevated("uninstall", SERVICE_ELEVATION_REASON)?;
     // Don't leave a live pairing token behind for a service that's going away.
     crate::pairing::clear(&config::data_paths().pairing);
     let purge = std::env::args().any(|a| a == "--purge");
-    remove_service()?;
+    let mut leftovers: Vec<Leftover> = Vec::new();
+
+    remove_service(&mut leftovers)?;
+
     if purge {
         let dir = config::data_paths().dir;
-        if let Err(e) = std::fs::remove_dir_all(&dir) {
-            println!("(could not remove {}: {e})", dir.display());
-        } else {
+        let removed = std::fs::remove_dir_all(&dir);
+        if removed.is_ok() {
             println!("Purged config/cert at {}", dir.display());
         }
+        leftovers.extend(Leftover::removal("the data directory", &dir, removed));
     } else {
+        // The stamp records which build was installed, so it belongs to the installation rather
+        // than to the parent's settings — it goes even when the settings stay. Leaving it would
+        // tell the next install it is upgrading from a version that is no longer on the machine.
+        let stamp = stamp_path();
+        leftovers.extend(Leftover::removal(
+            "the installed-version record",
+            &stamp,
+            std::fs::remove_file(&stamp),
+        ));
         println!(
             "Config/cert left in {} (use `uninstall --purge` to remove).",
             config::data_paths().dir.display()
         );
     }
+
+    if !leftovers.is_empty() {
+        bail!("{}", render_leftovers(&leftovers));
+    }
+    println!("\nUninstalled.");
     Ok(())
 }
 
@@ -531,11 +590,23 @@ fn deploy(port: u16) -> Result<()> {
         stop_and_wait(svc)?;
     }
 
+    // The service is stopped, but its resident watchers are not: `run_watcher_supervisor` is a
+    // detached thread that dies with the service process without terminating the helpers it
+    // spawned, and a helper ignores the resulting broken pipe. Those helpers are running *this*
+    // binary, and Windows keeps a running executable's image open — so the copy below failed with a
+    // sharing violation whenever anyone was signed in. The rollback then correctly restarted the old
+    // service, and the update simply never applied. Killing them here is what makes an upgrade
+    // possible on a machine that is actually in use.
+    //
+    // After the stop and before the copy, deliberately: killing them earlier lets the still-running
+    // supervisor spawn replacements, and killing them later is too late for the copy.
+    terminate_resident_helpers();
+
     // Everything from the stop above until the service is started again is a window where an
     // upgrade has enforcement switched OFF. Any `?` in here used to abort the install and leave
     // it that way until the next reboot — with a failed binary copy (antivirus holding the file,
-    // a lingering helper process) being the likely trigger. Do the fallible work first, then put
-    // the old service back if it didn't work out.
+    // or the lingering helper handled just above) being the likely trigger. Do the fallible work
+    // first, then put the old service back if it didn't work out.
     let staged = (|| -> Result<()> {
         if current_exe != target_exe {
             std::fs::copy(&current_exe, &target_exe)
@@ -956,10 +1027,7 @@ fn configure_firewall(port: u16) -> Result<()> {
 /// a correct rule looks like — or about what it's called.
 #[cfg(windows)]
 pub(crate) fn firewall_rule_is_subnet_scoped() -> bool {
-    let shown = std::process::Command::new(crate::syspath::system32("netsh.exe"))
-        .args(["advfirewall", "firewall", "show", "rule"])
-        .arg(format!("name={FIREWALL_RULE}"))
-        .output();
+    let shown = show_firewall_rule();
     // Both conditions: a rule disabled in the firewall GUI still reads back with its LocalSubnet
     // scope intact, so scope alone reported a healthy rule while inbound traffic was blocked —
     // a false OK for the single most common "I can't connect from my phone" cause. `Enabled` and
@@ -1019,8 +1087,147 @@ fn configure_recovery() {
     );
 }
 
+/// The full image path of a running process, or `None` if it cannot be asked.
+///
+/// `PROCESS_QUERY_LIMITED_INFORMATION`, not `PROCESS_QUERY_INFORMATION`: the wider right fails
+/// against a process running at a different integrity level, and a helper we cannot name is one we
+/// would leave running — which is the whole failure being fixed.
+///
+/// Shared with [`crate::watcher::process_name`], which wants the same pid→path chain and then only
+/// the file name. It lives here rather than there because `install` is compiled on every platform
+/// while `watcher` is `#[cfg(windows)]`, so this direction is the only one that links.
 #[cfg(windows)]
-fn remove_service() -> Result<()> {
+pub(crate) fn process_image_path(pid: u32) -> Option<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+    use windows::core::PWSTR;
+
+    // SAFETY: Win32 process FFI. The handle is closed on every path; `buf`/`len` are owned by this
+    // frame and `len` is initialised to the buffer's true capacity as the API requires.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 260];
+        let mut len = buf.len() as u32;
+        let path = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
+        .ok()
+        .map(|()| String::from_utf16_lossy(&buf[..len as usize]));
+        let _ = CloseHandle(handle);
+        path
+    }
+}
+
+/// Every running process whose executable *file name* matches, paired with its full image path.
+///
+/// Name first, path second, and the order is the point: the snapshot gives names for free, so only
+/// the one or two processes that could possibly be ours pay for an `OpenProcess`. The name is a
+/// filter, never the decision — [`helpers_to_terminate`] makes that on the full path.
+#[cfg(windows)]
+fn processes_named(name: &str) -> Vec<(u32, String)> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut found = Vec::new();
+    // SAFETY: Win32 snapshot FFI. `entry.dwSize` is set before the first call as the API requires;
+    // the snapshot handle is closed on the way out.
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return found;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let exe = exe_name_from_buf(&entry.szExeFile);
+                if exe.eq_ignore_ascii_case(name)
+                    && let Some(path) = process_image_path(entry.th32ProcessID)
+                {
+                    found.push((entry.th32ProcessID, path));
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    found
+}
+
+/// Kill `pid` and wait for it to actually be gone.
+///
+/// The wait is not optional. `TerminateProcess` only *initiates* termination, and the caller's next
+/// move is to overwrite or delete the executable that process has open — so returning before the
+/// kernel has torn the process down would reintroduce the exact sharing violation this exists to
+/// prevent, intermittently and only on slower machines.
+#[cfg(windows)]
+fn terminate_and_wait(pid: u32) -> bool {
+    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+    };
+
+    // SAFETY: Win32 process FFI. The handle is closed on both paths.
+    unsafe {
+        // `PROCESS_SYNCHRONIZE` as well as `PROCESS_TERMINATE`: without it the handle cannot be
+        // waited on, and the wait below is the part that makes this safe to follow with a file
+        // operation on the terminated process's image.
+        let Ok(handle) = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, false, pid) else {
+            return false;
+        };
+        let asked = TerminateProcess(handle, 0).is_ok();
+        // 5s: generous for a process being torn down, and bounded so a wedged one cannot hang an
+        // install. A timeout is reported as failure, which surfaces as a leftover rather than as a
+        // silently broken upgrade.
+        let gone = asked && WaitForSingleObject(handle, 5_000) == WAIT_OBJECT_0;
+        let _ = CloseHandle(handle);
+        gone
+    }
+}
+
+/// Terminate every resident watcher still running the installed binary. Returns how many died.
+///
+/// Called before the binary is overwritten (upgrade) and before it is deleted (uninstall), because
+/// Windows holds a running executable's image open and both operations fail against it. See
+/// [`helpers_to_terminate`] for why the helper is there to begin with and why it does not leave on
+/// its own.
+/// Reports its own result rather than returning a count for each caller to phrase. Both call sites
+/// printed the same event under two different names — "resident watcher" in one, "helper" in the
+/// other — which is one program describing one action to one person in two vocabularies.
+#[cfg(windows)]
+fn terminate_resident_helpers() {
+    let target = install_dir().join(INSTALL_EXE_NAME);
+    let candidates = processes_named(INSTALL_EXE_NAME);
+    let killed = helpers_to_terminate(&candidates, &target, std::process::id())
+        .into_iter()
+        .filter(|pid| terminate_and_wait(*pid))
+        .count();
+    if killed > 0 {
+        println!("Stopped {killed} helper process(es) holding the binary open.");
+    }
+}
+
+/// Remove the service, the firewall rule and the installed binary, recording anything that
+/// survived instead of stopping at the first failure.
+///
+/// **Nothing here short-circuits.** An uninstall that cannot delete the service should still take
+/// the firewall rule and the binary with it: stopping at the first problem leaves more behind than
+/// necessary, and the caller reports the whole list at once rather than making the parent re-run to
+/// discover the next item.
+#[cfg(windows)]
+fn remove_service(leftovers: &mut Vec<Leftover>) -> Result<()> {
     use std::ffi::OsStr;
 
     use windows_service::service::ServiceAccess;
@@ -1029,26 +1236,140 @@ fn remove_service() -> Result<()> {
     use crate::service::SERVICE_NAME;
 
     let manager = ServiceManager::local_computer(None::<&OsStr>, ServiceManagerAccess::CONNECT)?;
-    if let Ok(service) = manager.open_service(
+
+    // `service` is bound by the `if let`, so it drops at the end of that arm — before the
+    // registration check further down, which is what that check needs. `DeleteService` only *marks*
+    // a service for deletion and the record survives until the last handle closes, so verifying
+    // while still holding one would report every uninstall as incomplete. No extra scope is needed
+    // to get that; an earlier version wrapped this in one and claimed the braces were load-bearing,
+    // which was wrong in the direction that stops the next reader removing dead code.
+    let delete_failed = if let Ok(service) = manager.open_service(
         SERVICE_NAME,
         ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,
     ) {
         let _ = stop_and_wait(&service);
-        service.delete().context("deleting service")?;
-        println!("Stopped and deleted service '{SERVICE_NAME}'.");
+        match service.delete() {
+            Ok(()) => {
+                println!("Stopped and deleted service '{SERVICE_NAME}'.");
+                false
+            }
+            Err(e) => {
+                leftovers.push(Leftover {
+                    what: "the service",
+                    detail: SERVICE_NAME.to_string(),
+                    why: describe_service_error(&e),
+                });
+                true
+            }
+        }
     } else {
+        // Deliberately still verifies below. "Cannot open it" is not the same as "it is not there"
+        // — an access failure prints this line too, and in that case the registration check is the
+        // only thing that would notice a service still sitting on the machine.
         println!("Service '{SERVICE_NAME}' was not installed.");
+        false
+    };
+
+    // A successful `delete()` is not proof the service is gone, and the difference is one a parent
+    // meets later as a bare "os error 1072" on their *next* install. If anything else holds a
+    // handle — an open Services console is the usual one — the record stays behind, marked for
+    // deletion, and the SCM refuses to register a new service under the same name until it clears.
+    // Reporting it here, while they are still looking at the uninstall, is the whole point.
+    //
+    // Retried briefly rather than checked once: our own handle has just closed and the SCM does
+    // that asynchronously, so a single immediate query can see a service that is already on its
+    // way out.
+    // Skipped when the delete itself already failed: that is one problem, and reporting it twice
+    // under two names would make the leftover list look worse than the machine is.
+    if !delete_failed && service_still_registered(&manager) {
+        leftovers.push(Leftover {
+            what: "the service registration (marked for deletion)",
+            detail: SERVICE_NAME.to_string(),
+            why:
+                "something still holds a handle to it — close Services and Task Manager; a reboot \
+                  always clears it"
+                    .to_string(),
+        });
     }
 
-    // Remove the firewall rule and the installed binary directory.
+    // Before the binary is deleted, not after: the helpers this kills are running *from* that
+    // binary, and Windows keeps a running executable's image open. Skipping this is what made
+    // `remove_dir_all` below fail whenever anyone was signed in.
+    terminate_resident_helpers();
+
     delete_firewall_rule();
-    let dir = install_dir();
-    if dir.exists()
-        && let Err(e) = std::fs::remove_dir_all(&dir)
-    {
-        println!("(could not remove {}: {e})", dir.display());
+    // Verified, because `delete_firewall_rule` is best-effort by design: it ignores netsh's result
+    // so a reinstall does not report on a rule it is about to recreate anyway. That is right for
+    // install and wrong for uninstall, where an undeleted rule is a hole left open on the machine
+    // and nothing else would ever mention it.
+    if firewall_rule_exists() {
+        leftovers.push(Leftover {
+            what: "the firewall rule",
+            detail: FIREWALL_RULE.to_string(),
+            why: "netsh did not remove it".to_string(),
+        });
     }
+
+    let dir = install_dir();
+    leftovers.extend(Leftover::removal(
+        "the installed program directory",
+        &dir,
+        std::fs::remove_dir_all(&dir),
+    ));
     Ok(())
+}
+
+/// Whether the service is still registered a moment after being deleted.
+///
+/// Polled for about a second: closing the last handle lets the SCM drop the record, but it does so
+/// on its own schedule, and a single query issued immediately after `delete()` can still see it.
+/// Answering "still there" too eagerly would put a scary line on a perfectly good uninstall.
+#[cfg(windows)]
+fn service_still_registered(manager: &windows_service::service_manager::ServiceManager) -> bool {
+    use windows_service::service::ServiceAccess;
+
+    use crate::service::SERVICE_NAME;
+
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if manager
+            .open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS)
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a firewall rule by our name exists at all.
+///
+/// Distinct from [`firewall_rule_is_subnet_scoped`], which asks whether a rule is correctly scoped
+/// — a question that answers "no" both for a wrong rule and for no rule, and so cannot tell an
+/// uninstall whether it finished.
+///
+/// Decided on netsh's **exit status**, not its output: "No rules match the specified criteria." is
+/// localized and would make this work only on English installs, which is the same locale trap
+/// `firewall_rule_is_subnet_scoped` documents avoiding by matching value tokens.
+#[cfg(windows)]
+fn firewall_rule_exists() -> bool {
+    matches!(show_firewall_rule(), Ok(out) if out.status.success())
+}
+
+/// Ask netsh about our rule, once, for both questions asked of it.
+///
+/// [`firewall_rule_exists`] reads the exit status and [`firewall_rule_is_subnet_scoped`] reads the
+/// output — two projections of one query, which is what they now visibly are. Written out twice
+/// they were also the third and fourth hand-built `netsh … name={FIREWALL_RULE}` invocation in this
+/// file, so the rule name and the hardened `system32()` path had four places to stay in step.
+#[cfg(windows)]
+fn show_firewall_rule() -> std::io::Result<std::process::Output> {
+    std::process::Command::new(crate::syspath::system32("netsh.exe"))
+        .args(["advfirewall", "firewall", "show", "rule"])
+        .arg(format!("name={FIREWALL_RULE}"))
+        .output()
 }
 
 // ---------------------------------------------------------------------------
@@ -1062,14 +1383,461 @@ fn deploy(_port: u16) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn remove_service() -> Result<()> {
+fn remove_service(_leftovers: &mut Vec<Leftover>) -> Result<()> {
     println!("(service uninstall is Windows-only)");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// What this install is doing to whatever was here before
+// ---------------------------------------------------------------------------
+
+/// The relationship between the version on disk and the version doing the installing.
+///
+/// Recorded because nothing currently persists a version at all: `crate::VERSION` is printed and
+/// discarded, so an upgrade cannot see what it is upgrading *from*. That makes three things
+/// impossible — migrating data written by an older build, warning about a downgrade, and letting
+/// `doctor` notice that the binary and the data dir disagree.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum InstallKind {
+    /// Nothing was installed here before.
+    Fresh,
+    /// Same version over itself — a repair, not a change.
+    Reinstall,
+    Upgrade {
+        from: String,
+    },
+    /// An older binary over a newer stamp. Not blocked, but never silent: data written by the
+    /// newer build may carry keys this one drops on its next write.
+    Downgrade {
+        from: String,
+    },
+    /// A stamp exists and this build cannot order it against itself.
+    ///
+    /// Deliberately **not** folded into `Fresh`. They differ in the only way that matters: `Fresh`
+    /// means nothing was here, `Unknown` means something was here and we cannot say what. Collapsing
+    /// the two is the same mistake `install` already fixed for an unreadable config, where a parse
+    /// failure silently reset the curfew and rules to defaults.
+    ///
+    /// Carries nothing. There is by definition no version to report, and the previous shape — a
+    /// `from` holding a placeholder like `"(unreadable)"` — put a message where a version belongs.
+    /// Both consumers then wrapped it in their own parentheses and printed
+    /// `record is unreadable ((unreadable))`, and any future consumer that *compared* `from` rather
+    /// than printing it — a data migration keyed on the previous version being the obvious one, and
+    /// the reason this enum exists — would have matched a sentence as if it were a version.
+    Unknown,
+}
+
+/// What the on-disk install record says, if anything.
+///
+/// Three outcomes with three representations, so none of them has to be smuggled through another's
+/// type. `Missing` and `Corrupt` are the distinction [`InstallKind::Unknown`] exists to preserve;
+/// keeping them apart here is what stops a placeholder string reaching a version field.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Stamp {
+    /// No record on disk.
+    Missing,
+    /// A record exists and no version could be read out of it — unparseable, or missing the key.
+    Corrupt,
+    /// Whatever the record claims. Not necessarily a version this build can order.
+    Version(String),
+}
+
+/// Split a `major.minor.patch` version into orderable parts. `None` if it is not that shape.
+fn version_parts(v: &str) -> Option<(u64, u64, u64)> {
+    let mut it = v.trim().split('.');
+    let mut next = || it.next()?.parse::<u64>().ok();
+    let parts = (next()?, next()?, next()?);
+    // A trailing component means this is not the shape we think it is; say so rather than
+    // comparing a prefix and being confidently wrong about which build wrote the data.
+    it.next().is_none().then_some(parts)
+}
+
+/// Decide what this install is doing, from the stamp left by the last one.
+pub(crate) fn classify_install(previous: &Stamp, current: &str) -> InstallKind {
+    let prev = match previous {
+        Stamp::Missing => return InstallKind::Fresh,
+        Stamp::Corrupt => return InstallKind::Unknown,
+        Stamp::Version(v) => v,
+    };
+    let (Some(p), Some(c)) = (version_parts(prev), version_parts(current)) else {
+        return InstallKind::Unknown;
+    };
+    match p.cmp(&c) {
+        std::cmp::Ordering::Equal => InstallKind::Reinstall,
+        std::cmp::Ordering::Less => InstallKind::Upgrade { from: prev.clone() },
+        std::cmp::Ordering::Greater => InstallKind::Downgrade { from: prev.clone() },
+    }
+}
+
+/// Where the installed version is recorded, beside the config it describes.
+fn stamp_path() -> std::path::PathBuf {
+    config::data_paths().dir.join("installed.json")
+}
+
+/// The version the last install wrote, if any.
+///
+/// Three outcomes, kept distinct on purpose (see [`InstallKind::Unknown`]): `None` for no stamp at
+/// all, `Some(version)` for one this build can read, and `Some(raw)` for a stamp that exists and
+/// does not parse — which must reach [`classify_install`] as something rather than nothing.
+pub(crate) fn read_stamp() -> Stamp {
+    let Ok(raw) = std::fs::read_to_string(stamp_path()) else {
+        return Stamp::Missing;
+    };
+    // Deliberately not `Missing` on either failure below: a corrupt stamp is not an absent one, and
+    // that difference is the whole reason `Stamp` has three variants.
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(v) => match v.get("version").and_then(|v| v.as_str()) {
+            Some(version) => Stamp::Version(version.to_string()),
+            None => Stamp::Corrupt,
+        },
+        Err(_) => Stamp::Corrupt,
+    }
+}
+
+/// Record what is installed now, so the next install can see what it is replacing.
+fn write_stamp() -> Result<()> {
+    let body = serde_json::json!({
+        "version": crate::VERSION,
+        // Not read by anything yet. Written because the question "when did this last change?" is
+        // the first one asked when a machine starts misbehaving, and it cannot be answered
+        // retroactively.
+        "installed_at": crate::clock::now().to_rfc3339(),
+    });
+    // `write_atomic`, not `fs::write`, like every other writer into this data dir (`config.rs`,
+    // `cert.rs`, `pairing.rs`, `sessionstore.rs`, `rules.rs`). A torn write here is not a lost
+    // convenience: `read_stamp` would return "unreadable" permanently, which surfaces as a standing
+    // warning in `doctor` that nothing short of a reinstall clears.
+    let path = stamp_path();
+    crate::config::write_atomic(&path, &serde_json::to_vec_pretty(&body)?)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// Uninstall: what could not be removed
+// ---------------------------------------------------------------------------
+
+/// One thing `uninstall` set out to remove and could not.
+///
+/// Exists because the previous behaviour printed `(could not remove ...)` as a parenthetical and
+/// returned `Ok(())` — so a half-finished uninstall reported success. On this product that is the
+/// worst possible direction to be wrong in: the parent believes the controls are gone, and a
+/// service or a hooked helper is still running.
+pub(crate) struct Leftover {
+    /// What it was, in the parent's terms — "the installed binary", not "remove_dir_all".
+    pub what: &'static str,
+    /// Which one: a path, or a rule name.
+    pub detail: String,
+    /// The OS's reason, kept verbatim. A parent may not read it; whoever they forward it to will.
+    pub why: String,
+}
+
+impl Leftover {
+    /// A filesystem removal that failed for a reason other than the thing already being gone.
+    ///
+    /// **"Missing is success" is one rule and now has one definition.** It was written three
+    /// different ways across the uninstall path — a `NotFound` match arm, a `kind() != NotFound`
+    /// guard, and an `exists()` pre-check. The last was a different rule in the same clothes: it
+    /// asks the filesystem twice and races anything deleting the path in between.
+    ///
+    /// Returns an `Option` so callers can `extend` a list with it, which is what removes the
+    /// three-way spelling rather than merely centralising it.
+    fn removal(what: &'static str, path: &Path, result: std::io::Result<()>) -> Option<Self> {
+        match result {
+            Ok(()) => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(Leftover {
+                what,
+                detail: path.display().to_string(),
+                why: e.to_string(),
+            }),
+        }
+    }
+}
+
+/// The message `uninstall` fails with when anything survived.
+///
+/// Names every leftover, then says what is worth trying — and deliberately **does not** blame a
+/// resident watcher. That was the overwhelmingly likely cause, and [`terminate_resident_helpers`]
+/// now runs before every removal, so by the time this message is reached that explanation has
+/// already been ruled out. Pointing at it anyway would send the parent to sign a user out and
+/// change nothing, which is worse than admitting the cause is unknown.
+pub(crate) fn render_leftovers(items: &[Leftover]) -> String {
+    use std::fmt::Write as _;
+
+    let mut s = format!(
+        "uninstall did not finish — {} item(s) could not be removed:\n\n",
+        items.len()
+    );
+    for item in items {
+        let _ = writeln!(s, "  - {} - {}", item.what, item.detail);
+        let _ = writeln!(s, "    ({})", item.why);
+    }
+    let _ = write!(
+        s,
+        "\nAny resident watcher processes were already stopped, so something else is holding these \
+         open.\nUsual causes: a console whose current directory is inside the folder, an open \
+         Services or\nTask Manager window, or antivirus. Close those and re-run \
+         `{INSTALL_EXE_NAME} uninstall`."
+    );
+    s
+}
+
+// ---------------------------------------------------------------------------
+// Helpers left resident in a user's session
+// ---------------------------------------------------------------------------
+
+/// Which running processes are our own resident watchers, and must be terminated.
+///
+/// **Why this is needed at all.** `run_watcher_supervisor` spawns the installed binary as
+/// `helper --watch` inside each interactive session, and nothing stops it: the supervisor is a
+/// detached thread that dies with the service without running its `TerminateProcess`, and the
+/// helper ignores the resulting broken pipe. The helper's image *is* the installed binary, and
+/// Windows holds a running executable open — so a leftover helper makes `std::fs::copy` fail on
+/// upgrade and `remove_dir_all` fail on uninstall. `deploy` already names "a lingering helper
+/// process" as a likely cause of a failed copy without doing anything about it.
+///
+/// **Matched on the full path, never on the name.** A child can put a file called
+/// `host-health.exe` anywhere they can write. Terminating processes by name would hand them a way
+/// to make the installer kill something else; matching the exact path we installed to cannot be
+/// influenced from a directory they control.
+///
+/// Case-insensitive because process enumeration returns whatever case the OS recorded, which is
+/// not necessarily the case we wrote.
+/// The executable name out of a `PROCESSENTRY32W::szExeFile` buffer.
+///
+/// **Truncates at the first NUL; it must never trim trailing ones.** `szExeFile` is a
+/// null-*terminated* name inside a fixed 260-unit array, and nothing promises the units past the
+/// terminator are zero. `processes_named` reuses one `PROCESSENTRY32W` across the whole enumeration,
+/// so a long name followed by a shorter one leaves the tail of the long one in place. Trimming
+/// trailing NULs would then yield `"host-health.exe\0<residue>"`, the caller's comparison would
+/// silently stop matching, the helper would survive, and the upgrade would fail on the locked binary
+/// the whole enumeration exists to release — intermittently, depending on process ordering.
+///
+/// Pure and outside the `#[cfg(windows)]` block on purpose: this is the part with a rule worth
+/// getting wrong, and it would otherwise be reachable only on the machine that cannot run tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn exe_name_from_buf(buf: &[u16]) -> String {
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..end])
+}
+
+/// Only called from the Windows teardown paths, but tested on every platform — the selection rule
+/// is the security-relevant half and it must not be the part that only compiles on the target.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn helpers_to_terminate(
+    procs: &[(u32, String)],
+    install_exe: &Path,
+    self_pid: u32,
+) -> Vec<u32> {
+    let target = install_exe.to_string_lossy();
+    procs
+        .iter()
+        .filter(|(pid, path)| *pid != self_pid && path.eq_ignore_ascii_case(&target))
+        .map(|(pid, _)| *pid)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The installed layout, as a path with a space in it — which every real install has and which
+    /// is what the quoting below exists for.
+    ///
+    /// A **literal with Windows separators**, not `dir.join(INSTALL_EXE_NAME)`. `join` uses the
+    /// *host's* separator, so on the dev machine it yields
+    /// `C:\Program Files\HostHealth/host-health.exe` — a path that exists on no platform, and one
+    /// that would make these tests assert against a shape the target never produces.
+    fn installed() -> std::path::PathBuf {
+        std::path::PathBuf::from(r"C:\Program Files\HostHealth\host-health.exe")
+    }
+
+    /// The fixture above hard-codes the binary's name, so it has to be the real one.
+    #[test]
+    fn the_test_fixture_uses_the_name_the_installer_actually_writes() {
+        assert!(
+            installed().to_string_lossy().ends_with(INSTALL_EXE_NAME),
+            "fixture drifted from INSTALL_EXE_NAME ({INSTALL_EXE_NAME})"
+        );
+    }
+
+    /// A version the record could have carried, for the cases that are about ordering rather than
+    /// about the record being readable.
+    fn stamped(v: &str) -> Stamp {
+        Stamp::Version(v.to_string())
+    }
+
+    #[test]
+    fn a_first_install_has_nothing_to_compare_against() {
+        assert_eq!(
+            classify_install(&Stamp::Missing, "0.2.3"),
+            InstallKind::Fresh
+        );
+    }
+
+    #[test]
+    fn the_same_version_over_itself_is_a_reinstall_not_an_upgrade() {
+        assert_eq!(
+            classify_install(&stamped("0.2.3"), "0.2.3"),
+            InstallKind::Reinstall
+        );
+    }
+
+    #[test]
+    fn a_newer_binary_over_an_older_stamp_is_an_upgrade() {
+        assert_eq!(
+            classify_install(&stamped("0.2.3"), "0.10.0"),
+            InstallKind::Upgrade {
+                from: "0.2.3".into()
+            },
+            "0.10 must sort above 0.2 — string ordering would call this a downgrade"
+        );
+    }
+
+    #[test]
+    fn an_older_binary_over_a_newer_stamp_is_a_downgrade() {
+        assert_eq!(
+            classify_install(&stamped("0.3.0"), "0.2.3"),
+            InstallKind::Downgrade {
+                from: "0.3.0".into()
+            }
+        );
+    }
+
+    /// The distinction this enum exists for. A record that cannot be ordered must not read as
+    /// "nothing was installed here" — that is how a migration gets skipped silently.
+    #[test]
+    fn an_unparseable_stamp_is_never_mistaken_for_a_fresh_install() {
+        for junk in ["", "garbage", "1.2", "1.2.3.4", "v1.2.3", "1.2.x"] {
+            assert_eq!(
+                classify_install(&stamped(junk), "0.2.3"),
+                InstallKind::Unknown,
+                "{junk:?} must be Unknown, never Fresh"
+            );
+        }
+    }
+
+    /// The other half of the same distinction, and the one that used to be smuggled through the
+    /// version field as the string `"(unreadable)"`.
+    #[test]
+    fn a_corrupt_record_is_unknown_and_carries_no_version() {
+        assert_eq!(
+            classify_install(&Stamp::Corrupt, "0.2.3"),
+            InstallKind::Unknown,
+            "a corrupt record is not an absent one"
+        );
+    }
+
+    #[test]
+    fn an_uninstall_that_left_something_behind_says_what_and_how_to_finish() {
+        let msg = render_leftovers(&[Leftover {
+            what: "the installed binary",
+            detail: r"C:\Program Files\HostHealth\host-health.exe".into(),
+            why: "Access is denied. (os error 5)".into(),
+        }]);
+
+        assert!(
+            msg.contains("did not finish"),
+            "must not read as success: {msg}"
+        );
+        assert!(msg.contains(r"C:\Program Files\HostHealth\host-health.exe"));
+        assert!(
+            msg.contains("Access is denied."),
+            "the OS reason has to survive to whoever debugs it: {msg}"
+        );
+        // The installer terminates resident watchers before every removal, so by the time this
+        // message exists that cause is ruled out. Naming it would send the parent to sign a user
+        // out and change nothing.
+        assert!(
+            !msg.contains("Sign that user out"),
+            "must not blame a cause the uninstall already handled: {msg}"
+        );
+        assert!(
+            msg.contains("already stopped") && msg.contains("uninstall`"),
+            "must say what was ruled out and what to try next: {msg}"
+        );
+    }
+
+    /// Build a `szExeFile`-shaped buffer: a name, its terminator, then whatever was left in the
+    /// array by a previous, longer entry.
+    fn entry_buf(name: &str, residue: &str) -> Vec<u16> {
+        let mut buf: Vec<u16> = name.encode_utf16().collect();
+        buf.push(0);
+        buf.extend(residue.encode_utf16());
+        buf.resize(260, 0);
+        buf
+    }
+
+    /// The bug this guards: `processes_named` reuses one `PROCESSENTRY32W` across the enumeration,
+    /// so a shorter name lands in an array still holding the tail of a longer one. Trimming trailing
+    /// NULs instead of cutting at the first would carry the residue into the comparison, the helper
+    /// would not be recognised, and the upgrade would fail on the binary it still holds open.
+    #[test]
+    fn a_process_name_stops_at_its_terminator_not_at_the_last_nul() {
+        let buf = entry_buf("host-health.exe", "a-longer-previous-name.exe");
+        assert_eq!(exe_name_from_buf(&buf), "host-health.exe");
+    }
+
+    #[test]
+    fn a_clean_buffer_reads_back_unchanged() {
+        assert_eq!(
+            exe_name_from_buf(&entry_buf("chrome.exe", "")),
+            "chrome.exe"
+        );
+    }
+
+    /// A buffer with no terminator at all must not read past its end.
+    #[test]
+    fn a_buffer_with_no_terminator_is_taken_whole() {
+        let full: Vec<u16> = "x".repeat(260).encode_utf16().collect();
+        assert_eq!(exe_name_from_buf(&full).len(), 260);
+    }
+
+    #[test]
+    fn a_resident_helper_is_selected_for_termination() {
+        let exe = installed();
+        let procs = vec![(4321u32, exe.to_string_lossy().into_owned())];
+        assert_eq!(helpers_to_terminate(&procs, &exe, 1000), vec![4321]);
+    }
+
+    /// The installer runs from the same binary it is trying to replace. Killing itself would end
+    /// the upgrade halfway through, with enforcement off.
+    #[test]
+    fn the_installer_never_terminates_itself() {
+        let exe = installed();
+        let procs = vec![(1000u32, exe.to_string_lossy().into_owned())];
+        assert!(
+            helpers_to_terminate(&procs, &exe, 1000).is_empty(),
+            "our own pid must never be selected"
+        );
+    }
+
+    /// A standard user can drop a file called `host-health.exe` in their Downloads folder. Matching
+    /// on the name would let them choose what the elevated installer terminates.
+    #[test]
+    fn a_same_named_binary_elsewhere_on_disk_is_left_alone() {
+        let exe = installed();
+        let procs = vec![(
+            777u32,
+            r"C:\Users\son\Downloads\host-health.exe".to_string(),
+        )];
+        assert!(
+            helpers_to_terminate(&procs, &exe, 1).is_empty(),
+            "only the path we installed to may be terminated"
+        );
+    }
+
+    /// Process enumeration reports whatever case the OS recorded, not the case we wrote.
+    #[test]
+    fn a_helper_is_matched_regardless_of_path_case() {
+        let exe = installed();
+        let procs = vec![(
+            42u32,
+            r"c:\PROGRAM FILES\hosthealth\HOST-HEALTH.EXE".to_string(),
+        )];
+        assert_eq!(helpers_to_terminate(&procs, &exe, 1), vec![42]);
+    }
 
     /// `--port` is the one piece of argument handling here that is pure and platform-independent,
     /// and it sits in the file with the worst on-hardware record. Cheap to pin, so pin it.

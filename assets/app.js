@@ -41,6 +41,20 @@ function applyTheme(theme) {
 
 applyTheme(readTheme());
 
+// Register the component under a name Alpine can look up.
+//
+// `x-data="app()"` worked with the standard build because that build evaluates the attribute as
+// JavaScript, where `app` is a global. The CSP build reaches no globals at all -- that is the point
+// of it -- so the component is handed over by name instead, and the markup says `x-data="app"`.
+// Guarded like `applyTheme` above, and for the same reason: this file is also evaluated by the
+// tests, in a `vm` context with no `document`. An unguarded call here throws while the file is
+// being read, so *every* test fails at once with a ReferenceError that names none of them.
+if (typeof document !== "undefined") {
+  document.addEventListener("alpine:init", () => {
+    Alpine.data("app", app);
+  });
+}
+
 // The screen-time report before anything has been fetched.
 //
 // One definition, called from both the initial state and `resetSessionData`. It was written out
@@ -770,6 +784,73 @@ function app() {
         // which is a better outcome than refusing to change the theme at all.
       }
       applyTheme(theme);
+    },
+
+    // --- Written for Alpine's CSP build ---------------------------------------------------------
+    //
+    // That build parses attribute expressions with its own small parser instead of handing them to
+    // `new Function`, which is the whole reason `script-src` can drop `'unsafe-eval'`. Four
+    // constructs it cannot parse, established by probing the build rather than by reading — the
+    // documentation is silent on two of them, and this entry's own history is a confident claim
+    // about `x-model` that died on contact with the code:
+    //
+    //     `?.`     CSP Parser Error: Unexpected token: PUNCTUATION "."
+    //     `??`     CSP Parser Error: Unexpected token: PUNCTUATION "?"
+    //     backtick CSP Parser Error: Unexpected token: OPERATOR
+    //     [...x]   renders nothing at all, with no error
+    //
+    // Everything in this block exists to move one of those out of an attribute and into JavaScript,
+    // where all four are ordinary. Property paths, ternaries, comparisons, method calls with
+    // arguments, assignment, `x-model` and array literals *do* parse, and are left in the markup —
+    // the migration is deliberately the smallest one that works, not a wholesale move of logic.
+    //
+    // The `?.` here is load-bearing and must not be "simplified" by making `today` a zeroed object
+    // again: that placeholder is what the card used to read out as measurement, telling a parent
+    // "0 min used today" on a dashboard that had never reached the service.
+    get isPaused() { return this.today?.enabled === false; },
+    get hasPerApp() { return !!this.today?.per_app?.length; },
+    get focusMissing() { return !!this.today?.focus_missing; },
+    get hasFocused() { return !!this.today?.focused?.length; },
+    get hasPages() { return !!this.today?.pages?.length; },
+    get hasGroups() { return !!this.today?.groups?.length; },
+    get killTargetName() { return this.killTarget?.name ?? ""; },
+    get killTargetPid() { return this.killTarget?.pid ?? ""; },
+
+    todayUsedOrZero() { return this.today?.used_mins ?? 0; },
+    bonusLabel() { return " (incl. +" + this.today.extra_mins + " bonus)"; },
+    todayBarLabel() {
+      return "Screen time: " + this.today.used_mins + " of " + this.today.budget_mins + " minutes used";
+    },
+    // Both the per-app and per-group rows carry `{name, used_mins, limit_mins}`, so one label
+    // serves both rather than two that could drift.
+    limitLabel(row) {
+      return row.name + ": " + row.used_mins + " of " + row.limit_mins + " minutes";
+    },
+
+    stTotalLabel() { return this.screentime.total_mins + " min"; },
+    stAvgLabel() {
+      const a = this.screentime.daily_avg_mins;
+      return a == null ? "—" : a + " min";
+    },
+    stMeasuredLabel() {
+      return this.screentime.measured_days + "/" + this.screentime.days.length;
+    },
+    stTotalsHeading(what) { return what + " over " + this.stDays + " days"; },
+
+    // Newest first for the table, oldest first for the chart — the same days read in opposite
+    // orders, which is deliberate and explained at the call site.
+    get stDaysNewestFirst() { return this.screentime.days.slice().reverse(); },
+
+    // `x-for` over a possibly-absent list. The markup cannot say `?? []`, and iterating `undefined`
+    // renders nothing *silently*, which is the failure this whole file keeps being about.
+    stRows(key) {
+      const day = this.stDayFor(key);
+      return (day && day[key]) || [];
+    },
+    get timeRequestRows() { return this.timeRequests || []; },
+    requestBadgeCount() {
+      const n = this.requestCount();
+      return n === null ? "?" : n;
     },
 
     // Does the curfew have any hours that could actually fire?

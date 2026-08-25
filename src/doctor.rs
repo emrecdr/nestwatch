@@ -43,7 +43,8 @@ fn listening(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).is_ok()
 }
 
-#[derive(PartialEq, Clone, Copy)]
+// `Debug` so a failing assertion names the level it got instead of printing nothing useful.
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum Level {
     Ok,
     Warn,
@@ -138,6 +139,46 @@ fn fail(text: impl Into<String>, fix: impl Into<String>) -> Check {
     }
 }
 
+/// Compare the build that is *installed* against the build running this check.
+///
+/// They are routinely different and nothing else on the machine says so. Copying a new binary onto
+/// the PC is not installing it, so a parent who downloads an update and runs `doctor` from the
+/// download directory gets a clean bill of health about a service still running the old code —
+/// which is the report they will trust when deciding whether a fix is present.
+///
+/// `installed` is whether there is an install for a missing record to describe; on a machine with
+/// no config, "no version record" would only repeat "not installed" one line further down.
+///
+/// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
+/// than restated so there is one definition and one set of tests for it.
+fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool) -> Option<Check> {
+    use crate::install::InstallKind;
+
+    Some(match crate::install::classify_install(stamped, running) {
+        InstallKind::Reinstall => ok(format!("installed version {running} matches this binary")),
+        InstallKind::Upgrade { from } => warn(
+            format!("this binary is {running} but the installed service is {from}"),
+            "Copying the binary onto the machine does not update the service. Run\n\
+                 `nestwatch install` from an elevated console to apply it.",
+        ),
+        InstallKind::Downgrade { from } => warn(
+            format!("this binary is {running} — older than the installed service ({from})"),
+            "You are probably running an old copy. Check which binary you launched\n\
+                 before acting on anything else in this report.",
+        ),
+        InstallKind::Unknown => warn(
+            "the installed-version record is unreadable",
+            "Harmless on its own — re-running `nestwatch install` rewrites it.",
+        ),
+        InstallKind::Fresh if installed => warn(
+            "no installed-version record",
+            "Expected if this was installed by a build older than the record itself.\n\
+                 Re-running `nestwatch install` writes one.",
+        ),
+        InstallKind::Fresh => return None,
+    })
+}
+
 /// Run every check and print the report. Exits non-zero if anything is outright broken, so it's
 /// usable from a script; warnings alone still exit 0.
 pub fn run() -> Result<()> {
@@ -177,6 +218,18 @@ pub fn run() -> Result<()> {
                  note this regenerates the certificate, so paired devices will warn once more.",
             )),
             None => checks.push(fail("not installed — no config found", RUN_INSTALL)),
+        }
+
+        // Only meaningful where the record could actually be read: the data dir is locked to
+        // Administrators, so an unelevated run cannot tell "no record" from "cannot see it".
+        if (elevated || config.is_some())
+            && let Some(check) = version_check(
+                &crate::install::read_stamp(),
+                crate::VERSION,
+                config.is_some(),
+            )
+        {
+            checks.push(check);
         }
     }
 
@@ -594,6 +647,101 @@ mod tests {
             out.contains(crate::VERSION),
             "doctor's output must name the build it came from; got:\n{out}"
         );
+    }
+
+    /// The case this check exists for: a newer binary sitting beside an older installed service.
+    /// Reporting that as healthy is how someone concludes a fix is present when it is not.
+    #[test]
+    fn a_newer_binary_beside_an_older_service_is_a_warning_that_says_to_install() {
+        let c = version_check(
+            &crate::install::Stamp::Version("0.2.3".into()),
+            "0.10.0",
+            true,
+        )
+        .expect("must report something");
+        assert_eq!(c.level, Level::Warn);
+        assert!(
+            c.text.contains("0.10.0") && c.text.contains("0.2.3"),
+            "both versions must appear so it is obvious which is which: {}",
+            c.text
+        );
+        assert!(
+            c.fix.as_deref().is_some_and(|f| f.contains("install")),
+            "the fix has to name the step that was missed: {:?}",
+            c.fix
+        );
+    }
+
+    #[test]
+    fn a_matching_version_is_reported_as_healthy() {
+        let c = version_check(
+            &crate::install::Stamp::Version("0.2.3".into()),
+            "0.2.3",
+            true,
+        )
+        .expect("must report something");
+        assert_eq!(c.level, Level::Ok);
+    }
+
+    /// Running an old copy makes every other line in the report describe something else. Say so
+    /// before the reader acts on the rest of it.
+    #[test]
+    fn an_older_binary_than_the_installed_service_is_flagged() {
+        let c = version_check(
+            &crate::install::Stamp::Version("0.3.0".into()),
+            "0.2.3",
+            true,
+        )
+        .expect("must report something");
+        assert_eq!(c.level, Level::Warn);
+        assert!(c.text.contains("older"), "got: {}", c.text);
+    }
+
+    /// An unreadable record must not read as "no record" — same distinction `classify_install`
+    /// draws, and it has to survive the trip to the report.
+    ///
+    /// Both routes to `Unknown` are checked: a record that would not parse at all (`Corrupt`) and
+    /// one that parsed but holds something this build cannot order.
+    #[test]
+    fn an_unreadable_record_is_reported_rather_than_passed_over() {
+        for stamp in [
+            crate::install::Stamp::Corrupt,
+            crate::install::Stamp::Version("garbage".into()),
+        ] {
+            let c = version_check(&stamp, "0.2.3", true).expect("must report something");
+            assert_eq!(c.level, Level::Warn);
+            assert!(c.text.contains("unreadable"), "got: {}", c.text);
+
+            // The regression this guards. `read_stamp` used to return the placeholder string
+            // "(unreadable)" in the version field, which this line then wrapped in parentheses of
+            // its own — rendering "the installed-version record is unreadable ((unreadable))". The
+            // earlier version of this test asserted only `contains("unreadable")`, so it passed
+            // while the output was malformed. Assert the shape, not just the keyword.
+            assert!(
+                !c.text.contains("(("),
+                "doubled parentheses in the report: {}",
+                c.text
+            );
+            assert!(
+                !c.text.contains("unreadable ("),
+                "a placeholder is being printed where a version belongs: {}",
+                c.text
+            );
+        }
+    }
+
+    /// On a machine with nothing installed this would only repeat the "not installed" failure
+    /// printed a line above it.
+    #[test]
+    fn a_machine_with_no_install_gets_no_version_line() {
+        assert!(version_check(&crate::install::Stamp::Missing, "0.2.3", false).is_none());
+    }
+
+    #[test]
+    fn an_install_predating_the_record_is_mentioned_once() {
+        let c = version_check(&crate::install::Stamp::Missing, "0.2.3", true)
+            .expect("must report something");
+        assert_eq!(c.level, Level::Warn);
     }
 
     #[test]

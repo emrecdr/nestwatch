@@ -102,6 +102,32 @@ pub fn parse_sample(line: &str) -> Option<Sample> {
     serde_json::from_str(line).ok()
 }
 
+/// Write one sample as a JSON line and flush it. The inverse of [`parse_sample`].
+///
+/// **The error is the point.** This used to be inlined in the watcher as
+/// `if writeln!(out, "{line}").is_ok() { flush }` — with no `else`, so a failed write was
+/// discarded. Nothing else in the watcher can end the process (its message pump exits only on
+/// `WM_QUIT`, which nothing posts), and `session::spawn_piped` uses no job object, so the helper
+/// outlived every service that stopped without terminating it: an orphan per service restart, each
+/// still holding a `SetWinEventHook` and — because the helper *is* the installed binary — holding
+/// that binary open. Windows keeps a running executable's image locked, which is what made
+/// `std::fs::copy` fail on upgrade and `remove_dir_all` fail on uninstall.
+///
+/// So the write error is the only signal the helper gets that its service is gone, and returning it
+/// is what lets the caller stop. Flushing every line is unchanged and still required: the service
+/// reads this pipe line-by-line and a buffered sample is one it never sees.
+///
+/// Taking a `W: Write` rather than locking stdout inside keeps this testable on a machine with no
+/// Windows — the broken-pipe path is the whole reason the function exists and it would otherwise be
+/// the one path that could only be exercised on the target.
+pub fn write_sample<W: std::io::Write>(out: &mut W, sample: &Sample) -> std::io::Result<()> {
+    // A sample that will not serialize is a bug in this process, not a dead pipe. It is still an
+    // error rather than a silent skip, because a watcher that cannot report is not measuring.
+    let line = serde_json::to_string(sample).map_err(std::io::Error::other)?;
+    writeln!(out, "{line}")?;
+    out.flush()
+}
+
 /// Bound an untrusted [`Sample`] by the seconds that actually elapsed during the tick.
 ///
 /// When the reported total exceeds `elapsed_secs`, every entry is scaled down proportionally so the
@@ -541,6 +567,77 @@ impl Feed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sink that fails the way a pipe whose reader has gone away fails.
+    struct DeadPipe {
+        /// Whether the failure happens on `write` or is deferred to `flush`, which is the case a
+        /// buffered writer produces and the easier one to forget.
+        on_flush: bool,
+    }
+
+    impl std::io::Write for DeadPipe {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.on_flush {
+                Ok(buf.len())
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "the service is gone",
+                ))
+            }
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.on_flush {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "the service is gone",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn a_written_sample_is_one_line_that_parses_back() {
+        let mut buf = Vec::new();
+        let original = sample(&[("roblox.exe", 30)]);
+        write_sample(&mut buf, &original).expect("a plain buffer cannot fail");
+
+        let text = String::from_utf8(buf).expect("valid utf-8");
+        assert!(
+            text.ends_with('\n'),
+            "the reader splits on newlines: {text:?}"
+        );
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "one sample must be exactly one line: {text:?}"
+        );
+        assert_eq!(
+            parse_sample(text.trim_end()).expect("must parse back").apps,
+            original.apps
+        );
+    }
+
+    /// The whole reason this function returns a `Result`. A discarded write error is what let an
+    /// orphaned watcher outlive its service, holding the installed binary open and breaking the
+    /// next upgrade and uninstall.
+    #[test]
+    fn a_dead_pipe_is_reported_rather_than_swallowed() {
+        let err = write_sample(&mut DeadPipe { on_flush: false }, &sample(&[("a.exe", 1)]))
+            .expect_err("a broken pipe must not read as success");
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
+
+    /// A write can succeed into a buffer and fail only when that buffer is pushed at the pipe.
+    /// Checking `writeln!` alone would call this a successful report.
+    #[test]
+    fn a_pipe_that_dies_at_flush_time_is_reported_too() {
+        let err = write_sample(&mut DeadPipe { on_flush: true }, &sample(&[("a.exe", 1)]))
+            .expect_err("a flush failure must not read as success");
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+    }
 
     fn sample(pairs: &[(&str, u64)]) -> Sample {
         Sample {

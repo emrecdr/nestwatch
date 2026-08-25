@@ -10,9 +10,9 @@ depend on a **real browser** rather than a test client, such as the origin check
 
 Run through it once on his PC after installing.
 
-## Short on time? Do these seven first
+## Short on time? Do these eight first
 
-The full list is 104 items, which is why it keeps not happening. These seven are the ones whose
+The full list is 130 items, which is why it keeps not happening. These eight are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -28,10 +28,14 @@ Each links to its full entry below.
    If screenshots work and lock doesn't, that narrows the fault sharply.
 5. **He cannot stop the service or read the data directory** (§B) — two commands as him. This is
    the tamper-resistance claim; everything else assumes it holds.
-6. **Every dashboard card still works from a real browser** (§C) — the origin check
+6. **A blocked app still gets killed** (§E5) — the enforcer's process scan was rewritten to stop
+   gathering four things it threw away, and that code has never executed anywhere. If it returns a
+   short list, blocked apps quietly survive and the dashboard looks perfectly normal. One app, thirty
+   seconds.
+7. **Every dashboard card still works from a real browser** (§C) — the origin check
    fails *silently*, as buttons that do nothing rather than an error. A test client cannot catch
    this; only a browser can.
-7. **A day the PC was off shows as "not measured", not as a zero** (§D) — if those two states
+8. **A day the PC was off shows as "not measured", not as a zero** (§D) — if those two states
    look alike, a stopped enforcer reads exactly like a well-behaved week, which is the failure the
    feature exists to prevent. The chart *has* now been seen rendered, in Chrome on macOS with
    seeded data covering all three states — which is how the bug that made it draw nothing at all
@@ -246,6 +250,38 @@ wait until tomorrow.
       normal evening. Every performance figure in the design document is extrapolated from other
       people's programs; this is the first real one, and nothing should be published until it exists.
 
+## D3. What the dashboard now shows (verified in a browser, never on this machine)
+
+These reached the screen this release. All were driven in a real browser against a seeded instance,
+so the shapes are known to work — what has not been checked is any of it against **real data from
+this PC**, which is the half that matters and the half only you can do.
+
+- [ ] **"In front today" lists real apps, on the same afternoon.** Until this release those minutes
+      were measured every thirty seconds and only reached you the next morning. Use the PC for a
+      while as him, then open the dashboard: the apps he actually had in front should be listed with
+      minutes, under **Today's screen time**.
+- [ ] **The "no focus figures" note appears when the helper is not running.** Kill `helper --watch`
+      as him, use the PC for five minutes, then look. The card must say the figures are missing and
+      point at `nestwatch doctor` — not simply show an empty list, which reads as "he did nothing".
+      The five minutes matter: below that the card deliberately stays quiet rather than accuse a
+      helper that may be fine.
+- [ ] **The report answers "how much Roblox this month".** Screen time card → the most-used lists
+      cover the whole window, not one day. Switch **7 / 30 / 90** and confirm the totals and the
+      headings both change.
+- [ ] **Clicking a bar shows that day.** Pick a day on the chart; all three breakdowns below should
+      follow it and the heading should name that date. Pick a hatched (unmeasured) day: the panels
+      must say *nothing recorded for this day* rather than disappearing.
+- [ ] **Categories appear — if you have set up app groups.** With groups configured, tomorrow's
+      report should carry a **By category** list. It cannot show history from before this release;
+      days recorded earlier have no category data and correctly show none.
+- [ ] **The tab title counts waiting requests.** Have him ask for extra time and leave the dashboard
+      open in a background tab. The tab should read **(1) Nestwatch**. This is the only way this
+      product can tell you something without a tab being open somewhere — there is no push
+      notification and there will not be one.
+- [ ] **App names read like apps.** `RobloxPlayerBeta.exe` should show as *Roblox*. Hover gives the
+      real file name back. If something common on his PC still shows as an executable, say which —
+      the list of friendly names is curated by hand and only covers what we thought of.
+
 ## E. Curfew (the enforcement feature)
 
 - [ ] Set a window that includes **now** (e.g. now-1min → now+10min), warn = 60s, Save.
@@ -381,6 +417,37 @@ wait until tomorrow.
       minute. The used-minutes figure must have grown by at most a minute or two — not by the whole
       time it was asleep.
 
+## E5. The narrowed process scan (Windows-only code that has never run)
+
+Every thirty seconds, forever, the enforcer asks Windows what is running. That call was rewritten to
+stop gathering four things it immediately discarded — CPU share, disk-I/O counters, memory, and the
+full executable path for every process on the machine. It now asks for the pid and the name.
+
+**Why this section exists.** The rewritten call is `#[cfg(windows)]`, so **it has never executed
+anywhere** — not here, not in CI. It compiles clean for the target under `clippy -D warnings` and it
+is covered by tests through the fake, which proves the shape and nothing about the behaviour. It is
+also on the enforcement path: if it returns fewer processes than really exist, apps that should be
+killed simply are not there, and **the dashboard would look completely normal while that happened**.
+That is the failure mode worth a few minutes.
+
+- [ ] **Blocked apps are still killed.** With an app on the blocklist, start it as him. It must
+      disappear within about thirty seconds, same as before this change. This is the check that
+      matters: it is the one that fails if the scan came back short.
+- [ ] **Per-app limits still accrue.** Set a two-minute limit on something harmless (Notepad), run
+      it as him for three minutes, and confirm **Today's screen time** shows the app at its limit
+      and the app is closed. Accrual reads the same scan.
+- [ ] **The parent's process panel still shows memory.** Open **Running apps** on the dashboard.
+      Every row must show a memory figure — `42.9 MB`, not `0 B` or blank. That panel deliberately
+      uses a *different*, richer call than the enforcer's; a blank column means the two were
+      collapsed into one and the cheap scan is being asked for the expensive number.
+- [ ] **Nothing got slower.** Watch `HostHealthService` in Task Manager for a minute or two. CPU
+      should sit at or near zero between ticks. If anything, this change should have made it
+      quieter — if it is *busier* than you remember, say so, because that is the opposite of what
+      it was for.
+- [ ] **An elevated app is still seen.** Run something as administrator and confirm it appears in
+      **Running apps** and is still subject to its limit. Losing sight of elevated processes would
+      be an evasion route, not a cosmetic bug.
+
 ## F. Resilience
 
 - [ ] **Signing in survives a restart:** with the dashboard open and logged in on your phone,
@@ -421,6 +488,69 @@ wait until tomorrow.
 - [ ] **A failed update doesn't leave enforcement off.** Hard to stage deliberately; if an update
       ever does fail, confirm `sc query HostHealthService` still shows RUNNING (it restarts the
       previous version) and that the output says so.
+
+### G1a. The resident helper no longer blocks update or uninstall
+
+**Do every check in this block with HIM signed in** (fast-user-switch to your admin account rather
+than signing him out). That is the entire point: with nobody logged in there is no helper, and all
+of these pass whether or not the fix works. This is why the underlying bug survived — it cannot
+reproduce on an idle test machine.
+
+- [ ] **The helper is there to begin with.** Task Manager → Details, with *Command line* shown:
+      exactly one `host-health.exe` running as HIM with `helper --watch`. Note its PID.
+- [ ] **An in-place update actually replaces the binary while he is signed in.** Note the
+      *Modified* timestamp on `C:\Program Files\HostHealth\host-health.exe`, then run `install` from
+      a newer build. It must print `Stopped 1 resident watcher process(es) holding the binary open`,
+      and the timestamp **must change**. Before this fix the copy failed with a sharing violation,
+      the previous service was restarted, and the update silently did not apply.
+- [ ] **The old helper is gone and exactly one new one replaced it.** After the update, Task Manager
+      shows one `helper --watch`, with a **different PID** from the one you noted.
+- [ ] **Stopping the service leaves no helper behind.** `sc stop HostHealthService`, wait ~40 s
+      (longer than one 30-second emit), and confirm **no** `host-health.exe` is running as HIM. It
+      used to survive forever, holding a desktop hook and writing into a dead pipe.
+- [ ] **Restarting the service twice does not accumulate helpers.** `sc stop` / `sc start`, twice.
+      Exactly one `helper --watch` at the end, never three.
+- [ ] **Uninstall completes with him signed in.** `uninstall` must remove
+      `C:\Program Files\HostHealth` **and print `Uninstalled.`** — the whole directory gone, not a
+      note about a file it could not delete.
+- [ ] **A blocked uninstall fails loudly.** Stage it: open an elevated prompt, `cd` *into*
+      `C:\Program Files\HostHealth` (a current directory holds it open), and run `uninstall` from
+      elsewhere. It must **exit non-zero**, name the directory it could not remove, quote the OS
+      error, and tell you what to do. It must **not** print `Uninstalled.` — reporting success on a
+      partial uninstall is the failure this check exists for.
+- [ ] **Running the installed copy does not kill itself.** Run
+      `C:\Program Files\HostHealth\host-health.exe install` — i.e. the installed binary installing
+      over itself. It must complete normally, not terminate its own process.
+- [ ] **A service still marked for deletion is reported now, not next time.** Open `services.msc`
+      and leave it open (that holds a handle), then run `uninstall`. It must fail naming *the
+      service registration (marked for deletion)* and tell you to close Services. Close it, re-run
+      `uninstall` → clean. Without this the symptom appears one step later, as a bare
+      `os error 1072` on the *next* install, which is where it used to be met.
+- [ ] **A surviving firewall rule is caught.** `netsh advfirewall firewall show rule
+      name=HostHealthService` after a successful uninstall must report no match. The uninstall
+      verifies this itself now — deletion was previously fire-and-forget, so a failed `netsh` left
+      the rule open and said nothing.
+
+### G1b. The install remembers which version it was
+
+- [ ] **First install writes the record.** `C:\ProgramData\HostHealth\installed.json` exists and
+      names this build's version.
+- [ ] **A second install of the same build says so.** Re-run `install` → `Reinstalling <v> over
+      itself.`
+- [ ] **An update names both versions.** Install a newer build → `Updating <old> -> <new>.`
+- [ ] **A downgrade warns rather than proceeding quietly.** Install an *older* build over a newer
+      one → a `WARNING:` naming both versions. It still installs; the point is that it says so.
+- [ ] **A corrupt record is not read as a fresh machine.** `echo not-json > installed.json`, run
+      `install` → it must print the `NOTE: an install record exists but could not be read` line, not
+      stay silent as it does for a genuine first install. Silence there would mean a future data
+      migration gets skipped on exactly the machines most likely to need it.
+- [ ] **Uninstall takes the record with it**, even without `--purge`: after `uninstall`,
+      `installed.json` is gone while `config.json` remains.
+- [ ] **`doctor` notices a binary that was copied but never installed.** This is the one worth doing
+      properly, because it is how someone concludes a fix is present when it is not. Copy a *newer*
+      build to the Desktop and run `doctor` **from the Desktop copy**, elevated. It must warn that
+      this binary is newer than the installed service and tell you to run `install` — not report a
+      clean machine. Then run `install` and confirm `doctor` says the versions match.
 
 ---
 

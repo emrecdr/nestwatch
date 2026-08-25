@@ -35,16 +35,12 @@
 //! slow callback degrades **the whole desktop**, not just this process. It therefore does one
 //! non-blocking send and returns. All resolution happens on the worker.
 
-use std::io::Write;
 use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use windows::Win32::Foundation::{CloseHandle, HWND};
-use windows::Win32::System::Threading::{
-    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -52,7 +48,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowThreadProcessId, MSG, TranslateMessage, WINEVENT_OUTOFCONTEXT,
     WINEVENT_SKIPOWNPROCESS,
 };
-use windows::core::PWSTR;
 
 use crate::foreground::Tracker;
 
@@ -288,7 +283,7 @@ impl Resolver {
         {
             return Some(name.clone());
         }
-        let name = process_name(hwnd, pid)?;
+        let name = process_name(pid)?;
         self.last = Some((key, pid, name.clone()));
         Some(name)
     }
@@ -335,38 +330,20 @@ fn observe(resolver: &mut Resolver) -> Seen {
 
 /// The executable name behind `hwnd`, keyed through [`crate::rules::norm`] so it matches the
 /// enforcement tally exactly.
-fn process_name(hwnd: HWND, pid: u32) -> Option<String> {
-    // SAFETY: Win32 window/process FFI. The process handle is closed on every path; `hwnd` is only
-    // used as an opaque token and is never dereferenced.
-    unsafe {
-        let _ = hwnd; // the window is identified by its pid from here on
-
-        // LIMITED, not PROCESS_QUERY_INFORMATION. The wider right FAILS against an elevated
-        // process, and ActivityWatch's well-known 5-30% CPU burn on Windows is exactly that
-        // failure falling back to a WMI query every second forever. Here it would be worse than
-        // slow: a child could evade tracking entirely by running a game as administrator.
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-
-        let mut buf = [0u16; 260];
-        let mut len = buf.len() as u32;
-        let name = QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_WIN32,
-            PWSTR(buf.as_mut_ptr()),
-            &mut len,
-        )
-        .ok()
-        .map(|()| String::from_utf16_lossy(&buf[..len as usize]));
-        let _ = CloseHandle(handle);
-
-        let path = name?;
-        // Just the file name: the enforcement tally is keyed on `"roblox.exe"`, not a full path.
-        // `norm` rather than an inline `to_lowercase` because it is the single definition of how a
-        // process name is keyed — the dashboard shows `apps` and `focused` side by side on it, and
-        // a second copy of that rule here is a second thing to keep in step.
-        let file = path.rsplit(['\\', '/']).next().unwrap_or(&path);
-        Some(crate::rules::norm(file))
-    }
+///
+/// The pid→path half is [`crate::install::process_image_path`], which the uninstaller also needs to
+/// decide which running processes are the binary it is about to delete. It used to be written out
+/// twice, identically down to the 260-unit buffer and the `PROCESS_QUERY_LIMITED_INFORMATION`
+/// argument — two `unsafe` blocks with one invariant between them, and two prose copies of the same
+/// reasoning for that access right. One copy means a change to either reaches both.
+fn process_name(pid: u32) -> Option<String> {
+    let path = crate::install::process_image_path(pid)?;
+    // Just the file name: the enforcement tally is keyed on `"roblox.exe"`, not a full path.
+    // `norm` rather than an inline `to_lowercase` because it is the single definition of how a
+    // process name is keyed — the dashboard shows `apps` and `focused` side by side on it, and
+    // a second copy of that rule here is a second thing to keep in step.
+    let file = path.rsplit(['\\', '/']).next().unwrap_or(&path);
+    Some(crate::rules::norm(file))
 }
 
 /// The window's title, for browser page attribution.
@@ -387,14 +364,29 @@ fn window_title(hwnd: HWND) -> Option<String> {
 /// A sample with nothing in it is still written. Silence is how the service distinguishes a watcher
 /// that is running and seeing an idle machine from one that has died — and those two must never
 /// look alike, because the second means screen time is not being measured at all.
+///
+/// **A failed write ends the process**, and that is the whole of this function's judgement. See
+/// [`crate::foreground::write_sample`] for what discarding it used to cost: this helper is the
+/// installed binary, Windows holds a running executable's image open, and an orphan that never
+/// noticed its service had gone was what made the next upgrade's `fs::copy` and the next
+/// uninstall's `remove_dir_all` fail.
+///
+/// `exit(0)`, not an error: a dead pipe means the service stopped, which is a normal end for this
+/// process and not a fault of its own. `run_watcher_supervisor` keys its backoff on uptime rather
+/// than exit status, so this reads correctly either way — and if a user is still signed in when the
+/// service comes back, it simply spawns a fresh watcher.
+///
+/// Exiting from the worker thread rather than unwinding to the pump: the pump is on another thread
+/// and only leaves its loop on `WM_QUIT`, so returning from here would end the measuring and leave
+/// the process alive — the exact half-dead state this exists to prevent. Windows releases the
+/// `SetWinEventHook` on process exit, so there is nothing to unwind for.
 fn emit(sample: &crate::foreground::Sample) {
-    let Ok(line) = serde_json::to_string(sample) else {
-        return;
-    };
     let mut out = std::io::stdout().lock();
-    if writeln!(out, "{line}").is_ok() {
-        // Flush every line: the service reads this pipe line-by-line and a buffered sample is a
-        // sample it never sees.
-        let _ = out.flush();
+    if crate::foreground::write_sample(&mut out, sample).is_err() {
+        // Release the lock before leaving. `process::exit` runs no destructors, so the guard would
+        // otherwise still be held while the runtime tears stdout down — and every other decision in
+        // this function is written down, so an unexplained line here reads as an accident.
+        drop(out);
+        std::process::exit(0);
     }
 }
