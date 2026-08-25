@@ -162,6 +162,20 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   now carry diagonal stripes as well, at the opposite angle to the ones already used for days that
   weren't measured, so those two can't be confused either. The wording screen readers get was always
   correct and is unchanged.
+- **The key beneath that chart now matches the bars it explains.** Adding the stripes above fixed the
+  bars and left the little key underneath showing the old flat colours — so "over budget" was a plain
+  red square sitting next to striped red bars, and "not measured" a plain grey one next to hatched
+  ones. Two of the three were wrong, and wrong in exactly the way the stripes were added to fix: a
+  parent who can't separate those two colours was handed a key written in the pair they can't read,
+  explaining bars that had already been corrected. The key is now drawn by the same code that draws
+  the bars, so it can't drift from them again.
+- **The "updated 4 seconds ago" line under the live view no longer stops telling the truth.** The
+  live view now switches itself off after fifteen minutes, and when it did, that line simply froze —
+  still reading "updated 4 seconds ago", in the same ordinary grey, above a picture that could by
+  then be hours old. That is worse than having no line at all: instead of leaving you unsure how
+  fresh the picture is, it answered confidently and wrongly, which is the one thing the line exists
+  to prevent. It now keeps counting for as long as a picture is on screen, however the live view
+  stopped — whether it timed out, you switched it off, or it failed.
 - **Pausing the rules now records that it happened, and says which kind of pause it was.** The usage
   history logged when a session of active use *began* but, on the pause path, never that it ended —
   so a history read back later showed sessions starting and never finishing. It also called two

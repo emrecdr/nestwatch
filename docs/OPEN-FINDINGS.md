@@ -886,7 +886,7 @@ watcher has never run.
 interesting case leaves a trace. Properly, it is a distinct state rather than a third spelling of
 `None`, and it should reach the parent as "this check has stopped working, and here is why".
 
-**Trigger.** Whenever [O52](#o52--first_seens-three-states-collapse-to-two-at-the-last-hop) is taken,
+**Trigger.** Whenever O52 is taken,
 since both are about the same `Option` losing information on its way to the reader.
 
 ### O50 · `doctor` never asks whether the machine can capture at all
@@ -969,7 +969,7 @@ simply runs at full resolution, which is the exact outcome the shared spelling e
 `as_arg`'s doc says it exists so "preview" has one spelling across two boundaries. There is a third,
 in a third language, that it does not cover. The Rust round-trip test asserts the enum against
 itself; the JS test asserts the literal it typed. Both stay green through a drift. `openShotFull()`
-then branches on that same unverified string ([O47](#o47--the-full-capture-tier-is-unreachable-in-the-mode-a-parent-uses-it-from)).
+then branches on that same unverified string (O47).
 
 **Fix.** The handler already knows the tier and already builds the response headers — stamp it
 (`X-Shot-Tier`) and set `shotTier` from `r.headers.get(...)`. "Which tier is on screen" becomes an
@@ -998,7 +998,7 @@ away with it.
 **Not done here, and the reason is the interesting part.** This is argument dispatch on the capture
 helper — a path that has **never run on Windows hardware**. Rewriting it immediately before the
 on-device verification pass would mean that when something misbehaves on the machine, there is no way
-to tell the capture work from the refactor. Same reasoning as [O2](#o2--rulesrs-has-a-real-seam-between-the-pure-machine-and-the-loop)'s revised trigger.
+to tell the capture work from the refactor. Same reasoning as O2's revised trigger.
 
 **Trigger.** After `docs/WINDOWS-TESTING.md` has been run on the device.
 
@@ -1026,7 +1026,7 @@ Two things make it worse than a tight threshold:
 leading whitespace before it recognises the `//`, so an indented comment returns more bytes to the
 output than an unindented one. Swept: roughly **7 added lines at indent 0, 8 at indent 8**.
 **Outdenting a comment block moves the build closer to failing** — which nobody deduces, and which is
-why it is written down here. See [O23](#o23--minimum-resources-is-the-stated-design-target-and-no-number-has-ever-been-taken)
+why it is written down here. See O23
 for the three wrong answers produced by deriving this instead of measuring it.
 
 **Fix.** Keep the throw and swap the trigger: `stripJs` finishing with a non-null `quote` means it ran
@@ -1066,7 +1066,7 @@ this change introduces". Mechanical and safe when someone is next in that file f
 
 ### ~~O57 · The chart's key disagreed with its bars, in the channel the texture was added for~~ — **fixed**
 
-[O46](#o46--the-30-day-chart-signals-over-budget-by-colour-alone-at-122-contrast) added `.st-over`, a
+O46 added `.st-over`, a
 texture, because `bg-error` against `bg-primary` measures **1.22** contrast and a red-green confusion
 pair carries no information for the reader it matters to. The bars were fixed. The **legend was not**,
 because it spelled its three swatch classes out by hand in the markup instead of asking `stBarClass`.
@@ -1175,7 +1175,7 @@ was instructed "never flag comment volume" — correct, since long comments are 
 each generalised it to *don't look at comments at all*. The instruction protecting the style also
 shielded the content. Two of the twelve were then found by a reviewer only after it was told the class
 existed, and the two in the most-read files were found by a reviewer rather than by the sweep of
-`src/` that preceded it. See [O23](#o23--minimum-resources-is-the-stated-design-target-and-no-number-has-ever-been-taken)
+`src/` that preceded it. See O23
 on staleness and completeness being separate audits.
 
 ### ~~O46 · The 30-day chart signals over-budget by colour alone, at 1.22 contrast~~ — **fixed**
@@ -1383,8 +1383,11 @@ the feature a parent opens at the tensest moment, and it had never been measured
 looked there found nine things, of which three were correctness rather than cost.
 
 Numbered O25–O40 by a session that was report-only; the ones fixed here are recorded together
-because they had to ship as one change. O28, O33, O35, O36, O37, O39 and O40's idle half remain
-open and are listed under *Open* above.
+because they had to ship as one change. O28, O33, O35, O36 and O39 remain open and are listed under
+*Open* above. **O37 was subsequently implemented** and has its own entry under *Fixed*; it was listed
+here as open for a while after it had shipped, which is the ordinary failure of a group entry that
+outlives the group. O40 was split: its idle half is recorded under O18, whose general form it belongs
+to, and its other half is in *Considered and declined* below.
 
 **O25 — the capture backend was chosen by a default that does not exist.** `xcap` declares **no
 `default` feature list**, so `xcap = "0.9"` compiled the `#[cfg(not(feature = "wgc"))]` arm: GDI
@@ -2028,6 +2031,7 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 | **Memoizing `FakeControl`'s gradient, and `stBarPct`'s chart peak** | Both real: the fake rebuilds a 1280×720 image per call, and `stBarPct` recomputes the peak once per bar (8,100 element reads at a 90-day window, 0.177 ms). Declined — the first is dev/test-only and a cache adds global mutable state to a deliberately simple fake; the second predates the reviewed diff and is sub-millisecond once per report load. |
 | **Collapsing `takeScreenshot(silent, tier)` to one parameter** | The two agree at every production call site, and a reviewer correctly showed the comment defending their independence described the *shipped* behaviour as the failure it prevents. Declined anyway: they answer different questions — how loudly a failure is reported, versus how many pixels are asked for — and the plan that introduced tiers chose the split deliberately and mutation-tested it. **The stale justification was corrected rather than the signature**, which is the part that was actually wrong. |
 | **Deriving "today" in the timeline from `this.today.day` rather than the browser clock** | A genuine second definition of "today" on a page where every other today-figure comes from the server. Declined **from a cleanup pass**: it changes timezone semantics, needs a fallback for the pre-load `null`, and belongs in a correctness review rather than a tidy-up. |
+| **O40's other half — labelling the live frame with the app that has focus** | Proposed as the best available mitigation for a black frame: show *which game* rather than a blank rectangle meaning either "monitor off" or "capture defeated". **Declined because the premise was false**, and it was written before that was checked. The watcher's foreground data reaches the dashboard only as `focus_totals` — a per-day *aggregate* in the screen-time report. There is no "what has focus right now" anywhere on the wire, so the label would have named whatever the child used **most today**, pinned under a live picture of something else. Delivering it properly means a new field on `/api/usage/today` or the capture response, which is a feature, not a label. Recorded here because the idea is obviously attractive and will be proposed again. Its idle sibling — skipping capture while `GetLastInputInfo` reports idle — is refuted under O18. |
 | An `Enforcer` trait unifying the two background loops | The genuinely shared skeleton is ~6 lines. The blocks that *look* duplicated aren't: curfew calls `disarm()` when a shutdown fails so it retries with a fresh countdown; the rules enforcer deliberately doesn't, and returns as the uncancellable `ShutdownNow`. A shared helper would extract the boilerplate and leave the divergent part behind. |
 
 ---
