@@ -305,15 +305,23 @@ pub fn run_watcher_supervisor(feed: crate::foreground::Feed) {
 
 /// Spawn one watcher and read its output until the pipe closes. Returns when it exits.
 fn pump_watcher(exe: &str, feed: &crate::foreground::Feed) -> Result<(), ControlError> {
-    use std::io::BufRead;
-
     let (reader, proc_info) = spawn_piped(exe, "helper --watch")?;
-    let mut lines = std::io::BufReader::new(reader).lines();
+    let mut reader = std::io::BufReader::new(reader);
+    let mut buf = Vec::new();
 
-    while let Some(Ok(line)) = lines.next() {
+    // `read_bounded_line` rather than `BufRead::lines`, because `lines` grows one buffer until it
+    // meets a newline — and the writer at the other end runs as the child. A process that writes
+    // forever without one would take this service's memory with it, and this is the process that
+    // enforces the rules. See `foreground::MAX_LINE`.
+    while crate::foreground::read_bounded_line(&mut reader, &mut buf, crate::foreground::MAX_LINE)
+        .unwrap_or(false)
+    {
         // A malformed line is skipped, never fatal: this pipe can be cut mid-write by a session
-        // ending, so a partial line is expected rather than exceptional.
-        if let Some(sample) = crate::foreground::parse_sample(&line) {
+        // ending, so a partial line is expected rather than exceptional. An over-long line arrives
+        // here as an empty one, which fails to parse and is skipped by the same path.
+        if let Ok(line) = std::str::from_utf8(&buf)
+            && let Some(sample) = crate::foreground::parse_sample(line)
+        {
             feed.submit(sample);
         }
     }

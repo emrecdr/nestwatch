@@ -31,6 +31,23 @@ pub struct ProcessInfo {
     pub memory_bytes: u64,
 }
 
+/// A running process as the **enforcement tick** needs to see it: what it is, and how to stop it.
+///
+/// Deliberately narrower than [`ProcessInfo`], and a separate type rather than that one with a
+/// field left at zero. The two are gathered at very different costs, and the type is what keeps
+/// them apart.
+///
+/// [`SystemControl::list_processes`] renders a panel a parent opens occasionally, so it can afford
+/// a memory figure. This one runs every `CHECK_INTERVAL` for the life of the machine and reads
+/// exactly these two fields. A single type carrying an unused `memory_bytes` is how the cheap scan
+/// came to be paying for the expensive number in the first place — leaving the field present, even
+/// zeroed, invites that back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningProcess {
+    pub pid: u32,
+    pub name: String,
+}
+
 /// Whether an interactive user is present at the console — drives screen-time accounting so the
 /// budget isn't charged while nobody is using the machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +79,20 @@ pub trait SystemControl: Send + Sync + 'static {
     /// Capture the primary monitor and return PNG-encoded bytes.
     fn screenshot_png(&self) -> Result<Vec<u8>, ControlError>;
 
-    /// List currently running processes.
+    /// List currently running processes with their memory use, for the dashboard's process panel.
+    /// Called on demand, when a parent opens that card.
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError>;
+
+    /// The pid and name of every running process — the enforcement tick's view, and nothing more.
+    ///
+    /// Split from [`list_processes`](Self::list_processes) because the two run on completely
+    /// different schedules and the difference is not free. On Windows the memory figure costs a
+    /// kernel call per process, and the default refresh that used to serve both callers also
+    /// computed CPU percentage, disk-I/O counters and the full executable path for every process
+    /// on the machine — several hundred of them, twice a minute, forever, all discarded here.
+    ///
+    /// Ordering is unspecified: the enforcer folds the result into a set.
+    fn running_processes(&self) -> Result<Vec<RunningProcess>, ControlError>;
 
     /// Terminate the process with the given PID.
     fn kill_process(&self, pid: u32) -> Result<(), ControlError>;

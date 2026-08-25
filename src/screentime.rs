@@ -25,6 +25,11 @@ use serde_json::Value;
 
 use crate::jsonl::JsonlLog;
 
+/// The event tag every daily rollup row carries, in both `screentime.jsonl` and — for installs
+/// predating that file — the legacy `usage.jsonl`. Named once now that it is read back as a filter
+/// as well as written, so the two uses cannot drift.
+pub const ROLLUP_EVENT: &str = "screentime_daily";
+
 pub struct ScreentimeLog(JsonlLog);
 
 impl ScreentimeLog {
@@ -40,7 +45,7 @@ impl ScreentimeLog {
 
     /// Record one completed day. The event tag is fixed — this file holds nothing else.
     pub fn record(&self, fields: Value) {
-        self.0.record("screentime_daily", fields);
+        self.0.record(ROLLUP_EVENT, fields);
     }
 
     /// The most recent `limit` rows, newest first.
@@ -48,9 +53,14 @@ impl ScreentimeLog {
         self.0.recent(limit)
     }
 
-    /// The most recent `limit` rows, newest first, including the rotated backup.
+    /// The most recent `limit` rollup rows, newest first, including the rotated backup.
+    ///
+    /// Filtered by event tag even though this file holds only rollups. It costs a substring scan
+    /// the read was doing anyway, and it means a stray line — a hand edit, a row half-written when
+    /// the power went — is skipped here rather than reaching `parse_row`.
     pub fn recent_including_rotated(&self, limit: usize) -> Vec<Value> {
-        self.0.recent_including_rotated(limit)
+        self.0
+            .recent_matching_including_rotated(ROLLUP_EVENT, limit)
     }
 }
 
@@ -82,6 +92,10 @@ pub struct DayRow {
     pub focused: Vec<AppMinutes>,
     /// Minutes per browser page title. Same absent-means-unknown rule as `focused`.
     pub pages: Vec<AppMinutes>,
+    /// Minutes per **app group** — the categories a parent defined. Same absent-means-unknown rule
+    /// again: empty for any day recorded before groups were written to history, which is not the
+    /// same as a day whose categories went unused.
+    pub groups: Vec<AppMinutes>,
 }
 
 impl DayRow {
@@ -100,6 +114,7 @@ impl DayRow {
             apps: row.apps.clone(),
             focused: row.focused.clone(),
             pages: row.pages.clone(),
+            groups: row.groups.clone(),
         }
     }
 
@@ -115,6 +130,7 @@ impl DayRow {
             apps: Vec::new(),
             focused: Vec::new(),
             pages: Vec::new(),
+            groups: Vec::new(),
         }
     }
 }
@@ -136,6 +152,66 @@ pub struct Report {
     /// Percentage change against `prev_total_mins`. `None` — never `0` — when there is no
     /// baseline, so an absent comparison cannot read as "no change".
     pub change_pct: Option<i64>,
+    /// Minutes each app was **running**, summed across every measured day in the window.
+    ///
+    /// The report could previously answer "what did he use last Tuesday" and not "how much Roblox
+    /// this month", which is the question a parent actually arrives with. Each panel showed exactly
+    /// one day, because that is all `DayRow` could offer.
+    ///
+    /// Heaviest first, capped at [`TOP_OVER_WINDOW`]. Summed over measured days only — the same
+    /// rule `total_mins` follows, and for the same reason: a day nothing was watching contributes
+    /// no evidence, and treating it as a zero would understate by exactly the unknown amount.
+    pub app_totals: Vec<AppMinutes>,
+    /// Minutes each app actually had **focus**, summed the same way. Empty for a window whose days
+    /// all predate foreground tracking, which is not the same as zero focus.
+    pub focus_totals: Vec<AppMinutes>,
+    /// Minutes per browser page title, summed the same way.
+    pub page_totals: Vec<AppMinutes>,
+    /// Minutes per **app group**, summed the same way. The category view: "Games: 14 h" rather
+    /// than twenty rows of executable names.
+    pub group_totals: Vec<AppMinutes>,
+}
+
+/// How many rows each windowed total carries.
+///
+/// Wider than the live "today" panel because this is the view a parent scrolls deliberately rather
+/// than glances at, and a month legitimately spreads across more programs than an evening. Still a
+/// cap: page titles are attacker-influenced and the number of distinct ones over ninety days has no
+/// natural bound.
+pub const TOP_OVER_WINDOW: usize = 25;
+
+/// Sum one `DayRow` field across the window, heaviest first, capped.
+///
+/// Takes an extractor rather than a key string so a typo cannot silently produce an empty list —
+/// the compiler picks the field, not a lookup that quietly misses.
+fn totals_across<F>(days: &[DayRow], pick: F) -> Vec<AppMinutes>
+where
+    F: Fn(&DayRow) -> &Vec<AppMinutes>,
+{
+    let mut sums: BTreeMap<&str, u64> = BTreeMap::new();
+    for day in days {
+        // Unmeasured days carry empty vectors, so they contribute nothing without a special case —
+        // but the filter is explicit anyway, because "contributes nothing by accident" and
+        // "excluded on purpose" read the same right up until `DayRow::unmeasured` changes.
+        if !day.measured {
+            continue;
+        }
+        for entry in pick(day) {
+            *sums.entry(entry.name.as_str()).or_insert(0) += entry.minutes;
+        }
+    }
+
+    let mut rows: Vec<AppMinutes> = sums
+        .into_iter()
+        .map(|(name, minutes)| AppMinutes {
+            name: name.to_string(),
+            minutes,
+        })
+        .collect();
+    // Heaviest first, ties by name so the order is stable across refreshes.
+    rows.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
+    rows.truncate(TOP_OVER_WINDOW);
+    rows
 }
 
 /// A parsed rollup row, before windowing.
@@ -145,6 +221,7 @@ struct ParsedRow {
     apps: Vec<AppMinutes>,
     focused: Vec<AppMinutes>,
     pages: Vec<AppMinutes>,
+    groups: Vec<AppMinutes>,
 }
 
 impl ParsedRow {
@@ -156,11 +233,21 @@ impl ParsedRow {
     /// would otherwise outrank a modern row naming one — the richer row losing the tie and having
     /// its extra dimensions discarded, invisibly, because the day still renders. Only within the
     /// same generation does the field count decide.
-    fn detail(&self) -> (bool, usize) {
+    fn detail(&self) -> (bool, bool, usize) {
+        // Newest generation first, then the next, then the count. Ranking on the count alone let a
+        // wide row from an older build outrank a narrow modern one and silently discard the richer
+        // data — a row that knows about a *kind* of measurement beats one that does not, however
+        // few entries it happens to carry that day.
+        //
+        // Groups came after focus, so they lead. A row from a build that recorded neither sorts
+        // below both, which is what we want when the same date arrives from `screentime.jsonl` and
+        // the legacy `usage.jsonl`.
+        let knows_groups = !self.groups.is_empty();
         let knows_focus = !self.focused.is_empty() || !self.pages.is_empty();
         (
+            knows_groups,
             knows_focus,
-            self.apps.len() + self.focused.len() + self.pages.len(),
+            self.apps.len() + self.focused.len() + self.pages.len() + self.groups.len(),
         )
     }
 }
@@ -183,6 +270,7 @@ fn parse_row(v: &Value) -> Option<(NaiveDate, ParsedRow)> {
             apps: app_minutes(v, "apps"),
             focused: app_minutes(v, "focused"),
             pages: app_minutes(v, "pages"),
+            groups: app_minutes(v, "groups"),
         },
     ))
 }
@@ -235,12 +323,12 @@ fn window_total(
 /// exists to remove.
 pub fn history_rows(screentime: &ScreentimeLog, usage: &crate::usage::UsageLog) -> Vec<Value> {
     let mut rows = screentime.recent_including_rotated(usize::MAX);
-    rows.extend(
-        usage
-            .recent_including_rotated(usize::MAX)
-            .into_iter()
-            .filter(|v| v.get("event").and_then(Value::as_str) == Some("screentime_daily")),
-    );
+    // Filtered by the *reader*, not after it. `usage.jsonl` is the noisy log — session starts and
+    // stops, locks, countdown warnings, grants — and the rollups are a few dozen lines among all of
+    // it, up to 4 MiB once the rotated backup is counted. Reading it whole and discarding 99% built
+    // a `Value` tree per line on every dashboard load, and the cost scaled with how long the tool
+    // had been installed rather than with the thirty days actually asked for.
+    rows.extend(usage.recent_matching_including_rotated(ROLLUP_EVENT, usize::MAX));
     rows
 }
 
@@ -284,6 +372,10 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
             daily_avg_mins: None,
             prev_total_mins: None,
             change_pct: None,
+            app_totals: Vec::new(),
+            focus_totals: Vec::new(),
+            page_totals: Vec::new(),
+            group_totals: Vec::new(),
         };
     };
     let span = chrono::Duration::days(i64::from(days) - 1);
@@ -334,7 +426,16 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
         _ => None,
     };
 
+    let app_totals = totals_across(&day_rows, |d| &d.apps);
+    let focus_totals = totals_across(&day_rows, |d| &d.focused);
+    let page_totals = totals_across(&day_rows, |d| &d.pages);
+    let group_totals = totals_across(&day_rows, |d| &d.groups);
+
     Report {
+        app_totals,
+        focus_totals,
+        page_totals,
+        group_totals,
         days: day_rows,
         total_mins,
         measured_days,
@@ -612,6 +713,160 @@ mod tests {
             build_report(&sorted, d("2026-08-16"), 2).days,
             build_report(&jumbled, d("2026-08-16"), 2).days
         );
+    }
+
+    /// Category time now survives into history, which is the whole of O13.
+    #[test]
+    fn group_minutes_are_recorded_and_summed_across_the_window() {
+        let rows = vec![
+            serde_json::json!({ "date": "2026-08-20", "minutes_used": 120,
+                                "apps": {}, "groups": { "Games": 60, "School": 30 } }),
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 90,
+                                "apps": {}, "groups": { "Games": 45 } }),
+        ];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        assert_eq!(r.group_totals[0].name, "Games");
+        assert_eq!(r.group_totals[0].minutes, 105);
+        assert_eq!(r.group_totals[1].name, "School");
+        assert_eq!(r.group_totals[1].minutes, 30);
+    }
+
+    /// A row from a build that never recorded groups reports none — not a day of zero category use.
+    #[test]
+    fn a_row_predating_group_history_claims_no_group_data() {
+        let rows = vec![
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 90,
+                                            "apps": { "roblox.exe": 90 } }),
+        ];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        assert!(
+            r.days.iter().any(|x| x.measured),
+            "the day itself was measured"
+        );
+        assert!(
+            r.group_totals.is_empty(),
+            "an absent `groups` key means the build did not record them, not that nothing was used"
+        );
+    }
+
+    /// Knowing about a newer kind of measurement outranks carrying more of an older one.
+    ///
+    /// The same date can arrive from `screentime.jsonl` and the legacy `usage.jsonl`. Ranking on
+    /// the entry count alone let a wide legacy row beat a narrow modern one and drop the richer
+    /// data without trace — which is why `detail` leads with generation, newest first.
+    #[test]
+    fn a_row_that_knows_about_groups_wins_against_a_wider_one_that_does_not() {
+        let rows = vec![
+            // Wide, but from a build that recorded neither focus nor groups.
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 90,
+                                "apps": { "a.exe": 10, "b.exe": 10, "c.exe": 10,
+                                          "d.exe": 10, "e.exe": 10, "f.exe": 10 } }),
+            // Narrow, but it knows what a group is.
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 90,
+                                "apps": { "a.exe": 10 }, "groups": { "Games": 40 } }),
+        ];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        assert_eq!(r.group_totals.len(), 1, "the group-aware row must win");
+        assert_eq!(r.group_totals[0].name, "Games");
+        assert_eq!(
+            r.app_totals.len(),
+            1,
+            "and it brings its own narrower app data with it"
+        );
+    }
+
+    /// The question the report could not answer: how much of one app across the whole window.
+    #[test]
+    fn per_app_totals_sum_across_the_window_heaviest_first() {
+        let rows = vec![
+            serde_json::json!({ "date": "2026-08-20", "minutes_used": 60,
+                    "apps": { "roblox.exe": 40, "chrome.exe": 20 } }),
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 60,
+                    "apps": { "roblox.exe": 30, "notepad.exe": 5 } }),
+        ];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        let names: Vec<&str> = r.app_totals.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["roblox.exe", "chrome.exe", "notepad.exe"]);
+        assert_eq!(r.app_totals[0].minutes, 70, "40 + 30 across two days");
+        assert_eq!(r.app_totals[1].minutes, 20);
+    }
+
+    /// Focus and page totals are summed independently of the running-app totals.
+    #[test]
+    fn focus_and_page_totals_are_summed_separately() {
+        let rows = vec![
+            serde_json::json!({ "date": "2026-08-20", "minutes_used": 60,
+                    "apps": { "chrome.exe": 60 },
+                    "focused": { "chrome.exe": 25 },
+                    "pages": { "Roblox": 10 } }),
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 60,
+                    "apps": { "chrome.exe": 60 },
+                    "focused": { "chrome.exe": 15 },
+                    "pages": { "Roblox": 20, "Homework": 5 } }),
+        ];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        assert_eq!(r.app_totals[0].minutes, 120, "running time");
+        assert_eq!(
+            r.focus_totals[0].minutes, 40,
+            "focus is a different, smaller number"
+        );
+        assert_eq!(r.page_totals[0].name, "Roblox");
+        assert_eq!(r.page_totals[0].minutes, 30);
+    }
+
+    /// A day nobody measured contributes nothing — it is not a zero.
+    ///
+    /// The same rule `total_mins` follows. Counting a gap as zero would understate every total by
+    /// exactly the amount that is unknown, which is the confusion `DayRow::measured` exists to stop.
+    #[test]
+    fn unmeasured_days_do_not_dilute_the_totals() {
+        // Only one row in a thirty-day window: the other twenty-nine are gaps.
+        let rows = vec![
+            serde_json::json!({ "date": "2026-08-21", "minutes_used": 90,
+                                "apps": { "roblox.exe": 90 } }),
+        ];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        assert_eq!(r.days.len(), 30, "the window is still thirty days");
+        assert_eq!(r.measured_days, 1);
+        assert_eq!(r.app_totals.len(), 1);
+        assert_eq!(
+            r.app_totals[0].minutes, 90,
+            "the gaps add nothing, and subtract nothing"
+        );
+    }
+
+    /// The cap holds and keeps the heaviest, not the alphabetically luckiest.
+    #[test]
+    fn windowed_totals_are_capped_at_the_heaviest() {
+        let mut apps = serde_json::Map::new();
+        for i in 0..(TOP_OVER_WINDOW + 15) {
+            apps.insert(format!("app{i:03}.exe"), Value::from(i as u64 + 1));
+        }
+        let rows =
+            vec![serde_json::json!({ "date": "2026-08-21", "minutes_used": 500, "apps": apps })];
+        let r = build_report(&rows, d("2026-08-22"), 30);
+
+        assert_eq!(r.app_totals.len(), TOP_OVER_WINDOW);
+        assert_eq!(
+            r.app_totals[0].name,
+            format!("app{:03}.exe", TOP_OVER_WINDOW + 14),
+            "the heaviest survives the cap"
+        );
+    }
+
+    /// A window with no completed days at all still produces a well-formed report.
+    #[test]
+    fn totals_are_empty_rather_than_absent_when_nothing_was_recorded() {
+        let r = build_report(&[], d("2026-08-22"), 30);
+        assert!(r.app_totals.is_empty());
+        assert!(r.focus_totals.is_empty());
+        assert!(r.page_totals.is_empty());
     }
 
     #[test]

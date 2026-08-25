@@ -376,6 +376,7 @@ USAGE:
 Internal (invoked automatically):
   nestwatch service-run            SCM entry point for the service
   nestwatch helper --capture PATH  capture a screenshot in the user session
+  nestwatch helper --watch         measure which app has focus (runs while signed in)
 "#
     );
 }

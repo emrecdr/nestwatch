@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::control::{ControlError, ProcessInfo, SystemControl};
+use crate::control::{ControlError, RunningProcess, SystemControl};
 use crate::countdown::Countdown;
 use crate::curfew::{MAX_WARN_SECS, default_warn_secs};
 
@@ -448,6 +448,22 @@ pub fn today_summary(
         "extra_mins": extra,
         "per_app": per_app,
         "groups": groups,
+        // Today's focus figures, which until now were measured every thirty seconds, written to
+        // `usage_state.json`, and shown to nobody until the next day's rollup. Report-only, like
+        // everywhere else they appear: the watcher runs as the child, so nothing in `decide` may
+        // read them (`foreground_time_cannot_trigger_a_per_app_limit`).
+        //
+        // Unlike `per_app` above, this is not filtered to apps that already have a limit — the
+        // question it answers is "what has he actually been doing", which is precisely about the
+        // apps nobody thought to configure.
+        "focused": top_by_minutes(&usage.foreground_secs, TOP_TODAY),
+        "pages": top_by_minutes(&usage.page_secs, TOP_TODAY),
+        // Distinguishes "he focused nothing" from "nothing was watching" — the same distinction
+        // `DayRow::measured` draws for completed days, which this card had no equivalent of. An
+        // empty list on its own cannot tell them apart, and rendering silence as zero is the
+        // failure this codebase has already fixed twice.
+        "focus_missing": usage.total_secs >= FOCUS_EVIDENCE_SECS
+            && usage.foreground_secs.is_empty(),
     })
 }
 
@@ -519,6 +535,13 @@ pub struct PreRollover {
     pub per_app_secs: BTreeMap<String, u64>,
     pub foreground_secs: BTreeMap<String, u64>,
     pub page_secs: BTreeMap<String, u64>,
+    /// Per-group seconds, keyed by the group's display name.
+    ///
+    /// Groups were the one tally reported for *today* and never written to history, so a parent
+    /// could see "Games: 40 min" this afternoon and never "Games: 14 h this month" — which is the
+    /// view every comparable product leads with, and the one that turns thirty rows of executable
+    /// names into a sentence.
+    pub per_group_secs: BTreeMap<String, u64>,
 }
 
 /// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
@@ -597,7 +620,7 @@ impl RulesEnforcer {
     pub fn decide_after_snapshot(
         &mut self,
         rules: &Rules,
-        procs: &[ProcessInfo],
+        procs: &[RunningProcess],
         t: Tick,
     ) -> (PreRollover, Vec<RuleAction>) {
         let prev = PreRollover {
@@ -606,6 +629,7 @@ impl RulesEnforcer {
             per_app_secs: self.usage.per_app_secs.clone(),
             foreground_secs: self.usage.foreground_secs.clone(),
             page_secs: self.usage.page_secs.clone(),
+            per_group_secs: self.usage.per_group_secs.clone(),
         };
         (prev, self.decide(rules, procs, t))
     }
@@ -641,19 +665,28 @@ impl RulesEnforcer {
                 acc
             },
         );
-        crate::foreground::accrue(&mut self.usage.foreground_secs, apps);
+        // Capped as it accrues, not afterwards — `accrue_capped` is the only way in, so the count
+        // bound cannot be left off here the way it originally was. These maps are persisted every
+        // tick and folded into the daily rollup, so a fresh set of names each tick is growth on
+        // disk. Both maps, not just the titles: `apps` reads like the safe one because its keys are
+        // executables, but that holds only while the watcher is honest, and this module's premise is
+        // that it is not. `MAX_APPS` sits far above any real machine, so honest use never meets it.
+        crate::foreground::accrue_capped(
+            &mut self.usage.foreground_secs,
+            apps,
+            crate::foreground::MAX_APPS,
+        );
 
         // Page titles are deliberately **not** normalised: they are display text shown back to the
         // parent, not keys matched against a rule.
-        crate::foreground::accrue(&mut self.usage.page_secs, bounded.pages);
-
-        // Re-cap the running day, not just the report. `clamp` bounds each report to `MAX_PAGES`,
-        // but forty *different* titles every tick would still reach thousands by bedtime, and this
-        // map is persisted and rolled up.
-        crate::foreground::retain_top(&mut self.usage.page_secs, crate::foreground::MAX_PAGES);
+        crate::foreground::accrue_capped(
+            &mut self.usage.page_secs,
+            bounded.pages,
+            crate::foreground::MAX_PAGES,
+        );
     }
 
-    pub fn decide(&mut self, rules: &Rules, procs: &[ProcessInfo], t: Tick) -> Vec<RuleAction> {
+    pub fn decide(&mut self, rules: &Rules, procs: &[RunningProcess], t: Tick) -> Vec<RuleAction> {
         let mut actions = Vec::new();
 
         let targets = Targets::from_rules(rules);
@@ -778,6 +811,49 @@ pub(crate) fn norm(name: &str) -> String {
 ///
 /// Sub-minute entries are dropped: they are noise in a daily report, and keeping them would let a
 /// long tail of briefly-run processes dominate the row's size.
+/// How many apps and page titles today's live panel carries.
+///
+/// A card, not a report: the daily rollup keeps everything, and this is the "what has he been on
+/// this afternoon" glance. Ten rows is more than a parent reads standing in a kitchen, and it bounds
+/// a payload polled every sixty seconds by every open dashboard.
+const TOP_TODAY: usize = 10;
+
+/// How much accrued use makes "no focus data at all" evidence of a dead watcher rather than a quiet
+/// morning.
+///
+/// The two are genuinely indistinguishable at small totals. A machine that has been in use for five
+/// minutes with a running watcher has certainly had *some* window in front for at least one second,
+/// and the tally stores seconds — so an empty map past this threshold means nobody reported. Below
+/// it, the honest answer is that we do not know yet, and this stays `false`.
+///
+/// Deliberately generous. The failure this guards against is telling a parent their watcher is
+/// broken when it isn't, which spends the credibility of every other warning on this page.
+const FOCUS_EVIDENCE_SECS: u64 = 300;
+
+/// The `n` heaviest entries as `{name, minutes}`, heaviest first, sub-minute entries dropped.
+///
+/// Ordered output, so it is a JSON array and not an object: a `BTreeMap` serialises sorted by
+/// *name*, and the whole point here is sorted by *time*. Ties break on name so a refresh does not
+/// reshuffle equal rows under the parent's eyes.
+///
+/// Not `foreground::retain_top`, which is private and rightly so — that one bounds what gets
+/// *stored*, and routing a display projection through it would blur a memory-safety cap with a
+/// presentation choice.
+fn top_by_minutes(secs: &BTreeMap<String, u64>, n: usize) -> Vec<Value> {
+    let mut rows: Vec<(&String, u64)> = secs
+        .iter()
+        .filter_map(|(name, s)| {
+            let mins = s / 60;
+            (mins > 0).then_some((name, mins))
+        })
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    rows.truncate(n);
+    rows.into_iter()
+        .map(|(name, mins)| serde_json::json!({ "name": name, "minutes": mins }))
+        .collect()
+}
+
 fn per_app_minutes(per_app_secs: &BTreeMap<String, u64>) -> serde_json::Map<String, Value> {
     per_app_secs
         .iter()
@@ -825,6 +901,19 @@ fn rollup_row(prev: &PreRollover, date: NaiveDate, budget: Option<u32>) -> Value
     row.insert(
         "pages".into(),
         Value::Object(per_app_minutes(&prev.page_secs)),
+    );
+    // Group totals, keyed by the group's display name rather than a process name — the only map
+    // here whose keys the parent chose. Same absent-means-unknown rule as the two above: a row
+    // written before this existed has no `groups` key, and `parse_row` reads that as "not
+    // recorded" rather than as a day with no category time.
+    //
+    // Written even when empty, so a day where groups *were* configured and genuinely unused is
+    // distinguishable from one where the concept did not exist — `per_app_minutes` drops
+    // sub-minute entries, so an empty object here means "configured and under a minute", and an
+    // absent key means "this build did not record groups".
+    row.insert(
+        "groups".into(),
+        Value::Object(per_app_minutes(&prev.per_group_secs)),
     );
     Value::Object(row)
 }
@@ -908,8 +997,11 @@ pub async fn run_rules_enforcer(
 
         let procs = {
             let control = control.clone();
-            match tokio::task::spawn_blocking(move || control.list_processes()).await {
+            match tokio::task::spawn_blocking(move || control.running_processes()).await {
                 Ok(Ok(procs)) => procs,
+                // Unchanged on purpose: a failure skips the whole tick rather than falling through
+                // with an empty list. An empty list reads as "nothing is running" — no per-app time
+                // accrued, nothing killed — which is enforcement silently off for that tick.
                 _ => continue, // transient list failure; try again next tick
             }
         };
@@ -1233,11 +1325,10 @@ fn log_transition(
 mod tests {
     use super::*;
 
-    fn proc(pid: u32, name: &str) -> ProcessInfo {
-        ProcessInfo {
+    fn proc(pid: u32, name: &str) -> RunningProcess {
+        RunningProcess {
             pid,
             name: name.into(),
-            memory_bytes: 0,
         }
     }
 
@@ -1332,6 +1423,57 @@ mod tests {
         assert!(
             !actions.iter().any(|a| matches!(a, RuleAction::Kill(_))),
             "enforcement must read running time, never focused time"
+        );
+    }
+
+    /// The map that is actually saved, not just the report that reaches it.
+    ///
+    /// `clamp` bounds a single report, and `page_secs` is re-capped here because forty *different*
+    /// titles a tick still reaches thousands by bedtime. `foreground_secs` had the same exposure
+    /// and no cap: this map is persisted to disk every tick and folded into the daily rollup, so
+    /// unbounded growth here is unbounded growth on disk.
+    #[test]
+    fn a_days_worth_of_forged_app_names_cannot_grow_the_stored_tally() {
+        let mut e = RulesEnforcer::new(Usage::default());
+
+        // 200 ticks, each naming thirty executables nobody has installed.
+        for tick in 0..200u64 {
+            let mut sample = crate::foreground::Sample::default();
+            for i in 0..30u64 {
+                sample.apps.insert(format!("app{tick}-{i}.exe"), 1);
+            }
+            e.record_foreground(sample, Duration::from_secs(30));
+        }
+
+        assert!(
+            e.usage.foreground_secs.len() <= crate::foreground::MAX_APPS,
+            "stored tally grew to {} apps, cap is {}",
+            e.usage.foreground_secs.len(),
+            crate::foreground::MAX_APPS
+        );
+    }
+
+    /// The cap has to cost the flood, not the measurement. An app with real hours behind it
+    /// outweighs any number of one-second forgeries, so it survives being buried in them.
+    #[test]
+    fn a_forged_flood_does_not_evict_a_genuinely_used_app() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let mut real = crate::foreground::Sample::default();
+        real.apps.insert("roblox.exe".to_string(), 30);
+        e.record_foreground(real, Duration::from_secs(30));
+
+        for tick in 0..200u64 {
+            let mut sample = crate::foreground::Sample::default();
+            for i in 0..30u64 {
+                sample.apps.insert(format!("app{tick}-{i}.exe"), 1);
+            }
+            e.record_foreground(sample, Duration::from_secs(30));
+        }
+
+        assert_eq!(
+            e.usage.foreground_secs.get("roblox.exe"),
+            Some(&30),
+            "real measured time must outlast the flood it is buried in"
         );
     }
 
@@ -1522,6 +1664,133 @@ mod tests {
         u.accrue(next, 30, &running, &targets);
         assert_eq!(u.total_secs, 30);
         assert_eq!(u.per_app_secs["game.exe"], 30);
+    }
+
+    /// The live panel is ordered by time, capped, and drops what would render as a zero.
+    #[test]
+    fn todays_focus_list_is_heaviest_first_capped_and_free_of_zero_rows() {
+        let mut secs = std::collections::BTreeMap::new();
+        // Named so alphabetical order is the *opposite* of time order — if the sort were on the
+        // key, as a BTreeMap's own iteration is, this test would catch it.
+        secs.insert("a_small.exe".to_string(), 60u64); // 1 min
+        secs.insert("z_big.exe".to_string(), 7_200u64); // 120 min
+        secs.insert("m_mid.exe".to_string(), 600u64); // 10 min
+        secs.insert("blip.exe".to_string(), 59u64); // 0 min — dropped
+
+        let rows = top_by_minutes(&secs, TOP_TODAY);
+
+        assert_eq!(
+            rows.len(),
+            3,
+            "the sub-minute entry must not take a row: {rows:?}"
+        );
+        assert_eq!(rows[0]["name"], "z_big.exe");
+        assert_eq!(rows[0]["minutes"], 120);
+        assert_eq!(rows[1]["name"], "m_mid.exe");
+        assert_eq!(rows[2]["name"], "a_small.exe");
+    }
+
+    /// The cap holds, and it keeps the heaviest rather than the alphabetically luckiest.
+    #[test]
+    fn todays_focus_list_keeps_the_heaviest_when_it_has_to_choose() {
+        let mut secs = std::collections::BTreeMap::new();
+        for i in 0..40u64 {
+            // Later names carry more time, so a truncate-before-sort would keep exactly the wrong
+            // half and this test would fail.
+            secs.insert(format!("app{i:02}.exe"), (i + 1) * 60);
+        }
+
+        let rows = top_by_minutes(&secs, TOP_TODAY);
+
+        assert_eq!(rows.len(), TOP_TODAY);
+        assert_eq!(rows[0]["name"], "app39.exe", "heaviest first");
+        assert_eq!(
+            rows[TOP_TODAY - 1]["name"],
+            "app30.exe",
+            "tenth heaviest last"
+        );
+    }
+
+    /// Ties are broken on name, so a refresh does not reshuffle equal rows.
+    #[test]
+    fn equal_focus_times_keep_a_stable_order() {
+        let mut secs = std::collections::BTreeMap::new();
+        secs.insert("b.exe".to_string(), 600u64);
+        secs.insert("a.exe".to_string(), 600u64);
+        secs.insert("c.exe".to_string(), 600u64);
+
+        let names: Vec<String> = top_by_minutes(&secs, TOP_TODAY)
+            .iter()
+            .map(|r| r["name"].as_str().unwrap().to_string())
+            .collect();
+
+        assert_eq!(names, vec!["a.exe", "b.exe", "c.exe"]);
+    }
+
+    /// "Nobody was watching" and "he focused nothing" must not render the same.
+    ///
+    /// This is the distinction `DayRow::measured` draws for completed days and the Today card had
+    /// no equivalent of. The threshold is what keeps it honest in both directions: silent below it
+    /// (a quiet morning is not evidence of anything), confident above it.
+    #[test]
+    fn absent_focus_data_is_only_called_missing_once_there_is_use_to_contradict_it() {
+        let rules = Rules::default();
+        let day = NaiveDate::from_ymd_opt(2026, 8, 24).unwrap();
+
+        let summary = |total_secs: u64, focus: &[(&str, u64)]| {
+            let mut usage = Usage {
+                day: Some(day),
+                total_secs,
+                ..Default::default()
+            };
+            for (name, secs) in focus {
+                usage.foreground_secs.insert((*name).to_string(), *secs);
+            }
+            today_summary(&rules, day, 0, &usage, Some(1))
+        };
+
+        assert_eq!(
+            summary(0, &[])["focus_missing"],
+            false,
+            "an unused machine says nothing about the watcher"
+        );
+        assert_eq!(
+            summary(FOCUS_EVIDENCE_SECS - 1, &[])["focus_missing"],
+            false,
+            "just under the threshold is still 'we don't know'"
+        );
+        assert_eq!(
+            summary(FOCUS_EVIDENCE_SECS, &[])["focus_missing"],
+            true,
+            "used this long with nothing reported means nothing is reporting"
+        );
+        assert_eq!(
+            summary(86_400, &[("chrome.exe", 30)])["focus_missing"],
+            false,
+            "a single sub-minute report still proves the watcher is alive"
+        );
+    }
+
+    /// The whole point of the feature: today's focus reaches the payload at all.
+    #[test]
+    fn today_summary_carries_todays_focus_and_page_figures() {
+        let rules = Rules::default();
+        let day = NaiveDate::from_ymd_opt(2026, 8, 24).unwrap();
+        let mut usage = Usage {
+            day: Some(day),
+            total_secs: 3_600,
+            ..Default::default()
+        };
+        usage.foreground_secs.insert("roblox.exe".into(), 1_800);
+        usage.page_secs.insert("Roblox".into(), 900);
+
+        let s = today_summary(&rules, day, 0, &usage, Some(1));
+
+        assert_eq!(s["focused"][0]["name"], "roblox.exe");
+        assert_eq!(s["focused"][0]["minutes"], 30);
+        assert_eq!(s["pages"][0]["name"], "Roblox");
+        assert_eq!(s["pages"][0]["minutes"], 15);
+        assert_eq!(s["focus_missing"], false);
     }
 
     #[test]

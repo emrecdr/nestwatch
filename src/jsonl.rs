@@ -104,6 +104,46 @@ impl JsonlLog {
         events.extend(Self::read_events(path));
         Self::newest_first(events, limit)
     }
+
+    /// Parse only the lines whose `event` tag is `event`, oldest first.
+    ///
+    /// The `contains` is a **reject filter, never the decision**. A line that survives it is still
+    /// parsed and its real `event` field compared, so the substring turning up inside some other
+    /// field — a reason string, a routine name — cannot smuggle a row in. What it buys is skipping
+    /// `serde_json::from_str` on the lines that cannot possibly match, which is where the cost is:
+    /// parsing builds a `Value` tree per line, rejecting one is a memchr scan.
+    ///
+    /// The one way this can be wrong is a writer that `\u`-escapes ASCII letters in the event
+    /// name. [`record`](Self::record) never does, and the consequence would be a dropped row —
+    /// which surfaces as a *not measured* day in the report rather than as a wrong number.
+    fn read_events_matching(path: &Path, event: &str) -> Vec<Value> {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return Vec::new();
+        };
+        content
+            .lines()
+            .filter(|line| line.contains(event))
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|v| v.get("event").and_then(Value::as_str) == Some(event))
+            .collect()
+    }
+
+    /// Like [`recent_including_rotated`](Self::recent_including_rotated), but keeps only events
+    /// tagged `event`.
+    ///
+    /// Exists because the screen-time report wants roughly thirty daily rollup rows out of a log
+    /// whose other traffic — session starts and stops, locks, countdown warnings, grants — shares
+    /// the file and outnumbers them by orders of magnitude. Reading it unfiltered meant building a
+    /// `Value` for every line ever written, on every dashboard load, to keep a few dozen. The cost
+    /// scaled with how long the tool had been installed rather than with the window asked for.
+    pub fn recent_matching_including_rotated(&self, event: &str, limit: usize) -> Vec<Value> {
+        let Some(path) = &self.path else {
+            return Vec::new();
+        };
+        let mut events = Self::read_events_matching(&path.with_extension("jsonl.1"), event);
+        events.extend(Self::read_events_matching(path, event));
+        Self::newest_first(events, limit)
+    }
 }
 
 /// RFC3339 UTC timestamp with millisecond precision.
@@ -146,6 +186,103 @@ mod tests {
         assert_eq!(recent[0]["event"], "second", "newest first");
         assert_eq!(recent[1]["event"], "first");
         assert!(recent[0]["ts"].is_string(), "timestamp present");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The filter keeps what it should and drops what it shouldn't.
+    #[test]
+    fn a_filtered_read_returns_only_the_named_event() {
+        let dir = std::env::temp_dir().join(format!("nw-jsonl-filter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mixed.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let log = JsonlLog::new(path);
+
+        log.record("session_start", json!({}));
+        log.record("wanted", json!({ "n": 1 }));
+        log.record("lock", json!({ "reason": "budget" }));
+        log.record("wanted", json!({ "n": 2 }));
+
+        let hits = log.recent_matching_including_rotated("wanted", 10);
+        assert_eq!(hits.len(), 2, "only the two `wanted` rows: {hits:?}");
+        assert_eq!(hits[0]["n"], 2, "newest first");
+        assert_eq!(hits[1]["n"], 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The pre-filter is a reject step, not the verdict.
+    ///
+    /// This is the property the optimisation could quietly break: a line mentioning the event name
+    /// inside some *other* field passes the cheap `contains` and must then be rejected on its real
+    /// `event` tag. Deleting the post-parse check leaves the fast path working and this test
+    /// failing, which is the point — a report that silently absorbed a child's routine name as a
+    /// screen-time rollup would be very hard to notice.
+    #[test]
+    fn a_line_merely_mentioning_the_event_name_is_not_matched() {
+        let dir = std::env::temp_dir().join(format!("nw-jsonl-decoy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("decoy.jsonl");
+        let _ = std::fs::remove_file(&path);
+        let log = JsonlLog::new(path);
+
+        // The child controls this string: `/time-request` takes a free-text reason.
+        log.record("time_request", json!({ "reason": "wanted" }));
+        log.record("wanted", json!({ "real": true }));
+
+        let hits = log.recent_matching_including_rotated("wanted", 10);
+        assert_eq!(hits.len(), 1, "the decoy must not match: {hits:?}");
+        assert_eq!(hits[0]["real"], true);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A filtered read reaches into the rotated backup, like its unfiltered sibling.
+    #[test]
+    fn a_filtered_read_reaches_past_the_backup_boundary() {
+        let dir = std::env::temp_dir().join(format!("nw-jsonl-frot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frot.jsonl");
+        let backup = path.with_extension("jsonl.1");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&backup);
+
+        std::fs::write(
+            &backup,
+            "{\"event\":\"keep\",\"n\":1}\n{\"event\":\"drop\"}\n",
+        )
+        .unwrap();
+        std::fs::write(&path, "{\"event\":\"keep\",\"n\":2}\n").unwrap();
+
+        let log = JsonlLog::new(path);
+        let hits = log.recent_matching_including_rotated("keep", 10);
+        assert_eq!(hits.len(), 2, "both sides of the rotation: {hits:?}");
+        assert_eq!(hits[0]["n"], 2, "live file is the newer");
+        assert_eq!(hits[1]["n"], 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A truncated or corrupt line is skipped, not fatal — the same tolerance the unfiltered
+    /// reader has, since the filtered one is now the report's only route to this file.
+    #[test]
+    fn a_corrupt_line_does_not_break_a_filtered_read() {
+        let dir = std::env::temp_dir().join(format!("nw-jsonl-corrupt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("corrupt.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        // Middle line mentions the event and is not valid JSON — a power cut mid-write.
+        std::fs::write(
+            &path,
+            "{\"event\":\"keep\",\"n\":1}\n{\"event\":\"keep\",\"n\":\n{\"event\":\"keep\",\"n\":3}\n",
+        )
+        .unwrap();
+
+        let log = JsonlLog::new(path);
+        let hits = log.recent_matching_including_rotated("keep", 10);
+        assert_eq!(hits.len(), 2, "the two intact rows survive: {hits:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

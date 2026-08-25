@@ -52,8 +52,38 @@ pub struct Sample {
 /// bound. The heaviest entries are kept, which is also the only part anyone reads.
 pub const MAX_PAGES: usize = 40;
 
+/// Largest number of distinct **executables** carried in memory or stored for a day.
+///
+/// Far above any real machine — a busy PC sees tens of distinct foreground apps in a day, not
+/// hundreds — because this is a backstop against a forged report, not a product decision. It has to
+/// exist for the same reason [`MAX_PAGES`] does: the report arrives from a process running as the
+/// child, so "how many programs are installed" bounds the honest case and nothing else.
+///
+/// Higher than `MAX_PAGES` because the two are different bets. Dropping a page title loses display
+/// text; dropping an executable loses measured time that the enforcement tally is shown beside, so
+/// the ceiling is set where it cannot plausibly be reached by a real user.
+pub const MAX_APPS: usize = 200;
+
+/// Largest JSON line accepted from the watcher pipe, in bytes.
+///
+/// Sized from the worst line an **honest** watcher can produce, which is the failure this limit
+/// could cause rather than prevent: set it below that and real samples are discarded as if forged,
+/// and the symptom is a child who appears to have used nothing.
+///
+/// That worst case is **170,170 bytes** — [`MAX_PAGES`] titles at the 512 UTF-16 units
+/// `window_title` reads, plus the apps a 30-second emit can drain, every character worst-casing to
+/// a six-byte `\uXXXX` escape. Measured, not estimated: `the_read_limit_clears_the_largest_honest_line`
+/// builds that sample and asserts it fits, so raising `MAX_PAGES` or either watcher buffer without
+/// raising this fails there rather than on a child's PC. One MiB leaves about six times over.
+///
+/// 64 KiB would be the natural round number and is under the real figure by a factor of three.
+pub const MAX_LINE: u64 = 1024 * 1024;
+
 /// Keep the `n` heaviest entries, dropping the rest. Ties break by name so the result is stable.
-pub fn retain_top(map: &mut BTreeMap<String, u64>, n: usize) {
+///
+/// Private: outside this module the count bound is reached only through [`accrue_capped`], which
+/// is what stops a caller from folding data in and forgetting to bound it.
+fn retain_top(map: &mut BTreeMap<String, u64>, n: usize) {
     if map.len() <= n {
         return;
     }
@@ -84,8 +114,9 @@ pub fn parse_sample(line: &str) -> Option<Sample> {
 pub fn clamp(sample: Sample, elapsed_secs: u64) -> Sample {
     let mut pages = bound(sample.pages, elapsed_secs);
     // Cap after bounding, so what survives is the heaviest *real* time rather than the heaviest
-    // claim. Applied only to pages: `apps` is bounded by how many programs are installed, while
-    // page titles are bounded by nothing at all.
+    // claim. Pages only, because this bounds one report and apps cannot exceed `elapsed_secs`
+    // entries in one — not because executables are a safe keyspace. They are not, and the count
+    // bound that matters is [`accrue_capped`], applied wherever a map *accumulates*. See `MAX_APPS`.
     retain_top(&mut pages, MAX_PAGES);
 
     Sample {
@@ -159,11 +190,85 @@ pub fn idle_state(now_ms: u64, idle_ms: u64, idle_after_ms: u64) -> (bool, u64) 
     (true, credited_until.min(now_ms))
 }
 
+/// Read one newline-terminated line from the watcher pipe, never holding more than `max` bytes.
+///
+/// Returns `Ok(false)` once the pipe is done. On `Ok(true)`, `buf` holds the line without its
+/// newline — or is **empty** when the line was over-long and got skipped, which needs no special
+/// handling from the caller because an empty line does not parse as a sample.
+///
+/// `BufRead::lines` cannot do this job. It grows one `String` until it meets a newline, so a writer
+/// that never sends one takes the reader's memory with it — and the reader here is the SYSTEM
+/// service, reading a pipe from a process that runs as the child. By the time a line could be
+/// inspected and rejected, the allocation that mattered has already happened; the limit has to be
+/// on the read itself.
+///
+/// A trailing fragment with no newline is discarded rather than parsed. [`crate::watcher`] always
+/// terminates what it writes, so an unterminated tail is a pipe cut mid-write — the torn read
+/// [`parse_sample`] describes, and not a record that was ever complete.
+pub fn read_bounded_line<R: std::io::BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max: u64,
+) -> std::io::Result<bool> {
+    use std::io::{BufRead, Read};
+
+    buf.clear();
+    if reader.by_ref().take(max).read_until(b'\n', buf)? == 0 {
+        return Ok(false);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        return Ok(true);
+    }
+
+    // Over-long, or torn at EOF. Skip to the next newline so one bad line costs one line rather
+    // than desynchronising the stream — reusing `buf` as the scratch, so the ceiling on what is
+    // held at once stays `max` however long the offending line turns out to be.
+    loop {
+        buf.clear();
+        let read = reader.by_ref().take(max).read_until(b'\n', buf)?;
+        // Ask the buffer, not the byte count. "Stopped short of the limit" looks like the same
+        // question and is not: a chunk that fills the limit *and* ends on the newline is a line
+        // that just ended, and treating it as unfinished swallows the following line whole.
+        let ended = buf.last() == Some(&b'\n');
+        buf.clear();
+        if read == 0 {
+            return Ok(false);
+        }
+        if ended {
+            return Ok(true);
+        }
+    }
+}
+
+/// Fold one tick's bounded figures into a running map and bound how many keys it may hold.
+///
+/// **The only accrual this module exposes**, because both halves are needed everywhere and keeping
+/// them together is what makes the pair unskippable. [`clamp`] bounds what the numbers may *say*;
+/// `cap` bounds how many of them there may *be*, and the second is not implied by the first — a
+/// report of ten thousand one-second entries passes every value check ever written. Every caller
+/// previously did `accrue` then `retain_top` by hand, which is two things that must agree at four
+/// call sites, and the map that is actually persisted was the one where they did not.
+///
+/// The heaviest entries survive, so a flood costs the flood: an app with real hours behind it
+/// outweighs any number of forgeries. Free on the honest path — `retain_top` returns immediately
+/// while the map fits.
+pub fn accrue_capped(
+    running: &mut BTreeMap<String, u64>,
+    bounded: BTreeMap<String, u64>,
+    cap: usize,
+) {
+    accrue(running, bounded);
+    retain_top(running, cap);
+}
+
 /// Fold one tick's bounded figures into the running daily map.
 ///
 /// Separate from [`clamp`] so the bound cannot be skipped by a caller that only wanted to
-/// accumulate: the only way to obtain the map this takes is to have gone through `clamp`.
-pub fn accrue(running: &mut BTreeMap<String, u64>, bounded: BTreeMap<String, u64>) {
+/// accumulate: the only way to obtain the map this takes is to have gone through `clamp`. Private
+/// for the same reason one level up — outside this module the only way in is [`accrue_capped`], so
+/// the count bound cannot be forgotten either.
+fn accrue(running: &mut BTreeMap<String, u64>, bounded: BTreeMap<String, u64>) {
     for (name, secs) in bounded {
         let slot = running.entry(name).or_insert(0);
         *slot = slot.saturating_add(secs);
@@ -182,16 +287,29 @@ pub fn accrue(running: &mut BTreeMap<String, u64>, bounded: BTreeMap<String, u64
 /// It also saves a `GetWindowTextW` and a `String` on every non-browser window, which is most of
 /// them — but that is the smaller reason.
 pub fn is_browser(exe: &str) -> bool {
-    const BROWSERS: &[&str] = &[
-        "chrome.exe",
-        "msedge.exe",
-        "firefox.exe",
-        "brave.exe",
-        "opera.exe",
-        "vivaldi.exe",
-    ];
-    BROWSERS.contains(&exe)
+    BROWSERS.iter().any(|(known, _)| *known == exe)
 }
+
+/// Every browser this can attribute, with the title suffixes it is known to use.
+///
+/// **One table on purpose.** These were two lists — executables here, suffixes there — and they
+/// had already drifted: `opera.exe` and `vivaldi.exe` were admitted with no suffix to match, so an
+/// Opera user paid a title read on every wake and silently got no page attribution at all. Pairing
+/// them means a browser cannot be admitted without saying how to parse it, and adding one is a
+/// single entry rather than two edits that must agree.
+///
+/// Firefox appears with two suffixes because it separates with an em dash; matching only `" - "`
+/// would miss every Firefox window, which reads as "he never used Firefox" rather than as a bug.
+///
+/// Deliberately short. A browser whose title format has not been confirmed is left out rather than
+/// guessed at — an entry that never matches is indistinguishable, to a parent, from a child who
+/// never opened it.
+const BROWSERS: &[(&str, &[&str])] = &[
+    ("chrome.exe", &[" - Google Chrome"]),
+    ("msedge.exe", &[" - Microsoft Edge"]),
+    ("firefox.exe", &[" — Mozilla Firefox", " - Mozilla Firefox"]),
+    ("brave.exe", &[" - Brave"]),
+];
 
 /// Recognise a browser window by its title suffix and pull the page title out of it.
 ///
@@ -204,19 +322,11 @@ pub fn is_browser(exe: &str) -> bool {
 /// Returns `None` for any window that is not a recognised browser, which is the common case.
 /// The page is borrowed from `title` — which browser it was is deliberately not returned, because
 /// nothing displays it and an unread field is a thing to keep correct for no one.
-pub fn browser_page(title: &str) -> Option<&str> {
-    /// Title suffixes. Firefox appears twice because it separates with an em dash, and matching
-    /// only `" - "` would miss every Firefox window — which reads as "he never used Firefox"
-    /// rather than as a bug.
-    const SUFFIXES: &[&str] = &[
-        " - Google Chrome",
-        " — Mozilla Firefox",
-        " - Mozilla Firefox",
-        " - Microsoft Edge",
-        " - Brave",
-    ];
-
-    let page = SUFFIXES
+pub fn browser_page<'a>(exe: &str, title: &'a str) -> Option<&'a str> {
+    // The window must carry *this* browser's suffix, not merely some browser's — Chrome credited
+    // through Firefox's suffix would be one more thing a forged title could exploit.
+    let (_, suffixes) = BROWSERS.iter().find(|(known, _)| *known == exe)?;
+    let page = suffixes
         .iter()
         .find_map(|suffix| title.strip_suffix(suffix))?;
 
@@ -410,8 +520,13 @@ impl Feed {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pending = state.get_or_insert_with(Sample::default);
-        accrue(&mut pending.apps, sample.apps);
-        accrue(&mut pending.pages, sample.pages);
+
+        // Capped, because this is what accumulates *between* drains. `clamp` runs when the enforcer
+        // drains, thirty seconds apart; everything arriving in between lands here first, at whatever
+        // rate the watcher writes and with whatever names it chooses. Bounding only the stored day
+        // would leave the buffer in front of it, inside the service, with no ceiling at all.
+        accrue_capped(&mut pending.apps, sample.apps, MAX_APPS);
+        accrue_capped(&mut pending.pages, sample.pages, MAX_PAGES);
     }
 
     /// Take everything reported since the last drain, or `None` if no watcher has reported at all.
@@ -583,7 +698,8 @@ mod tests {
 
     #[test]
     fn a_chrome_window_yields_its_page_title() {
-        let got = browser_page("Roblox - Google Chrome").expect("Chrome must be recognised");
+        let got = browser_page("chrome.exe", "Roblox - Google Chrome")
+            .expect("Chrome must be recognised");
         assert_eq!(got, "Roblox");
     }
 
@@ -591,27 +707,28 @@ mod tests {
     /// every Firefox window, which would look like "he never used Firefox" rather than a bug.
     #[test]
     fn firefox_uses_an_em_dash() {
-        let got = browser_page("Wikipedia — Mozilla Firefox").expect("Firefox must be recognised");
+        let got = browser_page("firefox.exe", "Wikipedia — Mozilla Firefox")
+            .expect("Firefox must be recognised");
         assert_eq!(got, "Wikipedia");
     }
 
     /// Edge appends a tab count when several are open; it is chrome, not page title.
     #[test]
     fn edge_drops_its_and_n_more_pages_suffix() {
-        let got = browser_page("Roblox and 3 more pages - Microsoft Edge")
+        let got = browser_page("msedge.exe", "Roblox and 3 more pages - Microsoft Edge")
             .expect("Edge must be recognised");
         assert_eq!(got, "Roblox");
     }
 
     #[test]
     fn a_non_browser_window_is_not_a_page() {
-        assert_eq!(browser_page("Untitled - Notepad"), None);
+        assert_eq!(browser_page("notepad.exe", "Untitled - Notepad"), None);
         assert_eq!(
-            browser_page("Roblox"),
+            browser_page("chrome.exe", "Roblox"),
             None,
             "the game itself is not a page"
         );
-        assert_eq!(browser_page(""), None);
+        assert_eq!(browser_page("chrome.exe", ""), None);
     }
 
     #[test]
@@ -843,6 +960,51 @@ mod tests {
         assert_eq!(got.pages.get("Roblox"), Some(&30));
     }
 
+    /// A browser must carry **its own** suffix, not merely some browser's.
+    ///
+    /// The two facts were previously checked against separate lists, which could disagree in both
+    /// directions: an executable admitted with no suffix to match (a guaranteed-empty title read),
+    /// or a title suffix accepted from the wrong browser entirely. One table settles both.
+    #[test]
+    fn a_browser_is_matched_against_its_own_title_suffix() {
+        assert_eq!(
+            browser_page("chrome.exe", "Roblox - Google Chrome"),
+            Some("Roblox")
+        );
+        assert_eq!(
+            browser_page("chrome.exe", "Roblox — Mozilla Firefox"),
+            None,
+            "Chrome must not be credited through Firefox's suffix"
+        );
+    }
+
+    /// Every executable the process gate admits must have a suffix to match, or reading its title
+    /// is guaranteed waste — and its user silently gets no page attribution at all.
+    #[test]
+    fn every_admitted_browser_can_actually_be_parsed() {
+        // Walks the table itself rather than a copy of it, so an entry added with a suffix that
+        // does not round-trip fails here instead of on a child's PC.
+        for (exe, suffixes) in BROWSERS {
+            assert!(is_browser(exe), "{exe} must pass the process gate");
+            assert!(!suffixes.is_empty(), "{exe} admitted with nothing to match");
+
+            for suffix in *suffixes {
+                let title = format!("Some Page{suffix}");
+                assert_eq!(
+                    browser_page(exe, &title),
+                    Some("Some Page"),
+                    "{exe} must parse its own suffix {suffix:?}"
+                );
+            }
+        }
+
+        // The inverse: nothing is admitted that cannot be parsed. An executable with no known
+        // title format would cost a title read on every wake and yield nothing, and its user would
+        // see no page attribution without being told why.
+        assert!(!is_browser("opera.exe"));
+        assert!(!is_browser("notepad.exe"));
+    }
+
     /// Title suffixes are attacker-chosen, so they cannot be the only evidence a window is a
     /// browser. Any process can set its window title to `"Roblox - Google Chrome"`; a child
     /// scripting that could inject pages they never visited, or flood the capped list to push real
@@ -870,11 +1032,195 @@ mod tests {
     /// A page whose own title ends in a browser name must not be mistaken for chrome.
     #[test]
     fn only_the_trailing_suffix_counts() {
-        let got = browser_page("How to uninstall Google Chrome - Google Chrome")
-            .expect("still a Chrome window");
+        let got = browser_page(
+            "chrome.exe",
+            "How to uninstall Google Chrome - Google Chrome",
+        )
+        .expect("still a Chrome window");
         assert_eq!(
             got, "How to uninstall Google Chrome",
             "only the final suffix is the browser's"
+        );
+    }
+
+    /// The bound was being applied at the wrong end of the pipe.
+    ///
+    /// `clamp` runs when the enforcer *drains*, once every 30 seconds. Until then every report is
+    /// added straight into this map, inside the SYSTEM service, at whatever rate the watcher cares
+    /// to write. A forged watcher naming a new executable per line therefore grew the service's
+    /// memory for a full tick with nothing in the way — the bound that made the stored day safe did
+    /// not protect the buffer in front of it.
+    #[test]
+    fn a_flooded_feed_cannot_grow_the_service_without_bound() {
+        let feed = Feed::new();
+        for i in 0..10_000u64 {
+            feed.submit(sample(&[(&format!("app{i}.exe"), 1)]));
+        }
+
+        let drained = feed.drain().expect("reports were submitted");
+        assert!(
+            drained.apps.len() <= MAX_APPS,
+            "feed accumulated {} app keys, cap is {MAX_APPS}",
+            drained.apps.len()
+        );
+    }
+
+    /// Same hole on the higher-cardinality map. `MAX_PAGES` bounded the stored day and each report,
+    /// but not what accumulates between drains.
+    #[test]
+    fn a_flooded_feed_caps_page_titles_too() {
+        let feed = Feed::new();
+        for i in 0..10_000u64 {
+            feed.submit(Sample {
+                apps: BTreeMap::new(),
+                pages: [(format!("page {i}"), 1)].into(),
+            });
+        }
+
+        let drained = feed.drain().expect("reports were submitted");
+        assert!(
+            drained.pages.len() <= MAX_PAGES,
+            "feed accumulated {} page keys, cap is {MAX_PAGES}",
+            drained.pages.len()
+        );
+    }
+
+    /// Flooding must cost the *flood*, not the real measurements it arrives beside.
+    #[test]
+    fn a_flood_does_not_evict_the_app_that_actually_earned_time() {
+        let feed = Feed::new();
+        feed.submit(sample(&[("roblox.exe", 1_800)]));
+        for i in 0..10_000u64 {
+            feed.submit(sample(&[(&format!("app{i}.exe"), 1)]));
+        }
+
+        let drained = feed.drain().expect("reports were submitted");
+        assert_eq!(
+            drained.apps.get("roblox.exe"),
+            Some(&1_800),
+            "the heaviest entry must survive a flood, or the flood becomes the attack"
+        );
+    }
+
+    /// A line with no newline in it is a write that never ends, and `BufRead::lines` will buffer it
+    /// until the service runs out of memory. Reading is where that has to be stopped: by the time
+    /// anything can inspect the line, the allocation has already happened.
+    #[test]
+    fn an_endless_line_is_discarded_instead_of_buffered() {
+        let flood = "x".repeat(4096);
+        let mut input = std::io::Cursor::new(format!("{flood}\n{{\"apps\":{{}}}}\n"));
+
+        let mut buf = Vec::new();
+        assert!(
+            read_bounded_line(&mut input, &mut buf, 64).expect("reading must not fail"),
+            "an over-long line must not end the stream"
+        );
+        assert!(buf.is_empty(), "the over-long line must be discarded whole");
+
+        assert!(read_bounded_line(&mut input, &mut buf, 64).expect("reading must not fail"));
+        assert_eq!(
+            std::str::from_utf8(&buf).expect("valid utf-8"),
+            r#"{"apps":{}}"#,
+            "the line after a discarded one must still arrive"
+        );
+    }
+
+    /// `MAX_LINE` has to clear the largest line an **honest** watcher can produce.
+    ///
+    /// This is the failure the read limit could cause rather than prevent: set it too low and real
+    /// samples are discarded as if forged, which shows up as a child who used nothing. The three
+    /// numbers that decide it live in three places and are edited independently — `MAX_PAGES` here,
+    /// the 512-unit title buffer and 260-unit process-name buffer in `watcher.rs`, and the 30-second
+    /// emit cadence — so raising any of them without raising `MAX_LINE` breaks this quietly. That is
+    /// the same two-things-that-must-agree shape as the browser table above, which had already
+    /// drifted once.
+    ///
+    /// Built at the true worst case for JSON size: every character a control character, which
+    /// serde escapes to six bytes. Real titles are far cheaper — even CJK is three.
+    #[test]
+    fn the_read_limit_clears_the_largest_honest_line() {
+        // At most one window holds focus, so a 30-second emit can drain at most 30 whole-second
+        // app entries. Titles and process names are bounded by watcher.rs's fixed buffers.
+        let worst_title = "\u{1}".repeat(512);
+        let worst_exe = "\u{1}".repeat(260);
+
+        let sample = Sample {
+            apps: (0..30).map(|i| (format!("{worst_exe}{i}"), 1u64)).collect(),
+            pages: (0..MAX_PAGES)
+                .map(|i| (format!("{worst_title}{i}"), 1u64))
+                .collect(),
+        };
+
+        let line = serde_json::to_string(&sample).expect("a sample must serialise");
+        assert!(
+            (line.len() as u64) < MAX_LINE,
+            "the worst honest line is {} bytes but MAX_LINE is {MAX_LINE}; real samples would be \
+             discarded as forged, and the symptom is a child who appears to have used nothing",
+            line.len()
+        );
+    }
+
+    /// Resynchronising must not overshoot into the next line.
+    ///
+    /// A skipped line whose newline lands exactly on the read limit reads as "the chunk filled the
+    /// limit", which is indistinguishable from "the line is still going" if you ask the byte count
+    /// instead of the buffer. Getting that wrong swallows the line *after* the over-long one — so
+    /// one forged line would cost two, and the second would be a real sample.
+    ///
+    /// 15 bytes plus a newline, read 8 at a time: the second chunk is exactly full and exactly
+    /// finished.
+    #[test]
+    fn skipping_an_over_long_line_stops_at_its_newline_not_past_it() {
+        let mut input = std::io::Cursor::new(format!("{}\nkeep me\n", "x".repeat(15)));
+
+        let mut buf = Vec::new();
+        assert!(read_bounded_line(&mut input, &mut buf, 8).expect("reading must not fail"));
+        assert!(buf.is_empty(), "the over-long line is discarded");
+
+        assert!(read_bounded_line(&mut input, &mut buf, 8).expect("reading must not fail"));
+        assert_eq!(
+            std::str::from_utf8(&buf).expect("valid utf-8"),
+            "keep me",
+            "the line after a discarded one must survive, not be eaten by the skip"
+        );
+    }
+
+    #[test]
+    fn a_normal_line_round_trips_without_its_newline() {
+        let mut input = std::io::Cursor::new("{\"apps\":{}}\nsecond\n");
+
+        let mut buf = Vec::new();
+        assert!(read_bounded_line(&mut input, &mut buf, MAX_LINE).expect("reading must not fail"));
+        assert_eq!(
+            std::str::from_utf8(&buf).expect("valid utf-8"),
+            r#"{"apps":{}}"#
+        );
+
+        assert!(read_bounded_line(&mut input, &mut buf, MAX_LINE).expect("reading must not fail"));
+        assert_eq!(std::str::from_utf8(&buf).expect("valid utf-8"), "second");
+
+        assert!(
+            !read_bounded_line(&mut input, &mut buf, MAX_LINE).expect("reading must not fail"),
+            "a drained pipe reports EOF"
+        );
+    }
+
+    /// The pipe can be cut mid-write by the session ending. A tail with no newline is a torn write,
+    /// not a sample — `emit` always terminates its lines — so it is dropped rather than parsed.
+    #[test]
+    fn a_torn_final_line_is_dropped_rather_than_parsed() {
+        let mut input = std::io::Cursor::new("{\"apps\":{}}\n{\"apps\":{\"roblo");
+
+        let mut buf = Vec::new();
+        assert!(read_bounded_line(&mut input, &mut buf, MAX_LINE).expect("reading must not fail"));
+        assert_eq!(
+            std::str::from_utf8(&buf).expect("valid utf-8"),
+            r#"{"apps":{}}"#
+        );
+
+        assert!(
+            !read_bounded_line(&mut input, &mut buf, MAX_LINE).expect("reading must not fail"),
+            "a half-written trailing line is EOF, not a record"
         );
     }
 }

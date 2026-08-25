@@ -155,7 +155,7 @@ child's windows. That means everything arriving over that pipe is attacker-contr
 threat model this project already assumes ("the child is the adversary and a reboot is their tool").
 A child who finds the helper can kill it, or replace what it writes.
 
-Three rules follow, and the aggregation enforces all three:
+Four rules follow, and the aggregation enforces all four:
 
 1. **Bound every delta by real elapsed time.** The service knows how long the tick actually took. A
    report of 900 seconds inside a 30-second tick is a lie and is clamped. `rules.rs` already does
@@ -163,12 +163,34 @@ Three rules follow, and the aggregation enforces all three:
 2. **Bound the *sum*.** Only one window has focus at a time, so the total foreground time across all
    apps in a tick cannot exceed the tick. This is the invariant a naive per-app clamp misses: a
    forged line claiming 30s each for twenty apps passes a per-app check and fails this one.
-3. **Missing data is `null`, never `0`.** A killed helper produces *no* figures, which must never
+3. **Bound the *size*, at every point the data rests.** Rules 1 and 2 bound what the numbers may
+   say; they say nothing about how many there may be, or how long one line may run. Three separate
+   ceilings, because a forged report can grow in three separate places:
+   - `MAX_LINE` on the **read itself**. `BufRead::lines` grows one buffer until it meets a newline,
+     so a writer that never sends one takes the reader's memory with it — and the reader is the
+     SYSTEM service that enforces the rules. Inspecting the line afterwards is too late; the
+     allocation that mattered has already happened.
+   - `MAX_APPS` / `MAX_PAGES` on the **`Feed`**, which is what accumulates between drains. `clamp`
+     runs when the enforcer drains, thirty seconds apart; everything arriving in between lands in
+     the feed first, at whatever rate the watcher writes.
+   - `MAX_APPS` / `MAX_PAGES` on the **stored day**, which is persisted each tick and folded into
+     the daily rollup, so growth there is growth on disk.
+
+   In each case the *heaviest* entries are kept, so a flood costs the flood: an app with real hours
+   behind it outweighs any number of one-second forgeries.
+4. **Missing data is `null`, never `0`.** A killed helper produces *no* figures, which must never
    render as "he used nothing". This maps onto the `measured` distinction `screentime.rs` already
    draws, and for the same stated reason: collapsing them "would let a dead enforcer render exactly
    like a well-behaved child".
 
-Rule 3 is why the helper cannot be a silent optimisation. If it dies, the report must say so.
+Rule 4 is why the helper cannot be a silent optimisation. If it dies, the report must say so.
+
+Rule 3 is the one that was got wrong first. `MAX_PAGES` existed from the start, on the reasoning
+that page titles are the only unbounded dimension — every tab is a new key — while `apps` is
+"bounded by how many programs are installed". That is true of an honest watcher and this section is
+the reason it cannot be assumed: executable names arrive over the same pipe as everything else. The
+stored tally grew to 6,000 entries under a forged feed before the cap was added, and the read had
+no ceiling at all.
 
 ### Data model
 
@@ -206,11 +228,18 @@ Two Trackers rather than one map with mixed keys, because the keys are different
 `"chrome.exe"` is a program the enforcement tally also knows about, `"Roblox"` is whatever a tab
 happened to be called. Mixing them would let a page title collide with an app rule.
 
-**Page titles are capped, twice.** They are the only unbounded dimension here — every tab, video and
-renamed document is a new key — and they arrive from a process running as the child. `clamp` keeps
-the heaviest `MAX_PAGES` from each report, and the enforcer re-caps the running day, because forty
-*different* titles every thirty seconds would still reach thousands by bedtime in a map that is
-persisted to `usage_state.json` and rolled into a year of history.
+**Page titles are capped everywhere they rest.** They are the widest dimension here — every tab,
+video and renamed document is a new key — and they arrive from a process running as the child.
+`clamp` keeps the heaviest `MAX_PAGES` from each report, the `Feed` caps what accumulates between
+drains, and the enforcer re-caps the running day, because forty *different* titles every thirty
+seconds would still reach thousands by bedtime in a map that is persisted to `usage_state.json` and
+rolled into a year of history.
+
+Executables get the same treatment at `MAX_APPS`, set far higher because the two are different
+bets: dropping a title loses display text, while dropping an executable loses measured time shown
+beside the enforcement tally. The ceiling sits where a real machine cannot reach it. It is not that
+apps are a narrower dimension — it is that they are only a *closed set while the watcher is
+honest*, which is precisely what this design does not assume.
 
 The watcher already has the foreground window; reading its title costs one `GetWindowTextW`. A
 browser's title carries the page title — `"Roblox - Google Chrome"` — which gives coarse attribution
@@ -318,6 +347,10 @@ Windows, no clock, and no filesystem, exactly like `screentime::build_report`. C
 - a delta larger than the tick is clamped
 - a *sum* of deltas larger than the tick is clamped (the forged-line case)
 - a malformed or truncated line is skipped, not fatal
+- a line with no newline in it is discarded rather than buffered, and skipping it does not swallow
+  the line after it
+- a flood of forged names is capped in the `Feed` and in the stored day, and the app that actually
+  earned time survives being buried in one
 - an absent helper yields `null`, never `0`
 - an existing `usage_state.json` without the new field still loads
 - a rollup row without the new key still parses

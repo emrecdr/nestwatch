@@ -39,6 +39,15 @@ impl UsageLog {
         self.0.recent(limit)
     }
 
+    /// The most recent `limit` events tagged `event`, newest first, including the rotated backup.
+    ///
+    /// The screen-time report's route into this file, and the only one that should be used for it:
+    /// the rollups it wants are a few dozen lines among every session start, lock and warning ever
+    /// written here.
+    pub fn recent_matching_including_rotated(&self, event: &str, limit: usize) -> Vec<Value> {
+        self.0.recent_matching_including_rotated(event, limit)
+    }
+
     /// The most recent `limit` events, newest first, including the rotated backup.
     pub fn recent_including_rotated(&self, limit: usize) -> Vec<Value> {
         self.0.recent_including_rotated(limit)

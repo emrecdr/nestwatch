@@ -4,7 +4,7 @@
 //! for screen capture, `sysinfo` for process enumeration/termination, and shells out to
 //! `shutdown.exe` for power-off (dependency-free, no `unsafe`, no `windows` crate).
 
-use super::{ControlError, ProcessInfo, SessionState, SystemControl};
+use super::{ControlError, ProcessInfo, RunningProcess, SessionState, SystemControl};
 
 pub struct WindowsControl;
 
@@ -56,6 +56,42 @@ impl SystemControl for WindowsControl {
         // Heaviest first — the apps a parent most likely wants to see/close.
         out.sort_by_key(|p| std::cmp::Reverse(p.memory_bytes));
         Ok(out)
+    }
+
+    fn running_processes(&self) -> Result<Vec<RunningProcess>, ControlError> {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+
+        let mut sys = System::new();
+        // `nothing()`, not the `refresh_processes` default this used to share with
+        // `list_processes`. That default expands to
+        // `memory + cpu + disk_usage + exe(OnlyIfNotSet) + tasks`, and on Windows each is a syscall
+        // per process: `GetProcessTimes` twice (start time, then CPU), `GetSystemTimes`,
+        // `GetProcessIoCounters`, `GetProcessMemoryInfo`, `GetModuleFileNameExW`. Several hundred
+        // processes, every thirty seconds, forever — for two fields.
+        //
+        // `pid` and `name` survive `nothing()` because both come straight out of the
+        // `CreateToolhelp32Snapshot` walk, before any refresh kind is consulted. Neither needs a
+        // process handle.
+        //
+        // A fresh `System` per call is kept deliberately, though reusing one would skip more still.
+        // sysinfo holds a `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ` handle open for every live
+        // process for as long as the `System` lives, and a SYSTEM service permanently holding a few
+        // hundred read handles to everything on the machine is a well-known EDR heuristic. Being
+        // quarantined by antivirus costs a family more than these syscalls do.
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+
+        Ok(sys
+            .processes()
+            .iter()
+            .map(|(pid, proc_)| RunningProcess {
+                pid: pid.as_u32(),
+                name: proc_.name().to_string_lossy().into_owned(),
+            })
+            .collect())
     }
 
     fn kill_process(&self, pid: u32) -> Result<(), ControlError> {

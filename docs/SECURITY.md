@@ -326,11 +326,29 @@ than a process name and less than a browsing history:
   Getting domains would mean writing browser policy into `HKLM` to disable each browser's own DNS
   resolver; that was considered and declined, because reconfiguring a child's browser belongs in
   front of a parent as a decision rather than inside an installer as a detail.
-- **It is capped at 40 titles per report** (`foreground::MAX_PAGES`), heaviest first. The cap
-  exists because titles are the highest-cardinality thing here and arrive from a process running
-  as the child — without it, a script retitling a window in a loop grows the tally file without
-  bound. It also means the record is a summary of where the time went, not a log of everything
-  opened.
+- **It is capped at 40 titles per report** (`foreground::MAX_PAGES`), heaviest first, and capped
+  again everywhere the figures come to rest. The cap exists because titles are the
+  highest-cardinality thing here and arrive from a process running as the child — without it, a
+  script retitling a window in a loop grows the tally file without bound. It also means the record
+  is a summary of where the time went, not a log of everything opened.
+
+  Two companion limits exist for the same reason, and are worth stating because the obvious bound
+  is not sufficient on its own. Checks on *what the numbers may say* — no app can claim more
+  seconds than the tick lasted, and the sum cannot either — say nothing about **how many** of them
+  there may be, so an adversary simply switches axes: instead of one app claiming 9,000 seconds,
+  ten thousand apps claiming one second each, every value individually plausible.
+  - **`foreground::MAX_APPS` (200)** bounds the *count* of executables held in memory and stored
+    for a day. Set far above any real machine, because it is a backstop against a forged report
+    rather than a product decision. Without it the persisted tally grew to 6,000 invented names
+    under test.
+  - **`foreground::MAX_LINE` (1 MiB)** bounds a single line read from the watcher pipe. A writer
+    that never sends a newline would otherwise take the SYSTEM service's memory with it, and that
+    service is what enforces the rules. Sized from the largest line an *honest* watcher can
+    produce (170,170 bytes, measured and pinned by a test), because a limit set too low discards
+    real samples as if forged.
+
+  In each case the heaviest entries survive, so a flood costs the flood: an app with real hours
+  behind it outweighs any number of one-second forgeries.
 - **It is expected to see private-browsing windows too**, because browsers do not suppress window
   titles there. Expected, not confirmed: this is one of the open questions in
   [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md), and it has not been checked on a real browser.

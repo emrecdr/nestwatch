@@ -6,7 +6,7 @@
 
 use std::sync::Mutex;
 
-use super::{ControlError, ProcessInfo, SessionState, SystemControl};
+use super::{ControlError, ProcessInfo, RunningProcess, SessionState, SystemControl};
 
 pub struct FakeControl {
     processes: Mutex<Vec<ProcessInfo>>,
@@ -67,6 +67,23 @@ impl SystemControl for FakeControl {
         Ok(self.processes.lock().unwrap().clone())
     }
 
+    /// Projected from the same list `list_processes` returns, never a second one. A `kill` is then
+    /// visible through both views, and the fake cannot drift into disagreeing with itself about
+    /// what is running — which would let a test pass against a world the real implementations
+    /// cannot produce.
+    fn running_processes(&self) -> Result<Vec<RunningProcess>, ControlError> {
+        Ok(self
+            .processes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|p| RunningProcess {
+                pid: p.pid,
+                name: p.name.clone(),
+            })
+            .collect())
+    }
+
     fn kill_process(&self, pid: u32) -> Result<(), ControlError> {
         let mut procs = self.processes.lock().unwrap();
         let before = procs.len();
@@ -105,5 +122,56 @@ impl SystemControl for FakeControl {
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
         tracing::info!(%title, %body, "[fake] notify_user (no-op on this platform)");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two process views must describe the same machine.
+    ///
+    /// `list_processes` and `running_processes` exist separately because they cost very different
+    /// amounts to gather — but they answer the same question, and a test that passed against a fake
+    /// where they disagreed would be testing a world neither real implementation can produce. The
+    /// kill is the part that matters: it is the one operation that changes the answer, and a fake
+    /// projecting the second view from a stale copy would keep reporting a process the parent had
+    /// already stopped.
+    #[test]
+    fn both_process_views_agree_before_and_after_a_kill() {
+        let c = FakeControl::new();
+
+        let listed = |c: &FakeControl| -> Vec<(u32, String)> {
+            let mut v: Vec<_> = c
+                .list_processes()
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.pid, p.name))
+                .collect();
+            v.sort();
+            v
+        };
+        let running = |c: &FakeControl| -> Vec<(u32, String)> {
+            let mut v: Vec<_> = c
+                .running_processes()
+                .unwrap()
+                .into_iter()
+                .map(|p| (p.pid, p.name))
+                .collect();
+            v.sort();
+            v
+        };
+
+        assert_eq!(listed(&c), running(&c), "views disagree before any change");
+        assert!(!listed(&c).is_empty(), "the fake starts with processes");
+
+        let victim = c.list_processes().unwrap()[0].pid;
+        c.kill_process(victim).unwrap();
+
+        assert_eq!(listed(&c), running(&c), "views disagree after a kill");
+        assert!(
+            running(&c).iter().all(|(pid, _)| *pid != victim),
+            "the killed process is still reported as running"
+        );
     }
 }

@@ -152,6 +152,282 @@ mod tests {
         out
     }
 
+    /// The stylesheet that ships, so the scan below compares markup against what a browser will
+    /// actually receive — not against what Tailwind *could* generate from a fresh build.
+    ///
+    /// Read at run time rather than with `include_str!`, because `assets/app.css` is **generated
+    /// and gitignored**. Baking it in with `include_str!` makes it a compile-time requirement, so a
+    /// fresh clone that has not run `npm run build` fails to compile with a bare "couldn't read"
+    /// pointing at a file that is not in the repository — replacing the actionable warning
+    /// `build.rs` prints for exactly this case, and contradicting its promise that the app still
+    /// builds without it. Reading here fails only this test, and says what to run.
+    fn app_css() -> String {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/app.css");
+        std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!(
+                "cannot read {path}: {e}\nThis file is generated and gitignored — run \
+                 `cd web && npm install && npm run build` first. (Failing rather than skipping: a \
+                 guard that quietly passes when its input is missing is worse than no guard.)"
+            )
+        })
+    }
+
+    /// A `<summary>` never contains a control of its own.
+    ///
+    /// The five rarely-used cards are `<details>`, so a parent scrolling a phone passes five
+    /// headings instead of five full panels. That works because the browser toggles on a click
+    /// anywhere in the `<summary>` — which is also the trap: put the card's **Refresh** button in
+    /// there and pressing it collapses the panel you were trying to refresh. The button is
+    /// deliberately in the body, and the layout that keeps it there is a `justify-end` row that
+    /// looks like an oversight and is not.
+    ///
+    /// Nothing else can catch this. Both arrangements parse, both render, both look right in a
+    /// screenshot, and the wrong one only shows itself to someone who clicks the button while the
+    /// panel is open. Every Rust gate and every markup guard here passed over exactly that.
+    #[test]
+    fn no_summary_swallows_a_control() {
+        let mut bad = Vec::new();
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            let mut rest = html.as_str();
+            while let Some(start) = rest.find("<summary") {
+                let after = &rest[start..];
+                let end = after.find("</summary>").expect("an unterminated <summary>");
+                let block = &after[..end];
+                for control in ["<button", "<input", "<select", "<textarea", "<a "] {
+                    if block.contains(control) {
+                        bad.push(format!("{name}: a <summary> contains `{control}`"));
+                    }
+                }
+                rest = &after[end..];
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "a control inside a <summary> is pressed *and* toggles the panel, so the control \
+             appears not to work.\nPut it in the body instead:\n{bad:#?}",
+        );
+    }
+
+    /// Every class written into the markup has a rule behind it in the compiled stylesheet.
+    ///
+    /// This is the guard for a failure with no symptom. A class that no longer exists is still
+    /// emitted into the DOM and still looks like styling to anyone reading the source; the element
+    /// simply renders unstyled, and nothing anywhere reports it. That is how the daisyUI 4 → 5
+    /// upgrade left **69 dead references** across these two pages — `label-text`, `form-control`,
+    /// `input-bordered`, `select-bordered`, all four removed in v5 — with two of them silently
+    /// changing how every form on the product looked.
+    ///
+    /// Two things this deliberately gets right, both of which produced false findings on the way
+    /// here:
+    ///
+    /// * **Static `class="…"` only.** Alpine's `:class` holds JavaScript, not class names, and
+    ///   scanning it reports `===`, `null` and every property name as a missing class.
+    /// * **CSS escaping is undone first.** Tailwind writes `2xl:max-w-[110rem]` as
+    ///   `.\32 xl\:max-w-\[110rem\]` — a leading digit becomes `\3<hex><space>`, and `:`, `/`, `[`
+    ///   and `]` each gain a backslash. Matching the raw text reports classes as missing while
+    ///   their rules sit right there.
+    ///
+    /// Failing here also catches a stale `assets/app.css`: editing the markup without rebuilding
+    /// leaves new utilities with no rule, which is the same defect arriving by a different route.
+    /// `build.rs` warns about that, and a warning that scrolls past is indistinguishable from none.
+    #[test]
+    fn every_class_in_the_markup_has_a_rule_in_the_shipped_css() {
+        let css = unescape_css(&app_css());
+        // A set, not a sorted-and-deduped Vec: the same class appears in dozens of attributes, and
+        // ordered-unique is what this collection *is* rather than something done to it afterwards.
+        let mut missing = std::collections::BTreeSet::new();
+
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            for classes in static_class_attrs(&html) {
+                for class in classes.split_whitespace() {
+                    if !css_has_rule(&css, class) {
+                        missing.insert(format!("{name}: {class}"));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "these classes are in the markup but have no rule in assets/app.css.\nEither they were \
+             removed by a library upgrade, or app.css needs `cd web && npm run build`:\n{missing:#?}"
+        );
+    }
+
+    /// The values of every **static** `class` attribute, skipping Alpine's `:class` /
+    /// `x-bind:class`.
+    ///
+    /// Accepts either quote style. Both pages happen to use double quotes throughout, so matching
+    /// only `class="` works today — and would go on "working" in silence the day one attribute is
+    /// written with single quotes, skipping that element with no failure. A scanner that quietly
+    /// covers less than it claims is the exact defect this whole test exists to catch, so it must
+    /// not have one of its own.
+    fn static_class_attrs(html: &str) -> Vec<&str> {
+        let mut found = Vec::new();
+        let mut from = 0usize;
+
+        while let Some(at) = html[from..].find("class=") {
+            let at = from + at;
+            let before = html[..at].chars().next_back();
+            let open = at + "class=".len();
+            let quote = html[open..].chars().next();
+
+            // `:class="…"` and `x-bind:class="…"` both end in a colon and both hold JavaScript,
+            // not class names — scanning them reports `===` and `null` as missing classes.
+            let bound = before == Some(':');
+            // `superclass="…"` is a different attribute that merely ends in these six letters.
+            let is_attribute = before.is_none_or(|c| c.is_whitespace() || c == ':');
+
+            match quote {
+                Some(q @ ('"' | '\'')) if is_attribute => {
+                    let value = open + q.len_utf8();
+                    let end = html[value..]
+                        .find(q)
+                        .map(|e| value + e)
+                        .unwrap_or(html.len());
+                    if !bound {
+                        found.push(&html[value..end]);
+                    }
+                    from = end + q.len_utf8();
+                }
+                _ => from = open,
+            }
+        }
+
+        found
+    }
+
+    /// What the class scan does and does not pick up, pinned.
+    ///
+    /// This helper decides what the guard above can see, so a gap in it makes that guard pass
+    /// while checking less than it says. That is a worse failure than the one it was written to
+    /// catch, because it looks like coverage.
+    #[test]
+    fn the_class_scan_reads_static_attributes_and_only_those() {
+        let html = r#"
+            <div class="a b"></div>
+            <div class='c'></div>
+            <div :class="cond ? 'x' : null"></div>
+            <div x-bind:class="obj"></div>
+            <div superclass="not-a-class"></div>
+        "#;
+
+        assert_eq!(
+            static_class_attrs(html),
+            vec!["a b", "c"],
+            "both quote styles are read; bound expressions and lookalike attributes are not"
+        );
+    }
+
+    /// Undo CSS identifier escaping so a selector can be compared against a plain class name.
+    fn unescape_css(css: &str) -> String {
+        let mut out = String::with_capacity(css.len());
+        let mut chars = css.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            // `\3<hex><space>` is how a leading digit is written: `.2xl…` ships as `.\32 xl…`.
+            let mut probe = chars.clone();
+            if probe.next() == Some('3')
+                && let Some(digit) = probe.next()
+                && digit.is_ascii_hexdigit()
+            {
+                let mut after = probe.clone();
+                if after.next() == Some(' ') {
+                    probe = after;
+                }
+                out.push(digit);
+                chars = probe;
+                continue;
+            }
+            // Anything else is one escaped punctuation character: `\:`, `\/`, `\[`, `\.`.
+            if let Some(escaped) = chars.next() {
+                out.push(escaped);
+            }
+        }
+        out
+    }
+
+    /// Whether `class` appears as a class selector in the (already unescaped) stylesheet.
+    fn css_has_rule(css: &str, class: &str) -> bool {
+        let needle = format!(".{class}");
+        let mut from = 0usize;
+        while let Some(at) = css[from..].find(&needle) {
+            let at = from + at;
+            let after = css[at + needle.len()..].chars().next();
+            // `.flex` must not be satisfied by `.flex-col`: the name has to end where it ends.
+            let ends = after.is_none_or(|c| !c.is_alphanumeric() && c != '-' && c != '_');
+            if ends {
+                return true;
+            }
+            from = at + needle.len();
+        }
+        false
+    }
+
+    /// Every form control can be named by a screen reader.
+    ///
+    /// A control with only a `placeholder` is announced as "edit, blank" — the placeholder is a
+    /// hint, not a name, and it vanishes the moment anything is typed. Eight controls here had
+    /// nothing else: six rows in the rules editor, the routine-name box, and the curfew enable
+    /// toggle, which announced as "checkbox, not checked" beside a heading it had no relationship
+    /// to. The ✕ buttons sitting immediately beside those same rows all carried `aria-label`, which
+    /// is what marks this as an oversight rather than a decision.
+    ///
+    /// A wrapping `<label>` counts — that is how the per-weekday budget boxes are named, and they
+    /// are correct as they stand. Scanned rather than counted, because the regression mode is a new
+    /// row copied from an old one.
+    #[test]
+    fn every_form_control_can_be_named_by_a_screen_reader() {
+        const CONTROLS: [&str; 3] = ["<input", "<select", "<textarea"];
+        let mut unnamed: Vec<String> = Vec::new();
+
+        for (page, html) in PAGES {
+            let html = strip_html_comments(html);
+            let mut depth = 0usize;
+            let mut at = 0usize;
+
+            while at < html.len() {
+                let next = ["<label", "</label>"]
+                    .iter()
+                    .chain(CONTROLS.iter())
+                    .filter_map(|tag| html[at..].find(tag).map(|i| (at + i, *tag)))
+                    .min_by_key(|(i, _)| *i);
+                let Some((found, tag)) = next else { break };
+
+                match tag {
+                    "<label" => depth += 1,
+                    "</label>" => depth = depth.saturating_sub(1),
+                    _ => {
+                        let end = html[found..]
+                            .find('>')
+                            .map(|e| found + e)
+                            .unwrap_or(html.len());
+                        let element = &html[found..end];
+                        let named = element.contains("aria-label")
+                            || element.contains(" id=")
+                            || element.contains("type=\"hidden\"");
+                        // Inside a <label>, the label's own text is the name.
+                        if depth == 0 && !named {
+                            unnamed.push(format!("{page}: {}", element.trim()));
+                        }
+                    }
+                }
+                at = found + tag.len();
+            }
+        }
+
+        assert!(
+            unnamed.is_empty(),
+            "these controls sit outside any <label> and carry no aria-label or id, so a screen \
+             reader has nothing to announce but the field type:\n{unnamed:#?}"
+        );
+    }
+
     /// Every column header carries `scope`, on both served pages.
     ///
     /// A `<th>` without `scope` leaves the header-to-cell association to the screen reader's
@@ -167,8 +443,14 @@ mod tests {
     /// one source-scanning test in this repo (`tests/spawn_paths.rs`).
     #[test]
     fn every_table_header_says_which_column_it_heads() {
-        for (name, html) in PAGES {
-            let mut rest = html;
+        for (name, page) in PAGES {
+            // Comments stripped, like every other scan here. This one read the raw markup and
+            // passed only because no comment happens to contain `<th` — while index.html already
+            // has one containing `<template` and `<svg`, which is why the scan beside it strips
+            // first. Prose about a table would have failed this test, and the repo has been bitten
+            // by exactly that twice.
+            let html = strip_html_comments(page);
+            let mut rest = html.as_str();
             let mut seen = 0usize;
             while let Some(at) = rest.find("<th") {
                 rest = &rest[at..];

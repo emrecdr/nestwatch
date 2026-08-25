@@ -5,7 +5,7 @@
 //! is delegated to a helper launched into the interactive user session (see `crate::session`).
 
 use super::windows::WindowsControl;
-use super::{ControlError, ProcessInfo, SessionState, SystemControl};
+use super::{ControlError, ProcessInfo, RunningProcess, SessionState, SystemControl};
 
 pub struct ServiceControl {
     inner: WindowsControl,
@@ -26,6 +26,10 @@ impl SystemControl for ServiceControl {
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {
         self.inner.list_processes()
+    }
+
+    fn running_processes(&self) -> Result<Vec<RunningProcess>, ControlError> {
+        self.inner.running_processes()
     }
 
     fn kill_process(&self, pid: u32) -> Result<(), ControlError> {

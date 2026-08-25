@@ -198,3 +198,98 @@ pub async fn serve_with_handle(
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    /// This file's own source, so the guard below reads the router as written rather than as
+    /// remembered.
+    const SERVER_RS: &str = include_str!("server.rs");
+
+    /// Every route reachable **without a session**, exactly.
+    ///
+    /// Each one is unauthenticated on purpose and the reason is worth keeping next to the list:
+    ///
+    /// * `/` and `/session` — the login page itself, and the question "am I signed in?".
+    /// * `/login`, `/logout` — the transition either way.
+    /// * `/p/{token}` — the install QR's one-time pairing redemption; being signed out is the
+    ///   entire point. Rate-limited on the same per-IP limiter as `/login`.
+    /// * `/ask`, `/status`, `/time-request`, `/redeem-code` — the child's page and the three calls
+    ///   it makes. The child has no password and must not need one.
+    ///
+    /// Everything else lives under `/api`, behind `require_auth`.
+    const UNAUTHENTICATED: &[&str] = &[
+        "/",
+        "/ask",
+        "/login",
+        "/logout",
+        "/p/{token}",
+        "/redeem-code",
+        "/session",
+        "/status",
+        "/time-request",
+    ];
+
+    /// The authentication boundary is real but invisible where it can be broken.
+    ///
+    /// `api.rs` holds both audiences interleaved — `screenshot`, `kill_process` and `shutdown` sit
+    /// in the same file as `child_status`, `time_request` and `redeem_code`. What separates them is
+    /// not in that file at all: it is *which of the two routers below* a route is registered on.
+    /// The `/api` nest carries `route_layer(require_auth)`; the outer router does not, and both
+    /// look identical at the definition site.
+    ///
+    /// So adding a handler to the wrong router is a one-line mistake with no local evidence, and
+    /// one direction of that mistake exposes a parent capability — killing a process, shutting the
+    /// machine down, reading the audit log — to a page the child can reach with no password. The
+    /// child owns an account on this PC and is on this LAN; that is the threat model, not a
+    /// hypothetical.
+    ///
+    /// This guard pins the unauthenticated set so it can only change deliberately. It reads the
+    /// source rather than the built `Router` because axum exposes no way to enumerate routes or
+    /// ask which layers apply to one — the information exists only in the text.
+    #[test]
+    fn only_the_known_child_facing_routes_are_reachable_without_a_session() {
+        // Everything after the `require_auth` layer is the outer, unauthenticated router. Splitting
+        // on the layer itself rather than on a line number means moving routes around cannot
+        // silently change what this test is looking at.
+        // Drop this test module before scanning. `include_str!` pulls in the whole file, comments
+        // and all, so the prose below describing `.route("` reads as a route registration and the
+        // guard reports itself. That is not hypothetical — it is what this test did on its first
+        // run, and it is the same trap `no_alpine_template_inside_svg` hit when the comment
+        // explaining it contained the markup it forbids. A source scan must exclude its own text.
+        let router_src = SERVER_RS
+            .split_once("#[cfg(test)]")
+            .map_or(SERVER_RS, |(before, _)| before);
+
+        let (guarded, open) = router_src
+            .split_once("route_layer(middleware::from_fn(auth::require_auth))")
+            .expect("the /api router must apply require_auth — if this moved, this guard is stale");
+
+        assert!(
+            guarded.contains(".route(\"/screenshot\""),
+            "sanity: the guarded half should hold the parent's routes"
+        );
+
+        // `.route("` only: `.nest(` and `.fallback(` are not routes, and the fallback is the static
+        // asset handler, which is deliberately public.
+        let mut found: Vec<&str> = open
+            .match_indices(".route(\"")
+            .map(|(i, m)| {
+                let rest = &open[i + m.len()..];
+                &rest[..rest.find('"').expect("unterminated route path literal")]
+            })
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+
+        let mut expected: Vec<&str> = UNAUTHENTICATED.to_vec();
+        expected.sort_unstable();
+
+        assert_eq!(
+            found, expected,
+            "the set of routes reachable without a session has changed.\n\nIf you added a route to \
+             the outer router deliberately, add it to UNAUTHENTICATED above and say in the comment \
+             why it needs no password. If you did not, you have registered it on the wrong router \
+             and it is now reachable by the child."
+        );
+    }
+}

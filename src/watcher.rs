@@ -325,10 +325,10 @@ fn observe(resolver: &mut Resolver) -> Seen {
     let page = app
         .as_deref()
         .filter(|exe| crate::foreground::is_browser(exe))
-        .and_then(|_| window_title(hwnd))
-        .as_deref()
-        .and_then(crate::foreground::browser_page)
-        .map(str::to_string);
+        .and_then(|exe| {
+            let title = window_title(hwnd)?;
+            crate::foreground::browser_page(exe, &title).map(str::to_string)
+        });
 
     Seen { app, page, idle_ms }
 }

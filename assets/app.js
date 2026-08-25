@@ -5,8 +5,77 @@
 // one place and "all fine" in the other for the same age.
 const ENFORCER_STALE_SECS = 150;
 
+// --- Theme -------------------------------------------------------------------------------------
+//
+// Three states, not two, and "auto" is the default: the stylesheet ships `light` on `:root` and
+// `dim` under `prefers-color-scheme: dark`, so with no attribute set the page already follows the
+// device. This adds the override for the case the device setting gets wrong — a parent checking at
+// eleven at night on a phone that is still in light mode, or the reverse.
+//
+// Applied at the top of this file rather than from an inline `<script>` in the head, which is the
+// usual anti-flash trick: `script-src` does not admit `'unsafe-inline'` and
+// `no_inline_script_on_any_served_page` keeps it that way. This file is deferred, so it runs before
+// Alpine reveals the body, which is early enough.
+const THEME_KEY = "nw-theme";
+
+function readTheme() {
+  // `try` because storage can be absent (the test harness) or blocked (private modes, some
+  // enterprise policies), and a dashboard that fails to load over a theme preference would be a
+  // poor trade.
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return t === "light" || t === "dark" ? t : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
+function applyTheme(theme) {
+  if (typeof document === "undefined") return; // evaluated by the tests, where there is no document
+  const root = document.documentElement;
+  // Removing the attribute is what hands control back to `prefers-color-scheme`. Setting it to
+  // anything — including "auto" — would pin a theme, which is the bug this replaces.
+  if (theme === "auto") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", theme === "dark" ? "dim" : "light");
+}
+
+applyTheme(readTheme());
+
+// The screen-time report before anything has been fetched.
+//
+// One definition, called from both the initial state and `resetSessionData`. It was written out
+// twice, and a field added to the report reached one copy and not the other — so a sign-out left
+// the new arrays holding the previous session's values while everything beside them reset. Shape
+// duplicated in two places is the same defect `resetSessionData` exists to prevent, one level down.
+function emptyScreentime() {
+  return {
+    days: [],
+    total_mins: 0,
+    measured_days: 0,
+    daily_avg_mins: null,
+    prev_total_mins: null,
+    change_pct: null,
+    app_totals: [],
+    focus_totals: [],
+    page_totals: [],
+    group_totals: [],
+  };
+}
+
 function app() {
   return {
+    theme: readTheme(),
+    // Sun and moon carry light and dark without a word. "Follow device" has no icon anyone reads
+    // reliably, so it keeps a word — the alternative is a monitor glyph that says "computer", not
+    // "match whatever this one is set to".
+    //
+    // Every one of them carries `aria-label` *and* `title`: a bare glyph names itself to nobody,
+    // which is the same gap the unlabelled curfew switch had. The title is the sighted half.
+    themeOptions: [
+      { key: "auto", glyph: "Auto", label: "Follow this device's setting" },
+      { key: "light", glyph: "\u2600\uFE0F", label: "Light" },
+      { key: "dark", glyph: "\u{1F319}", label: "Dark" },
+    ],
     authed: null,
     busy: false,
     password: "",
@@ -26,6 +95,22 @@ function app() {
     shotFull: false,
     curfew: { enabled: false, start: "22:00", end: "07:00", warn_secs: 60, windows: [] },
     savingCurfew: false,
+    // The seven weekday boxes, defined once here rather than built in the markup.
+    //
+    // `short` is two characters, not one. `d[0]` rendered M T W T F S S — Tuesday and Thursday both
+    // "T", Saturday and Sunday both "S", four of seven ambiguous, at the smallest size the design
+    // has, on the phone this product is meant to be used from. Order was the only thing telling
+    // them apart. `full` is the accessible name: that single letter was also the whole of what a
+    // screen reader announced, so "T, checkbox, checked" named no day at all.
+    dayOptions: [
+      { key: "mon", short: "Mo", full: "Monday" },
+      { key: "tue", short: "Tu", full: "Tuesday" },
+      { key: "wed", short: "We", full: "Wednesday" },
+      { key: "thu", short: "Th", full: "Thursday" },
+      { key: "fri", short: "Fr", full: "Friday" },
+      { key: "sat", short: "Sa", full: "Saturday" },
+      { key: "sun", short: "Su", full: "Sunday" },
+    ],
     rules: { enabled: true, daily_budget_mins: 0, budget_by_weekday: null, blocklist: [], app_limits: {}, app_groups: [], warn_secs: 60, budget_action: "lock" },
     appLimitRows: [],
     groupRows: [],
@@ -34,10 +119,17 @@ function app() {
     loadingRoutines: false,
     newRoutineName: "",
     savingRoutine: false,
-    today: { day: null, enabled: true, budget_mins: 0, used_mins: 0, remaining_mins: null, extra_mins: 0, per_app: [], groups: [] },
+    // `null` until figures actually arrive — the card is gated on that, so there is no second flag
+    // to keep in sync with this one. A zeroed literal here would be a lie the markup reads out as
+    // measurement: "0 min used today" on a dashboard that may never have reached the service.
+    // Same shape, and the same reason, as `foreground::Feed`'s `Option<Sample>` on the Rust side,
+    // and the same rule the six other panels already follow (their own emptiness is the signal).
+    today: null,
     loadingToday: false,
-    // Whether the first /api/usage/today attempt has finished, succeeded or not. Distinguishes
-    // "nothing known yet" from "asked, and the answer is missing" — see isEnforcerStale.
+    // Whether the first /api/usage/today attempt has finished, succeeded or not. A *separate*
+    // question from whether it arrived, and not derivable from `today`: this one is what makes the
+    // staleness warning reachable after a failure, where `today` is still null. See
+    // isEnforcerStale, which treats a missing age as stale.
     todayAsked: false,
     grantingExtra: false,
     _lastPerDay: null, // remembers the per-day array while single-limit mode is active
@@ -45,9 +137,25 @@ function app() {
     loadingAudit: false,
     usage: [],
     loadingUsage: false,
-    screentime: { days: [], total_mins: 0, measured_days: 0, daily_avg_mins: null, prev_total_mins: null, change_pct: null },
+    screentime: emptyScreentime(),
     loadingScreentime: false,
-    timeRequests: [],
+    // How many completed days the report covers. `/api/screentime?days=N` has always accepted this
+    // and been clamped to 1..=365 server-side; nothing in the interface ever sent it, so every
+    // parent saw exactly thirty days forever.
+    stDays: 30,
+    // The day whose breakdown is pinned, or null to follow the most recent day carrying data.
+    // Selecting is what makes the chart answer the question it invites — "what was that Saturday?"
+    // — which it previously could not.
+    stPinned: null,
+    // `null` until an answer arrives, never `[]`. An empty array is a *fact* — the child has asked
+    // for nothing — and the card is hidden on it. A failed fetch is not that fact, and the two used
+    // to be the same value: on any error the card and its badge both vanished, leaving a dashboard
+    // that looked exactly like a quiet evening. See `showRequests`.
+    timeRequests: null,
+    // Whether the first attempt has finished, succeeded or not. Without it the "unknown" state
+    // renders for the few hundred milliseconds before the first response and the card flashes a
+    // failure notice on every page load — the same trade `todayAsked` exists to make.
+    requestsAsked: false,
     codes: [],
     loadingCodes: false,
     newCodeMins: 30,
@@ -117,6 +225,31 @@ function app() {
           if (!this.curfew.windows) this.curfew.windows = [];
         }
       } catch {}
+    },
+
+    // Which days a window actually applies on, as words.
+    //
+    // The rule this surfaces is a real inversion. `Days::includes` treats an all-false selector as
+    // *every* day — correct for the data model, since an omitted `days` field has to mean "daily" —
+    // but the markup offers seven live checkboxes, so a parent can clear them all. The natural
+    // reading of that gesture is "no days"; the effect is the opposite. Clearing the last box while
+    // exempting a weekend gives a machine that shuts down on exactly the two evenings you meant to
+    // spare.
+    //
+    // It was disclosed in the faintest text on the card, below the whole set of windows, and it
+    // never changed when a box was cleared. This says what the window will do, beside the window,
+    // as it changes — state the parent can see instead of a rule they must recall.
+    windowDayLabel(w) {
+      const on = this.dayOptions.filter((d) => w.days && w.days[d.key]);
+      if (on.length === 0) return "Applies: every day";
+      if (on.length === this.dayOptions.length) return "Applies: every day";
+      return "Applies: " + on.map((d) => d.full.slice(0, 3)).join(", ");
+    },
+
+    // True when the window applies daily *because nothing is ticked*, rather than because all seven
+    // are. Same outcome, very different intent, and only the first is worth drawing attention to.
+    windowDaysImplicit(w) {
+      return !this.dayOptions.some((d) => w.days && w.days[d.key]);
     },
 
     addWindow() {
@@ -259,7 +392,9 @@ function app() {
       }
     },
 
-    loadRoutines() { return this.loadList("/api/routines", "routines", "loadingRoutines"); },
+    loadRoutines() {
+      return this.loadList("/api/routines", "routines", "loadingRoutines", "Failed to load routines");
+    },
 
     async saveRoutine() {
       const name = (this.newRoutineName || "").trim();
@@ -339,8 +474,43 @@ function app() {
       this.stopPolling();
       await fetch("/logout", { method: "POST" });
       this.authed = false;
-      this.processes = [];
       if (this.shotUrl) { URL.revokeObjectURL(this.shotUrl); this.shotUrl = null; }
+      // Forget everything the session fetched. Left set, the next sign-in shows the last one's
+      // numbers as current until a fetch replaces them — and a window left open overnight makes
+      // "current" mean yesterday. Clearing the data itself, not a flag about it, so there is one
+      // thing to reset rather than two that must agree.
+      //
+      // This used to clear three fields and leave eight. `audit`, `usage`, `screentime`, `codes`,
+      // `timeRequests`, `routines`, `rules` and `curfew` all survived a sign-out, so a second
+      // person signing in on the same browser saw the first one's child. `resetSessionData` is one
+      // place rather than an inventory to keep aligned with the state above.
+      this.resetSessionData();
+    },
+
+    // Every field holding data fetched for a signed-in session, back to "nothing known".
+    //
+    // `null` where a later reader must tell "unknown" from "empty" (see `showRequests`), the empty
+    // shape elsewhere. Anything added to the component that holds server data belongs here too —
+    // the failure is silent, and shows up as a tab left open overnight presenting yesterday as now.
+    //
+    // `rules` and `curfew` are deliberately **not** reset. They describe the machine rather than the
+    // session, they are the same for whoever signs in next, and they are bound to form inputs with
+    // `x-model` — blanking them would flash empty fields and then a saved-looking form built from
+    // defaults, which is a worse lie than a stale one.
+    resetSessionData() {
+      this.processes = [];
+      this.today = null;
+      this.todayAsked = false;
+      this.timeRequests = null;
+      this.requestsAsked = false;
+      this.audit = [];
+      this.usage = [];
+      this.codes = [];
+      this.routines = [];
+      this.screentime = emptyScreentime();
+      // The title outlives the component state, so a sign-out that left "(2) Nestwatch" up would
+      // advertise the previous session's child from the login page.
+      this.syncTitle();
     },
 
     async loadProcesses() {
@@ -557,12 +727,21 @@ function app() {
 
     // GET a list into `this[field]`. `flag` (optional) toggles a loading spinner; `errMsg`
     // (optional) toasts on failure. Logs out on 401.
+    //
+    // `this[field]` is assigned only on success, so the field itself answers "did this arrive"
+    // and no caller needs a second flag for it — start it at `null`/`[]` and let its own emptiness
+    // be the signal, the way every panel here already does.
     async loadList(url, field, flag, errMsg) {
       if (flag) this[flag] = true;
       try {
         const r = await fetch(url);
         if (r.status === 401) { this.authed = false; return; }
-        if (r.ok) this[field] = await r.json();
+        // Throw on a failed status so it lands in the same catch a network fault does. `if (r.ok)`
+        // alone meant an errored server was indistinguishable from an empty one: the field kept
+        // its old value, no toast fired, and every caller's `errMsg` was dead code for the failure
+        // it actually names. Cards gated on `length > 0` then render as "nothing to show".
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        this[field] = await r.json();
       } catch {
         if (errMsg) this.toast(errMsg, "error");
       } finally {
@@ -575,10 +754,265 @@ function app() {
     async loadToday() {
       await this.loadList("/api/usage/today", "today", "loadingToday");
       // Set even when the fetch failed: loadList swallows that error, and a failure is exactly
-      // when the staleness warning needs to be reachable.
+      // when the staleness warning needs to be reachable. Whether the figures *arrived* needs no
+      // flag beside it — `today` is null until they do, and stays at its last real value if a
+      // later refresh fails, which is stale rather than imaginary and already has its own warning.
       this.todayAsked = true;
     },
-    loadScreentime() { return this.loadList("/api/screentime", "screentime", "loadingScreentime", "Failed to load screen-time report"); },
+    // Choose a theme. "auto" clears the override and follows the device again.
+    setTheme(theme) {
+      this.theme = theme;
+      try {
+        if (theme === "auto") localStorage.removeItem(THEME_KEY);
+        else localStorage.setItem(THEME_KEY, theme);
+      } catch {
+        // Storage refused. The choice still applies to this page; it just will not be remembered,
+        // which is a better outcome than refusing to change the theme at all.
+      }
+      applyTheme(theme);
+    },
+
+    // Does the curfew have any hours that could actually fire?
+    //
+    // The same three-state honesty the rules card needs, for the same reason: `enabled` only means
+    // "not switched off". A window whose start equals its end is never active — `is_within` treats
+    // it as empty — so a curfew can be on and still do nothing, and saying "On" there tells a
+    // parent the PC has a bedtime when it does not.
+    curfewHasHours() {
+      const windows = this.curfew.windows;
+      if (windows && windows.length) {
+        return windows.some((w) => w.start && w.end && w.start !== w.end);
+      }
+      return !!(this.curfew.start && this.curfew.end && this.curfew.start !== this.curfew.end);
+    },
+
+    // What the switch beside "Curfew" is doing, in words.
+    //
+    // It was a bare toggle with only an `aria-label`, which names it for a screen reader and leaves
+    // a sighted parent guessing — and this is the control that decides whether a child's PC powers
+    // itself off at night. The equivalent switch on the rules card has carried visible state all
+    // along; these two doing the same job and looking different was the oversight.
+    curfewStateLabel() {
+      if (!this.curfew.enabled) return "Off";
+      return this.curfewHasHours() ? "On" : "On — no hours set";
+    },
+
+    // The three answers a parent opens this page for, in one place above everything else.
+    //
+    // They were spread across three non-adjacent cards, one of them below the fold on any phone —
+    // and a phone is what the onboarding hands you, since `install` prints a QR precisely because
+    // typing an IP on a phone keyboard is the worst friction in setup. Source order was standing in
+    // for priority order.
+    //
+    // Pure and separately testable, because each has a state that is neither good nor bad but
+    // *unknown*, and that is the one every earlier version of this page got wrong.
+    glanceEnforcement() {
+      if (!this.todayAsked) return { text: "Enforcement: checking…", tone: "muted" };
+      if (this.stEnforcementStale()) return { text: "Enforcement may not be running", tone: "bad" };
+      if (this.today && this.today.enabled === false) return { text: "Enforcement paused", tone: "warn" };
+      return { text: "Enforcement running", tone: "good" };
+    },
+
+    glanceToday() {
+      if (!this.today) return { text: "Today: not known yet", tone: "muted" };
+      const used = this.today.used_mins ?? 0;
+      if (!(this.today.budget_mins > 0)) {
+        return { text: `Today: ${this.fmtDuration(used)} used, no limit set`, tone: "muted" };
+      }
+      const left = this.today.remaining_mins;
+      const tone = left === 0 ? "bad" : left <= 15 ? "warn" : "good";
+      return { text: `Today: ${this.fmtDuration(used)} used, ${this.fmtDuration(left)} left`, tone };
+    },
+
+    glanceRequests() {
+      const n = this.requestCount();
+      if (n === null) return this.requestsAsked
+        ? { text: "Requests: not known", tone: "warn" }
+        : { text: "Requests: checking…", tone: "muted" };
+      if (n === 0) return { text: "Nothing waiting for you", tone: "muted" };
+      return { text: n === 1 ? "1 request waiting" : `${n} requests waiting`, tone: "warn" };
+    },
+
+    // One place mapping a tone to its classes, so the three above stay free of styling and the
+    // markup stays free of conditionals.
+    glanceClass(tone) {
+      if (tone === "bad") return "text-error font-semibold";
+      if (tone === "warn") return "text-warning font-semibold";
+      if (tone === "good") return "text-success";
+      return "opacity-70";
+    },
+
+    // The page title, given a pending count. Pure, so the decision is testable; `syncTitle` below
+    // is the two lines that touch the document.
+    //
+    // A tab title is the whole mechanism available here, and that is a consequence of the product
+    // rather than a shortcut. Web Push needs an external push service, which "nothing leaves the
+    // house" forbids outright. The Badging API — `navigator.setAppBadge` — badges an *installed*
+    // app's icon, and `docs/MOBILE-APP.md` already establishes that an installable page cannot work
+    // for this product, because a home-screen app does not inherit the browser's certificate
+    // exception. The Notifications API needs a secure context, and whether a self-signed
+    // certificate accepted on a private IP counts as one is **unverified** — localhost is the
+    // documented exception, not private addresses generally. So: the title, which needs no
+    // permission, no service worker and no external anything.
+    //
+    // `null` is unknown, not zero. Titling the tab "(0)" for a service we could not reach is the
+    // same false confidence the badge used to show.
+    titleFor(pending) {
+      if (pending === null || pending === undefined) return "Nestwatch";
+      return pending > 0 ? `(${pending}) Nestwatch` : "Nestwatch";
+    },
+
+    // Reflect the pending count in the tab title. Guarded rather than assumed: the component is
+    // also evaluated by the tests, where there is no document, and a method that throws there would
+    // make every caller untestable rather than marking itself as needing a browser.
+    syncTitle() {
+      if (typeof document === "undefined") return;
+      document.title = this.titleFor(this.requestCount());
+    },
+
+    // Whether the more-time requests card belongs on screen.
+    //
+    // Three states, not two, and the third is the one this exists for. `[]` means the service
+    // answered and the child has asked for nothing — hide the card, it is only clutter. `null`
+    // *after* an attempt means the service did not answer, and hiding on that is how a pending
+    // request became invisible: the card and its badge were both gated on `length > 0`, so a failed
+    // fetch removed the only surface on which anything could have been noticed. `null` *before* an
+    // attempt is simply "too early", and shows nothing rather than flashing a failure on load.
+    showRequests() {
+      if (this.timeRequests === null) return this.requestsAsked;
+      return this.timeRequests.length > 0;
+    },
+
+    // How many are waiting, or null when that is not known. Kept separate from `showRequests` so
+    // the badge and the card cannot disagree about the same three states.
+    requestCount() {
+      return this.timeRequests === null ? null : this.timeRequests.length;
+    },
+
+    // Badge text. "?" rather than a number when the answer did not arrive — a badge is an assertion,
+    // and asserting zero for a service we could not reach is the whole bug.
+    requestBadge() {
+      const n = this.requestCount();
+      if (n === null) return "requests ?";
+      return n === 1 ? "1 request" : `${n} requests`;
+    },
+
+    loadScreentime() {
+      return this.loadList(
+        `/api/screentime?days=${this.stDays}`,
+        "screentime",
+        "loadingScreentime",
+        "Failed to load screen-time report",
+      );
+    },
+
+    // Change the window and reload. The pin is dropped because the day it named may not be in the
+    // new window, and a pinned date that is no longer on the chart is a heading pointing at nothing.
+    setStDays(days) {
+      this.stDays = days;
+      this.stPinned = null;
+      return this.loadScreentime();
+    },
+
+    // Pin a day, or unpin it by choosing it again. Toggling on re-click is what makes the chart
+    // usable without a separate clear control for the common case.
+    toggleStDay(date) {
+      this.stPinned = this.stPinned === date ? null : date;
+    },
+
+    // The day a breakdown should show for `key` ("apps" | "focused" | "pages").
+    //
+    // With nothing pinned this is the old behaviour, and the old reasoning holds: each list picks
+    // the most recent day carrying *that* kind of data, independently, because a day can have
+    // running-app figures and no focus figures and rendering an empty focus panel under a date that
+    // does have focus data elsewhere reads as "he looked at nothing" rather than "nothing was
+    // watching".
+    //
+    // With a day pinned, that independence is exactly wrong: the parent asked about one date, and
+    // three panels quietly showing three different dates would answer a question nobody asked. So a
+    // pin overrides all three, and a panel with nothing for that day says so rather than substitute.
+    stDayFor(key) {
+      if (this.stPinned !== null) {
+        return this.screentime.days.find((d) => d.date === this.stPinned) ?? null;
+      }
+      return this.stRecentDayWith(key);
+    },
+
+    // The heading over a breakdown, which has to say *why* it is showing the date it shows.
+    //
+    // Unpinned, each panel independently picks the newest day carrying its own kind of data, so the
+    // date needs the qualifier — three panels can legitimately name three different days. Pinned,
+    // they all show the chosen day and the qualifier would be a lie.
+    // What to call an executable when showing it to a parent.
+    //
+    // The keys stay as process names everywhere they matter — enforcement matches on them, and
+    // `apps` and `focused` are rendered side by side on the same key, so renaming the data would
+    // split one app into two rows. Only the presentation changes.
+    //
+    // A curated set rather than asking Windows. Reading `FileDescription` out of the version
+    // resource means file I/O per app and still misses Store-packaged programs, which is exactly
+    // the Roblox case this product most cares about. Anything unknown falls back to the executable
+    // without its extension, which is already an improvement on "RobloxPlayerBeta.exe".
+    // Minutes as something a person reads. Over a month a heavy app reaches four digits, and
+    // "1847 min" is a number you have to do arithmetic on before it means anything.
+    fmtDuration(mins) {
+      const m = Number(mins) || 0;
+      if (m < 60) return m + " min";
+      const h = Math.floor(m / 60);
+      const rest = m % 60;
+      return rest === 0 ? h + " h" : h + " h " + rest + " min";
+    },
+
+    appLabel(name) {
+      if (!name) return "";
+      const known = {
+        "chrome.exe": "Google Chrome",
+        "msedge.exe": "Microsoft Edge",
+        "firefox.exe": "Firefox",
+        "brave.exe": "Brave",
+        "opera.exe": "Opera",
+        "robloxplayerbeta.exe": "Roblox",
+        "windows10universal.exe": "Roblox",
+        "minecraft.windows.exe": "Minecraft",
+        "javaw.exe": "Minecraft (Java)",
+        "steam.exe": "Steam",
+        "steamwebhelper.exe": "Steam",
+        "discord.exe": "Discord",
+        "spotify.exe": "Spotify",
+        "vlc.exe": "VLC",
+        "obs64.exe": "OBS Studio",
+        "explorer.exe": "Windows Explorer",
+        "notepad.exe": "Notepad",
+        "winword.exe": "Word",
+        "excel.exe": "Excel",
+        "powerpnt.exe": "PowerPoint",
+        "onenote.exe": "OneNote",
+        "teams.exe": "Teams",
+        "ms-teams.exe": "Teams",
+        "zoom.exe": "Zoom",
+        "code.exe": "Visual Studio Code",
+        "whatsapp.exe": "WhatsApp",
+        "telegram.exe": "Telegram",
+      };
+      const hit = known[String(name).toLowerCase()];
+      if (hit) return hit;
+      return String(name).replace(/\.exe$/i, "");
+    },
+
+    stHeading(key) {
+      const d = this.stDayFor(key);
+      if (!d) return "";
+      const what =
+        key === "apps" ? "Apps running" : key === "focused" ? "Time in front" : "In the browser";
+      if (this.stPinned !== null) return what + " — " + d.date;
+      return what + " — most recent day with data (" + d.date + ")";
+    },
+
+    // Whether a breakdown has anything to show for the day in view.
+    stDayHas(key) {
+      const d = this.stDayFor(key);
+      return !!(d && d[key] && d[key].length);
+    },
 
     async grantExtra(mins) {
       this.grantingExtra = true;
@@ -599,8 +1033,23 @@ function app() {
         this.grantingExtra = false;
       }
     },
-    loadTimeRequests() { return this.loadList("/api/time-requests", "timeRequests"); },
-    loadCodes() { return this.loadList("/api/time-codes", "codes", "loadingCodes"); },
+    // Worth a message more than any other list here. Both surfaces for a pending request — the
+    // header badge and the card itself — are hidden when the list is empty, so a failed load is
+    // pixel-identical to "your child has asked for nothing". That is the one thing this screen
+    // exists to tell a parent, and the failure to tell them is otherwise completely silent.
+    loadTimeRequests() {
+      const done = this.loadList("/api/time-requests", "timeRequests", null, "Failed to load time requests");
+      return done.finally(() => {
+        this.requestsAsked = true;
+        // The one place a pending count changes on its own. A parent with the dashboard open in a
+        // background tab now learns a request arrived without looking at the page — which is the
+        // whole of what this product can offer without sending anything outside the house.
+        this.syncTitle();
+      });
+    },
+    loadCodes() {
+      return this.loadList("/api/time-codes", "codes", "loadingCodes", "Failed to load one-time codes");
+    },
 
     async issueCode() {
       this.issuingCode = true;
@@ -699,6 +1148,12 @@ function app() {
       return `height: ${this.stBarPct(d)}%`;
     },
 
+    // A bar is a control now, so it needs a name a screen reader can use — the `title` attribute
+    // it carried before sits on a non-focusable element and is not reliably announced.
+    stBarLabel(d) {
+      return this.stBarTitle(d) + (this.stPinned === d.date ? " (showing)" : "");
+    },
+
     stBarTitle(d) {
       if (d.minutes_used == null) return `${d.date}: not measured — the service was not running`;
       return `${d.date}: ${this.stDayLabel(d)}`;
@@ -731,7 +1186,7 @@ function app() {
     },
 
     stRecentAppDay() {
-      return this.stRecentDayWith('apps');
+      return this.stDayFor('apps');
     },
 
     // The most recent day carrying *focus* data, chosen independently of stRecentAppDay above.
@@ -742,13 +1197,13 @@ function app() {
     // date that does have focus data somewhere else in the window — which reads as "he looked at
     // nothing that day" rather than as "nothing was watching".
     stRecentFocusDay() {
-      return this.stRecentDayWith('focused');
+      return this.stDayFor('focused');
     },
 
     // The most recent day carrying browser page titles, chosen independently again — a day can
     // have focused apps and no browser time at all, which is a normal evening rather than a gap.
     stRecentPageDay() {
-      return this.stRecentDayWith('pages');
+      return this.stDayFor('pages');
     },
 
     // Shared by the "Today" panel banner and the screen-time card, so the two can never

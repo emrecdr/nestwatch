@@ -5,6 +5,50 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Added
+- **A light/dark switch, in the top bar.** ☀️ and 🌙, with **Auto** beside them and selected by
+  default — Auto follows whatever your phone or laptop is set to, which is what the dashboard has
+  been doing since the theme was unpinned. The switch is for when that setting is wrong for the
+  moment: checking at eleven at night on a phone still in daylight mode, or the reverse. Your choice
+  is remembered on that device, and choosing Auto forgets it rather than freezing today's answer.
+- **The three things you open the dashboard for are answered before anything else.** Is enforcement
+  running, how much time is left today, is anything waiting for you — they used to live in three
+  cards that were not next to each other, one of them below the fold on a phone, which is the device
+  the setup QR hands you. Each says *unknown* when it is unknown, rather than guessing the
+  reassuring answer.
+- **The tab title tells you when your child is waiting.** It reads `(1) Nestwatch` while a request is
+  pending, so a dashboard left open in a background tab is enough — you no longer have to look at the
+  page to find out. It never shows `(0)`: a count it could not fetch is not a zero.
+  This is the whole of what is possible without sending anything outside your house. Push
+  notifications need a company's servers in the middle; a home-screen app cannot inherit the
+  certificate you approved. Both are declined deliberately, and the cost is that a tab has to be open
+  somewhere.
+- **The report can now show time by category.** If you have grouped apps together — Games, School —
+  those totals were visible for today and thrown away overnight. They are now kept, and the report
+  leads with them, because "Games: 14 h" is a sentence and twenty file names is a puzzle.
+- **Today's screen time now shows which apps your child has actually been in front of** — not just
+  a total, and not a day late. Those minutes were already being measured every thirty seconds and
+  written to disk; they only ever reached you in the next morning's summary, describing an evening
+  that had already happened. The Today card now lists the ten apps in front longest so far, and the
+  browser pages beside them.
+  It also tells you when it *cannot* answer. An empty list on a busy afternoon used to look
+  identical to a quiet one; if the helper that measures this is not running, the card now says so
+  rather than showing nothing and letting you assume the best. It stays quiet on a genuinely quiet
+  morning — the warning only appears once there is enough use on the clock to contradict it.
+- **The screen-time report can answer "how much Roblox this month?"** Every breakdown on that card
+  used to show exactly one day, so you could see last Tuesday and never a total. There are now
+  most-used lists across the whole window, for time running, time in front, and browser pages.
+- **You can choose how far back the report looks — 7, 30 or 90 days.** The setting existed and
+  worked from the first release; nothing in the dashboard ever asked for it, so everyone saw thirty
+  days forever.
+- **Clicking a day on the chart shows that day.** The chart invited the question and could not
+  answer it: the lists underneath were pinned to whichever day the code picked. Choose a column and
+  all three follow it, including saying "nothing recorded" for a day that has none. Choose it again
+  to go back. The columns are proper buttons now, so they work from the keyboard and announce
+  themselves.
+- **Apps are named the way you would name them.** `RobloxPlayerBeta.exe` reads as Roblox,
+  `javaw.exe` as Minecraft (Java). The real file name is still there if you hover, and nothing
+  underneath changed — limits still match on the file name, because that is what Windows gives us.
+  Long totals read as `2 h 30 min` rather than `150 min`.
 - **Per-app screen time can now measure what was actually in front of your child — but this has
   never run on a real machine.** ⚠️ The code is written and its arithmetic is tested; the half that
   talks to Windows has not executed once, here or anywhere. **Work through §D2 of
@@ -55,6 +99,23 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   choice costs — including what it does to the source addresses in your access log.
 
 ### Improved
+- **Five panels you rarely open are now folded away.** Routines, Time codes, Recent access, Usage
+  history and Change password sit behind a heading you tap to open. On a phone — the device the
+  setup QR hands you — you passed all five in full before reaching anything else, in the order they
+  happened to be written rather than the order you need them. They stay one tap away, remember
+  nothing, and work from the keyboard.
+- **The dashboard now follows your device's light or dark setting.** ⚠️ *This changes how it looks.*
+  A light theme was being built into every release and then made unreachable — both pages pinned
+  themselves to the dark one, so roughly half the stylesheet shipped to every install and could
+  never be shown. The pages no longer pin a theme, so a phone or laptop set to light mode gets the
+  light dashboard and one set to dark gets the dark one. If you preferred it always dark, that is a
+  one-line change in `web/src/app.css` — set `themes: dim --default, light;` and rebuild.
+- **Eight more controls can be used with a screen reader.** The curfew on/off switch announced only
+  as "checkbox, not checked", with nothing tying it to the heading beside it, and seven boxes in the
+  rules editor — blocked apps, per-app limits, app groups, the routine name — had nothing but a
+  greyed-out example inside them, which is a hint and not a name, and which disappears as soon as
+  you type. Continues the pass that gave the tables their headers; the ✕ buttons beside those same
+  rows were already labelled, which is what gave the omission away.
 - **The dashboard is readable with a screen reader.** Its six tables had no column headers as far
   as assistive software was concerned — the header row was styled, not labelled, so a figure was
   read out without the column it belonged to. And the two panels that refresh by themselves every
@@ -63,6 +124,67 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **The switch beside "Curfew" now says what it is doing.** It was a bare toggle: you could see that
+  it did *something* and had to guess what. It now reads **Off**, **On**, or **On — no hours set**,
+  matching the switch on the screen-time card, which has always shown its state. The third case is
+  real — a window whose start and end are the same time never fires, so a curfew can be switched on
+  and still do nothing.
+- **The bedtime time boxes were clipping their own clock icon.** The field was about 39 pixels wide
+  inside its padding; "22:00" needs 33 of them, which left no room for the picker button and it
+  landed on top of the digits. Both pairs are now wide enough.
+- **The selected item in a group of buttons no longer wears the "do this" colour.** The chosen theme
+  and the chosen report window were painted the same green as **Save** and **Take screenshot**,
+  which made a settled choice look like something you still had to press. They now use a quieter
+  selected style. The green means "this is the action to take" and is worth keeping for that.
+- **Your child is now told the screen can be seen.** One line on the page they use: *"A parent set
+  this up and can see this screen, which apps you use, and how long for."* Nestwatch already goes out
+  of its way not to know things — it records what a tab was called and never its address, and refuses
+  to read browser history at all. Being silent about the screen was the one place that did not match.
+- **A pending request from your child could be completely invisible.** If the dashboard could not
+  reach the service, the "More-time requests" card and its counter were both hidden — they only
+  appeared when the count was above zero, and a failed check left the count at zero. So a child who
+  had asked for twenty more minutes and was waiting looked exactly like a child who had asked for
+  nothing. The card now stays on screen and says the answer is unknown, and the counter reads `?`
+  rather than claiming a number it does not have.
+- **Signing out left the previous session's figures on screen.** Only three things were cleared;
+  the access log, usage history, screen-time report, time codes, pending requests and saved routines
+  all survived, so the next sign-in showed stale numbers as current until each was re-fetched. A tab
+  left open overnight showed yesterday as today.
+- **Clearing every day on a bedtime window made it apply every day.** Unticking all seven boxes is
+  the natural way to say "not this week", and it does the opposite — an empty selection means daily.
+  That was true before and is still true, because it is what an unset schedule has to mean; what
+  changed is that the window now says *"Applies: every day"* beside itself, in a warning colour when
+  it happens by accident. Previously the only hint was the smallest text on the card, below the
+  whole set of windows, and it never reacted when you cleared the last box.
+- **The bedtime day boxes could not be told apart.** They were labelled with one letter each —
+  `M T W T F S S` — so Tuesday and Thursday looked the same, as did Saturday and Sunday, and a
+  screen reader announced nothing more than "T, checkbox". They now read `Mo Tu We Th Fr Sa Su` and
+  announce the full day name.
+- **Forms across the dashboard had been rendering unstyled since the interface library was
+  upgraded.** Four class names were removed by that upgrade and left behind in the markup — 69
+  references across both pages. Nothing reported it, because a class that no longer exists still
+  looks like styling to anyone reading the source; the browser simply has no rule to apply. Two of
+  the four were doing real work: one set the size of every field label, the other stacked labels
+  above their inputs. Both are restored, and a test now compares every class in the markup against
+  the stylesheet that actually ships, so the next upgrade's leftovers fail the build instead of
+  quietly changing how the product looks.
+- **"0 min used today" was shown before anything had been loaded.** The card started from a
+  placeholder of zeroes and read them out as measurement, so a dashboard that had not yet reached
+  the service — or could not reach it at all — stated as fact that your child had used no time. It
+  now says the figures have not loaded until they have. Figures that *did* arrive stay on screen if
+  a later refresh fails: they are then out of date rather than unknown, and the staleness warning
+  already covers that case. Signing out forgets them too — otherwise the next sign-in showed the
+  previous session's numbers as today's, and a tab left open overnight made "today's" mean
+  yesterday's.
+- **A failed request for more time looked exactly like no request at all.** When the dashboard could
+  not load a list, it kept whatever it had and said nothing, so a card with nothing in it meant
+  either "nothing to show" or "this failed and you were not told" — and there was no way to tell
+  which. That is worst on pending time requests, where both the header badge and the card itself
+  are hidden when the list is empty: a server error rendered as a child who had asked for nothing,
+  on the screen whose whole job is to show that they had. Failures are now reported, and the lists
+  that had no message to show — routines, time requests, one-time codes — have one. The error
+  messages the other lists already carried were dead code for the case that actually happens: they
+  fired only if the network dropped, never if the server itself returned an error.
 - **A day's per-app detail could be silently dropped.** When the same date turned up in both
   `usage.jsonl` and `screentime.jsonl`, the report kept whichever row listed more apps — so a row
   holding the same apps *plus* richer detail could lose the tie and have that detail discarded. The
@@ -105,6 +227,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   scrolling to the block does not look. All eight now match, and the lint that catches it is on.
 
 ### Security
+- **A tampered-with screen-time helper can no longer grow the service's memory or your disk without
+  limit.** The helper that measures which window is in front has to run as your child to see your
+  child's windows, so everything it reports is treated as something your child could have chosen —
+  and the checks on it bounded what the numbers could *say* without bounding how many of them there
+  could be. A modified helper could name thousands of invented programs, or send one line that
+  never ends. There are now ceilings at each point the data comes to rest, set far above anything a
+  real machine produces, and the busiest genuine entries are the ones kept — so a flood costs the
+  flood, not the record of what your child actually used. This only ever affected the new
+  never-yet-released tracking; nothing that was shipped behaved this way.
 - **The dashboard can no longer run a script that arrives in its markup.** Both pages kept their
   JavaScript in the page itself, which meant the policy had to permit inline scripts in general —
   and that permission is what an injected `<script>` would have needed. The code now lives in two
@@ -112,6 +243,84 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the gap between "we don't do that" and "that can't happen".
 
 ### Internal
+- **Curfew's two halves are one decision again.** The part that schedules the shutdown and the part
+  that gives your child the heads-up were separate machines, joined only by the loop that called
+  them — so rules about how they interact ("don't promise bedtime is coming while it is already
+  happening") had nowhere to live and no way to be tested. They now come out of a single call, and
+  the tests drive the real thing rather than a stand-in. Nothing behaves differently; what changed
+  is that it can no longer *start* behaving differently by accident.
+- **The stylesheet shrank by 15%, and the reason was not what two earlier passes assumed.** Both had
+  hunted individual words in comments, because a comment mentioning a component ships that component.
+  That was real but tiny. The actual cause: Tailwind's `@source` setting does not *replace* its
+  automatic file detection, it adds to it — so the build had been scanning the whole tooling
+  directory, including its own configuration and test files, since the beginning. Turning automatic
+  detection off took the stylesheet from 102,181 to 86,736 bytes.
+  The comment problem is fixed structurally too: the build now scans comment-free copies of the two
+  pages rather than the pages themselves, so prose can no longer ship anything. Two things were
+  learned by measuring rather than reading. The first build after that change made the stylesheet
+  *grow*, because the new script's own documentation lists the component names it exists to keep out
+  — a file explaining the trap was springing it. And pointed at the bundled Alpine library, the
+  comment stripper removed 13,543 bytes from a file containing no comments, because minified code is
+  full of slashes that are not comment markers. Bundled files are now left alone, and the script
+  refuses to continue if any file loses more than half its bytes.
+- **The enforcement check stopped gathering four things it immediately threw away.** Every thirty
+  seconds, forever, it asked Windows for the CPU share, disk-I/O counters, memory use and full
+  executable path of every process on the machine — several hundred of them — and read two fields.
+  It now asks for the two. The dashboard's process panel, which genuinely needs the memory figure,
+  keeps its own richer call; the two are separate types now so the cheap path cannot quietly be
+  asked for the expensive number again. **Windows-only code that has never run** — it compiles clean
+  for the target and is covered by tests through the fake, which is worth exactly what that is
+  worth.
+- **The screen-time report stopped reading the entire usage history to find thirty rows.** It parsed
+  every line ever written to `usage.jsonl` — session starts, locks, warnings, grants — and then kept
+  the daily summaries, which are one line a day. The cost grew with how long Nestwatch had been
+  installed rather than with the window asked for. Lines that cannot match are now rejected before
+  they are parsed, with the real check still done on the ones that survive, so a routine named after
+  an event cannot sneak into the report.
+- **A test now pins which pages work without signing in.** The handlers for you and the handlers for
+  your child live in one file, and what separates them is which of two routers they are registered
+  on, in a different file. Both look identical where they are written, so putting one in the wrong
+  place is a single-line mistake with nothing local to catch it — and one direction of that mistake
+  hands your child a control meant for you. Adding a route to the unauthenticated set now fails the
+  build unless it is listed deliberately, with a note saying why it needs no password.
+- **The stylesheet grew by 1.5 KB from three words in code comments, and shrank again.** The same
+  defect as the `steps` one below: `tab`, `list` and `step` are all names of interface components,
+  and prose containing them ships the component. This is the second time in one day, which says the
+  hazard is structural rather than careless — the scanner reads comments as candidate class names,
+  and no amount of care makes English avoid a vocabulary that includes "list".
+- **The stylesheet shrank by 2.4 KB because two code comments stopped using the word "steps".**
+  Tailwind finds class names by scanning the source files as raw text, so it does not distinguish a
+  class from English prose — and daisyUI ships a `steps` component. A comment reading "Width steps
+  up with the screen" was therefore emitting that entire component into every build, for a widget
+  the product does not have. Measured by stripping every comment and rebuilding: prose was
+  responsible for ~2.4 KB, and is now responsible for 21 bytes. Worth knowing before writing the
+  next comment, and worth knowing that it cuts both ways — a class named only inside `:class` in
+  JavaScript is found for the same reason, which is why `@source` scans `.js` too.
+- One `accrue_capped(map, data, cap)` replaces `accrue` + `retain_top` at four call sites, and both
+  halves are now private. The module's own doc had argued that `accrue` was kept separate from
+  `clamp` "so the bound cannot be skipped" — while leaving the *count* bound skippable, which is
+  exactly how the persisted tally ended up as the one map without it. Outside the module there is
+  now no way to fold data in without bounding it, and the compiler says so. One mutation to that
+  single function now fails all three flood tests; it previously took breaking three call sites.
+- Two markup guards, both for defects with no symptom, joining the three that already scan these
+  pages. `every_class_in_the_markup_has_a_rule_in_the_shipped_css` compares every static `class`
+  against the compiled stylesheet — it reports all 69 dead references when run against the markup
+  as it was, and nothing against the markup as it is. It also fails on a stale `assets/app.css`,
+  which `build.rs` could previously only warn about, and a warning that scrolls past is
+  indistinguishable from none. Two things it deliberately gets right, both of which produced false
+  findings first: it reads only static `class="…"`, because Alpine's `:class` holds JavaScript and
+  scanning it reports `===` and `null` as missing classes; and it undoes CSS escaping first,
+  because Tailwind writes `2xl:max-w-[110rem]` as `.\32 xl\:max-w-\[110rem\]`.
+  `every_form_control_can_be_named_by_a_screen_reader` counts a wrapping `<label>` as a name, so
+  the per-weekday budget boxes pass as they stand. The class scan reads both quote styles and has
+  its own test pinning what it picks up: a scanner that quietly covers less than it claims is a
+  worse defect than the one it was written to catch, because it looks like coverage.
+- `the_read_limit_clears_the_largest_honest_line` pins `foreground::MAX_LINE` against the biggest
+  line a well-behaved watcher can emit — 170,170 bytes at the worst case for JSON escaping. The
+  three numbers that decide it (`MAX_PAGES`, the title and process-name buffers in `watcher.rs`,
+  the 30-second emit cadence) live in three files and are edited independently, and a limit set
+  below that figure discards real samples as if forged. 64 KiB, the obvious round number, is under
+  it by a factor of three.
 - Lint policy moved from CI's command line into `Cargo.toml`, so `cargo clippy` and the editor
   enforce what CI enforces. Turning on `undocumented_unsafe_blocks` is what found the four above —
   it is allow-by-default, so `-D warnings` had never switched it on.
@@ -119,7 +328,8 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   into `assets/app.js` and `assets/ask.js`. Beyond the policy change above, this is what made it
   possible to test them at all. Three source scans guard the shapes that would silently undo it:
   no inline script, no `<template>` inside `<svg>`, and `scope` on every column header.
-- **25 tests for the dashboard's own logic**, where there were none — the version comparison, the
+- **Tests for the dashboard's own logic, where there were none** — 81 of them as this is written:
+  the version comparison, the
   enforcement-staleness check, the chart's bar heights, the shared day formatting, and the
   "any limits set" check. They run on `node:test`, which ships with Node, so nothing was added to
   the project's dependencies; `npm test` in `web/` runs them, and CI runs them on both Linux and

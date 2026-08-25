@@ -203,9 +203,17 @@ is the largest untested surface in the build, and unlike the rest of this docume
 record at all — treat a failure here as expected rather than surprising. The design and the
 reasoning are in [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md).
 
+**Watch the Today card, not the daily report.** The dashboard's Today panel now carries **In front
+today** and **In the browser today**, fed by the same watcher and refreshed about once a minute. It
+is the fastest signal available: everything below shows up there within a minute or two, where the
+day-by-day report only gains a row after midnight's rollover. Keep it open on a second device while
+working through this section — that is what turns most of these checks into a glance rather than a
+wait until tomorrow.
+
 - [ ] **`nestwatch helper --watch` is running as him.** Task Manager → Details, while he is signed
-      in. If it is absent, nothing below can pass and the report will show no focused minutes at
-      all — which correctly renders as *not measured* rather than as zero.
+      in. If it is absent, nothing below can pass, the Today card shows no "In front" section at
+      all, and the report shows no focused minutes — which correctly renders as *not measured*
+      rather than as zero.
 - [ ] **Alt-tab between two apps for a few minutes.** Both accrue focused minutes, and the totals
       track wall-clock rather than drifting.
 - [ ] **A minimised app accrues no focused time** while still accruing running minutes. That

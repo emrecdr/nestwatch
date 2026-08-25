@@ -200,11 +200,43 @@ enum Action {
 /// completed; `None` means no shutdown is believed pending.
 struct Enforcer {
     deadline: Option<Instant>,
+    /// The heads-up state machine, owned here rather than by the loop.
+    ///
+    /// It used to be a local in `run_enforcer`, which meant no single function could answer "what
+    /// should curfew do this tick" — the shutdown machine and the warning machine were joined only
+    /// by the loop body. Any rule coupling them had nowhere to live and no way to be tested:
+    /// *don't warn while a shutdown is pending*, *re-arm when one is aborted*. Each would have
+    /// landed in the loop as an ad-hoc `if`, invisible to the tests. The rules enforcer can pin
+    /// that class of interaction (`countdown_is_silent_once_the_budget_is_spent`) because both
+    /// outcomes come out of one call; this one structurally could not.
+    countdown: Countdown,
+}
+
+/// What the loop learned about the **next** curfew window this tick.
+///
+/// Passed in rather than derived here, so the enforcer stays free of both the config and the clock
+/// — the property that makes every case below a unit test rather than something discovered on a
+/// child's PC at bedtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Upcoming {
+    /// Nothing to count down to: curfew is off, or it is already bedtime and Windows' own shutdown
+    /// dialog has taken over, where a "bedtime soon" popup would be a lie.
+    ///
+    /// Distinct from `In(None)`, and the difference is load-bearing. This **re-primes** the
+    /// countdown, so the first reading afterwards announces nothing. `In(None)` records a real
+    /// observation of "further off than we can see", from which the next reading *can* warn.
+    Nothing,
+    /// The next window is this many minutes away — `None` meaning further off than
+    /// [`LOOKAHEAD_MINS`], which is a reading rather than an absence.
+    In(Option<u32>),
 }
 
 impl Enforcer {
     fn new() -> Self {
-        Self { deadline: None }
+        Self {
+            deadline: None,
+            countdown: Countdown::default(),
+        }
     }
 
     /// Decide the action for this tick.
@@ -214,7 +246,51 @@ impl Enforcer {
     ///   child ran `shutdown /a`) or failed, so we re-issue — this is what makes curfew
     ///   robust rather than a one-shot latch.
     /// - Leaving the window aborts any pending shutdown.
-    fn tick(&mut self, active: bool, now: Instant, warn: Duration, slack: Duration) -> Action {
+    fn tick(
+        &mut self,
+        active: bool,
+        upcoming: Upcoming,
+        now: Instant,
+        warn: Duration,
+        slack: Duration,
+    ) -> (Action, Option<u32>) {
+        let action = self.decide(active, now, warn, slack);
+
+        let warning = match upcoming {
+            Upcoming::Nothing => {
+                self.countdown.reset();
+                None
+            }
+            Upcoming::In(mins) => self.countdown.observe_upcoming(mins),
+        };
+
+        // Two states where "bedtime in 15 minutes" is wrong whatever the caller observed, and the
+        // reason this refactor was worth doing: before it, these rules had nowhere to live except
+        // as ad-hoc `if`s in the loop, invisible to every test.
+        //
+        // * A shutdown is pending — bedtime has *arrived*, and Windows' own countdown dialog is on
+        //   screen. A popup promising it is still coming is a plain contradiction.
+        // * One was just aborted — the window ended this tick, so the next is a whole day off and
+        //   the countdown is re-priming. Announcing from a reading taken before the abort would
+        //   count down to a bedtime that already happened.
+        //
+        // The loop happens to pass `Nothing` in both cases today, so this changes no behaviour. It
+        // moves the guarantee from "the caller is careful" to "the enforcer cannot do otherwise",
+        // which is the difference between a convention and a rule.
+        if self.deadline.is_some() || action == Action::Abort {
+            if action == Action::Abort {
+                // Re-arm, so the first reading after the window closes primes rather than warns.
+                self.countdown.reset();
+            }
+            return (action, None);
+        }
+
+        (action, warning)
+    }
+
+    /// The shutdown half, unchanged. Split out so [`tick`](Self::tick) reads as "warn, then decide"
+    /// rather than interleaving two machines.
+    fn decide(&mut self, active: bool, now: Instant, warn: Duration, slack: Duration) -> Action {
         if active {
             match self.deadline {
                 None => {
@@ -251,24 +327,34 @@ pub async fn run_enforcer(
     usage_log: Arc<crate::usage::UsageLog>,
 ) {
     let mut enforcer = Enforcer::new();
-    let mut countdown = crate::countdown::Countdown::default();
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
     // See the note in `rules`: without this a resume from sleep replays every missed tick.
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Curfew).await;
 
-        let (active, warn_secs, warning) = {
+        let (active, warn_secs, upcoming) = {
             let guard = crate::state::recover_read(&config);
             let curfew = &guard.curfew;
             // One clock reading for both questions, so "is it bedtime?" and "how soon?" can't
             // disagree across a tick boundary.
             let now = crate::clock::now();
             let active = curfew.is_active_at(now);
-            let warning = bedtime_warning(&mut countdown, curfew, now);
-            (active, curfew.warn_secs, warning)
+            // The only place the config and the clock are consulted. Everything the enforcer needs
+            // to decide is now an argument, which is what lets the tests below drive the real one.
+            let upcoming = if !curfew.enabled || active {
+                Upcoming::Nothing
+            } else {
+                Upcoming::In(curfew.mins_until_active(now))
+            };
+            (active, curfew.warn_secs, upcoming)
         };
         let warn = Duration::from_secs(warn_secs as u64);
+
+        // One call, both answers. They used to come from two machines the loop had to join by
+        // hand — see `Enforcer::countdown`.
+        let (action, warning) =
+            enforcer.tick(active, upcoming, Instant::now(), warn, CHECK_INTERVAL);
 
         // Advance heads-up before the window opens, so the shutdown dialog isn't the first
         // the child hears of bedtime.
@@ -282,7 +368,7 @@ pub async fn run_enforcer(
             );
         }
 
-        match enforcer.tick(active, Instant::now(), warn, CHECK_INTERVAL) {
+        match action {
             action @ (Action::Shutdown | Action::ShutdownNow) => {
                 // The first issue warns; a re-issue means the last one was cancelled, so it goes
                 // immediately (see `Action::ShutdownNow`).
@@ -324,27 +410,6 @@ pub async fn run_enforcer(
             Action::None => {}
         }
     }
-}
-
-/// The bedtime warning to announce this tick, if any — the whole of the enforcer's countdown
-/// decision, split out of the loop so an entire evening's approach can be simulated in tests
-/// rather than only ever observed on a child's laptop at 21:45.
-fn bedtime_warning(
-    countdown: &mut Countdown,
-    curfew: &Curfew,
-    now: DateTime<FixedOffset>,
-) -> Option<u32> {
-    // Curfew off, or already bedtime — where Windows' own shutdown dialog has taken over and a
-    // "bedtime soon" popup would be a lie. Nothing to count down to, so re-prime rather than
-    // announce. Deriving this here rather than taking it as a parameter keeps it tied to the same
-    // `now` the reading below is measured from.
-    if !curfew.enabled || curfew.is_active_at(now) {
-        countdown.reset();
-        return None;
-    }
-    // `None` here means "further off than we can see", which is a reading, not an absence — see
-    // [`Countdown::observe_upcoming`], which owns the sentinel that distinction needs.
-    countdown.observe_upcoming(curfew.mins_until_active(now))
 }
 
 /// What the child is told as bedtime approaches. `mins` is one of
@@ -541,20 +606,42 @@ mod tests {
     /// Takes the `Countdown` so one can span several configs, which is what a parent changing the
     /// settings mid-evening looks like.
     fn evening(
-        countdown: &mut Countdown,
+        enforcer: &mut Enforcer,
         curfew: &Curfew,
         from: DateTime<FixedOffset>,
         ticks: i64,
     ) -> Vec<u32> {
         let tick = TimeDelta::from_std(CHECK_INTERVAL).expect("check interval fits a TimeDelta");
+        let base = Instant::now();
         (0..ticks)
-            .filter_map(|i| bedtime_warning(countdown, curfew, from + tick * i as i32))
+            .filter_map(|i| {
+                let now = from + tick * i as i32;
+                // Exactly what `run_enforcer` computes, and the only place the config and the clock
+                // are read — see the loop. Driving the real enforcer rather than a free function is
+                // what this refactor bought: these evenings now exercise the same code path that
+                // decides when the PC shuts down, including the interaction between the two.
+                let active = curfew.is_active_at(now);
+                let upcoming = if !curfew.enabled || active {
+                    Upcoming::Nothing
+                } else {
+                    Upcoming::In(curfew.mins_until_active(now))
+                };
+                enforcer
+                    .tick(
+                        active,
+                        upcoming,
+                        base + tick.to_std().unwrap() * i as u32,
+                        WARN,
+                        SLACK,
+                    )
+                    .1
+            })
             .collect()
     }
 
-    /// [`evening`] over a fresh countdown — the common case.
+    /// [`evening`] over a fresh enforcer — the common case.
     fn one_evening(curfew: &Curfew, from: DateTime<FixedOffset>, ticks: i64) -> Vec<u32> {
-        evening(&mut Countdown::default(), curfew, from, ticks)
+        evening(&mut Enforcer::new(), curfew, from, ticks)
     }
 
     #[test]
@@ -588,10 +675,12 @@ mod tests {
             enabled: false,
             ..nightly("22:00", "07:00")
         };
-        // One countdown spanning both configs — the parent flipping the switch mid-evening.
-        let cd = &mut Countdown::default();
-        let mut announced = evening(cd, &off, at(2026, 7, 9, 21, 30), 40); // off through 21:30–21:50
-        announced.extend(evening(cd, &on, at(2026, 7, 9, 21, 50), 30)); // on, ten minutes to go
+        // One enforcer spanning both configs — the parent flipping the switch mid-evening. It has
+        // to be the same one, because the state that could carry a stale threshold across the
+        // change now lives inside it.
+        let e = &mut Enforcer::new();
+        let mut announced = evening(e, &off, at(2026, 7, 9, 21, 30), 40); // off through 21:30–21:50
+        announced.extend(evening(e, &on, at(2026, 7, 9, 21, 50), 30)); // on, ten minutes to go
 
         assert_eq!(
             announced,
@@ -740,16 +829,121 @@ mod tests {
         let base = Instant::now();
         let mut e = Enforcer::new();
         // Enter the window → schedule a shutdown.
-        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
+        assert_eq!(act(&mut e, true, base, WARN, SLACK), Action::Shutdown);
         // Subsequent ticks before the deadline do nothing (countdown in progress).
         assert_eq!(
-            e.tick(true, base + Duration::from_secs(30), WARN, SLACK),
+            act(&mut e, true, base + Duration::from_secs(30), WARN, SLACK),
             Action::None
         );
         assert_eq!(
-            e.tick(true, base + Duration::from_secs(60), WARN, SLACK),
+            act(&mut e, true, base + Duration::from_secs(60), WARN, SLACK),
             Action::None
         );
+    }
+
+    // The interaction the old shape could not express, let alone test. `curfew::Enforcer` owned the
+    // deadline and a loose local in `run_enforcer` owned the countdown, so no single function
+    // answered "what should curfew do this tick". The four cases below each need *both* answers
+    // from *one* call.
+
+    /// A pending shutdown silences the heads-up, whatever the caller observed.
+    #[test]
+    fn no_bedtime_warning_while_a_shutdown_is_already_pending() {
+        let mut e = Enforcer::new();
+        let base = Instant::now();
+
+        // Prime the countdown just short of a threshold, so it *would* announce on the next
+        // reading if nothing suppressed it.
+        let (_, w) = e.tick(false, Upcoming::In(Some(16)), base, WARN, SLACK);
+        assert_eq!(w, None, "the first reading primes rather than announces");
+
+        // Bedtime arrives. A shutdown is scheduled, and a "bedtime in 15 minutes" popup would now
+        // contradict the dialog Windows is already showing.
+        let (action, warning) = e.tick(true, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(action, Action::Shutdown);
+        assert_eq!(
+            warning, None,
+            "a pending shutdown must silence the countdown"
+        );
+    }
+
+    /// Leaving the window aborts the shutdown and says nothing on the way out.
+    #[test]
+    fn an_abort_tick_is_silent_and_re_arms_the_countdown() {
+        let mut e = Enforcer::new();
+        let base = Instant::now();
+
+        assert_eq!(
+            e.tick(true, Upcoming::Nothing, base, WARN, SLACK).0,
+            Action::Shutdown
+        );
+
+        // The window ends. The next one is a day away, so a reading taken now would count down to
+        // a bedtime that has already been and gone.
+        let (action, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(action, Action::Abort);
+        assert_eq!(warning, None, "an abort tick must not announce");
+
+        // Re-armed: the first reading afterwards primes rather than firing on a stale comparison.
+        let (_, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(warning, None, "the reading after an abort primes");
+    }
+
+    /// The ordinary case still works: approaching bedtime does announce.
+    #[test]
+    fn a_warning_fires_when_a_threshold_is_crossed_with_nothing_pending() {
+        let mut e = Enforcer::new();
+        let base = Instant::now();
+
+        let (_, w) = e.tick(false, Upcoming::In(Some(16)), base, WARN, SLACK);
+        assert_eq!(w, None, "primes");
+
+        let (action, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(action, Action::None, "not bedtime yet");
+        assert_eq!(warning, Some(15), "and the child gets the heads-up");
+    }
+
+    /// `Nothing` and `In(None)` are not the same, and collapsing them would misfire.
+    ///
+    /// `Nothing` re-primes: nothing to count down to, so the next reading announces nothing.
+    /// `In(None)` is a real observation of "further off than we can see", from which the next
+    /// reading *can* cross a threshold. A refactor that treated curfew-disabled as "16 minutes
+    /// away" would announce bedtime to a household that had switched curfew off.
+    #[test]
+    fn nothing_to_count_down_to_is_not_the_same_as_a_distant_window() {
+        let base = Instant::now();
+
+        let mut disabled = Enforcer::new();
+        disabled.tick(false, Upcoming::Nothing, base, WARN, SLACK);
+        let (_, after_nothing) = disabled.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(
+            after_nothing, None,
+            "curfew off then on primes, it does not announce"
+        );
+
+        let mut distant = Enforcer::new();
+        distant.tick(false, Upcoming::In(None), base, WARN, SLACK);
+        let (_, after_distant) = distant.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(
+            after_distant,
+            Some(15),
+            "a distant window is a reading, and this one counts"
+        );
+    }
+
+    /// The shutdown half only, for the cases that predate the countdown moving into the enforcer.
+    ///
+    /// `Upcoming::Nothing` is the honest stand-in: every one of them is either inside a window or
+    /// leaving one, and there is nothing to count down to in either. The coupling between the two
+    /// halves is exercised by the tests further down, which call `tick` directly.
+    fn act(
+        e: &mut Enforcer,
+        active: bool,
+        now: Instant,
+        warn: Duration,
+        slack: Duration,
+    ) -> Action {
+        e.tick(active, Upcoming::Nothing, now, warn, slack).0
     }
 
     #[test]
@@ -758,19 +952,19 @@ mod tests {
         // should have powered off → re-issue.
         let base = Instant::now();
         let mut e = Enforcer::new();
-        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown); // deadline = base+60
+        assert_eq!(act(&mut e, true, base, WARN, SLACK), Action::Shutdown); // deadline = base+60
         // base+90 = deadline(60) + slack(30) → re-issue, and it must be the UNCANCELLABLE kind.
         // Re-issuing another warned countdown was the bug: it handed the child a fresh window to
         // `shutdown /a`, so a loop beat the 30s tick indefinitely.
         assert_eq!(
-            e.tick(true, base + Duration::from_secs(90), WARN, SLACK),
+            act(&mut e, true, base + Duration::from_secs(90), WARN, SLACK),
             Action::ShutdownNow
         );
         // And it stays uncancellable for as long as they keep cancelling.
         for i in 1..=5 {
             let t = base + Duration::from_secs(90 + 91 * i);
             assert_eq!(
-                e.tick(true, t, WARN, SLACK),
+                act(&mut e, true, t, WARN, SLACK),
                 Action::ShutdownNow,
                 "cancel attempt {i} must not earn another countdown"
             );
@@ -781,15 +975,15 @@ mod tests {
     fn enforcer_aborts_when_window_ends_while_armed() {
         let base = Instant::now();
         let mut e = Enforcer::new();
-        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
+        assert_eq!(act(&mut e, true, base, WARN, SLACK), Action::Shutdown);
         // Window ends (curfew disabled or time passed) → cancel the pending shutdown.
         assert_eq!(
-            e.tick(false, base + Duration::from_secs(10), WARN, SLACK),
+            act(&mut e, false, base + Duration::from_secs(10), WARN, SLACK),
             Action::Abort
         );
         // Nothing pending anymore.
         assert_eq!(
-            e.tick(false, base + Duration::from_secs(20), WARN, SLACK),
+            act(&mut e, false, base + Duration::from_secs(20), WARN, SLACK),
             Action::None
         );
     }
@@ -798,10 +992,10 @@ mod tests {
     fn enforcer_disarm_forces_reissue_next_active_tick() {
         let base = Instant::now();
         let mut e = Enforcer::new();
-        assert_eq!(e.tick(true, base, WARN, SLACK), Action::Shutdown);
+        assert_eq!(act(&mut e, true, base, WARN, SLACK), Action::Shutdown);
         e.disarm(); // simulate a failed shutdown call
         assert_eq!(
-            e.tick(true, base + Duration::from_secs(5), WARN, SLACK),
+            act(&mut e, true, base + Duration::from_secs(5), WARN, SLACK),
             Action::Shutdown
         );
     }

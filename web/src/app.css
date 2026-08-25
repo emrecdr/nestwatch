@@ -1,17 +1,39 @@
 /* Tailwind v4 + daisyUI 5 entry (CSS-first config).
    Built to ../assets/app.css by `npm run build`. */
-@import "tailwindcss";
+/* `source(none)` turns OFF Tailwind v4's automatic source detection, so the only thing scanned is
+   the explicit @source below.
+   Without it, `@source` *adds to* the automatic scan rather than replacing it — and the automatic
+   scan covers this directory. That was found the hard way: pointing @source at comment-stripped
+   copies made the stylesheet *grow*, because Tailwind had started reading `scripts/strip-comments.mjs`,
+   whose documentation necessarily lists the very component names it exists to keep out — `step`,
+   `list`, `tab`, `mask`. A file explaining the hazard was causing it. */
+@import "tailwindcss" source(none);
 
-/* Scan the served files for used utilities/components.
-   The `.js` matters: the dashboard's script moved out of the markup into assets/app.js, and it
-   builds class strings there (stBarClass returns "bg-error"/"bg-primary"/"st-nodata"). Scanning
-   only *.html would purge any utility named solely in JavaScript, and the failure is silent —
-   the class is emitted into the DOM and simply has no rule behind it. */
-@source "../../assets/**/*.{html,js}";
+/* Scan comment-free copies of the served files, written by scripts/strip-comments.mjs.
+   Not `assets/` directly, and the indirection is the point: Tailwind reads source as raw text and
+   cannot tell a class name from English, while daisyUI names components with ordinary words. A
+   comment mentioning "steps" shipped 2,408 bytes of a widget this product does not have; a later
+   one mentioning "tab", "list" and "step" added 1,544 more. Both were found by measuring the
+   output, never by reading the diff, and the next person to write a comment will not have read
+   either incident. Stripping comments removes the whole class of surprise rather than asking
+   everyone to avoid a vocabulary that includes "list".
+   Over-stripping would be the dangerous direction, and it is covered: the scanner keeps string
+   contents, and `every_class_in_the_markup_has_a_rule_in_the_shipped_css` fails loudly if anything
+   real ever went missing.
+   The `.js` still matters: the dashboard builds class strings at runtime (stBarClass returns
+   "bg-error"/"bg-primary"/"st-nodata"), named nowhere else. Scanning only *.html would purge them,
+   and the failure is silent — the class reaches the DOM with no rule behind it. */
+@source "../.scan/**/*.{html,js}";
 
-/* daisyUI 5, with the two themes referenced by index.html's data-theme. */
+/* daisyUI 5, with both themes reachable.
+   Both were always compiled — about half the stylesheet — but the pages pinned `data-theme="dim"`,
+   so `light` shipped to every install and could never be selected by anything. Marking them
+   `--default` / `--prefersdark` and dropping that attribute is what makes those bytes do something:
+   daisyUI emits `light` on `:root` and `dim` under `prefers-color-scheme: dark`, so the dashboard
+   follows the device. That matters on a product whose onboarding is a QR code scanned with a phone,
+   where the reader's setting is the only signal available. */
 @plugin "daisyui" {
-  themes: dim --default, light;
+  themes: light --default, dim --prefersdark;
 }
 
 /* "Not measured" columns in the screen-time chart.
@@ -25,4 +47,19 @@
     var(--color-base-200) 0 3px,
     color-mix(in oklab, var(--color-base-content) 35%, transparent) 3px 5px
   );
+}
+
+/* Disclosure arrow for the collapsed cards.
+   The five rarely-touched panels are <details>, so a parent scrolling a phone passes five headings
+   instead of five full cards. Plain <details> needs no JavaScript and stays keyboard- and
+   screen-reader-operable for free — the browser handles Enter, Space, and announcing expanded state.
+   The native marker is suppressed and replaced because daisyUI's card sets `display: flex` on the
+   summary, which stops `list-item` from rendering one at all. */
+summary::-webkit-details-marker { display: none; }
+summary { list-style: none; }
+.chev { transition: transform 120ms ease; display: inline-block; }
+details[open] > summary .chev { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .chev { transition: none; }
 }

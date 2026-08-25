@@ -75,13 +75,13 @@ one on the real machine with **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.
 | **Daily budget** | Minutes per day, optionally different per weekday. Counts only *active* use — not idle, locked or logged-out time. Survives reboots, resets at midnight. When spent: lock, shut down, or warn only. |
 | **Curfew** | One or more time windows per weekday, separate from the budget. Counts down on the child's screen, then shuts down — and re-issues if the shutdown is cancelled. |
 | **Warnings** | 15, 5 and 1 minutes before both the budget and bedtime, so the limit is never a surprise. A budget shorter than a threshold never announces it; a mid-day restart doesn't replay warnings; granting extra time re-arms them. |
-| **Screen-time report** | 30 days as a chart, with per-app minutes and a comparison against the period before. Days the service wasn't running show as **not measured**, never as zero — so a stopped enforcer can't look like a quiet week. |
+| **Screen-time report** | 7, 30 or 90 days as a chart, with a comparison against the period before. Click a column to drill into that day. Most-used lists cover the whole window — by app, by category, by time actually in front, and by browser page — so it answers "how much Roblox this month", not only "what happened last Tuesday". Days the service wasn't running show as **not measured**, never as zero, so a stopped enforcer can't look like a quiet week. |
 | **Asking for more** | The child's page shows time left and can request more; you approve or deny. Single-use offline codes cover times you're away or the network is down. |
 | **Remote control** | Screenshot the desktop (with live refresh), list and kill running apps, lock the screen, shut down with a warned countdown. |
 | **App rules** | Blocklist, per-app daily limits, and groups sharing one pool. Habit-shaping, not a wall — see [Not included](#not-included). |
 | **Modes** | Pause the whole rules enforcer with one toggle for a free evening (curfew still applies). Save the current setup as a named routine and reapply with a click. |
 | **Trust the setup** | `nestwatch doctor` reports whether the service is up, the port listening, the firewall rule right, the network private, the certificate valid, and whether anything is actually being enforced. Every problem prints its fix. |
-| **Visibility** | Today's usage with per-app bars, usage history, and an access log of logins with source IP. |
+| **Visibility** | Today's usage with per-app bars — and, where the watcher is running, which apps were actually *in front* today and what the browser was showing, refreshed about once a minute rather than waiting for tomorrow's summary. Plus usage history and an access log of logins with source IP. |
 
 **Resists clock tampering.** Changing the PC's time zone — which Windows lets a standard user do
 with no prompt — cannot reset the day's tally or move the curfew window. Real daylight-saving
@@ -93,8 +93,13 @@ One binary. On Windows it installs as a **SYSTEM service** (Session 0) that serv
 UI + JSON API over self-signed HTTPS and runs two background enforcers — **curfew** and the
 **usage rules** (screen-time budget, app blocklist, per-app limits). Because Session 0 has no
 desktop, **screenshots and screen-lock are delegated to a short-lived helper** launched into
-the interactive user session. All OS access sits behind a `SystemControl` trait, so the whole
-app also builds, runs, and is tested on macOS/Linux via a `FakeControl`.
+the interactive user session. Per-app *foreground* time needs a second helper that **stays
+running** for the length of your child's session — a desktop-scoped Windows hook cannot be
+installed from Session 0 at all, so this one is forced by the platform rather than chosen; it
+reports over a pipe and decides nothing (see
+[FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)). All OS access sits behind a
+`SystemControl` trait, so the whole app also builds, runs, and is tested on macOS/Linux via a
+`FakeControl`.
 
 ```
 Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── auth (argon2 + session)
@@ -103,8 +108,10 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
                           │  │                     counts active use only, 15/5/1-min warnings
                           │  │                     → kill · lock · shutdown)
                           │  ├─ processes / kill / shutdown         [direct, Session 0 OK]
-                          │  └─ screenshot + lock ─→ helper in user session (WTSQueryUserToken +
-                          │                           CreateProcessAsUserW) ─→ xcap ─→ PNG
+                          │  ├─ screenshot + lock ─→ helper in user session (WTSQueryUserToken +
+                          │  │                        CreateProcessAsUserW) ─→ xcap ─→ PNG
+                          │  └─ foreground watcher ─→ RESIDENT helper in the child's session
+                          │                           (SetWinEventHook + 5s poll) ─→ JSONL ─→ pipe
                           └─ SystemControl trait ─→ ServiceControl │ WindowsControl │ FakeControl
 ```
 
@@ -118,7 +125,7 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
 | Service / FFI | windows-service 0.8, windows 0.62 (WTS + CreateProcessAsUser) |
 | Time | chrono 0.4 (local-time curfew windows + daily screen-time reset) |
 | Cert | rcgen 0.14 |
-| UI | Alpine.js 3.15, Tailwind CSS v4.3, daisyUI 5.6 (built to `assets/app.css`) |
+| UI | Alpine.js 3.15, Tailwind CSS v4.3, daisyUI 5.7 (built to `assets/app.css`). Follows the viewing device's light/dark setting. |
 
 ## Tamper-resistance — and its limits
 

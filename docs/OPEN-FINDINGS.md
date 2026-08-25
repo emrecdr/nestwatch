@@ -12,7 +12,12 @@ total), plus a security analysis and a verification round — across four angles
 altitude. Every claim below was verified against the tree before being written down; the measured
 ones say so.
 
-That second pass is also why three entries in *Considered and declined* record findings that were
+A later pass (2026-08-25) added O11-O15 and six more *Considered and declined* rows, including five
+suspicions about the install and enforcement paths that were checked and found false. That pass also
+recorded one of its own recommendations as wrong — see O10's entry below, where a proposed fix would
+have been a no-op because it misread the flag it proposed to reuse.
+
+That second pass is also why several entries in *Considered and declined* record findings that were
 **refuted**: on this codebase a confident claim has repeatedly survived review and died on contact
 with the code, so what was checked and found false is worth as much shelf space as what was found
 true.
@@ -20,28 +25,6 @@ true.
 ---
 
 ## Open
-
-### O1 · Curfew's per-tick state has two owners
-
-`curfew::Enforcer` owns `deadline`; a loose local in `run_enforcer` owns the `Countdown`. So no
-single function answers "what should curfew do this tick" — the two machines are joined only in the
-loop body.
-
-**Cost, concretely.** Any rule coupling them has nowhere to live and no way to be tested: *don't
-warn while a shutdown is already pending*, *re-arm the countdown when a shutdown is aborted*,
-*suppress the warning on an abort tick*. Each would land in the loop as an ad-hoc `if`, invisible to
-the test helpers. The rules enforcer has a test pinning exactly this kind of interaction
-(`countdown_is_silent_once_the_budget_is_spent`) because both outcomes come out of one call; curfew
-**structurally cannot** have the equivalent. A symptom you can see today: `active` is derived three
-times per tick from the same `now` (`curfew.rs` — the loop, `bedtime_warning`, `mins_until_active`).
-
-**Fix.** Move `Countdown` into `curfew::Enforcer` as a field and fold the warning into `tick()`,
-taking the next-window state as an input so the enforcer stays config-free and clock-free, and
-returning the warning alongside the `Action`. Tests then drive the real enforcer. This does *not*
-require matching the rules enforcer's `Vec<RuleAction>` shape — a tuple is enough.
-
-**Trigger.** Do this **before** anything else is added to the curfew loop. It is not urgent while
-the loop is stable.
 
 ### O2 · `rules.rs` has a real seam between the pure machine and the loop
 
@@ -175,10 +158,15 @@ against primary sources made it sharper: `SetWinEventHook` is scoped to a **desk
 session, so no arrangement of a session-0 service can observe the child's windows. A resident
 helper is forced, not chosen.
 
-Shipped: the whole data path except the watcher — `Usage::foreground_secs`, a `focused` map in the
-rollup row, and `DayRow.focused` out through `GET /api/screentime`, plus the pure aggregation that
-bounds what the watcher reports. Still open: the watcher itself, which waits on
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) for the reason O4 gives.
+Shipped: the whole data path, the watcher included — `Usage::foreground_secs`, a `focused` map in
+the rollup row, `DayRow.focused` out through `GET /api/screentime`, the pure aggregation that bounds
+what the watcher reports, and `src/watcher.rs` itself.
+
+**What is still open is verification, not authorship.** The watcher is written, compiles and lints
+against `x86_64-pc-windows-gnu`, and **has never executed — not here, not anywhere**. It waits on
+§D2 of [WINDOWS-TESTING.md](WINDOWS-TESTING.md) for the reason O4 gives. The distinction is worth
+the sentence: this entry previously read "still open: the watcher itself", which anyone deciding
+what to pick up next would reasonably take as "not written yet".
 
 Three things learned while designing it are worth not re-deriving:
 
@@ -204,10 +192,20 @@ result — an inline `<script>` can no longer run on either page, which is the d
 matters most where injected content would land. `no_inline_script_on_any_served_page` holds that
 shape, since the failure mode is silent.
 
-**There are now 25 JavaScript tests**, on `node:test` — no framework installed, so the addition
+**The JavaScript now has tests** — 39 of them as this is written, on `node:test` — no framework
+installed, so the addition
 costs the project nothing it was not already carrying. They cover the pure decision and formatting
 methods: `compareVersions`, `isEnforcerStale`, `stBarPct`, `stDayLabel`, `stBarClass`,
-`anyRulesSet`, `fmtBytes`, and the approve/deny decision. Every mutation tried against them fails at least one test.
+`anyRulesSet`, `fmtBytes`, `stRecentDayWith` and its three wrappers, and the approve/deny decision.
+Every mutation tried against them fails at least one test.
+
+The DOM-facing note below is now narrower than it was. `loadList` and `loadToday` **are** covered —
+the harness already injected `fetch`, so the network-shaped methods were reachable all along without
+a DOM, and nobody had looked. That found two more silent failures of O10's exact class: an HTTP
+error status never reached the `catch`, so the error messages three callers passed could only ever
+fire for a dropped network; and the Today card read its placeholder zeroes out as measurement before
+anything had loaded. What genuinely still needs a DOM is narrower — the polling loop, the screenshot
+lifecycle, and Alpine's own rendering.
 
 Writing them found O10 on the first run — the staleness indicator reporting healthy enforcement
 for a service the page could not reach. That is the argument for this entry, made concrete: the
@@ -263,6 +261,225 @@ Raised here, then resolved. Kept rather than deleted, so nobody re-derives a que
 answered — and because *how* a finding was proved fixed is worth more than the fact that it was.
 Each was confirmed by mutation: break the fix, watch the named test fail, restore.
 
+### ~~O1 · Curfew's per-tick state has two owners~~ — **fixed**
+
+`curfew::Enforcer` owns `deadline`; a loose local in `run_enforcer` owns the `Countdown`. So no
+single function answers "what should curfew do this tick" — the two machines are joined only in the
+loop body.
+
+**Cost, concretely.** Any rule coupling them has nowhere to live and no way to be tested: *don't
+warn while a shutdown is already pending*, *re-arm the countdown when a shutdown is aborted*,
+*suppress the warning on an abort tick*. Each would land in the loop as an ad-hoc `if`, invisible to
+the test helpers. The rules enforcer has a test pinning exactly this kind of interaction
+(`countdown_is_silent_once_the_budget_is_spent`) because both outcomes come out of one call; curfew
+**structurally cannot** have the equivalent. A symptom you can see today: `active` is derived three
+times per tick from the same `now` (`curfew.rs` — the loop, `bedtime_warning`, `mins_until_active`).
+
+**Fix.** Move `Countdown` into `curfew::Enforcer` as a field and fold the warning into `tick()`,
+taking the next-window state as an input so the enforcer stays config-free and clock-free, and
+returning the warning alongside the `Action`. Tests then drive the real enforcer. This does *not*
+require matching the rules enforcer's `Vec<RuleAction>` shape — a tuple is enough.
+
+**Fixed, 2026-08-25.** `Countdown` is a field of `curfew::Enforcer`, and `tick` returns
+`(Action, Option<u32>)` — both answers from one call. The next-window state arrives as an argument
+(`Upcoming`), so the enforcer stays free of the config and the clock, which is what lets the tests
+drive the real one instead of a free helper. `bedtime_warning` is gone; the `evening` test helper
+now runs the actual enforcer over a simulated evening, computing exactly what `run_enforcer`
+computes.
+
+**Two of the three coupling rules this entry named are now enforced rather than merely true.**
+*Don't warn while a shutdown is pending* and *suppress the warning on an abort tick* live in `tick`,
+which returns `None` for the warning in both states regardless of what the caller observed. The loop
+happens to pass `Upcoming::Nothing` in both cases today, so **no behaviour changed** — what changed
+is that the guarantee moved from "the caller is careful" to "the enforcer cannot do otherwise". The
+third rule, *re-arm the countdown when a shutdown is aborted*, is now explicit in the same place.
+
+**One distinction worth not losing.** `Upcoming::Nothing` and `Upcoming::In(None)` look
+interchangeable and are not. `Nothing` re-primes the countdown, so the reading after it announces
+nothing; `In(None)` records a real observation of "further off than we can see", from which the next
+reading *can* cross a threshold. Collapsing them would announce bedtime to a household that had just
+switched curfew off — `nothing_to_count_down_to_is_not_the_same_as_a_distant_window` fails on
+exactly that, confirmed by mutation.
+
+Four new tests, and both mutations checked: forcing the suppression off fails one, collapsing the
+two `Upcoming` cases fails two.
+
+### ~~O11 · The dashboard is shaped for a desktop and arrived at from a phone~~ — **fixed**
+
+**Shipped: the at-a-glance strip.** Three answers — is enforcement running, how much time is left today, is anything waiting — in one full-width row above every card, each with an explicit *unknown* state distinct from its good and bad ones. Nine tests.
+
+**Also shipped, and all three were found by a person looking rather than by any gate.** The switch
+beside "Curfew" carried only an `aria-label` — named for a screen reader, blank to everyone else, on
+the control that decides whether a child's PC powers off at night. `every_form_control_can_be_named_by_a_screen_reader`
+passed the whole time, and this entry was marked fixed on the strength of it. The bedtime time
+fields were clipping their picker icon behind the digits, with `scrollWidth == clientWidth` so
+nothing measured it as overflow. And the selected item in both button groups was painted
+`btn-primary` — the colour reserved for *Save* and *Take screenshot* — so a settled choice looked
+like a pending action.
+
+The lesson is narrower than "test the UI": **an automated check answers exactly the question it
+asks.** A name check cannot see an invisible label, an overflow check cannot see an overlap the
+browser considers legal, and nothing has an opinion about whether a colour means the right thing.
+Each of those passed while the defect stood.
+
+**The collapse shipped too — with a browser open, which is what it was waiting for.** Five
+`<details>`: Routines, Time codes, Recent access, Usage history, Change password. The page now
+presents five headings where it presented five full panels. Plain `<details>` and no JavaScript —
+the browser handles the toggle, Enter, Space, and announcing expanded state, none of which is worth
+reimplementing badly.
+
+Verified by driving it rather than reading it: all five collapsed at 56px, opening one expands it,
+the chevron rotates, the summary takes keyboard focus, and **pressing Refresh inside an open panel
+does not collapse it**. That last one is the trap this shape sets. A control inside a `<summary>`
+is activated *and* toggles the panel, so it reads as a button that does not work. Both arrangements
+parse, render and screenshot identically; only clicking one tells them apart.
+`no_summary_swallows_a_control` now fails the build on it — confirmed by putting a button back in.
+
+
+The whole first-run story is phone-first — `install` prints a QR *because* "typing an IP plus a
+passphrase on a phone keyboard is the single biggest piece of friction in first-time setup", which
+is the code's own comment. The parent scans it and lands on a single page of twelve stacked cards
+with no navigation, no anchors and no search.
+
+**Measured:** twelve cards, and **zero** `sm:` breakpoints in the whole document. Below the medium
+breakpoint the grid collapses to one column and the parent scrolls twelve cards in source order.
+
+**Cost, concretely.** Source order is not priority order. The three questions a parent opens this
+page with — *is enforcement running, how much time is left today, is anything waiting for me* — are
+answered in three non-adjacent cards, one of them below the fold on any phone.
+
+**Fix, smallest first.** A status strip at the top answering those three, before any card. Then
+collapse the rarely-touched cards (Routines, Time codes, Recent access, Usage history, Change
+password) behind `<details>`, which costs no JavaScript and stays keyboard- and screen-reader
+reachable. Tabs are the conventional answer and are worse here: they hide state a parent is scanning
+for.
+
+**Worth knowing:** `ask.html`, the child's page, is 63 lines, single-purpose, and carries
+`inputmode`, `autocapitalize`, `aria-live` and `role="alert"`. The page built for the child is
+better made for a phone than the page built for the parent.
+
+**Trigger.** Before the next card is added, or the collapse work grows with it.
+
+### ~~O12 · Nothing tells the parent a request is waiting~~ — **fixed**
+
+**Shipped: the tab title carries the pending count.** `(2) Nestwatch`, and `Nestwatch` — never `(0)` — when the count is unknown. Cleared on sign-out so a login page cannot advertise the previous session's child.
+
+The research that settled the mechanism is worth keeping: Web Push needs an external push service, which the privacy promise forbids. The **Badging API** (`navigator.setAppBadge`) badges an *installed* app's icon, and `MOBILE-APP.md` already establishes an installable page cannot work here — a home-screen app does not inherit the certificate exception. The **Notifications API** needs a secure context, and whether an accepted self-signed certificate on a private IP qualifies is **unverified** — localhost is the documented exception, not private addresses generally. The title needs no permission, no service worker, and no external anything. Its limitation stands: a tab must be open somewhere.
+
+
+A child submits from `/ask`. It is queued durably, capped at five, folded to latest status, and
+rendered on a card the dashboard polls every sixty seconds. Then nothing happens: no sound, no
+notification, no unread count, no change to the page title. **Zero** hits for `Notification`,
+`document.title` or any badge mechanism in `app.js`. The one concession is an `aria-live` on the
+heading, so a screen-reader user is told and a sighted user is not.
+
+For a feature whose whole value is a fast answer to "can I have twenty more minutes", that is the
+feature not working. The card's *visibility* half was fixed (see the changelog); being told is not.
+
+**What survives the privacy promise.** Web Push is out — it needs an external push service, and
+nothing leaves the house. But push is not the only mechanism:
+
+- **Title badging** (`document.title = "(1) Nestwatch"`) needs no permission, no API surface and no
+  uncertainty. This is the recommendation.
+- **The Notifications API** works without a service worker or any push service, but requires a
+  secure context. An accepted self-signed certificate *should* qualify and this is **unverified** —
+  five minutes in a browser settles it; do not build on it until someone has.
+
+**Honest limitation.** Every option needs a dashboard tab open somewhere. Nothing reaches a phone in
+a pocket without an external service, and that is an accepted cost of the privacy promise rather
+than an oversight to engineer around. Say so in the README rather than leave a silence.
+
+**Trigger.** Do the title badge with the next dashboard change; treat notifications as gated on that
+one browser check.
+
+### ~~O13 · Category time exists for today and vanishes tomorrow~~ — **fixed**
+
+**Shipped end to end.** `PreRollover` carries `per_group_secs`, `rollup_row` writes a `groups` map, `DayRow`/`ParsedRow` carry it, `Report` gains `group_totals`, and the card renders categories *above* the executable-name lists because "Games: 14 h" is a sentence and twenty file names is a puzzle.
+
+**`ParsedRow::detail()` extended to `(knows_groups, knows_focus, count)`** — generations ahead of the count, newest first. Ranking on the count alone once let a wide legacy row outrank a narrow modern one and silently discard the richer data; groups are a third generation and had to lead.
+
+**The deferral in the first draft of this entry was wrong and is withdrawn.** It said the change should wait for on-device verification "because it changes the stored format". `focused` and `pages` were added to the rollup row in exactly this shape, and `parse_row` reads an absent key as *not recorded* rather than as zero. Same additive shape, same safety.
+
+
+`AppGroup { name, apps, limit_mins }` already exists with a shared pool, and `today_summary` already
+reports per-group minutes against the limit. `rollup_row` records `apps`, `focused` and `pages` —
+and **no group data at all**, so category history does not exist. A parent can see "Games: 40 min"
+this afternoon and never "Games: 14 h this month".
+
+Categories are the primary view in every comparable product; Apple's taxonomy is public and stable
+(Social, Games, Entertainment, Creativity, Education, Health & Fitness, Information & Reading,
+Productivity & Finance, Shopping & Food, Travel, Utilities, Other) and iOS 27 adds per-category
+limits. It is the view that turns thirty rows of executable names into a sentence.
+
+**Fix.** Add a group map to the rollup row, and ship a starter set drawn from that taxonomy that a
+parent can edit. Keep an explicit uncategorised bucket rather than a catch-all, so a group covering
+nothing is visible as a gap. Both additive; neither changes what enforces.
+
+**Trigger.** After the current build has been verified on-device — this writes a new key into the
+daily history, and a format change is a bad thing to stack on a release nobody has watched run.
+
+### ~~O14 · Prose in the served files compiles into the stylesheet~~ — **fixed, and the real cost was 15%**
+
+**Shipped:** `web/scripts/strip-comments.mjs` writes comment-free copies into a git-ignored `web/.scan/`, and `@source` points there. A hand-written scanner rather than a regex, tracking string and template state so `"https://x"` survives; string contents are deliberately preserved because `stBarClass` names utilities appearing nowhere else.
+
+**The prose was a rounding error beside what was actually wrong.** `@source` does not *replace* Tailwind v4's automatic source detection — it adds to it, and automatic detection was scanning the whole `web/` directory: `package.json`, `app.css`'s own comments, the test files. `@import "tailwindcss" source(none);` turns it off. **102,181 → 86,736 bytes, 15,445 saved.** That was true before any of this work; two careful comment rewordings were optimising the wrong thing by two orders of magnitude.
+
+**Two things learned the hard way, both by measuring rather than reading:**
+
+- The first build after repointing `@source` made the stylesheet *grow*, and `.steps` reappeared — the component removed earlier. It was `strip-comments.mjs` itself, whose documentation necessarily lists `step`, `list`, `tab` and `mask` to explain the hazard, being picked up by automatic detection. **A file explaining the trap was springing it.**
+- Pointed at `alpine.min.js`, the scanner removed **13,543 bytes from a file with no comments** — minified code is full of regex literals and divisions, and a `/` there is not a comment marker. Vendored files are now excluded, and the script throws if any file loses more than half its bytes, because that is not comments, that is a mis-parse deleting code.
+
+
+Tailwind finds class names by scanning `assets/**/*.{html,js}` as raw text, so it cannot distinguish
+a class from English. daisyUI's components are named with ordinary words — `list`, `tab`, `step`,
+`range`, `join`, `mask`, `collapse`, `tooltip` — so an explanatory comment ships whatever component
+it happens to name.
+
+**This is structural, not carelessness.** It has now happened twice in one day, to two different
+authors: a comment reading "Width **steps** up with the screen" shipped 2,408 bytes of a widget the
+product does not have, and a later pass added `tab`, `list` and `step` for another 1,544. Both were
+found by measuring, not by review. No amount of care makes English avoid a vocabulary that includes
+"list".
+
+**Fix.** A prebuild step that writes comment-stripped copies of the served files into a scratch
+directory and points `@source` at those. About twenty lines. It composes safely with the guard that
+already exists: if the stripper ever removed something real, `every_class_in_the_markup_has_a_rule_in_the_shipped_css`
+goes red rather than the UI going quietly unstyled.
+
+**Why it is open rather than done.** It changes the shared `web/` build while two sessions are
+working in this repository, and the current cost is ~1.5% of a stylesheet. Worth doing, not worth
+doing unilaterally.
+
+**Trigger.** The next time anyone touches the build, or the third occurrence — whichever comes
+first.
+
+### ~~O15 · The child is never told the screen can be watched~~ — **decided and fixed**
+
+**Shipped: one quiet sentence on the child's page** — *"A parent set this up and can see this screen, which apps you use, and how long for."* Not a legal notice and not a warning.
+
+The reasoning, so it is not re-litigated: this product takes the opposite view everywhere else it had the choice. It records page titles and not addresses specifically so it cannot rebuild a browsing history, and declines to read browser history at all as disproportionate. A tool that careful about what it should not know is a strange one to have a silent camera in. Reverting is one line if a household disagrees.
+
+
+Not a vulnerability — a product question, recorded because the answer should be deliberate rather
+than default.
+
+`GET /api/screenshot` captures the primary monitor on demand. It is audited, so the *parent* has a
+record, and `SECURITY.md` describes it plainly — for the parent. The child's page, the only surface
+they ever see, mentions screen capture **zero** times.
+
+Competitors mostly do not disclose either, so this is not out of step. But this product made the
+opposite choice everywhere else: it records page *titles* and not URLs specifically so it cannot
+reconstruct browsing history, and `FOREGROUND-TRACKING.md` declines browser-history reading as
+disproportionate. A tool that reasons that carefully about what it should not know is a strange one
+to have a silent camera in.
+
+**Three options, none of them obviously right.** Leave it silent; add one line to the child's page;
+or show a brief on-screen indicator when a capture happens. The middle costs a sentence and makes
+the tool's honesty consistent with itself.
+
+**Trigger.** None. Decide it, write down why, and move it to *Considered and declined* if the answer
+is no.
+
 ### ~~O3 · `today_summary` is documented pure but reads process globals~~ — **fixed**
 
 Its doc said "Pure (no I/O) so it's unit-tested" while calling `crate::heartbeat::worst_age_secs()`,
@@ -306,6 +523,26 @@ through `stEnforcementStale()`, which is what the shared helper's own comment sa
 **Verified by mutation**: restoring `=== null` fails two tests, and removing the `todayAsked` gate
 fails a third. Both properties — no flash before the first load, honest reporting after it — are
 asserted, so neither can be traded away for the other again without a test going red.
+
+
+**A later pass found the same class twice more, and got the fix wrong the first time.** The
+`loadList` helper read `if (r.ok) { … }` with no `else`, so an HTTP error status never threw and
+never reached the `catch` — meaning the error messages three callers passed were dead code for the
+failure that actually happens; only a dropped network ever produced one. And the Today card read its
+placeholder zeroes out as measurement before anything had loaded.
+
+The instructive part is the proposed remedy for the second. It was "gate the figures on
+`todayAsked` — the flag exists and already means exactly this". It does not:
+`todayAsked` is set **whether the fetch succeeded or failed**, deliberately, because keeping the
+staleness warning reachable when the service is unreachable is this entry's whole point. Gating the
+numbers on it would have revealed them the moment the first attempt finished, including the failure
+it was meant to suppress. The reviewer had quoted the flag's semantics correctly two sections
+earlier in their own notes and still read the name for the meaning.
+
+`day` cannot stand in either: `today_summary` emits `"day": usage.day.map(…)`, so a *successful*
+response carries `day: null` on a machine whose enforcer has not yet written a tally — "nothing
+recorded", not "nothing received". What shipped is `today` starting as `null`, so the data's own
+presence answers the question and there is no second flag to keep in step.
 
 ### ~~O9 · The screen-time chart rendered no bars at all~~ — **fixed**
 
@@ -376,6 +613,12 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 | **Widening `is_lan` to admit CGNAT (`100.64.0.0/10`)** | Confirmed by running: `Ipv4Addr::is_private()` excludes that range, so a parent tunnelling in over Tailscale is rejected by the app-layer gate. Declined anyway — the tool is LAN-only by design, and admitting a range no home network uses would extend the trust boundary for every install to fix an explicitly unsupported setup. Documented in the README instead, so it reads as a boundary rather than a bug. |
 | Adopting `clippy::unused_qualifications` | Clean everywhere except 9 sites, all of them in `curfew.rs` and `rules.rs` — the enforcement path, including the pure function a previous pass already declined to restructure during cleanup. A style lint is not a reason to touch it. The other lints adopted in `Cargo.toml`'s `[lints]` were each verified to produce zero warnings first, so none of them opened a cleanup. Same for `missing_docs` (84) and `clippy::str_to_string` (36). |
 | Widening `is_lan` — **second look, still no** | The original row below stands, and the case for widening got weaker, not stronger: Tailscale run as a *subnet router* on another machine already reaches this service from `192.168.x.x`, because subnet routers masquerade routed traffic to their own LAN address by default. So a working Tailscale arrangement exists without touching the allowlist — and it is the better one anyway, since it keeps the tunnel daemon off the monitored PC. README corrected, which had claimed Tailscale simply does not work. |
+| **Back-dating the return from idle**, so the reconciliation poll could back off while nobody is there | Raised as an accuracy fix and **withdrawn after the counter-argument**. `GetLastInputInfo` reports when input last *happened*, not when the user *returned* — on resume those are the same instant, so any correction guesses in the over-credit direction. Understating is the direction this codebase chooses deliberately elsewhere (`countdown`'s floor division, `clamp`'s scaling). The drop is real: up to one poll interval of genuine use per idle episode. Revisit only if an idle-poll back-off is actually wanted, and then measure first. |
+| **Replacing the enforcement process scan with `WTSEnumerateProcessesW`** | One call, one buffer, zero per-process handles, and it carries `SessionId` — which is the key O6's per-account half needs. The `Win32_System_RemoteDesktop` feature is already enabled, so it costs no new dependency. **Killed by the documentation:** a caller outside the Administrators group does not get an error, it gets a *partial list*. On the enforcement path a partial process list is a silent fail-open — apps that should have been killed are simply absent. Running as LocalSystem satisfies the requirement today, but that is a property of the install rather than of the code, and the failure is invisible when it breaks. |
+| **Reusing one long-lived `sysinfo::System` across ticks** | Strictly the largest remaining win without new FFI — sysinfo would skip `ProcessInner::new` for processes it already knows. **Declined:** it holds a `PROCESS_QUERY_INFORMATION \| PROCESS_VM_READ` handle open for every live process for as long as the `System` lives. A SYSTEM service permanently holding a few hundred read handles to everything on the machine is a textbook EDR heuristic, and being quarantined by antivirus costs a family more than the syscalls do. Revisit only if a real measurement shows the narrowed refresh is insufficient. |
+| **An embedded database — DuckDB, as used in a sibling project** | The precedent is real and defeats the obvious objection: that project builds `x86_64-pc-windows-msvc` natively on `windows-latest`, exactly as this one does. **What does not transfer is the shape.** A realistic rollup row measures 763 bytes typical / 1,891 worst case, so ten years is 3,650 rows and under 7 MiB — a `Vec` holds the entire history. The shipped binary is 3.79 MiB and DuckDB's bundled amalgamation alone sits at crates.io's 10 MB *source* ceiling. And `bundled` cross-compilation is best-effort and needs a C++ cross-compiler for the target, which would cost the `x86_64-pc-windows-gnu` check that is the only way to lint eight `#[cfg(windows)]` `unsafe` blocks from a Mac. **SQLite becomes defensible** if the model ever changes from one blob per day to a row per `(day, app)` — that is ~11,000 rows a year and makes aggregation a query rather than a fold. Not yet earned. |
+| **Shortening the 30-second enforcement tick to improve resolution** | The reflex when someone asks for better tracking, and it buys nothing: focus changes are caught within 250 ms by the watcher's hook, and the tick only decides how often that is folded into the day's tally. Resolution is already an order of magnitude finer than the tick, and every cost in the loop would multiply. |
+| **Five suspicions about the install and enforcement paths, all refuted by reading** | Recorded because each is plausible enough that someone will suspect it again. **Localised group names** — `doctor` queries the Administrators group by SID (`S-1-5-32-544`) precisely *because* the name is localised; "Administratoren"/"Beheerders" appear only in the comment saying why. **Secrets written before the lockdown** — `prepare_data_dir` runs `create_dir_all` then `harden_acl` *before* the config is constructed, under a comment stating the ordering is deliberate. **ACL hardening** — `icacls /inheritance:r` strips inherited entries first, grants are by SID, and a failure bails the install rather than continuing. **An arbitrary 825-day certificate** — it is Apple's hard limit, and both bounds are set because Apple measures `not_after − not_before`. **Curfew defeatable by `shutdown /a`** — still on past `deadline + slack` re-issues as the *uncancellable* `ShutdownNow`, so cancelling buys one interval, not an evening. |
 | An `Enforcer` trait unifying the two background loops | The genuinely shared skeleton is ~6 lines. The blocks that *look* duplicated aren't: curfew calls `disarm()` when a shutdown fails so it retries with a fresh countdown; the rules enforcer deliberately doesn't, and returns as the uncancellable `ShutdownNow`. A shared helper would extract the boilerplate and leave the divergent part behind. |
 
 ---

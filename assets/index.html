@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dim">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark light" />
+    <meta name="color-scheme" content="light dark" />
     <title>Host Health</title>
     <!-- Inline so there is no second request and no 404 on every page load, which is what the
          browser did before this. Matches the heading on the sign-in screen, and stays as
@@ -33,15 +33,15 @@
             <h1 class="card-title justify-center text-2xl">🩺 Host Health</h1>
             <p class="text-center text-sm opacity-70">Sign in to continue</p>
 
-            <label class="form-control w-full mt-2">
-              <span class="label-text mb-1">Password</span>
+            <label class="flex flex-col w-full mt-2">
+              <span class="text-sm mb-1">Password</span>
               <input
                 type="password"
                 x-model="password"
                 :disabled="busy"
                 autofocus
                 autocomplete="current-password"
-                class="input input-bordered w-full"
+                class="input w-full"
                 placeholder="••••••••"
               />
             </label>
@@ -65,15 +65,35 @@
         <div class="navbar bg-base-100 shadow">
           <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
           <div class="flex-none items-center gap-2">
-            <span class="badge badge-warning gap-1" x-show="timeRequests.length > 0"
-                  x-text="`${timeRequests.length} request${timeRequests.length === 1 ? '' : 's'}`"></span>
+            <span class="badge badge-warning gap-1" x-show="showRequests()"
+                  x-text="requestBadge()"></span>
+            <!-- `btn-active`, not `btn-primary`. The primary colour means "this is the action to
+                 take" and is spent on Save, Take screenshot, Generate code. A theme choice is
+                 *state*, not an action, and painting it the same green put a call-to-action pill
+                 behind a moon — which read as wrong before anyone could say why. The report's
+                 7/30/90 selector had the same misuse and is now consistent with this.
+                 Auto first and default: the stylesheet already follows the device, and this only
+                 exists for when that setting is wrong for the moment — a parent checking at night
+                 on a phone still in light mode. Three buttons rather than a two-way toggle for the
+                 same reason the rest of this page distinguishes states: "following the device" is
+                 not the same as "light", even when they look identical right now. -->
+            <div class="join" role="group" aria-label="Colour theme">
+              <template x-for="t in themeOptions" :key="t.key">
+                <button class="btn btn-xs join-item"
+                        :class="theme === t.key ? 'btn-active' : 'btn-ghost'"
+                        :aria-pressed="theme === t.key"
+                        :aria-label="t.label" :title="t.label"
+                        @click="setTheme(t.key)"
+                        x-text="t.glyph"></button>
+              </template>
+            </div>
             <button class="btn btn-info btn-sm" @click="doLock()">🔒 Lock</button>
             <button class="btn btn-warning btn-sm" @click="confirmShutdown = true">⏻ Shut down</button>
             <button class="btn btn-ghost btn-sm" @click="logout()">Log out</button>
           </div>
         </div>
 
-        <!-- Width steps up with the screen instead of stopping at 1024px. Eight of the ten
+        <!-- Width scales up with the screen instead of stopping at 1024px. Eight of the ten
              cards below are md:col-span-2, and almost all of them hold tables, charts or rows of
              controls -- content that reads better wide, unlike prose. Still capped rather than
              full-bleed: on a 4K monitor an uncapped grid gives one 3800px-wide table row, where
@@ -81,6 +101,21 @@
         <main
           class="mx-auto grid w-full max-w-5xl gap-4 p-4 md:grid-cols-2 xl:max-w-7xl 2xl:max-w-[110rem]"
         >
+          <!-- The three questions this page is opened with, answered before anything else.
+               They lived in three non-adjacent cards, one below the fold on a phone — and a phone
+               is what the onboarding QR hands you. Full width, first in source order, so it is the
+               first thing read on a narrow screen as well as a wide one. -->
+          <section class="card bg-base-100 shadow md:col-span-2" aria-label="At a glance">
+            <div class="card-body py-3">
+              <div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm"
+                   aria-live="polite" aria-atomic="true">
+                <span :class="glanceClass(glanceEnforcement().tone)" x-text="glanceEnforcement().text"></span>
+                <span :class="glanceClass(glanceToday().tone)" x-text="glanceToday().text"></span>
+                <span :class="glanceClass(glanceRequests().tone)" x-text="glanceRequests().text"></span>
+              </div>
+            </div>
+          </section>
+
           <!-- Screenshot -->
           <section class="card bg-base-100 shadow">
             <div class="card-body">
@@ -88,7 +123,7 @@
                 <h2 class="card-title text-base">Screen</h2>
                 <div class="flex items-center gap-2">
                   <label class="label cursor-pointer gap-2 py-0">
-                    <span class="label-text text-xs">Live</span>
+                    <span class="text-xs">Live</span>
                     <input type="checkbox" class="toggle toggle-primary toggle-sm"
                            x-model="autoRefresh" @change="toggleAutoRefresh()" />
                   </label>
@@ -157,7 +192,16 @@
             <div class="card-body">
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">Curfew</h2>
-                <input type="checkbox" class="toggle toggle-warning" x-model="curfew.enabled" />
+                <!-- Visible state beside the switch, not only an `aria-label`. A bare toggle names
+                     itself for a screen reader and leaves a sighted parent guessing, and this is
+                     the control that decides whether a child's PC powers itself off at night. The
+                     rules card's equivalent switch has read "Paused / Enforcing / Nothing set up
+                     yet" all along; the two doing the same job and looking different was the gap. -->
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <span class="text-sm" x-text="curfewStateLabel()"></span>
+                  <input type="checkbox" class="toggle toggle-sm toggle-warning"
+                         x-model="curfew.enabled" aria-label="Curfew" />
+                </label>
               </div>
               <p class="text-sm opacity-70">
                 When the PC is on during a closed window, it shuts down (with a warning countdown).
@@ -166,13 +210,13 @@
               <!-- Simple single window (shown until you add day-specific schedules) -->
               <template x-if="!curfew.windows || curfew.windows.length === 0">
                 <div class="mt-2 flex flex-wrap items-end gap-3">
-                  <label class="form-control">
-                    <span class="label-text mb-1">From</span>
-                    <input type="time" x-model="curfew.start" class="input input-bordered" />
+                  <label class="flex flex-col">
+                    <span class="text-sm mb-1">From</span>
+                    <input type="time" x-model="curfew.start" class="input w-28" />
                   </label>
-                  <label class="form-control">
-                    <span class="label-text mb-1">Until</span>
-                    <input type="time" x-model="curfew.end" class="input input-bordered" />
+                  <label class="flex flex-col">
+                    <span class="text-sm mb-1">Until</span>
+                    <input type="time" x-model="curfew.end" class="input w-28" />
                   </label>
                 </div>
               </template>
@@ -182,35 +226,52 @@
                 <div class="mt-2 flex flex-col gap-3">
                   <template x-for="(w, i) in curfew.windows" :key="i">
                     <div class="flex flex-wrap items-end gap-2 rounded-lg bg-base-200 p-2">
-                      <label class="form-control">
-                        <span class="label-text mb-1 text-xs">From</span>
-                        <input type="time" x-model="w.start" class="input input-bordered input-sm" />
+                      <!-- Explicit widths on the time fields. daisyUI 5's `.input` is a flex box with
+                           `flex-shrink: 1` and no width of its own, so in this row it collapsed to
+                           roughly 39px of content — enough for "22:00" at 33px and nothing else. The
+                           native picker indicator is a flex item on the same track, so it rendered
+                           on top of the digits. Found by looking at it; `scrollWidth` equals
+                           `clientWidth` here, so nothing measures it as overflowing. -->
+                      <label class="flex flex-col">
+                        <span class="mb-1 text-xs">From</span>
+                        <input type="time" x-model="w.start" class="input input-sm w-24" />
                       </label>
-                      <label class="form-control">
-                        <span class="label-text mb-1 text-xs">Until</span>
-                        <input type="time" x-model="w.end" class="input input-bordered input-sm" />
+                      <label class="flex flex-col">
+                        <span class="mb-1 text-xs">Until</span>
+                        <input type="time" x-model="w.end" class="input input-sm w-24" />
                       </label>
                       <div class="flex items-end gap-1">
-                        <template x-for="d in ['mon','tue','wed','thu','fri','sat','sun']" :key="d">
+                        <template x-for="d in dayOptions" :key="d.key">
                           <label class="flex flex-col items-center text-xs">
-                            <span class="uppercase opacity-70" x-text="d[0]"></span>
-                            <input type="checkbox" class="checkbox checkbox-xs" x-model="w.days[d]" />
+                            <span class="opacity-70" x-text="d.short"></span>
+                            <input type="checkbox" class="checkbox checkbox-xs"
+                                   :aria-label="d.full" x-model="w.days[d.key]" />
                           </label>
                         </template>
                       </div>
                       <button class="btn btn-ghost btn-xs" aria-label="Remove window" @click="removeWindow(i)">✕</button>
+                      <!-- What this window will actually do, beside the window and updating as the
+                           boxes change. Clearing every box means every day, which is the opposite
+                           of what clearing every box looks like it means — so it is said here in
+                           words rather than left to a note further down that never reacts. -->
+                      <p class="w-full text-xs"
+                         :class="windowDaysImplicit(w) ? 'text-warning' : 'opacity-60'"
+                         x-text="windowDayLabel(w)"></p>
                     </div>
                   </template>
-                  <p class="text-xs opacity-60">No day selected = every day.</p>
+                  <p class="text-xs opacity-60">
+                    Ticking no days means the window applies every day — clearing them all does not
+                    switch it off. Use ✕ to remove a window you no longer want.
+                  </p>
                 </div>
               </template>
 
               <div class="mt-3 flex flex-wrap items-end gap-3">
                 <button class="btn btn-ghost btn-sm" @click="addWindow()">+ Add day schedule</button>
-                <label class="form-control">
-                  <span class="label-text mb-1">Warning (sec)</span>
+                <label class="flex flex-col">
+                  <span class="text-sm mb-1">Warning (sec)</span>
                   <input type="number" min="0" max="600" x-model.number="curfew.warn_secs"
-                         class="input input-bordered w-28" />
+                         class="input w-28" />
                 </label>
                 <button class="btn btn-primary" @click="saveCurfew()" :disabled="savingCurfew">
                   <span x-show="savingCurfew" class="loading loading-spinner loading-sm"></span>
@@ -228,7 +289,7 @@
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">
                   Today's screen time
-                  <span class="badge badge-warning badge-sm" x-show="today.enabled === false">Paused</span>
+                  <span class="badge badge-warning badge-sm" x-show="today?.enabled === false">Paused</span>
                 </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadToday()" :disabled="loadingToday">
                   <span x-show="loadingToday" class="loading loading-spinner loading-xs"></span>
@@ -250,8 +311,11 @@
                 </div>
               </template>
 
-              <!-- Total budget bar -->
-              <template x-if="today.budget_mins > 0">
+              <!-- Total budget bar. `today` is null until figures arrive, so its own presence is
+                   the answer to "do we know anything yet" — no second flag to keep in sync. Without
+                   the guard this branch is unreachable on a first load but reachable after a
+                   sign-out and back in, showing the previous session's figures as current. -->
+              <template x-if="today && today.budget_mins > 0">
                 <div class="mt-1">
                   <!-- Polled every 60s (see startPolling). Without a live region these numbers
                        change silently: a screen-reader user is told the budget once, on load, and
@@ -272,9 +336,17 @@
                 </div>
               </template>
 
+              <!-- Nothing has come back yet. `today` used to start as a literal of zeroes, which
+                   the block below read out as measurement — telling a parent "0 min used today" on
+                   a dashboard that may not have reached the service at all. It starts null instead;
+                   same distinction the report draws between a measured zero and an unmeasured day. -->
+              <template x-if="!today">
+                <p class="mt-1 text-sm opacity-70">Today's figures haven't loaded yet.</p>
+              </template>
+
               <!-- No budget: still show the tally. Time is counted regardless, so this answers
                    "has he been on the PC today?" even before any limit exists. -->
-              <template x-if="!(today.budget_mins > 0)">
+              <template x-if="today && !(today.budget_mins > 0)">
                 <div class="mt-1">
                   <p class="text-sm">
                     <span class="font-semibold" x-text="today.used_mins ?? 0"></span> min used today
@@ -287,21 +359,22 @@
               </template>
 
               <!-- Parent-granted bonus time (only meaningful with a budget) -->
-              <div class="mt-2 flex flex-wrap items-center gap-2" x-show="today.budget_mins > 0">
-                <span class="label-text">Add bonus time today:</span>
+              <div class="mt-2 flex flex-wrap items-center gap-2"
+                   x-show="today && today.budget_mins > 0">
+                <span class="text-sm">Add bonus time today:</span>
                 <button class="btn btn-outline btn-sm" @click="grantExtra(15)" :disabled="grantingExtra">+15</button>
                 <button class="btn btn-outline btn-sm" @click="grantExtra(30)" :disabled="grantingExtra">+30</button>
                 <button class="btn btn-outline btn-sm" @click="grantExtra(60)" :disabled="grantingExtra">+60</button>
               </div>
 
               <!-- Per-app usage -->
-              <template x-if="today.per_app && today.per_app.length">
+              <template x-if="today?.per_app?.length">
                 <div class="mt-2">
-                  <span class="label-text">Per-app usage today</span>
+                  <span class="text-sm">Per-app usage today</span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="a in today.per_app" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
-                        <span class="w-48 truncate" x-text="a.name"></span>
+                        <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <progress class="progress flex-1"
                                   :aria-label="`${a.name}: ${a.used_mins} of ${a.limit_mins} minutes`"
                                   :class="a.used_mins >= a.limit_mins ? 'progress-error' : 'progress-primary'"
@@ -314,10 +387,61 @@
                 </div>
               </template>
 
-              <!-- Group (shared pool) usage -->
-              <template x-if="today.groups && today.groups.length">
+              <!-- Focus figures for today.
+                   These are measured every thirty seconds and written to the tally, and until now
+                   reached a parent only in the next morning's rollup — a full day after the evening
+                   they describe. Guarded on `today?.` because `today` is null until the first
+                   response arrives; an unguarded read here throws at runtime where no Rust test can
+                   see it, which is how the chart shipped drawing nothing. -->
+              <template x-if="today?.focus_missing">
+                <p class="mt-2 text-sm opacity-70">
+                  No focus figures today. Time in front of each app is measured by a helper running
+                  in your child's own session — if it is not running, this stays empty even on a
+                  busy day. <span class="font-mono">nestwatch doctor</span> on the PC reports it.
+                </p>
+              </template>
+
+              <template x-if="today?.focused?.length">
                 <div class="mt-2">
-                  <span class="label-text">App groups today</span>
+                  <span class="text-sm">In front today</span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="a in today.focused" :key="a.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
+                      </div>
+                    </template>
+                  </div>
+                  <p class="mt-1 text-xs opacity-60">
+                    Time each app spent as the window in front, while somebody was actually at the
+                    keyboard. Different from the figures above, which count an app from the moment
+                    it starts — a game left running behind a homework window still uses up its
+                    limit.
+                  </p>
+                </div>
+              </template>
+
+              <template x-if="today?.pages?.length">
+                <div class="mt-2">
+                  <span class="text-sm">In the browser today</span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="pg in today.pages" :key="pg.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" x-text="pg.name"></span>
+                        <span class="opacity-70"><span x-text="pg.minutes"></span> min</span>
+                      </div>
+                    </template>
+                  </div>
+                  <p class="mt-1 text-xs opacity-60">
+                    The title each page gave itself, never its address and never a browsing history.
+                  </p>
+                </div>
+              </template>
+
+              <!-- Group (shared pool) usage -->
+              <template x-if="today?.groups?.length">
+                <div class="mt-2">
+                  <span class="text-sm">App groups today</span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="g in today.groups" :key="g.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -345,7 +469,7 @@
                   <!-- Three states, not two. `enabled` only means "not paused"; with nothing
                        configured the enforcer skips every tick, so showing "Enforcing" on a
                        fresh install told the parent the PC was limited when it wasn't. -->
-                  <span class="label-text"
+                  <span class="text-sm"
                         x-text="!rules.enabled ? 'Paused' : (anyRulesSet() ? 'Enforcing' : 'Nothing set up yet')"></span>
                   <input type="checkbox" class="toggle toggle-sm toggle-primary"
                          :checked="rules.enabled"
@@ -366,27 +490,27 @@
               <label class="flex w-fit items-center gap-2 mt-1 cursor-pointer">
                 <input type="checkbox" class="checkbox checkbox-sm"
                        :checked="!!rules.budget_by_weekday" @change="togglePerDay($event.target.checked)" />
-                <span class="label-text">Different limit each day</span>
+                <span class="text-sm">Different limit each day</span>
               </label>
 
               <div class="mt-1 flex flex-wrap items-end gap-3">
-                <label class="form-control" x-show="!rules.budget_by_weekday">
-                  <span class="label-text mb-1">Daily limit (min, 0 = off)</span>
+                <label class="flex flex-col" x-show="!rules.budget_by_weekday">
+                  <span class="text-sm mb-1">Daily limit (min, 0 = off)</span>
                   <input type="number" min="0" x-model.number="rules.daily_budget_mins"
-                         class="input input-bordered w-40" />
+                         class="input w-40" />
                 </label>
-                <label class="form-control">
-                  <span class="label-text mb-1">When time's up</span>
-                  <select x-model="rules.budget_action" class="select select-bordered">
+                <label class="flex flex-col">
+                  <span class="text-sm mb-1">When time's up</span>
+                  <select x-model="rules.budget_action" class="select">
                     <option value="lock">Lock screen</option>
                     <option value="shutdown">Shut down</option>
                     <option value="warn">Warn only</option>
                   </select>
                 </label>
-                <label class="form-control">
-                  <span class="label-text mb-1">Warning (sec)</span>
+                <label class="flex flex-col">
+                  <span class="text-sm mb-1">Warning (sec)</span>
                   <input type="number" min="0" max="600" x-model.number="rules.warn_secs"
-                         class="input input-bordered w-28" />
+                         class="input w-28" />
                 </label>
               </div>
 
@@ -396,10 +520,10 @@
                 <div class="mt-2">
                   <div class="flex flex-wrap gap-2">
                     <template x-for="(d, i) in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="i">
-                      <label class="form-control">
-                        <span class="label-text mb-1 text-center" x-text="d"></span>
+                      <label class="flex flex-col">
+                        <span class="text-sm mb-1 text-center" x-text="d"></span>
                         <input type="number" min="0" x-model.number="rules.budget_by_weekday[i]"
-                               class="input input-bordered input-sm w-16 text-center" />
+                               class="input input-sm w-16 text-center" />
                       </label>
                     </template>
                   </div>
@@ -411,12 +535,12 @@
 
               <!-- Blocked apps -->
               <div class="mt-3">
-                <span class="label-text">Blocked apps (killed on sight)</span>
+                <span class="text-sm">Blocked apps (killed on sight)</span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(b, i) in rules.blocklist" :key="i">
                     <div class="flex items-center gap-2">
                       <input type="text" x-model="rules.blocklist[i]" placeholder="game.exe"
-                             class="input input-bordered input-sm w-64" />
+                             aria-label="Blocked app filename" class="input input-sm w-64" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
                     </div>
                   </template>
@@ -426,14 +550,14 @@
 
               <!-- Per-app limits -->
               <div class="mt-3">
-                <span class="label-text">Per-app daily limits</span>
+                <span class="text-sm">Per-app daily limits</span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(row, i) in appLimitRows" :key="i">
                     <div class="flex items-center gap-2">
                       <input type="text" x-model="row.name" placeholder="chrome.exe"
-                             class="input input-bordered input-sm w-64" />
+                             aria-label="App filename to limit" class="input input-sm w-64" />
                       <input type="number" min="0" x-model.number="row.mins" placeholder="min"
-                             class="input input-bordered input-sm w-24" />
+                             aria-label="Daily limit in minutes" class="input input-sm w-24" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
                     </div>
                   </template>
@@ -444,16 +568,18 @@
 
               <!-- App groups (shared pool) -->
               <div class="mt-3">
-                <span class="label-text">App groups (shared daily pool)</span>
+                <span class="text-sm">App groups (shared daily pool)</span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(g, i) in groupRows" :key="i">
                     <div class="flex flex-wrap items-center gap-2">
                       <input type="text" x-model="g.name" placeholder="Games"
-                             class="input input-bordered input-sm w-32" />
+                             aria-label="Group name" class="input input-sm w-32" />
                       <input type="text" x-model="g.appsText" placeholder="minecraft.exe, roblox.exe"
-                             class="input input-bordered input-sm w-64" />
+                             aria-label="Apps in this group, comma separated"
+                             class="input input-sm w-64" />
                       <input type="number" min="0" x-model.number="g.limit_mins" placeholder="min"
-                             class="input input-bordered input-sm w-24" />
+                             aria-label="Shared daily limit in minutes"
+                             class="input input-sm w-24" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>
                     </div>
                   </template>
@@ -472,10 +598,13 @@
           </section>
 
           <!-- Routines (saved rule presets) -->
-          <section class="card bg-base-100 shadow md:col-span-2">
-            <div class="card-body">
-              <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Routines</h2>
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Routines</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadRoutines()" :disabled="loadingRoutines">
                   <span x-show="loadingRoutines" class="loading loading-spinner loading-xs"></span>
                   Refresh
@@ -487,7 +616,7 @@
               </p>
               <div class="mt-1 flex flex-wrap items-end gap-2">
                 <input type="text" x-model="newRoutineName" maxlength="40" placeholder="Homework"
-                       class="input input-bordered input-sm w-48" />
+                       aria-label="Name for this routine" class="input input-sm w-48" />
                 <button class="btn btn-primary btn-sm" @click="saveRoutine()" :disabled="savingRoutine">
                   <span x-show="savingRoutine" class="loading loading-spinner loading-xs"></span>
                   Save current as routine
@@ -506,10 +635,10 @@
                 No saved routines.
               </p>
             </div>
-          </section>
+          </details>
 
           <!-- More-time requests -->
-          <section class="card bg-base-100 shadow md:col-span-2" x-show="timeRequests.length > 0">
+          <section class="card bg-base-100 shadow md:col-span-2" x-show="showRequests()">
             <div class="card-body">
               <div class="flex items-center justify-between">
                 <!-- The heading, not the table, is the live region: a request arriving mid-session
@@ -518,17 +647,26 @@
                      behind it. -->
                 <h2 class="card-title text-base" aria-live="polite" aria-atomic="true">
                   More-time requests
-                  <span class="badge badge-primary" x-text="timeRequests.length"></span>
+                  <span class="badge badge-primary" x-text="requestCount() ?? '?'"></span>
                 </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadTimeRequests()">Refresh</button>
               </div>
-              <div class="mt-2 max-h-72 overflow-y-auto">
+              <!-- The card is on screen and the answer is unknown, which is the state that used to
+                   render as nothing at all. Say so plainly: a child may be waiting behind it. -->
+              <template x-if="timeRequests === null">
+                <p class="mt-2 text-sm opacity-70">
+                  Couldn't reach the service, so whether anything is waiting is unknown. This is not
+                  the same as no requests — try Refresh, or check that Nestwatch is running.
+                </p>
+              </template>
+
+              <div class="mt-2 max-h-72 overflow-y-auto" x-show="timeRequests !== null">
                 <table class="table table-pin-rows table-sm">
                   <thead>
                     <tr><th scope="col">Time</th><th scope="col">Minutes</th><th scope="col">Reason</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
                   </thead>
                   <tbody>
-                    <template x-for="r in timeRequests" :key="r.id">
+                    <template x-for="r in timeRequests ?? []" :key="r.id">
                       <tr>
                         <td class="whitespace-nowrap" x-text="fmtTime(r.ts)"></td>
                         <td x-text="r.minutes"></td>
@@ -546,10 +684,13 @@
           </section>
 
           <!-- Time codes -->
-          <section class="card bg-base-100 shadow md:col-span-2">
-            <div class="card-body">
-              <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Time codes</h2>
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Time codes</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadCodes()" :disabled="loadingCodes">
                   <span x-show="loadingCodes" class="loading loading-spinner loading-xs"></span>
                   Refresh
@@ -562,16 +703,16 @@
               <!-- The full URL, copyable. Naming the path alone left the parent to reconstruct
                    scheme + IP + port from memory to tell their child where to go. -->
               <div class="mt-1 flex flex-wrap items-center gap-2">
-                <span class="label-text">Child's page:</span>
+                <span class="text-sm">Child's page:</span>
                 <code class="text-xs break-all" x-text="askUrl()"></code>
                 <button class="btn btn-ghost btn-xs" @click="copyAskUrl()"
                         aria-label="Copy the child's page link">Copy link</button>
               </div>
               <div class="mt-1 flex flex-wrap items-end gap-2">
-                <label class="form-control">
-                  <span class="label-text mb-1">Minutes</span>
+                <label class="flex flex-col">
+                  <span class="text-sm mb-1">Minutes</span>
                   <input type="number" min="1" max="240" x-model.number="newCodeMins"
-                         class="input input-bordered w-28" />
+                         class="input w-28" />
                 </label>
                 <button class="btn btn-primary" @click="issueCode()" :disabled="issuingCode">
                   <span x-show="issuingCode" class="loading loading-spinner loading-sm"></span>
@@ -601,13 +742,16 @@
                 No active codes.
               </p>
             </div>
-          </section>
+          </details>
 
           <!-- Recent access -->
-          <section class="card bg-base-100 shadow md:col-span-2">
-            <div class="card-body">
-              <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Recent access</h2>
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Recent access</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadAudit()" :disabled="loadingAudit">
                   <span x-show="loadingAudit" class="loading loading-spinner loading-xs"></span>
                   Refresh
@@ -636,7 +780,7 @@
                 </table>
               </div>
             </div>
-          </section>
+          </details>
 
           <!-- Screen-time report -->
           <section class="card bg-base-100 shadow md:col-span-2">
@@ -654,6 +798,19 @@
                   <span>⚠ Enforcement may not have been running — days below can be missing rather than quiet.</span>
                 </div>
               </template>
+
+              <!-- The window the report covers. `?days=N` was implemented, documented and clamped
+                   server-side from the start; nothing ever sent it. -->
+              <div class="mt-2 flex flex-wrap items-center gap-2" role="group"
+                   aria-label="How many days the report covers">
+                <template x-for="n in [7, 30, 90]" :key="n">
+                  <button class="btn btn-xs"
+                          :class="stDays === n ? 'btn-active' : 'btn-ghost'"
+                          :aria-pressed="stDays === n"
+                          @click="setStDays(n)"
+                          x-text="n + ' days'"></button>
+                </template>
+              </div>
 
               <div class="mt-2 flex flex-wrap gap-4 text-sm">
                 <div><span class="opacity-70">Total</span>
@@ -677,11 +834,27 @@
                    `web::tests::no_alpine_template_inside_svg` guards the shape instead.
                    Per-bar hover text is a plain `title` attribute here, which is also more
                    reliable than SVG's <title> element. -->
-              <div class="mt-3 flex h-28 w-full items-end gap-px" role="img"
-                   aria-label="Daily screen-time minutes; hatched columns are days that were not measured">
+              <template x-if="stPinned !== null">
+                <div class="mt-2 flex items-center gap-2 text-sm">
+                  <span>Showing <span class="font-semibold" x-text="stPinned"></span></span>
+                  <button class="btn btn-ghost btn-xs" @click="stPinned = null">Show latest instead</button>
+                </div>
+              </template>
+
+              <!-- A group of controls, not a picture. Each column is a button: choosing one pins
+                   that day's breakdown below, which is the question the chart invites and could not
+                   previously answer. `role="img"` would have hidden the buttons from assistive
+                   technology entirely. -->
+              <div class="mt-3 flex h-28 w-full items-end gap-px" role="group"
+                   aria-label="Daily screen-time minutes; choose a day to see its apps. Hatched columns were not measured">
                 <template x-for="d in screentime.days" :key="d.date">
-                  <div class="min-w-0 flex-1 rounded-sm" :title="stBarTitle(d)"
-                       :class="stBarClass(d)" :style="stBarStyle(d)"></div>
+                  <button type="button"
+                          class="min-w-0 flex-1 rounded-sm"
+                          :title="stBarTitle(d)" :aria-label="stBarLabel(d)"
+                          :aria-pressed="stPinned === d.date"
+                          :class="stBarClass(d) + (stPinned === d.date ? ' ring-2 ring-offset-1' : '')"
+                          :style="stBarStyle(d)"
+                          @click="toggleStDay(d.date)"></button>
                 </template>
               </div>
 
@@ -697,7 +870,7 @@
                    Deliberately newest first — the opposite of the chart's oldest-first left-to-
                    right order — because a scrolling list reads better with "now" at the top; this
                    is not a mismatched bug. -->
-              <p class="mt-3 label-text">Day by day (newest first)</p>
+              <p class="mt-3 text-sm">Day by day (newest first)</p>
               <div class="mt-1 max-h-40 overflow-y-auto">
                 <table class="table table-pin-rows table-sm">
                   <thead>
@@ -715,48 +888,118 @@
                 </table>
               </div>
 
-              <template x-if="stRecentAppDay()">
+              <!-- Categories first, because "Games: 14 h" is a sentence and twenty executable
+                   names is a puzzle. Only rendered once there is category history to show: a
+                   parent who has defined no groups sees nothing here rather than an empty heading,
+                   and days recorded before groups were written to history contribute none. -->
+              <template x-if="screentime.group_totals && screentime.group_totals.length">
                 <div class="mt-3">
-                  <span class="label-text"
-                        x-text="`Most recent measured day with app data (${stRecentAppDay().date})`"></span>
+                  <span class="text-sm" x-text="`By category over ${stDays} days`"></span>
                   <div class="mt-1 flex flex-col gap-1">
-                    <template x-for="a in stRecentAppDay().apps" :key="a.name">
+                    <template x-for="t in screentime.group_totals" :key="t.name">
                       <div class="flex items-center gap-2 text-sm">
-                        <span class="w-48 truncate" x-text="a.name"></span>
+                        <span class="w-48 truncate" x-text="t.name"></span>
+                        <span class="opacity-70" x-text="fmtDuration(t.minutes)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <!-- Totals across the whole window. Until now every breakdown on this card showed
+                   exactly one day, so the report could answer "what did he use last Tuesday" and
+                   not "how much Roblox this month" — which is the question a parent arrives with.
+                   Summed over measured days only, so a gap contributes nothing rather than a zero. -->
+              <template x-if="screentime.app_totals && screentime.app_totals.length">
+                <div class="mt-3">
+                  <span class="text-sm" x-text="`Most-used apps over ${stDays} days`"></span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="t in screentime.app_totals" :key="t.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" :title="t.name" x-text="appLabel(t.name)"></span>
+                        <span class="opacity-70" x-text="fmtDuration(t.minutes)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="screentime.focus_totals && screentime.focus_totals.length">
+                <div class="mt-3">
+                  <span class="text-sm" x-text="`Most time in front over ${stDays} days`"></span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="t in screentime.focus_totals" :key="t.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" :title="t.name" x-text="appLabel(t.name)"></span>
+                        <span class="opacity-70" x-text="fmtDuration(t.minutes)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="screentime.page_totals && screentime.page_totals.length">
+                <div class="mt-3">
+                  <span class="text-sm" x-text="`Most browser time over ${stDays} days`"></span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="t in screentime.page_totals" :key="t.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" x-text="t.name"></span>
+                        <span class="opacity-70" x-text="fmtDuration(t.minutes)"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="stDayFor('apps')">
+                <div class="mt-3">
+                  <span class="text-sm" x-text="stHeading('apps')"></span>
+                  <div class="mt-1 flex flex-col gap-1">
+                    <template x-for="a in stDayFor('apps').apps ?? []" :key="a.name">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
                       </div>
                     </template>
                   </div>
+                  <template x-if="!stDayHas('apps')">
+                    <p class="mt-1 text-sm opacity-60">Nothing recorded for this day.</p>
+                  </template>
                 </div>
               </template>
 
-              <template x-if="stRecentFocusDay()">
+              <template x-if="stDayFor('focused')">
                 <div class="mt-3">
-                  <span class="label-text"
-                        x-text="'Time actually looking at the screen (' + stRecentFocusDay().date + ')'"></span>
+                  <span class="text-sm" x-text="stHeading('focused')"></span>
                   <div class="mt-1 flex flex-col gap-1">
-                    <template x-for="a in stRecentFocusDay().focused" :key="a.name">
+                    <template x-for="a in stDayFor('focused').focused ?? []" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
-                        <span class="w-48 truncate" x-text="a.name"></span>
+                        <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <span class="opacity-70"><span x-text="a.minutes"></span> min focused</span>
                       </div>
                     </template>
                   </div>
+                  <template x-if="!stDayHas('focused')">
+                    <p class="mt-1 text-sm opacity-60">Nothing recorded for this day.</p>
+                  </template>
                 </div>
               </template>
 
-              <template x-if="stRecentPageDay()">
+              <template x-if="stDayFor('pages')">
                 <div class="mt-3">
-                  <span class="label-text"
-                        x-text="'In the browser (' + stRecentPageDay().date + ')'"></span>
+                  <span class="text-sm" x-text="stHeading('pages')"></span>
                   <div class="mt-1 flex flex-col gap-1">
-                    <template x-for="p in stRecentPageDay().pages" :key="p.name">
+                    <template x-for="p in stDayFor('pages').pages ?? []" :key="p.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="p.name"></span>
                         <span class="opacity-70"><span x-text="p.minutes"></span> min</span>
                       </div>
                     </template>
                   </div>
+                  <template x-if="!stDayHas('pages')">
+                    <p class="mt-1 text-sm opacity-60">Nothing recorded for this day.</p>
+                  </template>
                 </div>
               </template>
 
@@ -777,10 +1020,13 @@
           </section>
 
           <!-- Usage history -->
-          <section class="card bg-base-100 shadow md:col-span-2">
-            <div class="card-body">
-              <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Usage history</h2>
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Usage history</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadUsage()" :disabled="loadingUsage">
                   <span x-show="loadingUsage" class="loading loading-spinner loading-xs"></span>
                   Refresh
@@ -807,12 +1053,15 @@
                 </table>
               </div>
             </div>
-          </section>
+          </details>
 
           <!-- Change password -->
-          <section class="card bg-base-100 shadow md:col-span-2">
-            <div class="card-body">
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
               <h2 class="card-title text-base">Change password</h2>
+            </summary>
+            <div class="card-body pt-0">
               <p class="text-sm opacity-70">Update the control password without reinstalling.</p>
               <!-- A real <form> with autocomplete tokens, matching the sign-in form above.
                    Two password inputs loose in a <div> are not a password change as far as the
@@ -823,15 +1072,15 @@
                    the form rather than @click also makes Enter work, as it already does on the
                    sign-in screen. -->
               <form class="mt-2 flex flex-wrap items-end gap-3" @submit.prevent="changePassword()">
-                <label class="form-control">
-                  <span class="label-text mb-1">Current</span>
+                <label class="flex flex-col">
+                  <span class="text-sm mb-1">Current</span>
                   <input type="password" x-model="pwCurrent" autocomplete="current-password"
-                         class="input input-bordered" placeholder="••••••••" />
+                         class="input" placeholder="••••••••" />
                 </label>
-                <label class="form-control">
-                  <span class="label-text mb-1">New</span>
+                <label class="flex flex-col">
+                  <span class="text-sm mb-1">New</span>
                   <input type="password" x-model="pwNew" autocomplete="new-password"
-                         class="input input-bordered" placeholder="at least 8 characters" />
+                         class="input" placeholder="at least 8 characters" />
                 </label>
                 <button class="btn btn-primary" :disabled="savingPw || !pwCurrent || !pwNew">
                   <span x-show="savingPw" class="loading loading-spinner loading-sm"></span>
@@ -839,7 +1088,7 @@
                 </button>
               </form>
             </div>
-          </section>
+          </details>
         </main>
 
         <!-- Which build is on this PC, and whether it is the current one.
