@@ -385,7 +385,10 @@ test("stBarTitle explains an unmeasured day rather than showing a blank", () => 
 test("stBarClass distinguishes the three states the legend promises", () => {
   const app = loadApp();
   assert.equal(app.stBarClass({ minutes_used: null }), "st-nodata");
-  assert.equal(app.stBarClass({ minutes_used: 90, over_budget: true }), "bg-error");
+  // `bg-error st-over`, not `bg-error`: the colour alone measured 1.22 against `bg-primary` in this
+  // theme, so over budget carries a texture too. See O46 and the accessibility tests at the end of
+  // this file — this assertion is the exact-string half, those are the property half.
+  assert.equal(app.stBarClass({ minutes_used: 90, over_budget: true }), "bg-error st-over");
   assert.equal(app.stBarClass({ minutes_used: 30, over_budget: false }), "bg-primary");
   assert.equal(app.stBarClass({ minutes_used: 0, over_budget: false }), "bg-primary", "measured zero is measured");
 });
@@ -1005,4 +1008,428 @@ test("every theme button carries a name, not only a glyph", () => {
   }
   assert.equal(a.themeOptions[1].glyph, "☀️", "light is the sun");
   assert.equal(a.themeOptions[2].glyph, "🌙", "dark is the moon");
+});
+
+// --- the live view's tier, staleness and cancellation ----------------------
+//
+// The tier decides bandwidth, and getting it wrong is invisible: a live stream silently running at
+// full resolution looks identical to one running correctly, just slower and far more expensive on
+// the child's machine. Staleness is the opposite failure — visible only by its absence, because a
+// frozen live view and a motionless child are the same picture.
+
+/** An app whose fetch records the URLs asked for and returns a blob, so captures "succeed". */
+function appRecordingShots(overrides = {}) {
+  const calls = [];
+  const app = loadApp({
+    fetch: async (url) => (calls.push(url), { ok: true, status: 200, blob: async () => ({}) }),
+    URL: { createObjectURL: () => "blob:x", revokeObjectURL: () => {} },
+    AbortController: function () {
+      this.signal = {};
+      this.abort = () => { this.aborted = true; };
+    },
+    // A fuller document than most tests need: supplying one at all makes app.js's
+    // `typeof document !== "undefined"` guard true, which switches on the theme init that reaches
+    // `document.documentElement`. A stub with only `hidden` throws there.
+    document: {
+      hidden: false,
+      documentElement: { setAttribute() {}, removeAttribute() {} },
+      addEventListener() {},
+    },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    setInterval: () => 1,
+    clearInterval: () => {},
+    ...overrides,
+  });
+  app.toast = () => {};
+  return { app, calls };
+}
+
+test("a live frame asks for the preview tier and a human's click asks for full", async () => {
+  const { app, calls } = appRecordingShots();
+
+  await app.takeScreenshot();                    // the "Take screenshot" button
+  await app.takeScreenshot(false, "full");       // the modal's Refresh
+  await app.takeScreenshot(true, "preview");     // the live timer
+
+  assert.equal(calls.length, 3);
+  assert.ok(calls[0].endsWith("tier=full"), `button asked for ${calls[0]}`);
+  assert.ok(calls[1].endsWith("tier=full"), `refresh asked for ${calls[1]}`);
+  assert.ok(calls[2].endsWith("tier=preview"), `live timer asked for ${calls[2]}`);
+});
+
+test("the tier is its own argument, not a synonym for how loud the failure is", async () => {
+  const { app, calls } = appRecordingShots();
+
+  // The two combinations no current call site uses. They are the whole point: `silent` says
+  // whether a failure raises a toast, `tier` says how many pixels to ask for, and they are
+  // independent. Written because the test above did NOT catch deriving the tier from `silent` —
+  // all three of its cases happened to have the two agree, so a mutation that collapsed them
+  // passed. A test whose cases are perfectly correlated cannot see the correlation being assumed.
+  await app.takeScreenshot(true, "full");
+  await app.takeScreenshot(false, "preview");
+
+  assert.ok(
+    calls[0].endsWith("tier=full"),
+    `a silent capture must still be able to ask for full, got ${calls[0]}`,
+  );
+  assert.ok(
+    calls[1].endsWith("tier=preview"),
+    `a loud capture must still be able to ask for a preview, got ${calls[1]}`,
+  );
+});
+
+test("switching Live on takes a full frame first, so a failure surfaces at once", async () => {
+  const { app, calls } = appRecordingShots();
+  app.startAutoRefresh();
+  // startAutoRefresh kicks off an un-awaited capture; let it land.
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(calls.length, 1, "exactly one frame on switch-on");
+  assert.ok(
+    calls[0].endsWith("tier=full"),
+    "the first frame must be full — mapping the tier onto `silent` would make it a preview and " +
+      "the picture would visibly soften one tick later",
+  );
+});
+
+test("a failed live frame marks the picture stale instead of silently keeping it", async () => {
+  const { app } = appRecordingShots({ fetch: async () => ({ ok: false, status: 500 }) });
+  app.shotAt = Date.now();
+
+  await app.takeScreenshot(true, "preview");
+  assert.equal(app.shotStale, true, "a silent failure must still be visible on the page");
+  assert.match(app.shotAge(), /not updating/, `said: ${app.shotAge()}`);
+});
+
+test("a successful frame clears a stale marker", async () => {
+  const { app } = appRecordingShots();
+  app.shotStale = true;
+  await app.takeScreenshot(true, "preview");
+  assert.equal(app.shotStale, false);
+  assert.match(app.shotAge(), /^updated /, `said: ${app.shotAge()}`);
+});
+
+test("turning Live off aborts the capture already in flight", () => {
+  const { app } = appRecordingShots();
+  let aborted = false;
+  app._shotAbort = { abort: () => { aborted = true; } };
+  app.autoRefresh = true;
+
+  app.stopAutoRefresh();
+  assert.equal(aborted, true, "a frame arriving after the parent said stop must be dropped");
+  assert.equal(app._shotAbort, null);
+  assert.equal(app.autoRefresh, false);
+});
+
+test("an aborted capture is not reported as a failure", async () => {
+  const err = new Error("aborted");
+  err.name = "AbortError";
+  const { app } = appRecordingShots({ fetch: async () => { throw err; } });
+  let toasted = 0;
+  app.toast = () => { toasted += 1; };
+
+  await app.takeScreenshot(true, "preview");
+  assert.equal(app.shotStale, false, "the parent stopped it; nothing is stale");
+  await app.takeScreenshot();
+  assert.equal(toasted, 0, "cancelling must not look like a broken screenshot");
+});
+
+test("the age line reads plainly at every scale and never leaks a raw number", () => {
+  const { app } = appRecordingShots();
+  assert.equal(app.shotAge(), "", "nothing captured yet says nothing");
+
+  const base = 1_700_000_000_000;
+  app.shotAt = base;
+  for (const [elapsed, want] of [[0, "updated 0s ago"], [4000, "updated 4s ago"],
+                                 [65_000, "updated 1m 5s ago"]]) {
+    app.now = base + elapsed;
+    assert.equal(app.shotAge(), want);
+  }
+  app.shotStale = true;
+  app.now = base + 4000;
+  assert.equal(app.shotAge(), "not updating — last frame 4s ago");
+  assert.equal(app.shotAgeClass(), "text-error", "a stalled view must be visible, not just legible");
+});
+
+test("every offered cadence is slower than the one that shipped, and the default is not the fastest", () => {
+  const app = loadApp();
+  const offered = app.refreshOptions.map((o) => o.ms);
+  assert.equal(offered.join(","), "2000,5000,15000");
+  assert.ok(
+    offered.includes(app._refreshMs),
+    `the default ${app._refreshMs} must be one of the offered cadences`,
+  );
+  assert.ok(
+    app._refreshMs > Math.min(...offered),
+    "defaulting to the fastest cadence would keep the most expensive setting as the only one a " +
+      "parent ever sees",
+  );
+});
+
+test("choosing a cadence while Live is running restarts it rather than stacking timers", () => {
+  const cleared = [];
+  const { app } = appRecordingShots({
+    setInterval: () => cleared.length + 100,
+    clearInterval: (id) => cleared.push(id),
+  });
+  app.startAutoRefresh();
+  const first = app._shotTimer;
+  app.setRefreshMs(15000);
+
+  assert.equal(app._refreshMs, 15000);
+  assert.ok(cleared.includes(first), "the previous interval must be cleared, not left running");
+  assert.equal(app.autoRefresh, true, "changing cadence must not switch the live view off");
+});
+
+test("signing out forgets how old the picture was", () => {
+  const { app } = appRecordingShots();
+  app.shotAt = Date.now();
+  app.shotStale = true;
+  app.syncTitle = () => {};
+
+  app.resetSessionData();
+  assert.equal(app.shotAt, null, "'updated 3s ago' must not outlive the session it belonged to");
+  assert.equal(app.shotStale, false);
+});
+
+// --- the first-seen notice -------------------------------------------------
+//
+// Three states the UI must keep apart: `null` = the report could not tell, empty = it checked and
+// nothing was new, non-empty = the notice. Merging the first two makes a working check look broken
+// on the first day the watcher ran; merging the last two shows an empty panel every quiet day,
+// and a notice that is always present stops being read.
+
+function appWithFirstSeen(first_seen) {
+  const a = loadApp();
+  a.screentime = Object.assign(emptyish(), { first_seen });
+  return a;
+}
+function emptyish() {
+  return { days: [], total_mins: 0, measured_days: 0, daily_avg_mins: null, prev_total_mins: null,
+           change_pct: null, app_totals: [], focus_totals: [], page_totals: [], group_totals: [] };
+}
+
+test("a report that cannot tell shows no notice", () => {
+  const a = appWithFirstSeen(null);
+  assert.equal(a.firstSeen, null);
+  assert.equal(a.showFirstSeen, false, "'could not tell' must not render as 'nothing new'");
+});
+
+test("a quiet day shows no notice, but is not the same state as cannot-tell", () => {
+  const a = appWithFirstSeen({ date: "2026-08-19", apps: [], count: 0, baseline_days: 12 });
+  assert.equal(a.showFirstSeen, false, "an empty notice is not worth a panel");
+  assert.notEqual(a.firstSeen, null, "but the answer exists, unlike the null case");
+});
+
+test("a new app is announced with the strength of the claim beside it", () => {
+  const a = appWithFirstSeen({
+    date: "2026-08-19",
+    apps: [{ name: "discord.exe", minutes: 42 }],
+    count: 1, baseline_days: 12,
+  });
+  assert.equal(a.showFirstSeen, true);
+  assert.equal(a.firstSeenHeading(), "1 new app");
+  assert.match(a.firstSeenNote(), /2026-08-19/);
+  assert.match(a.firstSeenNote(), /12 earlier days/,
+    "a parent cannot weigh 'new' without knowing what it is new against");
+});
+
+test("one day of history is described in the singular, not '1 earlier days'", () => {
+  const a = appWithFirstSeen({ date: "2026-08-19", apps: [{ name: "x.exe", minutes: 1 }],
+                               count: 1, baseline_days: 1 });
+  assert.match(a.firstSeenNote(), /1 earlier day\b/);
+  assert.doesNotMatch(a.firstSeenNote(), /1 earlier days/);
+});
+
+test("a capped list says so, so the notice cannot understate what happened", () => {
+  const apps = Array.from({ length: 8 }, (_, i) => ({ name: "n" + i + ".exe", minutes: 10 }));
+  const a = appWithFirstSeen({ date: "2026-08-19", apps, count: 13, baseline_days: 30 });
+  const h = a.firstSeenHeading();
+  assert.match(h, /13 new apps/, `must lead with the true total: ${h}`);
+  assert.match(h, /showing the 8/, `must admit the list is capped: ${h}`);
+});
+
+test("the plural is right at every count", () => {
+  const mk = (count, shown) => appWithFirstSeen({
+    date: "2026-08-19", count, baseline_days: 5,
+    apps: Array.from({ length: shown }, (_, i) => ({ name: i + ".exe", minutes: 1 })),
+  });
+  assert.equal(mk(1, 1).firstSeenHeading(), "1 new app");
+  assert.equal(mk(2, 2).firstSeenHeading(), "2 new apps");
+  assert.doesNotMatch(mk(1, 1).firstSeenHeading(), /apps/);
+});
+
+test("a missing screentime object does not throw", () => {
+  const a = loadApp();
+  a.screentime = null;
+  assert.equal(a.firstSeen, null);
+  assert.equal(a.showFirstSeen, false);
+  assert.equal(a.firstSeenNote(), "");
+  assert.equal(a.firstSeenHeading(), "");
+});
+
+// --- today's usage timeline ------------------------------------------------
+//
+// The only view that answers *when* rather than *how much*. Its whole difficulty is pairing, and
+// pairing has exactly one dangerous failure: joining a start to a stop that belongs to a different
+// session. That draws a bar from an afternoon crash through to bedtime and calls it use — which is
+// the defect this feature was blocked on (OPEN-FINDINGS O36), reappearing one layer up.
+
+/** Events as `/api/usage` delivers them: newest first, RFC 3339 with a local-time offset. */
+function ev(kind, hhmm, day = "2026-08-25") {
+  const [h, m] = hhmm.split(":");
+  const d = new Date(`${day}T${h}:${m}:00`);           // local time, matching what the API renders
+  return { event: kind, ts: d.toISOString() };
+}
+function timelineOf(list, nowMin = 23 * 60) {
+  return loadApp().dayTimeline(list, "2026-08-25", nowMin);
+}
+// Both forward the optional day. Dropping it silently is not hypothetical: the first version of
+// these took only the time, so `STOP("10:00", "2026-08-24")` quietly built a *today* event and the
+// other-days test failed against correct code.
+const START = (t, day) => ev("session_start", t, day);
+const STOP = (t, day) => ev("session_stop", t, day);
+
+test("a paired session becomes one span", () => {
+  const spans = timelineOf([STOP("10:30"), START("09:00")]);   // newest first, as delivered
+  assert.equal(spans.length, 1);
+  assert.deepEqual({ ...spans[0] }, { from: 540, to: 630, kind: "use" });
+});
+
+test("events arrive newest-first and are still ordered correctly", () => {
+  const spans = timelineOf([STOP("22:00"), START("21:00"), STOP("10:00"), START("09:00")]);
+  assert.equal(spans.map((s) => s.from).join(","), "540,1260", "oldest span first");
+});
+
+test("a start with no stop before the next start never spans the gap", () => {
+  // The enforcer died at some point after 09:00. Its end is unknowable.
+  const spans = timelineOf([START("20:00"), START("09:00")]);
+  const orphan = spans.find((s) => s.kind === "unknown");
+  assert.ok(orphan, `expected an unknown-end span, got ${JSON.stringify(spans)}`);
+  assert.equal(orphan.from, orphan.to,
+    "an unknown end must have no duration — stretching it to the next start is the original bug");
+  assert.equal(orphan.from, 540);
+});
+
+test("a still-running session is bounded by now, not by midnight", () => {
+  const spans = timelineOf([START("21:00")], 22 * 60 + 30);
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].kind, "live");
+  assert.equal(spans[0].to, 1350, "ends at 22:30, not 24:00");
+});
+
+test("a stop with nothing open is discarded rather than inventing a span", () => {
+  // Its start was yesterday; this axis is one day wide.
+  // `.length`, never `deepEqual`: the component is built in a `vm` realm, so an array it creates
+  // has that realm's prototype and `deepStrictEqual` rejects it as a different type even when
+  // empty. Documented on the harness and on two earlier tests — and walked into again here, which
+  // is the argument for the comment existing at all.
+  assert.equal(timelineOf([STOP("07:00")]).length, 0);
+});
+
+test("events from other days are excluded", () => {
+  const spans = timelineOf([STOP("10:00", "2026-08-24"), START("09:00", "2026-08-24")]);
+  assert.equal(spans.length, 0, "yesterday's session is not today's timeline");
+});
+
+test("non-session events are ignored", () => {
+  const noise = { event: "budget_lock", ts: new Date("2026-08-25T12:00:00").toISOString() };
+  const spans = timelineOf([noise, STOP("10:00"), START("09:00")]);
+  assert.equal(spans.length, 1, "a lock is not a session boundary");
+});
+
+test("unparseable or missing timestamps are skipped, not crashed on", () => {
+  const junk = [{ event: "session_start", ts: "not a date" }, { event: "session_stop" },
+                STOP("10:00"), START("09:00")];
+  const spans = timelineOf(junk);
+  assert.equal(spans.length, 1);
+  assert.equal(spans[0].kind, "use");
+});
+
+test("an empty or absent history yields no timeline rather than throwing", () => {
+  assert.equal(timelineOf([]).length, 0);
+  assert.equal(timelineOf(null).length, 0);
+  assert.equal(timelineOf(undefined).length, 0);
+});
+
+test("geometry is a percentage of the day and never collapses to invisible", () => {
+  const a = loadApp();
+  assert.match(a.spanStyle({ from: 0, to: 720, kind: "use" }), /left:0\.000%;width:50\.000%/);
+  const hairline = a.spanStyle({ from: 600, to: 600, kind: "unknown" });
+  assert.match(hairline, /width:0\.400%/, "a zero-width marker would be invisible");
+  const tiny = a.spanStyle({ from: 600, to: 601, kind: "use" });
+  assert.match(tiny, /width:0\.400%/, "a one-minute session must still be seen");
+});
+
+test("no span kind is told apart by colour alone", () => {
+  const a = loadApp();
+  // Measured in Chrome on the dark theme: bg-primary vs bg-success is a 1.01 contrast ratio —
+  // identical luminance, differing only in hue, and green-against-teal is the textbook
+  // deuteranopia confusion pair. So every kind must carry a non-colour cue as well.
+  //
+  // `live` gets a ring; `unknown` gets no width (`spanStyle`), because its duration is unknown
+  // rather than short. `use` is the plain case both are read against.
+  assert.match(a.spanClass({ kind: "live" }), /\bring-/,
+    "the live span must be marked by shape, not only by being a different green");
+  assert.equal(a.spanStyle({ from: 600, to: 600, kind: "unknown" }).includes("width:0.400%"), true,
+    "an unknown end must stay a hairline — width is its distinguishing cue");
+  assert.doesNotMatch(a.spanClass({ kind: "use" }), /\bring-/,
+    "the ordinary case must not also be ringed, or the cue distinguishes nothing");
+});
+
+test("every span kind is visually and verbally distinct", () => {
+  const a = loadApp();
+  const kinds = ["use", "live", "unknown"];
+  const classes = kinds.map((kind) => a.spanClass({ kind }));
+  assert.equal(new Set(classes).size, 3, `kinds must not share a colour: ${classes}`);
+  // An unknown end must say so, not imply a duration a parent would read as fact.
+  assert.match(a.spanLabel({ from: 540, to: 540, kind: "unknown" }), /end unknown/);
+  assert.match(a.spanLabel({ from: 540, to: 600, kind: "use" }), /09:00 to 10:00/);
+  assert.match(a.spanLabel({ from: 540, to: 600, kind: "live" }), /still on/);
+});
+
+test("the axis is labelled every four hours across the whole day", () => {
+  const t = loadApp().dayTicks;
+  assert.equal(t.map((x) => x.label).join(" "), "00:00 04:00 08:00 12:00 16:00 20:00");
+  assert.equal(t[0].pct, 0);
+  assert.ok(t[t.length - 1].pct < 100, "the last tick must sit inside the axis");
+});
+
+// --- the over-budget bar (OPEN-FINDINGS O46) --------------------------------
+//
+// `bg-error` against `bg-primary` measures 1.22 in this theme — near-identical luminance differing
+// mostly in hue, and green-against-salmon is a red-green confusion pair. It was the only over/under
+// cue on the bar (the ring in the markup marks the *pinned* day). Screen readers were always told;
+// the reader with neither channel was the sighted colour-blind parent.
+
+test("an over-budget bar is textured, not only coloured", () => {
+  const a = loadApp();
+  const over = a.stBarClass({ minutes_used: 200, over_budget: true });
+  const under = a.stBarClass({ minutes_used: 100, over_budget: false });
+
+  assert.match(over, /\bst-over\b/, "over budget must carry a texture, not just bg-error");
+  assert.doesNotMatch(under, /\bst-over\b/, "the ordinary case must be plain, or the cue means nothing");
+  assert.match(over, /\bbg-error\b/, "the colour stays as reinforcement for those who can see it");
+});
+
+test("the three bar states are mutually distinguishable without colour", () => {
+  const a = loadApp();
+  const states = {
+    nodata: a.stBarClass({ minutes_used: null }),
+    over: a.stBarClass({ minutes_used: 200, over_budget: true }),
+    under: a.stBarClass({ minutes_used: 100, over_budget: false }),
+  };
+  // "not measured" and "over budget" both use a pattern, so they must not use the *same* one —
+  // .st-nodata stripes at 45deg and .st-over at 135deg, deliberately mirrored.
+  assert.notEqual(states.nodata, states.over);
+  assert.match(states.nodata, /\bst-nodata\b/);
+  assert.doesNotMatch(states.nodata, /\bst-over\b/, "an unmeasured day is not an over-budget day");
+  assert.equal(new Set(Object.values(states)).size, 3);
+});
+
+test("the text cue that screen readers rely on is still there", () => {
+  const a = loadApp();
+  // The texture is for sighted colour-blind readers; this is the channel that already worked and
+  // must not regress while fixing the other one.
+  assert.match(a.stDayLabel({ minutes_used: 200, budget: 120, over_budget: true }), /over budget/);
+  assert.doesNotMatch(a.stDayLabel({ minutes_used: 100, budget: 120, over_budget: false }), /over budget/);
 });

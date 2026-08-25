@@ -73,6 +73,10 @@ function emptyScreentime() {
     focus_totals: [],
     page_totals: [],
     group_totals: [],
+    // `null` rather than an empty object: the server returns null when it cannot answer honestly,
+    // and that is a different state from "checked, nothing new". Collapsing them would make a
+    // working check look like a broken one on the first day the watcher ran.
+    first_seen: null,
   };
 }
 
@@ -99,11 +103,40 @@ function app() {
     shotUrl: null,
     loadingShot: false,
     autoRefresh: false,
+    // When the frame on screen was captured (epoch ms), and whether the last live attempt failed.
+    // Together these are what make a stalled live view distinguishable from a child sitting still:
+    // without them a stopped service, a signed-out child or a wedged helper all leave the last good
+    // picture up with the toggle still on, and nothing on the page ever says so.
+    shotAt: null,
+    shotStale: false,
+    // Re-read once a second so "updated 4s ago" counts up on its own rather than only when a new
+    // frame lands — the case that matters is precisely the one where no new frame is landing.
+    now: Date.now(),
     _shotTimer: null,
     _shotBusy: false,
+    _clockTimer: null,
+    // Aborts the in-flight capture when Live is switched off or the session ends. Without it a
+    // capture started at second 0 still assigns `shotUrl` when it returns, up to 15s after the
+    // parent turned the live view off — a picture arriving after the switch says stop.
+    _shotAbort: null,
     _pollTimer: null,
     _pollMs: 60000,
-    _refreshMs: 3000,
+    // How often the live view asks for a frame. Chosen by the parent from `refreshOptions`; 5s is
+    // the default rather than the 3s this shipped with, because every tick spawns a helper in the
+    // child's session and 3s was both the most expensive setting available and the only one.
+    _refreshMs: 5000,
+    // Offered cadences. Slower is cheaper on the child's machine, and nothing here needs to be
+    // fast: the point is noticing what someone is doing, not watching them type.
+    refreshOptions: [
+      { ms: 2000, label: "2s" },
+      { ms: 5000, label: "5s" },
+      { ms: 15000, label: "15s" },
+    ],
+    // Live view stops itself after this long. `document.hidden` already covers a backgrounded tab,
+    // but a tab left *visible* on a second monitor casts all day, and the parent who opened it to
+    // glance at one thing has long since walked away.
+    _liveMaxMs: 15 * 60 * 1000,
+    _liveUntil: 0,
     killTarget: null,
     confirmShutdown: false,
     shotFull: false,
@@ -522,6 +555,11 @@ function app() {
       this.codes = [];
       this.routines = [];
       this.screentime = emptyScreentime();
+      // The capture's own metadata. `shotUrl` is revoked by the caller (it owns a blob), but these
+      // two describe it and would otherwise outlive it — leaving "updated 3s ago" under a picture
+      // that has been cleared, or a stale-view warning on the login page.
+      this.shotAt = null;
+      this.shotStale = false;
       // The title outlives the component state, so a sign-out that left "(2) Nestwatch" up would
       // advertise the previous session's child from the login page.
       this.syncTitle();
@@ -540,45 +578,112 @@ function app() {
       }
     },
 
-    async takeScreenshot(silent = false) {
+    // Fetch one frame.
+    //
+    // `tier` is passed explicitly rather than derived from `silent`. The two look interchangeable
+    // and are not: `toggleAutoRefresh` fires a NON-silent capture the instant Live is switched on,
+    // so that a live view which cannot start says so immediately. Map the tier onto `silent` and
+    // that first frame arrives sharp while every later one is a preview — a visible softening one
+    // second in, which reads as a bug rather than as a mode.
+    async takeScreenshot(silent = false, tier = "full") {
       // Never overlap captures: the service helper can take up to ~15s, but the Live timer
       // fires every few seconds — without this guard slow captures would pile up.
       if (this._shotBusy) return;
       this._shotBusy = true;
       if (!silent) this.loadingShot = true;
+      const ctrl = new AbortController();
+      this._shotAbort = ctrl;
       try {
-        const r = await fetch("/api/screenshot");
+        const r = await fetch("/api/screenshot?tier=" + tier, { signal: ctrl.signal });
         if (r.status === 401) { this.authed = false; this.stopAutoRefresh(); return; }
         if (!r.ok) throw new Error();
         const blob = await r.blob();
         if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
         this.shotUrl = URL.createObjectURL(blob);
-      } catch {
-        if (!silent) this.toast("Screenshot failed", "error");
+        this.shotAt = Date.now();
+        this.shotStale = false;
+      } catch (e) {
+        // An abort is the parent switching Live off mid-capture. Nothing failed, so it must not
+        // raise a toast or mark the picture stale.
+        if (e && e.name === "AbortError") return;
+        // A failed LIVE frame is the case this whole flag exists for. It used to be swallowed
+        // entirely, so a stopped service, a signed-out child or a wedged helper all left the last
+        // good picture on screen with the toggle still on, indefinitely.
+        if (silent) this.shotStale = true;
+        else this.toast("Screenshot failed", "error");
       } finally {
+        if (this._shotAbort === ctrl) this._shotAbort = null;
         if (!silent) this.loadingShot = false;
         this._shotBusy = false;
       }
     },
 
     toggleAutoRefresh() {
-      if (this.autoRefresh) {
-        this.takeScreenshot();
-        // Skip while the tab is hidden, matching the data poll. Each tick spawns a helper
-        // in the child's session to capture and PNG-encode their whole desktop — by far
-        // the most expensive thing this tool does — and without the guard it kept doing it
-        // on their laptop for as long as the parent left the tab open in a pocket.
-        this._shotTimer = setInterval(() => {
-          if (!document.hidden) this.takeScreenshot(true);
-        }, this._refreshMs);
-      } else {
-        this.stopAutoRefresh();
-      }
+      if (this.autoRefresh) this.startAutoRefresh();
+      else this.stopAutoRefresh();
+    },
+
+    startAutoRefresh() {
+      this.stopAutoRefresh(); // never stack two timers when the cadence changes mid-session
+      this.autoRefresh = true;
+      this.shotStale = false;
+      this._liveUntil = Date.now() + this._liveMaxMs;
+      // The first frame is full so switching Live on gives an immediately sharp picture and
+      // surfaces a failure at once; every frame after it is a preview.
+      this.takeScreenshot();
+      // Skip while the tab is hidden, matching the data poll. Each tick spawns a helper
+      // in the child's session to capture and encode their whole desktop — by far
+      // the most expensive thing this tool does — and without the guard it kept doing it
+      // on their laptop for as long as the parent left the tab open in a pocket.
+      this._shotTimer = setInterval(() => {
+        if (Date.now() > this._liveUntil) { this.stopAutoRefresh(); return; }
+        if (!document.hidden) this.takeScreenshot(true, "preview");
+      }, this._refreshMs);
+      this.startShotClock();
+    },
+
+    // Change cadence without making the parent toggle Live off and on.
+    setRefreshMs(ms) {
+      this._refreshMs = ms;
+      if (this.autoRefresh) this.startAutoRefresh();
     },
 
     stopAutoRefresh() {
       if (this._shotTimer) { clearInterval(this._shotTimer); this._shotTimer = null; }
+      // Drop an in-flight capture on the floor: its frame would land after the parent said stop.
+      if (this._shotAbort) { this._shotAbort.abort(); this._shotAbort = null; }
+      this.stopShotClock();
       this.autoRefresh = false;
+    },
+
+    // Ticks `now` so the age under the picture counts up by itself. Only runs while Live is on —
+    // a still screenshot has no staleness to report.
+    startShotClock() {
+      this.stopShotClock();
+      this._clockTimer = setInterval(() => { this.now = Date.now(); }, 1000);
+    },
+
+    stopShotClock() {
+      if (this._clockTimer) { clearInterval(this._clockTimer); this._clockTimer = null; }
+    },
+
+    // "updated 4s ago", or a plain statement that it is not updating any more.
+    //
+    // Deliberately says "not updating" rather than staying silent: the whole failure being
+    // addressed is that a frozen live view and a motionless child look identical.
+    shotAge() {
+      if (!this.shotAt) return "";
+      const secs = Math.max(0, Math.round((this.now - this.shotAt) / 1000));
+      const ago = secs < 60
+        ? secs + "s ago"
+        : Math.floor(secs / 60) + "m " + (secs % 60) + "s ago";
+      if (this.shotStale) return "not updating — last frame " + ago;
+      return "updated " + ago;
+    },
+
+    // Tone for the age line, so a stalled view is not merely readable but visible.
+    shotAgeClass() {
+      return this.shotStale ? "text-error" : "opacity-60";
     },
 
     askKill(p) { this.killTarget = p; },
@@ -662,6 +767,20 @@ function app() {
       } finally {
         this.checkingUpdate = false;
       }
+    },
+
+    // Open the full-size view, refetching at full tier first.
+    //
+    // The refetch is not optional. The thumbnail and this overlay bind the same `shotUrl`, so
+    // while Live is running that value holds a 960x540 preview — opening the overlay without
+    // asking for a sharp one would stretch it across the whole window, turning the bandwidth
+    // saving into a visible regression at the exact moment the parent is looking hardest.
+    //
+    // The overlay is shown *before* the fetch resolves, so it opens instantly with the frame
+    // already on screen and sharpens a moment later, rather than pausing on a click.
+    openShotFull() {
+      this.shotFull = true;
+      this.takeScreenshot();
     },
 
     // Close the full-size view, and leave real fullscreen if we entered it -- otherwise the
@@ -1044,6 +1163,186 @@ function app() {
       return rest === 0 ? h + " h" : h + " h " + rest + " min";
     },
 
+    // --- today's usage timeline ---------------------------------------------
+    //
+    // When the machine was actually in use today, as spans on a 24-hour axis. Every figure the
+    // report offers answers *how much*; this is the only one that answers *when*, which is the
+    // question a parent arrives with at 2am.
+    //
+    // Derived entirely from `session_start` / `session_stop` in `this.usage`, which `loadUsage()`
+    // already fetches on sign-in — no endpoint, no extra request, no new storage.
+    //
+    // **Pairing is the whole difficulty and it must fail safe.** A `session_start` with no stop
+    // before the next start means the enforcer died between them (a crash, an upgrade, `sc stop`)
+    // and the end of that span is genuinely unknowable. Pairing across it would shade a bar from an
+    // afternoon crash through to bedtime and call it use — which is the bug this feature was
+    // blocked on, wearing a different hat. Such a span is marked `unknown` and drawn as a marker
+    // with no width, never as a duration.
+
+    // Local minutes from midnight, or `null` if the event is not from `dayISO` (or is unparseable).
+    minutesIntoDay(ts, dayISO) {
+      if (!ts) return null;
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return null;
+      // Compare in local time, because the axis is the parent's day, not UTC's.
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      if (y + "-" + m + "-" + day !== dayISO) return null;
+      return d.getHours() * 60 + d.getMinutes();
+    },
+
+    // Spans for `dayISO`. `nowMin` bounds a still-open session so a live one does not run to
+    // midnight. Pure: takes the events rather than reading `this.usage`, so it is testable.
+    dayTimeline(events, dayISO, nowMin) {
+      const rows = [];
+      for (const e of events || []) {
+        if (e.event !== "session_start" && e.event !== "session_stop") continue;
+        const at = this.minutesIntoDay(e.ts, dayISO);
+        if (at === null) continue;
+        rows.push({ at: at, start: e.event === "session_start" });
+      }
+      // `/api/usage` is newest-first; spans need oldest-first. Stable, so two events sharing a
+      // minute keep their relative order.
+      rows.sort((a, b) => a.at - b.at);
+
+      const spans = [];
+      let open = null;
+      for (const r of rows) {
+        if (r.start) {
+          // A second start with one already open: the enforcer went away in between and the end of
+          // that span is unknowable. Never stretch it to here.
+          if (open !== null) spans.push({ from: open, to: open, kind: "unknown" });
+          open = r.at;
+        } else if (open !== null) {
+          spans.push({ from: open, to: r.at, kind: "use" });
+          open = null;
+        }
+        // A stop with nothing open is discarded: it belongs to a session that began yesterday, and
+        // this axis is one day wide.
+      }
+      if (open !== null) spans.push({ from: open, to: Math.max(open, nowMin), kind: "live" });
+      return spans;
+    },
+
+    // The spans for today, ready to render.
+    get todayTimeline() {
+      const now = new Date();
+      const dayISO = now.getFullYear() + "-" +
+        String(now.getMonth() + 1).padStart(2, "0") + "-" +
+        String(now.getDate()).padStart(2, "0");
+      return this.dayTimeline(this.usage, dayISO, now.getHours() * 60 + now.getMinutes());
+    },
+
+    get hasTodayTimeline() {
+      return this.todayTimeline.length > 0;
+    },
+
+    // Percent-of-day geometry, so the markup needs no arithmetic (and no template literal, which
+    // the CSP build cannot parse in an attribute).
+    spanStyle(s) {
+      const left = (s.from / 1440) * 100;
+      // A zero-width span would be invisible; give an unknown-end marker a hairline instead.
+      const width = s.kind === "unknown" ? 0.4 : Math.max(0.4, ((s.to - s.from) / 1440) * 100);
+      return "left:" + left.toFixed(3) + "%;width:" + width.toFixed(3) + "%";
+    },
+
+    // Colour is **reinforcement here, never the carrier.** Measured in Chrome on the dark theme:
+    // `bg-primary` (159,232,141) against `bg-success` (98,239,189) is a contrast ratio of **1.01**
+    // — identical luminance differing only in hue, and green-against-teal is the textbook
+    // deuteranopia confusion pair. `bg-warning` sits at 1.04 against primary, no better. A reader
+    // who cannot separate those hues would have had nothing at all to go on.
+    //
+    // So each kind is distinguishable by **shape** before colour is considered:
+    //   * `unknown` is a hairline, because its duration is unknown rather than short — see
+    //     `spanStyle`, which gives it no width on purpose.
+    //   * `live` carries a ring, the same device the screen-time chart already uses to mark a
+    //     pinned day.
+    //   * `use` is a plain filled bar.
+    // Every span also carries a `title` and a line in the visually-hidden list beside the chart.
+    spanClass(s) {
+      if (s.kind === "unknown") return "bg-warning";
+      if (s.kind === "live") return "bg-success ring-2 ring-inset ring-base-content";
+      return "bg-primary";
+    },
+
+    // Read aloud, and on hover. An unknown end must say so rather than implying a duration.
+    spanLabel(s) {
+      const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" +
+                          String(m % 60).padStart(2, "0");
+      if (s.kind === "unknown") {
+        return "In use from " + hhmm(s.from) + " — end unknown, the service stopped";
+      }
+      if (s.kind === "live") return "In use from " + hhmm(s.from) + ", still on";
+      return "In use " + hhmm(s.from) + " to " + hhmm(s.to);
+    },
+
+    // Six labelled ticks — every four hours. More would not fit on a phone.
+    get dayTicks() {
+      const out = [];
+      for (let h = 0; h < 24; h += 4) {
+        out.push({ h: h, label: String(h).padStart(2, "0") + ":00", pct: (h / 24) * 100 });
+      }
+      return out;
+    },
+
+    // A key, because three encoded colours without one is a puzzle. Only the kinds actually
+    // present are listed — a legend naming states the day does not contain is its own noise.
+    get timelineKey() {
+      const kinds = {};
+      for (const s of this.todayTimeline) kinds[s.kind] = true;
+      const all = [
+        { kind: "use", label: "In use" },
+        { kind: "live", label: "In use now" },
+        { kind: "unknown", label: "End unknown — the service stopped" },
+      ];
+      return all.filter((k) => kinds[k.kind]);
+    },
+
+    tickStyle(t) {
+      return "left:" + t.pct.toFixed(3) + "%";
+    },
+
+    // --- first-seen notice -------------------------------------------------
+    //
+    // Three states, and the UI must not merge them: `null` means the report could not tell (no
+    // focus history, only one day of it, or a baseline too large to hold); an empty list means it
+    // checked and nothing was new; a non-empty list is the notice.
+
+    get firstSeen() {
+      const st = this.screentime;
+      if (!st) return null;
+      return st.first_seen || null;
+    },
+
+    // Only worth showing when something actually turned up. "Nothing new" is the normal case and
+    // does not deserve a panel — a notice that is present every day stops being read.
+    get showFirstSeen() {
+      const fs = this.firstSeen;
+      return !!fs && fs.apps && fs.apps.length > 0;
+    },
+
+    // The claim's strength, stated rather than implied. "New, against 40 days" and "new, against
+    // 1 day" are different statements and only the parent can weigh them.
+    firstSeenNote() {
+      const fs = this.firstSeen;
+      if (!fs) return "";
+      const days = fs.baseline_days === 1 ? "1 earlier day" : fs.baseline_days + " earlier days";
+      return "First seen " + fs.date + ", against " + days + " of history";
+    },
+
+    // Named separately from the list because the count can exceed what is shown.
+    firstSeenHeading() {
+      const fs = this.firstSeen;
+      if (!fs) return "";
+      const n = fs.count;
+      const noun = n === 1 ? "app" : "apps";
+      if (n > fs.apps.length) {
+        return n + " new " + noun + ", showing the " + fs.apps.length + " most used";
+      }
+      return n + " new " + noun;
+    },
+
     appLabel(name) {
       if (!name) return "";
       const known = {
@@ -1220,9 +1519,17 @@ function app() {
     // measured, over budget, not measured — named in one place, and keeps the markup to
     // plain method calls, which is the form Alpine's CSP build accepts (see O8): no
     // template literals and no globals in an attribute.
+    // Over budget carries a **texture as well as a colour**. `bg-error` against `bg-primary` is a
+    // 1.22 contrast ratio in this theme — near-identical luminance differing in hue, and
+    // green-against-salmon is a red-green confusion pair — so colour alone left a sighted
+    // colour-blind parent with no way to read the one thing this chart exists to show. The screen
+    // reader was always told: `stBarTitle` and `stDayLabel` both say "over budget".
+    //
+    // `.st-over` stripes at 135deg, the mirror of `.st-nodata`'s 45deg, so the two encoded states
+    // are also distinguishable from each other and not merely from the ordinary case.
     stBarClass(d) {
       if (d.minutes_used == null) return "st-nodata";
-      return d.over_budget ? "bg-error" : "bg-primary";
+      return d.over_budget ? "bg-error st-over" : "bg-primary";
     },
 
     stBarStyle(d) {

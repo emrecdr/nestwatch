@@ -199,13 +199,27 @@ pub fn run_cli() -> Result<()> {
 
 /// `helper --capture-stdout` (used by the service) or `helper --capture <path>` (dev):
 /// capture a screenshot in the interactive user session.
+///
+/// `--tier preview|full` may follow either capture form. It is optional and defaults to `full`,
+/// which is what this subcommand did before tiers existed — see [`control::ShotTier::from_arg`]
+/// for why an unrecognised value defaults the same way rather than failing.
 fn run_helper(args: &[String]) -> Result<()> {
+    // Scanned rather than positional: `--tier` is optional and follows a `--capture <path>` that
+    // already consumes an argument of its own, so a fixed index would read the path on one form and
+    // the flag on the other.
+    let tier = control::ShotTier::from_arg(
+        args.iter()
+            .position(|a| a == "--tier")
+            .and_then(|i| args.get(i + 1))
+            .map(String::as_str),
+    );
+
     match args.get(2).map(String::as_str) {
-        Some("--capture-stdout") => helper::capture_to_stdout(),
+        Some("--capture-stdout") => helper::capture_to_stdout(tier),
         Some("--capture") => match args.get(3) {
-            Some(path) => helper::capture_to_file(path),
+            Some(path) => helper::capture_to_file(path, tier),
             None => {
-                eprintln!("usage: nestwatch helper --capture <path>");
+                eprintln!("usage: nestwatch helper --capture <path> [--tier preview|full]");
                 std::process::exit(2);
             }
         },
@@ -213,7 +227,8 @@ fn run_helper(args: &[String]) -> Result<()> {
         Some("--watch") => helper::watch(),
         _ => {
             eprintln!(
-                "usage: nestwatch helper --capture-stdout | --capture <path> | --lock | --watch"
+                "usage: nestwatch helper --capture-stdout [--tier preview|full] | \
+                 --capture <path> [--tier preview|full] | --lock | --watch"
             );
             std::process::exit(2);
         }
@@ -376,6 +391,7 @@ USAGE:
 Internal (invoked automatically):
   nestwatch service-run            SCM entry point for the service
   nestwatch helper --capture PATH  capture a screenshot in the user session
+                                   (add --tier preview for the small live-view size)
   nestwatch helper --watch         measure which app has focus (runs while signed in)
 "#
     );
@@ -444,6 +460,61 @@ mod tests {
         assert!(err.contains("--purge"), "list what it does accept: {err}");
     }
 
+    /// `helper`'s flags are exempt from the table, so its usage message is the only place a
+    /// person can learn them — which makes that message load-bearing rather than decorative.
+    ///
+    /// This exists because `every_flag_the_code_reads_is_listed_in_the_table` skips `run_helper`
+    /// for good reasons, and a skip with nothing behind it is how an undocumented flag ships. The
+    /// claim in that skip's comment — "their declaration is the usage message" — is checked here
+    /// instead of merely asserted there.
+    #[test]
+    fn every_helper_flag_is_named_in_the_usage_it_prints() {
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("reading src/lib.rs");
+        let body = text
+            .split_once("\nfn run_helper(")
+            .expect("run_helper must exist")
+            .1;
+        let body = body.split_once("\n}\n").expect("run_helper must end").0;
+
+        // What the function dispatches on, and what it prints when nothing matches.
+        //
+        // A usage message is gathered from its first line to the `)` that closes the `eprintln!`,
+        // because these wrap: the longest one carries `--lock` and `--watch` on a continuation
+        // line that contains no "usage:" of its own. Reading only the first line found exactly
+        // that, and reported two documented flags as undocumented.
+        let (mut flags, mut usage) = (Vec::new(), String::new());
+        let mut in_usage = false;
+        for line in body.lines() {
+            in_usage = (in_usage || line.contains("usage:")) && !line.contains(");");
+            if in_usage || line.contains("usage:") {
+                usage.push_str(line);
+            }
+            for idiom in ["Some(\"--", "a == \"--"] {
+                if let Some((_, rest)) = line.split_once(idiom)
+                    && let Some((flag, _)) = rest.split_once('"')
+                {
+                    flags.push(format!("--{flag}"));
+                }
+            }
+        }
+
+        assert!(
+            flags.len() >= 4,
+            "found only {} flags in run_helper — the scan drifted and proves nothing: {flags:?}",
+            flags.len()
+        );
+        for flag in &flags {
+            assert!(
+                usage.contains(flag.as_str()),
+                "`{flag}` is accepted by run_helper but named in no usage message, so the only \
+                 way to discover it is to read the source"
+            );
+        }
+    }
+
     /// Commands whose arguments this table must not police.
     #[test]
     fn the_internal_commands_are_left_alone() {
@@ -489,7 +560,24 @@ mod tests {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("reading a source file");
+            // Which top-level function the scan is currently inside. Only `run_helper` matters,
+            // and only because the flags it reads belong to `helper` — a command dispatched
+            // *before* `check_flags` exists in the call path, and deliberately absent from
+            // `accepts` (see `the_internal_commands_are_left_alone`). Demanding its flags be
+            // listed in the table would mean adding entries to a table whose whole point is not
+            // to police them. Their user-facing declaration is `run_helper`'s own usage message,
+            // which is what a person actually sees when they get one wrong.
+            //
+            // This opens no hole: `run_helper` handles exactly one command, so no user-facing
+            // flag can hide in here.
+            let mut in_run_helper = false;
             for (n, line) in text.lines().enumerate() {
+                if let Some(rest) = line.strip_prefix("fn ").or(line.strip_prefix("pub fn ")) {
+                    in_run_helper = rest.starts_with("run_helper");
+                }
+                if in_run_helper {
+                    continue;
+                }
                 // Prose mentions the idiom without being a call site — the same exclusion
                 // `tests/spawn_paths.rs` needs for the same reason.
                 if line.trim_start().starts_with("//") {

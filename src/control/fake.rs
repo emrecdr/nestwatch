@@ -6,7 +6,7 @@
 
 use std::sync::Mutex;
 
-use super::{ControlError, ProcessInfo, RunningProcess, SessionState, SystemControl};
+use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
 pub struct FakeControl {
     processes: Mutex<Vec<ProcessInfo>>,
@@ -53,14 +53,21 @@ impl Default for FakeControl {
 }
 
 impl SystemControl for FakeControl {
-    fn screenshot_png(&self) -> Result<Vec<u8>, ControlError> {
-        // A 320x180 diagonal gradient so the UI has something real to display.
-        let (w, h) = (320u32, 180u32);
+    /// A diagonal gradient, so the UI has something real to display and the tiers are
+    /// distinguishable.
+    ///
+    /// Deliberately **larger than [`super::PREVIEW_W`]×[`super::PREVIEW_H`]** — it used to be
+    /// 320×180. A source smaller than the preview box is returned untouched by `encode_shot`, so
+    /// with the old size both tiers produced identical bytes and no test could tell whether the
+    /// tier had reached the implementation at all. 1280×720 is the smallest ordinary desktop shape
+    /// that actually exercises the downscale.
+    fn screenshot(&self, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
+        let (w, h) = (1280u32, 720u32);
         let mut img = image::RgbImage::new(w, h);
         for (x, y, px) in img.enumerate_pixels_mut() {
             *px = image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 128]);
         }
-        super::encode_png(image::DynamicImage::ImageRgb8(img))
+        super::encode_shot(image::DynamicImage::ImageRgb8(img), tier)
     }
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {

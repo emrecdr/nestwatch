@@ -62,6 +62,74 @@ pub enum SessionState {
     Active,
 }
 
+/// How much of the screen a capture is expected to carry.
+///
+/// The axis is **intent, not resolution**: which tier applies is decided by whether a person asked
+/// or a timer did, and the parent never chooses a picture size. The dashboard already encodes that
+/// distinction in its markup — the *Take screenshot* and modal *Refresh* buttons are people, the
+/// live interval is a clock — so this adds no control to the UI.
+///
+/// The split exists because the two are not the same job and do not cost the same. Measured through
+/// this crate's encoder on a 4K desktop showing a game: native PNG was **20,641 KiB**, and the same
+/// frame at [`Preview`](ShotTier::Preview) is about **23 KiB**. More usefully, the preview figure
+/// barely moves — 23–32 KiB across every content type and source resolution tried — while the
+/// native one varies **132×** on content nobody controls. A predictable cost is what makes this a
+/// tier rather than a gamble.
+///
+/// One variant, one code path, one parameter — deliberately not two methods. Separate
+/// `capture_preview()` / `capture_full()` functions would give the preview path all the exercise
+/// and let the full path rot, and the full path is the one used at the tense moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShotTier {
+    /// Ambient view, fed by the live timer. Fitted inside [`PREVIEW_W`]×[`PREVIEW_H`] and encoded
+    /// at [`PREVIEW_QUALITY`]. Sized about 1.4× the dashboard card's real display area, so it stays
+    /// sharp at a 1.5× device pixel ratio without paying for pixels the card discards.
+    Preview,
+    /// A deliberate look, fed by a person pressing something. Native resolution at
+    /// [`FULL_QUALITY`], because this is the tier a parent uses to actually *read* something and
+    /// JPEG rings around small text at low quality.
+    Full,
+}
+
+impl ShotTier {
+    /// The tier's name on the wire — the `?tier=` query the dashboard sends and the `--tier`
+    /// argument the service passes to the helper.
+    ///
+    /// One definition for both, on purpose. They are the same value crossing two different
+    /// boundaries, and a second spelling of "preview" in either place is a mismatch that would show
+    /// up as a silently full-resolution live stream: no error, no failing test, just the cost back.
+    pub fn as_arg(self) -> &'static str {
+        match self {
+            ShotTier::Preview => "preview",
+            ShotTier::Full => "full",
+        }
+    }
+
+    /// Parse a tier from the wire. **Unknown and absent both mean [`Full`](ShotTier::Full)** —
+    /// the tier that behaves as this endpoint always has. A typo therefore costs bandwidth, which
+    /// is visible and recoverable; the opposite default would quietly hand a parent a blurry
+    /// picture at the moment they asked for a sharp one.
+    pub fn from_arg(s: Option<&str>) -> Self {
+        match s {
+            Some("preview") => ShotTier::Preview,
+            _ => ShotTier::Full,
+        }
+    }
+}
+
+/// Longest edge of a preview frame. See [`ShotTier::Preview`] for why this size.
+pub const PREVIEW_W: u32 = 960;
+/// Tallest a preview frame gets. Paired with [`PREVIEW_W`] as a bounding box, not a forced aspect —
+/// the capture is fitted inside it so a 16:10 or rotated monitor is never stretched.
+pub const PREVIEW_H: u32 = 540;
+/// JPEG quality for [`ShotTier::Preview`]. Ample for "what kind of thing is on screen".
+const PREVIEW_QUALITY: u8 = 70;
+/// JPEG quality for [`ShotTier::Full`]. Higher because this tier exists to make text legible.
+const FULL_QUALITY: u8 = 90;
+
+/// The MIME type every capture is returned as, so handlers and tests share one definition.
+pub const SHOT_MIME: &str = "image/jpeg";
+
 #[derive(Debug, thiserror::Error)]
 pub enum ControlError {
     #[error("no process with pid {0}")]
@@ -76,8 +144,14 @@ pub enum ControlError {
 
 /// The set of remote operations the server can perform on the host machine.
 pub trait SystemControl: Send + Sync + 'static {
-    /// Capture the primary monitor and return PNG-encoded bytes.
-    fn screenshot_png(&self) -> Result<Vec<u8>, ControlError>;
+    /// Capture the primary monitor at `tier` and return JPEG-encoded bytes ([`SHOT_MIME`]).
+    ///
+    /// Implementations must apply the tier **before** the bytes leave the process that captured
+    /// them. On Windows that process is a helper in the child's session and the result crosses a
+    /// pipe, where the difference is the whole point: the same 4K frame is 32,400 KiB as raw RGBA,
+    /// 20,641 KiB as PNG, and **47 KiB** resized and encoded first. Downscaling on the service side
+    /// would save the parent's bandwidth and none of the cost that actually matters.
+    fn screenshot(&self, tier: ShotTier) -> Result<Vec<u8>, ControlError>;
 
     /// List currently running processes with their memory use, for the dashboard's process panel.
     /// Called on demand, when a parent opens that card.
@@ -151,13 +225,46 @@ pub async fn notify(control: &Arc<dyn SystemControl>, title: &str, body: &str) -
     }
 }
 
-/// Encode a decoded image as PNG bytes. Shared by the real and fake controllers so the
-/// buffer/format/error-mapping lives in one place (child modules see this private helper).
-fn encode_png(img: image::DynamicImage) -> Result<Vec<u8>, ControlError> {
-    let mut buf = std::io::Cursor::new(Vec::new());
-    img.write_to(&mut buf, image::ImageFormat::Png)
+/// Fit `img` to `tier` and encode it as JPEG. Shared by the real and fake controllers so the
+/// sizing, quality and error-mapping live in one place (child modules see this private helper).
+///
+/// **The alpha channel is dropped here, and that is a saving rather than a loss.** A desktop
+/// capture is opaque by construction, so a quarter of every byte the old PNG path fed its encoder
+/// was the constant 255. Measured on a 4K frame with the compression level held fixed, dropping it
+/// alone was 10% smaller and 15% faster; JPEG has no alpha channel to carry, so `to_rgb8` gets that
+/// for free rather than as a separate step.
+///
+/// `Triangle` for the resample: `Nearest` shimmers on text as the window moves and `Lanczos3` costs
+/// several times as much for a frame the parent glances at.
+fn encode_shot(img: image::DynamicImage, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
+    use image::ImageEncoder;
+
+    let (fitted, quality) = match tier {
+        // Only ever **down**. `DynamicImage::resize` fits the image *to* the box in both
+        // directions, so a 640x360 frame would be scaled up to 960x540 — spending bytes to invent
+        // detail that is not there. Worse, it would disguise the defect
+        // `SetProcessDpiAwarenessContext` exists to fix: a DPI-virtualised capture arrives
+        // undersized, and stretching it back out makes a broken capture look merely soft. Caught by
+        // `a_small_frame_is_never_scaled_up`, which failed on exactly this.
+        ShotTier::Preview if img.width() > PREVIEW_W || img.height() > PREVIEW_H => (
+            img.resize(PREVIEW_W, PREVIEW_H, image::imageops::FilterType::Triangle),
+            PREVIEW_QUALITY,
+        ),
+        ShotTier::Preview => (img, PREVIEW_QUALITY),
+        ShotTier::Full => (img, FULL_QUALITY),
+    };
+
+    let rgb = fitted.to_rgb8();
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+        .write_image(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
         .map_err(|e| ControlError::Capture(e.to_string()))?;
-    Ok(buf.into_inner())
+    Ok(out)
 }
 
 /// Controller for an **interactive** process (dev `run`, or the session helper): captures
@@ -184,5 +291,105 @@ pub fn service_control() -> Arc<dyn SystemControl> {
     #[cfg(not(windows))]
     {
         Arc::new(FakeControl::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The capture backend must be **named** in `Cargo.toml`, never left to a default.
+    ///
+    /// This is the guard for a defect that produced no warning, no error and no failing test, and
+    /// survived thirteen review passes as a result. `xcap` declares **no `default` feature list**,
+    /// so `xcap = "0.9"` silently selected its `#[cfg(not(feature = "wgc"))]` arm — GDI `BitBlt`,
+    /// which returns **black** for exclusive-fullscreen games and DRM video. A child can select
+    /// that failure from a game's own display settings.
+    ///
+    /// Reading the manifest as text, rather than testing a capture, is deliberate: the wrong
+    /// backend is only observable at runtime on Windows, in front of specific content, on hardware
+    /// this project has never had. The manifest is checkable everywhere, including from the
+    /// machine this is developed on, and it is where the mistake is actually made.
+    ///
+    /// It fires on the next `cargo upgrade` too — if xcap ever gains a `default` list, this still
+    /// insists the choice be written down rather than inherited.
+    #[test]
+    fn the_capture_backend_is_named_not_defaulted() {
+        let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+        let line = manifest
+            .lines()
+            .find(|l| l.trim_start().starts_with("xcap"))
+            .expect("Cargo.toml must declare xcap");
+        assert!(
+            line.contains("\"wgc\""),
+            "xcap must name its capture backend. This line leaves it to a default that does not \
+             exist, which silently selects the GDI path and captures fullscreen games as black:\n  \
+             {line}"
+        );
+    }
+
+    /// The preview tier must actually be smaller, at the one place both tiers are produced.
+    ///
+    /// `tests/api.rs` covers this end to end through the HTTP handler; this covers `encode_shot`
+    /// itself, so a regression is attributed to the encoder rather than to the route.
+    #[test]
+    fn a_preview_is_smaller_than_the_frame_it_came_from() {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(1920, 1080, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        }));
+        let full = encode_shot(img.clone(), ShotTier::Full).expect("full encodes");
+        let preview = encode_shot(img, ShotTier::Preview).expect("preview encodes");
+        assert!(
+            preview.len() * 2 < full.len(),
+            "preview {} B vs full {} B — the tier is not being applied",
+            preview.len(),
+            full.len()
+        );
+    }
+
+    /// A frame already smaller than the preview box is not scaled **up**.
+    ///
+    /// Upscaling would cost bytes to invent detail, and would hide the very defect
+    /// `SetProcessDpiAwarenessContext` exists to fix: a DPI-virtualised capture arrives small, and
+    /// blowing it back up to 960x540 would make a broken capture look merely soft.
+    #[test]
+    fn a_small_frame_is_never_scaled_up() {
+        let small = image::DynamicImage::ImageRgb8(image::RgbImage::new(640, 360));
+        let preview = encode_shot(small.clone(), ShotTier::Preview).expect("encodes");
+        let full = encode_shot(small, ShotTier::Full).expect("encodes");
+        // Same pixels either way; only the quality setting differs, so preview cannot be larger.
+        assert!(
+            preview.len() <= full.len(),
+            "a {}x{} frame must not grow when asked for a preview",
+            640,
+            360
+        );
+    }
+
+    /// Round-trip every tier through the wire spelling. A mismatch here would show up as a live
+    /// stream silently running at full resolution — no error, no failing route, just the cost back.
+    #[test]
+    fn every_tier_survives_the_wire_spelling() {
+        for tier in [ShotTier::Preview, ShotTier::Full] {
+            assert_eq!(ShotTier::from_arg(Some(tier.as_arg())), tier);
+        }
+    }
+
+    /// Absent and unrecognised both mean `Full` — the tier this endpoint has always returned.
+    #[test]
+    fn an_unknown_tier_is_full_not_preview() {
+        for input in [
+            None,
+            Some(""),
+            Some("PREVIEW"),
+            Some("thumbnail"),
+            Some("0"),
+        ] {
+            assert_eq!(
+                ShotTier::from_arg(input),
+                ShotTier::Full,
+                "{input:?} must not be read as a preview"
+            );
+        }
     }
 }

@@ -5,7 +5,7 @@
 //! is delegated to a helper launched into the interactive user session (see `crate::session`).
 
 use super::windows::WindowsControl;
-use super::{ControlError, ProcessInfo, RunningProcess, SessionState, SystemControl};
+use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
 pub struct ServiceControl {
     inner: WindowsControl,
@@ -20,8 +20,11 @@ impl ServiceControl {
 }
 
 impl SystemControl for ServiceControl {
-    fn screenshot_png(&self) -> Result<Vec<u8>, ControlError> {
-        crate::session::capture_via_session_helper()
+    /// The tier is passed **through to the helper**, not applied to what it returns. The helper
+    /// runs in the child's session and hands its result back over a pipe, so sizing there is what
+    /// keeps 20,641 KiB of 4K frame from crossing it to be thrown away on this side.
+    fn screenshot(&self, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
+        crate::session::capture_via_session_helper(tier)
     }
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {

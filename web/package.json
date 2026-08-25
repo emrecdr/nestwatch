@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Build-time only: strips comments from the served files, compiles Tailwind v4 + daisyUI into assets/app.css, and runs the tests for assets/*.js. Nothing here ships in the .exe.",
   "scripts": {
-    "build": "node scripts/strip-comments.mjs && tailwindcss -i src/app.css -o ../assets/app.css --minify",
+    "build": "node scripts/strip-comments.mjs && tailwindcss -i src/app.css -o ../assets/app.css --minify && node scripts/stamp-build.mjs",
     "watch": "node scripts/strip-comments.mjs --watch & tailwindcss -i src/app.css -o ../assets/app.css --watch",
     "test": "node --test \"test/*.test.js\"",
     "test:watch": "node --test --watch \"test/*.test.js\""

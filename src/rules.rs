@@ -969,16 +969,47 @@ pub async fn run_rules_enforcer(
         };
 
         if !rules.any_configured() {
-            // Nothing to enforce this tick (paused, or no rules). But if we had a budget shutdown
-            // in flight, cancel it — otherwise pausing (or clearing the budget) mid-countdown
-            // would still power the machine off.
+            // Which of the two states this is. `any_configured()` is `enabled && has_targets()`, so
+            // a parent's pause toggle and a household that has configured nothing both land here,
+            // and they are different facts. This line used to label both "paused", which told a
+            // parent reading their own history that they had switched something off when they had
+            // simply never switched it on.
+            let reason = inactive_reason(rules.enabled);
+
+            // Close an open session before we stop watching it.
+            //
+            // Without this the stream is unpairable: `prev_active` is discarded below, so the next
+            // active tick opens a *second* session with no stop between them. Measured on real
+            // data before the fix — six `session_start` and zero `session_stop`.
+            //
+            // Deliberately `session_stop` rather than a new event name, so that **every start has a
+            // matching stop by construction**. A distinct name would leave a future consumer to
+            // learn about it, and forgetting would reproduce exactly the orphaning this fixes;
+            // `reason` carries the nuance instead. It also keeps the record honest about what
+            // ended: enforcement stopped observing, and the child may well still be sitting there.
+            //
+            // `budget` is omitted rather than guessed. Nothing is configured on this path, so there
+            // is no budget in force — the same choice `rollup_row` makes when it cannot know one.
+            if prev_active == Some(true) {
+                usage_log.record(
+                    "session_stop",
+                    serde_json::json!({
+                        "minutes_used": enforcer.usage.total_secs / 60,
+                        "reason": reason,
+                    }),
+                );
+            }
+
+            // Nothing to enforce this tick. But if we had a budget shutdown in flight, cancel it —
+            // otherwise pausing (or clearing the budget) mid-countdown would still power the
+            // machine off.
             prev_shutdown_wanted = maybe_abort_budget_shutdown(
                 &control,
                 &config,
                 &usage_log,
                 prev_shutdown_wanted,
                 false,
-                serde_json::json!({ "reason": "paused" }),
+                serde_json::json!({ "reason": reason }),
             )
             .await;
             prev_active = None; // resume treats the next active tick as a fresh session_start
@@ -1240,6 +1271,20 @@ async fn save_tally_if_changed(
         Ok(Err(e)) => tracing::warn!(error = %e, "usage tally save failed"),
         Err(e) => tracing::error!(error = %e, "usage tally save task panicked"),
     }
+}
+
+/// Why the enforcer is sitting a tick out, for the usage history.
+///
+/// Two different facts reach the same branch, because `Rules::any_configured` is
+/// `enabled && has_targets()`: the parent pressed **Pause**, or they have never set a budget, a
+/// blocklist or a per-app limit. A parent reading their own history should be able to tell those
+/// apart — "paused" against a household that simply has no rules is a claim about something they
+/// did.
+///
+/// Pure, and beside [`should_abort_budget_shutdown`] for the same reason that one is: it is a rule
+/// the loop applies, and rules in that loop are worth pinning without standing up an enforcer.
+fn inactive_reason(enabled: bool) -> &'static str {
+    if enabled { "no_rules" } else { "paused" }
 }
 
 /// Whether the rules enforcer should cancel a pending OS shutdown *it* previously scheduled.
@@ -1814,6 +1859,81 @@ mod tests {
     /// guessed value. `parse_row` treats a missing key as "unknown" (`over_budget: false`); a
     /// present-but-wrong key would instead render a false verdict on the wrong day (see
     /// `rollup_row`'s doc comment for the concrete Sunday/Monday scenario this guards against).
+    /// The stand-down branch must close an open session before it forgets one is open.
+    ///
+    /// A source scan, because the property is the *existence of a call site* and no unit test can
+    /// see one deleted: `inactive_reason` stays green whether or not anything calls it, and the
+    /// emission itself lives inside `run_rules_enforcer`'s async loop where pinning it would mean
+    /// standing up an enforcer. Mutation-checked by deleting the guard, which this catches and the
+    /// unit tests do not.
+    ///
+    /// Worth a guard rather than a comment because the failure is **latent and silent**. Nothing
+    /// reads `session_start`/`session_stop` today — the dashboard prints them verbatim and derives
+    /// nothing — so losing the stop again would produce no symptom at all until somebody builds the
+    /// timeline, and then it would produce a wrong one: spans shaded from a mid-afternoon pause
+    /// through to bedtime, labelled as use. See `docs/OPEN-FINDINGS.md`, O36.
+    #[test]
+    fn standing_down_closes_an_open_session() {
+        const SRC: &str = include_str!("rules.rs");
+        // Drop this test module before scanning, or the prose above matches itself.
+        let code = SRC
+            .split_once("\n#[cfg(test)]")
+            .map_or(SRC, |(before, _)| before);
+
+        let branch = code
+            .split_once("if !rules.any_configured() {")
+            .expect("the stand-down branch must exist")
+            .1
+            .split_once("continue;")
+            .expect("the stand-down branch must end in `continue`")
+            .0;
+
+        assert!(
+            branch.contains("\"session_stop\""),
+            "the stand-down branch discards `prev_active` without recording a `session_stop`, so \
+             the next active tick opens a second session with no stop between them. Measured on \
+             real data when this was last broken: six `session_start` and zero `session_stop`."
+        );
+        assert!(
+            branch.contains("prev_active == Some(true)"),
+            "the stop must be conditional on a session actually being open — writing one \
+             unconditionally invents a stop on every paused tick"
+        );
+    }
+
+    /// A pause and an empty rule set are different facts and must not share a label.
+    ///
+    /// `any_configured()` is `enabled && has_targets()`, so both reach the same branch. Labelling
+    /// both "paused" told a parent reading their own usage history that they had switched something
+    /// off, when they may simply never have switched it on.
+    #[test]
+    fn a_pause_and_an_unconfigured_household_are_labelled_differently() {
+        assert_eq!(inactive_reason(false), "paused", "the master switch is off");
+        assert_eq!(
+            inactive_reason(true),
+            "no_rules",
+            "enabled, but with nothing to enforce — the parent paused nothing"
+        );
+        assert_ne!(
+            inactive_reason(true),
+            inactive_reason(false),
+            "one label for two states is the defect this exists to prevent"
+        );
+    }
+
+    /// The reason travels to the reader, so it has to survive as a plain JSON string that the
+    /// dashboard's generic `usageDetail` branch (`if (e.reason) return e.reason`) can render.
+    #[test]
+    fn the_inactive_reason_is_renderable_as_it_stands() {
+        for enabled in [true, false] {
+            let reason = inactive_reason(enabled);
+            assert!(
+                !reason.is_empty() && reason.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "`{reason}` must be a plain snake_case token — it is shown to a parent verbatim"
+            );
+        }
+    }
+
     #[test]
     fn rollup_row_omits_budget_when_unknown() {
         let per_app = BTreeMap::new();

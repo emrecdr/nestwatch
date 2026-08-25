@@ -121,13 +121,28 @@
             <div class="card-body">
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">Screen</h2>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2">
                   <label class="label cursor-pointer gap-2 py-0">
                     <span class="text-xs">Live</span>
                     <input type="checkbox" class="toggle toggle-primary toggle-sm"
                            x-model="autoRefresh" @change="toggleAutoRefresh()" />
                   </label>
-                  <button class="btn btn-ghost btn-sm" @click="shotFull = true"
+                  <!-- Cadence. Only shown while Live is on, because off it controls nothing and
+                       would be one more thing to read on a card that already has three buttons.
+                       `btn-active` rather than `btn-primary` for the chosen one: primary is
+                       reserved for actions that DO something (Save, Take screenshot), and using it
+                       for a settled choice made a selection look like a pending action. -->
+                  <div x-show="autoRefresh" x-cloak class="join" role="group"
+                       aria-label="How often the live view refreshes">
+                    <template x-for="o in refreshOptions" :key="o.ms">
+                      <button class="btn btn-xs join-item"
+                              :class="o.ms === _refreshMs ? 'btn-active' : 'btn-ghost'"
+                              :aria-pressed="o.ms === _refreshMs"
+                              @click="setRefreshMs(o.ms)"
+                              x-text="o.label"></button>
+                    </template>
+                  </div>
+                  <button class="btn btn-ghost btn-sm" @click="openShotFull()"
                           :disabled="!shotUrl" title="Expand to fill the window (Esc to close)">
                     ⤢ Expand
                   </button>
@@ -147,9 +162,15 @@
                        view, which is where you actually look at what he is doing. -->
                   <img :src="shotUrl" alt="screen of the monitored PC — click to enlarge"
                        class="max-h-96 w-full cursor-zoom-in rounded-lg object-contain"
-                       @click="shotFull = true" />
+                       @click="openShotFull()" />
                 </template>
               </div>
+              <!-- How old the picture is, and whether it is still arriving.
+                   `aria-live="polite"` so a screen reader hears the view stop rather than only a
+                   sighted parent noticing the colour change. Without this line a frozen live view
+                   and a motionless child are the same picture. -->
+              <p x-show="shotAt" x-cloak class="mt-1 text-xs" aria-live="polite"
+                 :class="shotAgeClass()" x-text="shotAge()"></p>
             </div>
           </section>
 
@@ -887,6 +908,77 @@
                   </tbody>
                 </table>
               </div>
+
+              <!-- When the machine was in use today, on a 24-hour axis.
+                   Every other figure on this card answers *how much*; this is the only one that
+                   answers *when*, which is the question a parent arrives with at two in the
+                   morning. Built entirely from session events `loadUsage()` already fetched.
+
+                   A gold marker is a session whose end is unknowable because the service stopped
+                   between two starts — drawn with no width on purpose. Giving it a duration would
+                   shade a bar from an afternoon crash through to bedtime and call it use. -->
+              <template x-if="hasTodayTimeline">
+                <div class="mt-3">
+                  <div class="mb-1 flex items-baseline justify-between">
+                    <span class="text-sm font-semibold">When the PC was in use today</span>
+                    <span class="text-xs opacity-60">local time</span>
+                  </div>
+                  <div class="relative h-6 w-full overflow-hidden rounded bg-base-300"
+                       role="img" aria-label="Times the PC was in use today">
+                    <template x-for="(s, i) in todayTimeline" :key="i">
+                      <div class="absolute inset-y-0 rounded-sm"
+                           :class="spanClass(s)" :style="spanStyle(s)"
+                           :title="spanLabel(s)"></div>
+                    </template>
+                  </div>
+                  <div class="relative mt-1 h-4 w-full">
+                    <template x-for="t in dayTicks" :key="t.h">
+                      <span class="absolute text-[10px] opacity-50"
+                            :style="tickStyle(t)" x-text="t.label"></span>
+                    </template>
+                  </div>
+                  <!-- The key. Only for states this day actually has: a legend naming things that
+                       are not on screen is its own kind of noise. -->
+                  <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                    <template x-for="k in timelineKey" :key="k.kind">
+                      <span class="flex items-center gap-1 text-[10px] opacity-70">
+                        <span class="inline-block h-2 w-2 rounded-sm" :class="spanClass(k)"></span>
+                        <span x-text="k.label"></span>
+                      </span>
+                    </template>
+                  </div>
+
+                  <!-- Spelt out for a screen reader, which cannot read absolute positioning. -->
+                  <ul class="sr-only">
+                    <template x-for="(s, i) in todayTimeline" :key="i">
+                      <li x-text="spanLabel(s)"></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+
+              <!-- Something turned up that never had before.
+                   Placed above the totals because it is the one thing here a parent may need to
+                   act on: a total tells you how much, this tells you what changed. Detection is by
+                   *use*, not installation — an app installed and never opened is not a fact about
+                   a child's day, and this product watches no registry by design.
+                   `x-if` (not x-show) so `firstSeen.apps` is never evaluated while it is null. -->
+              <template x-if="showFirstSeen">
+                <div class="mt-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
+                  <div class="flex items-baseline gap-2">
+                    <span class="text-sm font-semibold" x-text="firstSeenHeading()"></span>
+                    <span class="text-xs opacity-70" x-text="firstSeenNote()"></span>
+                  </div>
+                  <ul class="mt-1 space-y-0.5">
+                    <template x-for="a in firstSeen.apps" :key="a.name">
+                      <li class="flex justify-between text-sm">
+                        <span x-text="appLabel(a.name)"></span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
+                      </li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
 
               <!-- Categories first, because "Games: 14 h" is a sentence and twenty executable
                    names is a puzzle. Only rendered once there is category history to show: a

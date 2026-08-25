@@ -21,7 +21,7 @@ authenticated session*:
 
 | Capability | Endpoint |
 |---|---|
-| See the live screen | `GET /api/screenshot` |
+| See the live screen | `GET /api/screenshot?tier=preview\|full` |
 | List running apps | `GET /api/processes` |
 | Kill any app | `POST /api/processes/{pid}/kill` |
 | Lock the screen | `POST /api/lock` |
@@ -187,6 +187,20 @@ open the door on its own.
   recent events in the dashboard's **Recent access** panel or via `GET /api/audit`. This turns an
   otherwise invisible access into something you can see — a login from an unfamiliar IP at an odd
   hour stands out.
+- **The live view is logged as a session, not as frames.** A full-resolution capture — the
+  *Take screenshot* button, or **Expand** — writes one `screenshot_taken` line each, because there
+  are few of them, a person asked for each, and that is the tier detailed enough to read a message
+  over someone's shoulder. The live view's small preview frames are counted instead and written as
+  a single `live_view` line at most every five minutes, carrying the number of frames it stands
+  for.
+  <br>This is a **security** property rather than a tidiness one. At the old cadence a per-frame
+  line was 1,200 rows an hour; `audit.jsonl` rotates at 2 MiB and keeps exactly one backup, so
+  roughly 57 hours of live viewing would evict the entire security history — every login, every
+  kill, every password change — to make room for a timer. Of the fourteen places this codebase
+  writes an audit line, thirteen are each bounded by one human action; the live preview was the
+  only one a clock could drive, and so the only one whose volume nothing bounded. The coalesced
+  line is also the more useful record: it says the screen was watched for forty minutes and looked
+  at closely five times, rather than repeating one sentence 1,200 times.
 - Further append-only logs live beside it with independent retention: `usage.jsonl` (usage
   history — session edges, countdowns, enforcement actions — read-only via `GET /api/usage`),
   `screentime.jsonl` (one rollup row per completed day, read-only via `GET /api/screentime`; kept

@@ -200,6 +200,103 @@ mod tests {
         })
     }
 
+    /// The chart's two textured states must have rules in the **shipped** stylesheet.
+    ///
+    /// These are the only classes in the product that no other guard can see. `stBarClass` builds
+    /// them at run time — `"st-nodata"`, `"bg-error st-over"` — so they appear in no `class=`
+    /// attribute, and `the_class_scan_reads_static_attributes_and_only_those` pins that scanner to
+    /// static attributes deliberately, because reading Alpine expressions yields `===` and `null`
+    /// as class names. So the markup guard cannot cover these two by construction.
+    ///
+    /// The JavaScript tests either side of this one assert the *strings* `stBarClass` returns, and
+    /// would all still pass if these rules vanished from the CSS. What would ship is a bar carrying
+    /// a class with nothing behind it: an over-budget day rendered identically to an ordinary one,
+    /// with no error anywhere. That is the same silent failure the markup guard exists to prevent,
+    /// arriving through the one door it does not watch.
+    ///
+    /// Both are plain CSS rather than `@utility`, and the reason is narrower than it first looks —
+    /// see the comment beside `.st-over` in `web/src/app.css`. Converting them today would *not*
+    /// drop them: `@source` covers `.scan/app.js` and `stBarClass` writes the literal `"st-over"`
+    /// there, so the scanner sees the name. Plain CSS protects against the day that string stops
+    /// being literal — a name built as `"st-" + kind` — at which point a utility survives only if
+    /// something else happens to mention it. This test catches the rule going missing; nothing
+    /// catches it being reachable only by luck, which is what the plain-CSS choice is for.
+    #[test]
+    fn the_chart_state_classes_survive_into_the_shipped_stylesheet() {
+        let css = app_css();
+        for class in [".st-nodata", ".st-over"] {
+            assert!(
+                css.contains(class),
+                "{class} has no rule in the shipped CSS. It is produced by `stBarClass` at run \
+                 time, so no markup scan and no JS test can catch its absence — the bar would \
+                 render untextured and nothing would fail.\nLikely causes, in order: the rule was \
+                 deleted from `web/src/app.css`; or it became an `@utility` *and* the literal class \
+                 name stopped appearing in a scanned file, so Tailwind no longer emits it. \
+                 `@utility` alone is not the cause — the scanner still sees the literal in \
+                 `stBarClass` today."
+            );
+        }
+    }
+
+    /// The CSS build chain must strip, then compile, then stamp — in that order.
+    ///
+    /// `web/scripts/stamp-build.mjs` advances `assets/app.css`'s mtime after a successful build, so
+    /// `build.rs`'s freshness warning stops firing on the byte-identical rebuilds Tailwind
+    /// deliberately does not write. That repair depends entirely on *where* the stamp sits in the
+    /// chain, and the chain is a single line of JSON that anyone might reorder:
+    ///
+    /// * `strip-comments.mjs` regenerates `web/.scan/`, the copies Tailwind actually scans. Stamp a
+    ///   stylesheet compiled from a stale scan and the freshness it claims is not there.
+    /// * The stamp must come **after** Tailwind. Moved earlier — or run when the compile failed —
+    ///   the warning inverts from a false alarm into a false *silence*, which is strictly worse:
+    ///   the check exists to speak up when the stylesheet is behind.
+    ///
+    /// `&&` between each step is part of the contract, not formatting: with `;` a failed compile
+    /// would still stamp, asserting freshness for a stylesheet that was never rebuilt.
+    ///
+    /// Read as text rather than parsed, for the same reason the manifest guard in `control` is:
+    /// this must fail on a machine that has never run `npm`, which is every machine in CI's Rust
+    /// jobs and the one this is developed on.
+    #[test]
+    fn the_css_build_chain_stamps_only_after_a_successful_compile() {
+        const PKG: &str = include_str!("../web/package.json");
+
+        let build = PKG
+            .lines()
+            .find(|l| l.trim_start().starts_with("\"build\":"))
+            .expect("web/package.json must define a `build` script");
+
+        let step = |needle: &str| {
+            build
+                .find(needle)
+                .unwrap_or_else(|| panic!("the build chain no longer runs `{needle}`:\n  {build}"))
+        };
+        let (strip, compile, stamp) = (
+            step("strip-comments.mjs"),
+            step("tailwindcss"),
+            step("stamp-build.mjs"),
+        );
+
+        assert!(
+            strip < compile,
+            "`strip-comments.mjs` must run before Tailwind, or Tailwind compiles a stale scan:\n  \
+             {build}"
+        );
+        assert!(
+            compile < stamp,
+            "`stamp-build.mjs` must run after Tailwind, or a build that never compiled is stamped \
+             as fresh — turning `build.rs`'s warning from a false alarm into a false silence:\n  \
+             {build}"
+        );
+        // Between the last two steps specifically: `;` there would stamp a failed compile.
+        let between = &build[compile..stamp];
+        assert!(
+            between.contains("&&"),
+            "the compile and the stamp must be joined by `&&`, so a failed compile stamps \
+             nothing:\n  {build}"
+        );
+    }
+
     /// No served page uses an Alpine expression its CSP build cannot parse.
     ///
     /// `script-src` is `'self'` with no `'unsafe-eval'`, which is only possible because the CSP

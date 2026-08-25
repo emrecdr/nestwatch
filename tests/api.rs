@@ -72,8 +72,89 @@ async fn session_endpoint_reflects_auth_state() {
     assert_eq!(body_json(res).await["authenticated"], json!(true));
 }
 
+/// Fetch a capture, returning its content-type and body.
+async fn shot(app: &axum::Router, cookie: &str, query: &str) -> (String, Vec<u8>) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/screenshot{query}"))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let mime = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (mime, bytes.to_vec())
+}
+
 #[tokio::test]
-async fn screenshot_returns_png() {
+async fn screenshot_returns_jpeg() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let (mime, bytes) = shot(&app, &cookie, "").await;
+    assert_eq!(mime, "image/jpeg");
+    // SOI marker. JPEG has no ASCII signature, so this is the whole of what identifies one.
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8], "JPEG magic bytes present");
+}
+
+/// The tier must reach the capture and change what comes back.
+///
+/// Asserting on **size** rather than on decoded dimensions is deliberate: bytes-on-the-wire is the
+/// entire point of the tier, and a test that only checked the pixel count would still pass if the
+/// preview were downscaled and then encoded at a quality that undid the saving.
+///
+/// The fake's source frame is 1280x720 — larger than the preview box on purpose. It used to be
+/// 320x180, and at that size `encode_shot` returns a frame smaller than the box untouched, so both
+/// tiers produced identical bytes and this test could not have failed however broken the plumbing.
+#[tokio::test]
+async fn the_preview_tier_is_far_smaller_than_the_full_one() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let (_, full) = shot(&app, &cookie, "?tier=full").await;
+    let (_, preview) = shot(&app, &cookie, "?tier=preview").await;
+
+    assert!(
+        preview.len() * 2 < full.len(),
+        "preview ({} B) must be dramatically smaller than full ({} B), not incidentally so — \
+         if these are close the tier is not reaching the capture",
+        preview.len(),
+        full.len()
+    );
+}
+
+/// Absent and unrecognised both mean full, so a typo costs bandwidth rather than silently handing
+/// a parent a blurry picture at the moment they asked for a sharp one.
+#[tokio::test]
+async fn an_absent_or_unknown_tier_falls_back_to_full() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let (_, full) = shot(&app, &cookie, "?tier=full").await;
+    for query in ["", "?tier=", "?tier=PREVIEW", "?tier=medium"] {
+        let (_, got) = shot(&app, &cookie, query).await;
+        assert_eq!(
+            got.len(),
+            full.len(),
+            "`/api/screenshot{query}` must return the full tier"
+        );
+    }
+}
+
+/// A capture of a child's desktop must never be written to a browser's disk cache.
+#[tokio::test]
+async fn a_capture_is_not_cacheable() {
     let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();
 
@@ -88,13 +169,10 @@ async fn screenshot_returns_png() {
         .await
         .unwrap();
 
-    assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(
-        res.headers().get(header::CONTENT_TYPE).unwrap(),
-        "image/png"
+        res.headers().get(header::CACHE_CONTROL).unwrap(),
+        "no-store"
     );
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(&bytes[1..4], b"PNG", "PNG magic bytes present");
 }
 
 #[tokio::test]

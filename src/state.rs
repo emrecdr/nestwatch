@@ -43,6 +43,9 @@ pub struct AppState {
     pub config_save_lock: Arc<tokio::sync::Mutex<()>>,
     /// Append-only security audit log (login attempts + sensitive actions).
     pub audit: Arc<AuditLog>,
+    /// Collapses the live view's preview frames into one audit line per window, so a timer cannot
+    /// evict the security history. See [`crate::audit::LiveViewAudit`].
+    pub live_audit: Arc<crate::audit::LiveViewAudit>,
     /// Append-only usage-history log (daily screen-time, sessions, enforcement events).
     pub usage: Arc<UsageLog>,
     /// Append-only daily screen-time rollups. Separate from `usage` so point-in-time events
@@ -86,6 +89,7 @@ impl AppState {
             login_lock: Arc::new(tokio::sync::Mutex::new(())),
             config_save_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
+            live_audit: Arc::new(crate::audit::LiveViewAudit::default()),
             usage,
             screentime,
             time_requests,

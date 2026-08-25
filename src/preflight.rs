@@ -313,8 +313,84 @@ pub fn gather(port: u16) -> Vec<Finding> {
         check_existing_service(&mut out);
         check_mark_of_the_web(&mut out);
         check_network_profile(&mut out);
+        check_windows_build(&mut out);
     }
     out
+}
+
+/// The Windows build the screen capture needs.
+///
+/// `xcap`'s Windows.Graphics.Capture path reaches the monitor through
+/// `IGraphicsCaptureItemInterop::CreateForMonitor`, which arrived in Windows 10 **version 1903**
+/// (build 18362). Below that the API is simply absent and every capture fails.
+///
+/// **Note the number.** This codebase cites build **1803** twice — for Interactive Service
+/// Detection, in `watcher.rs` and `FOREGROUND-TRACKING.md` — so 1803 is the figure already in a
+/// reader's head here, and it is the wrong one for this. Anyone reasoning from memory ships a
+/// build that is broken on 1809.
+pub const MIN_CAPTURE_BUILD: u32 = 18362;
+
+/// Whether `build` can run the capture path, as a pure function so the boundary is testable
+/// anywhere. Kept separate from the FFI that reads the number for the reason `foreground::idle_state`
+/// is: the arithmetic that decides something should not live in a module the dev machine never
+/// compiles.
+///
+/// `0` means the build could not be read, and is treated as **new enough**. Failing the other way
+/// would block an install on every machine where one syscall misbehaved, to prevent a fault the
+/// parent can see and report for themselves.
+///
+/// `pub` for the same reason [`crate::foreground::idle_state`] is: it is the decision, its only
+/// caller is behind `#[cfg(windows)]`, and a private helper would be dead code on the machine this
+/// is developed on — which is also the machine where its tests run.
+pub fn capture_build_ok(build: u32) -> bool {
+    build == 0 || build >= MIN_CAPTURE_BUILD
+}
+
+/// Warn when this Windows is too old for the screen capture to work.
+///
+/// A **caution**, not a blocker: everything else — the budget, curfew, blocklists, per-app limits,
+/// the whole enforcement half — works fine on an older build. Refusing to install would take a
+/// working parental control away to protect one feature of it.
+#[cfg(windows)]
+fn check_windows_build(out: &mut Vec<Finding>) {
+    let build = os_build();
+    if capture_build_ok(build) {
+        return;
+    }
+    out.push(Finding::caution(
+        format!("Windows build {build} is older than 18362 (version 1903)"),
+        "Screenshots and the live view need an API that arrived in Windows 10 version 1903. \
+         Everything else — screen-time limits, curfew, blocked apps — works normally on this \
+         build; only the picture of the screen will fail.",
+        "Run Windows Update. Any Windows 10 that still receives updates is well past this.",
+    ));
+}
+
+/// This machine's Windows build number, or `0` if it cannot be read.
+///
+/// `RtlGetVersion` rather than `GetVersionEx`: the latter is **shimmed** for binaries without an
+/// application manifest declaring supported-OS compatibility, and reports Windows 8's 6.2 forever.
+/// This binary has no manifest — it sets DPI awareness through an API call precisely so it does not
+/// need one — so `GetVersionEx` would report a version far below the floor on every machine and
+/// warn every parent. `RtlGetVersion` is the documented way to get the real number and is not
+/// subject to the shim.
+#[cfg(windows)]
+fn os_build() -> u32 {
+    use windows::Wdk::System::SystemServices::RtlGetVersion;
+    use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+
+    let mut info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: Win32 version FFI. `info` is a correctly-sized, fully-initialized `OSVERSIONINFOW`
+    // owned by this frame; `RtlGetVersion` writes into it and retains no reference to it.
+    let status = unsafe { RtlGetVersion(&mut info) };
+    if status.is_ok() {
+        info.dwBuildNumber
+    } else {
+        0
+    }
 }
 
 /// The port our own service is serving right now, if it is running.
@@ -595,6 +671,30 @@ mod tests {
             "nothing can reach it",
             "set it to Private",
         )
+    }
+
+    /// The capture floor is 1903 (18362), and the neighbouring build must fall on the right side.
+    ///
+    /// Pinned as numbers rather than as `MIN_CAPTURE_BUILD ± 1` so that changing the constant
+    /// fails here and has to be justified. 17763 is 1809 — the build a reader who remembers this
+    /// codebase's *other* version citation would wrongly allow.
+    #[test]
+    fn the_capture_floor_is_1903_not_1809() {
+        assert!(!capture_build_ok(17_763), "1809 cannot run the capture");
+        assert!(!capture_build_ok(18_361), "one below the floor is below it");
+        assert!(capture_build_ok(18_362), "1903 is exactly the floor");
+        assert!(capture_build_ok(19_045), "22H2 is well past it");
+        assert!(capture_build_ok(26_100), "Windows 11 24H2");
+    }
+
+    /// An unreadable build number must not warn.
+    ///
+    /// The check exists to tell a parent something useful. Warning whenever one syscall
+    /// misbehaved would train them to ignore it, which costs more than the case it catches — and
+    /// a genuinely too-old machine still reports the failure the moment a capture is attempted.
+    #[test]
+    fn an_unknown_build_is_treated_as_new_enough() {
+        assert!(capture_build_ok(0));
     }
 
     /// An upgrade is not a port conflict.

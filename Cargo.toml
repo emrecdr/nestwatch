@@ -53,11 +53,25 @@ argon2 = "0.5"
 async-trait = "0.1"
 axum = "0.8.9"
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
-# PNG encoding only (screenshots). Default features drag in the whole decode stack — AV1
-# (rav1e/ravif), EXR, TIFF, WebP, JPEG — ~54 crates this app never calls, since nothing here
+# JPEG encoding only (screenshots). Default features drag in the whole decode stack — AV1
+# (rav1e/ravif), EXR, TIFF, WebP — ~54 crates this app never calls, since nothing here
 # ever *decodes* an image. xcap already declares image correctly; feature unification means
 # this declaration is what pulls the rest in.
-image = { version = "0.25", default-features = false, features = ["png"] }
+#
+# This was `["png"]` until the capture path grew two tiers. Both encode JPEG, so nothing here
+# writes a PNG any more and the feature came out of *this* declaration. It does not leave the
+# build: `xcap` declares `image = { features = ["png"], default-features = false }` itself, and
+# feature unification means the png stack (`png`, `flate2`, `miniz_oxide`, `fdeflate`,
+# `crc32fast`, `adler2`, `simd-adler32`) stays for as long as xcap is a dependency. Verified with
+# `cargo tree -i png --target x86_64-pc-windows-gnu`, after predicting the opposite and being
+# wrong. So the cost of JPEG is exactly **two** crates, `zune-core` and `zune-jpeg`, and asking
+# for `["jpeg"]` alone here is honest about what this crate uses rather than a saving.
+#
+# Why JPEG at all, given the tool shipped lossless for a year: a 4K desktop showing a game is
+# 20,641 KiB of PNG and 979 KiB of q70 JPEG, measured through this exact encoder. Live mode fired
+# the first of those every three seconds. Raising PNG's compression instead was measured too and
+# is far worse — 63% smaller for 1,477 ms per frame, against 44.7 ms today.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
 pem = "4"
 # Renders the pairing URL as a QR in the install console. `default-features = false` drops its
@@ -96,6 +110,29 @@ panic = "abort"
 [target."cfg(windows)".dependencies]
 # Screen capture is only used on Windows (control/windows.rs); keeping it Windows-only
 # avoids pulling X11/Wayland system deps into Linux/macOS builds and CI.
-xcap = "0.9"
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_Security", "Win32_System_Threading", "Win32_System_Environment", "Win32_System_StationsAndDesktops", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Diagnostics_ToolHelp"] }
+#
+# `features = ["wgc"]` is LOAD-BEARING and must never be dropped back to a bare `xcap = "0.9"`.
+# xcap declares **no `default` feature list at all**, so a bare dependency silently compiles the
+# `#[cfg(not(feature = "wgc"))]` arm of `src/windows/capture.rs` — GDI `BitBlt` against the
+# DWM-composited desktop. That captures a normal desktop perfectly and returns **black** for
+# anything that bypasses composition: a game in exclusive fullscreen, and DRM video. Exclusive
+# fullscreen is a radio button in any game's display settings, so the failure is not an edge case,
+# it is an evasion the child can select. It also produces no warning, no error and no failing
+# test — which is why `control::tests::the_capture_backend_is_named_not_defaulted` now pins it.
+#
+# Two consequences, both deliberate:
+#   * The two paths are mutually exclusive at COMPILE time — xcap's `mod.rs` gates `mod gdi` on
+#     `cfg(not(feature = "wgc"))` — so turning this on removes the GDI fallback entirely. There is
+#     no runtime `IsSupported()` arrangement available here; `preflight` checks the OS build
+#     instead and fails loudly.
+#   * `CreateForMonitor` needs Windows 10 **1903** (10.0.18362). Note the trap: this codebase cites
+#     **1803** twice, for Interactive Service Detection, so the wrong number is the familiar one.
+#
+# Costs no new crate: `wgc` only switches on features of the `windows` crate below.
+xcap = { version = "0.9", features = ["wgc"] }
+# `Win32_UI_HiDpi` is for `SetProcessDpiAwarenessContext` in `control/windows.rs`. Without it the
+# capture helper is DPI-*unaware*, so its desktop DC is virtualised to logical pixels while xcap
+# asks `EnumDisplaySettingsW` for the rectangle in physical ones — a mismatch that leaves over half
+# the frame outside the source surface at the 150% scaling Windows picks for a 4K laptop panel.
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_RemoteDesktop", "Win32_Security", "Win32_System_Threading", "Win32_System_Environment", "Win32_System_StationsAndDesktops", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_HiDpi", "Wdk_System_SystemServices"] }
 windows-service = "0.8.1"

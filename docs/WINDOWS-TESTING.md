@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these eight first
 
-The full list is 130 items, which is why it keeps not happening. These eight are the ones whose
+The full list is 159 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -24,18 +24,23 @@ Each links to its full entry below.
    this list matters until you know.
 3. **Screenshot returns the live desktop, not a black image** (§D) — the single hardest piece of
    the whole system to get right, and the one most likely to be broken by a Windows update.
-4. **Lock actually locks the screen** (§D) — same mechanism as the screenshot, opposite direction.
+4. **A game in exclusive fullscreen is captured, not black** (§D1a) — the capture backend was
+   replaced for exactly this. The old one returned black, and the child could select that failure
+   from the game's own display settings with no prompt and no admin right. An ordinary desktop
+   captures fine either way, so nothing else on this list distinguishes the two backends. One
+   game, one setting, thirty seconds.
+5. **Lock actually locks the screen** (§D) — same mechanism as the screenshot, opposite direction.
    If screenshots work and lock doesn't, that narrows the fault sharply.
-5. **He cannot stop the service or read the data directory** (§B) — two commands as him. This is
+6. **He cannot stop the service or read the data directory** (§B) — two commands as him. This is
    the tamper-resistance claim; everything else assumes it holds.
-6. **A blocked app still gets killed** (§E5) — the enforcer's process scan was rewritten to stop
+7. **A blocked app still gets killed** (§E5) — the enforcer's process scan was rewritten to stop
    gathering four things it threw away, and that code has never executed anywhere. If it returns a
    short list, blocked apps quietly survive and the dashboard looks perfectly normal. One app, thirty
    seconds.
-7. **Every dashboard card still works from a real browser** (§C) — the origin check
+8. **Every dashboard card still works from a real browser** (§C) — the origin check
    fails *silently*, as buttons that do nothing rather than an error. A test client cannot catch
    this; only a browser can.
-8. **A day the PC was off shows as "not measured", not as a zero** (§D) — if those two states
+9. **A day the PC was off shows as "not measured", not as a zero** (§D) — if those two states
    look alike, a stopped enforcer reads exactly like a well-behaved week, which is the failure the
    feature exists to prevent. The chart *has* now been seen rendered, in Chrome on macOS with
    seeded data covering all three states — which is how the bug that made it draw nothing at all
@@ -173,8 +178,78 @@ failures rather than being surprised by them.
 - [ ] **Lock** (navbar 🔒) → his screen locks to the sign-in prompt (password to resume). This
       exercises the session-helper lock (`helper --lock` launched into his session) — a Session-0
       service can't lock the desktop directly, so if nothing happens see Troubleshooting.
-- [ ] **Live** toggle on the Screen card → the screenshot refreshes every few seconds without
-      clicking; toggling it off (or logging out) stops the refresh.
+- [ ] **Live** toggle on the Screen card → the screenshot refreshes without clicking; toggling it
+      off (or logging out) stops the refresh. The **2s / 5s / 15s** buttons appear beside the
+      toggle only while Live is on, and changing one keeps the view running rather than switching
+      it off.
+- [ ] **The picture says how old it is.** With Live on, a line under it reads "updated Ns ago" and
+      counts up on its own. Now **stop the service** (`sc stop Nestwatch`) with Live still on: the
+      line must turn red and read "not updating — last frame …". This is the whole point of it. A
+      frozen live view and a child sitting still are the same picture, and before this the last
+      good frame simply stayed on screen with the toggle still lit.
+- [ ] **Expand fetches a sharper frame.** With Live running, click the picture (or **⤢ Expand**).
+      The full-size view must be visibly sharper than the thumbnail — the live stream sends a
+      960×540 preview, and expanding asks for a full-resolution one. If it looks like a stretched,
+      soft version of the thumbnail, the refetch is not happening.
+- [ ] **Turning Live off stops it immediately.** Toggle Live off while a capture is mid-flight
+      (easiest at the 2s cadence). The picture must not change afterwards. A frame arriving after
+      the parent said stop means the in-flight request was not aborted.
+
+> **Already verified in a browser, on macOS, against the fake controller** (2026-08-25): the first
+> frame after switching Live on requests `tier=full` and every timer frame after it requests
+> `tier=preview`; **Expand** issues a fresh `tier=full` request; the age line renders and counts up;
+> with `/api/*` returning 503 the line turns red and reads *"not updating — last frame Ns ago"*
+> while the toggle stays lit, and clears to *"updated 2s ago"* when the API returns. Preview was
+> 21,985 B against full's 62,795 B on the fake's 1280×720 frame, and 41 preview frames plus 3 full
+> captures wrote **4** audit lines rather than 44. The console showed no CSP or Alpine parser
+> errors — which matters because that build fails *silently*.
+>
+> None of that touched Windows, a real desktop, or the WGC backend. The items above and in §D1a are
+> what those numbers do not cover.
+
+- [ ] **The "when the PC was in use today" strip matches reality.** Sign in and out a couple of
+      times during the day, then compare the strip against what actually happened. Two specific
+      checks beyond "there are bars": pause the rules mid-session and confirm the bar *ends* there
+      rather than running on, and stop the service mid-session (`sc stop Nestwatch`) then restart
+      it — that session's end is unknowable and must appear as a thin gold marker, never as a bar
+      stretching to the restart.
+- [ ] **A new app is called out after it is first used.** Install something the child has never
+      run (or rename a copy of an existing exe), open it for a few minutes, and let the day roll
+      over at midnight. The next day the report must name it under "new apps". Two things to check
+      beyond that it appears: the count of earlier days is right, and an app used every day is
+      **not** listed. This runs off the foreground watcher, so it is also an end-to-end proof that
+      the watcher reported at all — if nothing is ever called new, suspect §D2 before suspecting
+      this.
+- [ ] **The first day of history says nothing.** On a machine where the watcher has only ever run
+      for one day, the report must show no new-apps panel at all rather than listing everything.
+
+### D1a. The capture backend (new, and the reason for the Windows version floor)
+
+The capture moved from GDI `BitBlt` to Windows.Graphics.Capture. Everything here is new code that
+has **never run anywhere**, and the failures it fixes are invisible on an ordinary desktop — which
+is exactly why the old backend survived thirteen review passes.
+
+- [ ] **A yellow border appears around the screen while the parent is watching.** Windows draws
+      it; the app cannot and does not suppress it. Its presence is the proof the new backend is
+      live — the old one drew nothing. Its absence with a working picture means the build fell back
+      to GDI.
+- [ ] **Capture a game running in EXCLUSIVE FULLSCREEN.** Set a game to exclusive fullscreen in its
+      own display settings (not borderless), then take a screenshot. **This is the single most
+      important item in this file.** The old backend returned black here, and the child can select
+      that failure from the game's own settings menu with no prompt and no admin right. A black
+      frame is indistinguishable from a monitor that is switched off.
+- [ ] **Capture DRM video** — Netflix, Disney+ or Prime Video playing in a browser. Same failure
+      class as above.
+- [ ] **Capture on a display scaled above 100%** (Settings → Display → Scale, 125% or 150%). The
+      whole desktop must be in the frame. If the picture holds the desktop in its top-left corner
+      with black down the right and bottom, `SetProcessDpiAwarenessContext` is not taking effect —
+      that was predicted to lose 36% of the frame at 125% and 55.6% at 150%, and was never verified.
+- [ ] **Two monitors: the picture is the PRIMARY one.** Arrange the secondary as monitor 1 in
+      Windows' display settings if possible, so enumeration order and primary disagree. The old
+      code took whichever enumerated first.
+- [ ] **On a machine below build 18362** (if one is reachable): `nestwatch install` reports a
+      **caution** naming the build, and installs anyway. Screen-time limits, curfew and blocked
+      apps must all still work there — only the picture is expected to fail.
 - [ ] **Shut down** → Windows shows a countdown notification, then the PC powers off.
 - [ ] **The system tools still resolve.** `shutdown`, `rundll32`, `icacls`,
       `netsh` and `sc` are now invoked by absolute path instead of by name. CI proves those files

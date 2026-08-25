@@ -16,7 +16,7 @@
 //! a temp directory. (The row *written* on rollover is built by `rules::rollup_row`, which this
 //! module's `parse_row` is the deliberate mirror image of.)
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
@@ -170,6 +170,11 @@ pub struct Report {
     /// Minutes per **app group**, summed the same way. The category view: "Games: 14 h" rather
     /// than twenty rows of executable names.
     pub group_totals: Vec<AppMinutes>,
+    /// Apps that turned up for the first time on the most recent day with focus evidence.
+    ///
+    /// `None` when the question cannot be answered honestly — see [`first_seen_in`]. The UI must
+    /// distinguish that from `Some` with an empty `apps`, which means "checked, nothing new".
+    pub first_seen: Option<FirstSeen>,
 }
 
 /// How many rows each windowed total carries.
@@ -180,10 +185,120 @@ pub struct Report {
 /// natural bound.
 pub const TOP_OVER_WINDOW: usize = 25;
 
+/// Largest baseline the "first seen" comparison will build before giving up.
+///
+/// The baseline is a union of app names across every retained day, and those names come from the
+/// watcher — a process running as the child. `foreground::MAX_APPS` bounds one day at 200, so a
+/// year of deliberately-renamed executables could otherwise reach five figures. A cap alone would
+/// be worse than none: a truncated baseline silently reports familiar apps as new, which is a false
+/// alarm aimed at the parent. So overflow abandons the answer entirely rather than degrading it —
+/// the same "absent rather than wrong" rule the rest of this file follows for unmeasured days.
+///
+/// 2,000 is far above any honest machine. A busy PC sees tens of distinct programs in a year.
+const MAX_BASELINE_APPS: usize = 2_000;
+
+/// How many apps the "first seen" list will name.
+///
+/// Small on purpose: this is a *notice*, and a notice listing thirty things is a list. If a day
+/// genuinely introduces more than this, the count still reports the total so nothing is hidden.
+const TOP_FIRST_SEEN: usize = 8;
+
 /// Sum one `DayRow` field across the window, heaviest first, capped.
 ///
 /// Takes an extractor rather than a key string so a typo cannot silently produce an empty list —
 /// the compiler picks the field, not a lookup that quietly misses.
+/// Apps that had focus on one day and on no earlier day in the retained history.
+///
+/// The most actionable thing a usage report can say is not a total but a **change**: something
+/// appeared that never appeared before. A newly installed game, a chat client the parent has not
+/// heard of. Today a parent has to spot it themselves in a list sorted by minutes, where a program
+/// used for twelve minutes sits near the bottom.
+///
+/// Detection is by **use, not installation**, because that is the only signal available here — this
+/// product deliberately watches no registry and reads no install log. That also matches what the
+/// market does: Qustodio surfaces a new app once it has been used at least once, not when it lands
+/// on disk. An app installed and never opened is not a fact about a child's day.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+pub struct FirstSeen {
+    /// The day these were first seen, `YYYY-MM-DD`. The most recent **completed** day with focus
+    /// evidence — never today, because today's rollup has not been written yet.
+    pub date: String,
+    /// The names, heaviest first, capped at [`TOP_FIRST_SEEN`].
+    pub apps: Vec<AppMinutes>,
+    /// How many first appeared, which can exceed `apps.len()`.
+    pub count: usize,
+    /// How many earlier days carried focus evidence. This is the **strength of the claim** and the
+    /// UI must show it: "new, against 40 days of history" and "new, against 1 day" are different
+    /// statements, and the second is nearly worthless.
+    pub baseline_days: usize,
+}
+
+/// Compute [`FirstSeen`] for the newest day in `history` that carries focus evidence.
+///
+/// `None` — rather than an empty result — whenever the question cannot be answered honestly:
+///
+/// * no day carries focus evidence (the watcher has never reported, or every row predates it);
+/// * the newest such day is the only one, so there is no baseline and *everything* would look new;
+/// * the baseline exceeded [`MAX_BASELINE_APPS`], where a partial answer would invent new apps.
+///
+/// A day with an empty `focused` map is treated as carrying **no evidence**, not as evidence of
+/// nothing. That is the same rule `DayRow::focused` documents: an absent map means the watcher was
+/// not running or the build did not record it, and reading it as "no app had focus" would make
+/// every app look new the following day.
+fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> {
+    // Newest day with evidence is the subject; everything strictly before it is the baseline.
+    let (&target, row) = history
+        .iter()
+        .rev()
+        .find(|(_, row)| !row.focused.is_empty())?;
+
+    let mut baseline: BTreeSet<&str> = BTreeSet::new();
+    let mut baseline_days = 0usize;
+    for (_, earlier) in history.range(..target) {
+        if earlier.focused.is_empty() {
+            continue;
+        }
+        baseline_days += 1;
+        for app in &earlier.focused {
+            baseline.insert(app.name.as_str());
+            if baseline.len() > MAX_BASELINE_APPS {
+                return None;
+            }
+        }
+    }
+    if baseline_days == 0 {
+        return None;
+    }
+
+    let mut fresh: Vec<AppMinutes> = row
+        .focused
+        .iter()
+        .filter(|a| !baseline.contains(a.name.as_str()))
+        .cloned()
+        .collect();
+    if fresh.is_empty() {
+        // A day that introduced nothing is the normal case, and it is still an answer worth
+        // returning: the UI can say so, or say nothing, but it must not be confused with "we could
+        // not tell". `None` is reserved for the latter.
+        return Some(FirstSeen {
+            date: target.to_string(),
+            apps: Vec::new(),
+            count: 0,
+            baseline_days,
+        });
+    }
+
+    fresh.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
+    let count = fresh.len();
+    fresh.truncate(TOP_FIRST_SEEN);
+    Some(FirstSeen {
+        date: target.to_string(),
+        apps: fresh,
+        count,
+        baseline_days,
+    })
+}
+
 fn totals_across<F>(days: &[DayRow], pick: F) -> Vec<AppMinutes>
 where
     F: Fn(&DayRow) -> &Vec<AppMinutes>,
@@ -376,6 +491,7 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
             focus_totals: Vec::new(),
             page_totals: Vec::new(),
             group_totals: Vec::new(),
+            first_seen: None,
         };
     };
     let span = chrono::Duration::days(i64::from(days) - 1);
@@ -426,12 +542,19 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
         _ => None,
     };
 
+    // From `by_date` — every completed day in the retained history — rather than from `day_rows`,
+    // which is only the chosen window. "First seen" must mean first in everything we know, not
+    // first in the last seven days; otherwise narrowing the range would invent new apps, and the
+    // same app would be "new" or not depending on which button the parent last pressed.
+    let first_seen = first_seen_in(&by_date);
+
     let app_totals = totals_across(&day_rows, |d| &d.apps);
     let focus_totals = totals_across(&day_rows, |d| &d.focused);
     let page_totals = totals_across(&day_rows, |d| &d.pages);
     let group_totals = totals_across(&day_rows, |d| &d.groups);
 
     Report {
+        first_seen,
         app_totals,
         focus_totals,
         page_totals,
@@ -491,6 +614,145 @@ mod tests {
             "event": "screentime_daily", "date": date,
             "minutes_used": minutes, "budget": budget, "apps": {}
         })
+    }
+
+    /// A rollup row carrying focus minutes, for the first-seen tests below.
+    fn focus_row(date: &str, focused: &[(&str, u64)]) -> Value {
+        let map: serde_json::Map<String, Value> = focused
+            .iter()
+            .map(|(n, m)| ((*n).to_string(), Value::from(*m)))
+            .collect();
+        serde_json::json!({
+            "event": "screentime_daily", "date": date, "minutes_used": 60,
+            "apps": {}, "focused": map
+        })
+    }
+
+    fn report_of(rows: &[Value]) -> Report {
+        build_report(rows, d("2026-08-20"), 30)
+    }
+
+    /// The whole point: an app that shows up on the newest day and on no earlier one.
+    #[test]
+    fn an_app_never_seen_before_is_reported_as_first_seen() {
+        let rows = vec![
+            focus_row("2026-08-17", &[("chrome.exe", 40)]),
+            focus_row("2026-08-18", &[("chrome.exe", 50)]),
+            focus_row("2026-08-19", &[("chrome.exe", 30), ("discord.exe", 25)]),
+        ];
+        let fs = report_of(&rows).first_seen.expect("answerable");
+        assert_eq!(fs.date, "2026-08-19");
+        assert_eq!(
+            fs.apps.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            vec!["discord.exe"],
+            "chrome.exe was there on both earlier days and is not new"
+        );
+        assert_eq!(fs.count, 1);
+        assert_eq!(fs.baseline_days, 2, "two earlier days carried evidence");
+    }
+
+    /// A quiet day is an answer, not a failure to answer. The UI needs to tell "checked, nothing
+    /// new" apart from "cannot tell", and collapsing them would make a working feature look broken.
+    #[test]
+    fn a_day_that_introduced_nothing_answers_with_an_empty_list() {
+        let rows = vec![
+            focus_row("2026-08-18", &[("chrome.exe", 50)]),
+            focus_row("2026-08-19", &[("chrome.exe", 30)]),
+        ];
+        let fs = report_of(&rows).first_seen.expect("still answerable");
+        assert!(fs.apps.is_empty());
+        assert_eq!(fs.count, 0);
+        assert_eq!(fs.baseline_days, 1);
+    }
+
+    /// With nothing to compare against, *every* app is trivially new — which is not a finding, it
+    /// is the absence of one. Reporting it would greet a parent with a list of everything their
+    /// child uses, labelled as new, on the first day the watcher ran.
+    #[test]
+    fn the_first_ever_day_of_evidence_reports_nothing() {
+        let rows = vec![focus_row(
+            "2026-08-19",
+            &[("chrome.exe", 30), ("roblox.exe", 90)],
+        )];
+        assert!(
+            report_of(&rows).first_seen.is_none(),
+            "one day of history cannot establish that anything is new"
+        );
+    }
+
+    /// A day with no `focused` map is unknown focus, never zero focus. Counting it as a baseline
+    /// day would make everything used the next day look new — the exact failure `DayRow::focused`
+    /// warns about, one layer up.
+    #[test]
+    fn days_without_focus_evidence_are_not_a_baseline() {
+        let rows = vec![
+            row("2026-08-17", 120, 180), // no `focused` key at all
+            row("2026-08-18", 120, 180),
+            focus_row("2026-08-19", &[("roblox.exe", 90)]),
+        ];
+        assert!(
+            report_of(&rows).first_seen.is_none(),
+            "two focus-less days are not evidence that roblox.exe is new"
+        );
+    }
+
+    /// The baseline reaches past the report window. Otherwise narrowing the range would invent new
+    /// apps, and the same app would be "new" or not depending on which button was last pressed.
+    #[test]
+    fn the_baseline_is_all_history_not_just_the_window() {
+        let rows = vec![
+            focus_row("2026-07-01", &[("roblox.exe", 90)]), // ~7 weeks before `today`
+            focus_row("2026-08-18", &[("chrome.exe", 50)]),
+            focus_row("2026-08-19", &[("roblox.exe", 30)]),
+        ];
+        // A 3-day window: 2026-07-01 is far outside it, but still counts as having seen roblox.
+        let narrow = build_report(&rows, d("2026-08-20"), 3)
+            .first_seen
+            .expect("answerable");
+        assert!(
+            narrow.apps.is_empty(),
+            "roblox.exe was seen in July; a 3-day window must not call it new: {:?}",
+            narrow.apps
+        );
+        assert_eq!(narrow.baseline_days, 2);
+    }
+
+    /// The names come from a process running as the child, so the baseline is attacker-influenced.
+    /// A truncated baseline would report familiar apps as new — a false alarm aimed at the parent —
+    /// so overflow abandons the answer instead of degrading it.
+    #[test]
+    fn an_oversized_baseline_gives_up_rather_than_crying_wolf() {
+        let many: Vec<(String, u64)> = (0..=MAX_BASELINE_APPS)
+            .map(|i| (format!("app{i}.exe"), 1))
+            .collect();
+        let refs: Vec<(&str, u64)> = many.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+        let rows = vec![
+            focus_row("2026-08-18", &refs),
+            focus_row("2026-08-19", &[("brand-new.exe", 10)]),
+        ];
+        assert!(
+            report_of(&rows).first_seen.is_none(),
+            "a baseline that could not be held completely must not be used"
+        );
+    }
+
+    /// A day introducing more than the display cap still reports the true total, so the notice
+    /// cannot understate what happened.
+    #[test]
+    fn the_count_is_the_truth_even_when_the_list_is_capped() {
+        let fresh: Vec<(String, u64)> = (0..TOP_FIRST_SEEN + 5)
+            .map(|i| (format!("new{i}.exe"), (i as u64 + 1) * 10))
+            .collect();
+        let refs: Vec<(&str, u64)> = fresh.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+        let rows = vec![
+            focus_row("2026-08-18", &[("chrome.exe", 50)]),
+            focus_row("2026-08-19", &refs),
+        ];
+        let fs = report_of(&rows).first_seen.expect("answerable");
+        assert_eq!(fs.apps.len(), TOP_FIRST_SEEN, "the list is capped");
+        assert_eq!(fs.count, TOP_FIRST_SEEN + 5, "the count is not");
+        // Heaviest first, so the cap keeps what matters most.
+        assert_eq!(fs.apps[0].minutes, (TOP_FIRST_SEEN as u64 + 5) * 10);
     }
 
     /// `measured` and `minutes_used` encode the same fact and must never disagree. The two

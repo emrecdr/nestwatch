@@ -175,6 +175,13 @@ pub async fn set_security_headers(mut response: Response) -> Response {
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static(PERMISSIONS_POLICY),
     );
+    // Applied to everything, not only `/api/*`. The most sensitive bytes this service produces are
+    // captures of a child's desktop, and until now nothing told the parent's browser anything at
+    // all about storing them — no `Cache-Control`, no `Expires`, no validator. A blanket
+    // `no-store` costs nothing here: every page is embedded in the binary and served over a LAN,
+    // so there is no round trip worth saving, and scoping the rule to one path prefix would only
+    // create a second place to keep in step.
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 

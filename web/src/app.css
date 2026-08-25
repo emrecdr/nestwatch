@@ -49,6 +49,39 @@
   );
 }
 
+/* Over budget, encoded as a texture rather than only as a colour.
+   `stBarClass` returned `bg-error` against `bg-primary` and that was the *only* over/under cue on
+   the bar — the `ring-2` in the markup marks the pinned day, not the budget. Measured in `dim`:
+   those two are a **1.22** contrast ratio (159,232,141 against 255,174,155), which is identical
+   luminance differing mostly in hue, and green-against-salmon is a red-green confusion pair.
+   WCAG asks 3:1 for a non-text UI component. A screen reader was always told — `stBarTitle` and
+   `stDayLabel` both say "over budget" — so the reader who had neither channel was precisely the
+   sighted colour-blind parent.
+
+   135deg, deliberately the mirror of `.st-nodata`'s 45deg, so "over budget" and "not measured"
+   cannot be confused with each other either. Transparent stripes rather than opaque ones, so the
+   error colour still shows through and keeps its meaning for everyone who can see it.
+
+   Plain CSS, not `@utility`, for the same reason `.st-nodata` is: the class is produced by a
+   method rather than written in the markup, and it must be emitted whether or not the scanner
+   happens to see the name.
+
+   Precisely what that buys, since it is easy to test the wrong thing here (and was): converting
+   this to `@utility` does **not** drop the rule today, because the scanner reads `assets/app.js`
+   via `@source` and `stBarClass` writes the literal string `"st-over"` there. What plain CSS
+   protects against is the day that string stops being literal — a name built as `"st-" + kind`,
+   say — at which point an `@utility` rule is emitted only if something else happens to mention it,
+   and the bar silently renders untextured. `web::tests::the_chart_state_classes_survive_into_the
+   _shipped_stylesheet` catches the rule going missing; nothing catches it being *reachable only by
+   luck*, which is what this line is for. */
+.st-over {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    color-mix(in oklab, var(--color-base-content) 30%, transparent) 3px 6px
+  );
+}
+
 /* Disclosure arrow for the collapsed cards.
    The five rarely-touched panels are <details>, so a parent scrolling a phone passes five headings
    instead of five full cards. Plain <details> needs no JavaScript and stays keyboard- and

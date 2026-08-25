@@ -5,6 +5,30 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Added
+- **The report now shows *when* the PC was used today, not just how much.** A 24-hour strip above the
+  totals, so "was he on at two in the morning?" is a glance rather than a guess — the one question
+  every other number on that card cannot answer. It marks a session that is still running, and it
+  marks one whose end it does not know, which happens when the service stopped while your child was
+  still using the machine. Those are drawn as a marker with no width on purpose: pretending to know
+  when it ended would be worse than admitting it doesn't.
+- **The report now tells you when an app turns up for the first time.** A total tells you how much;
+  this tells you what *changed* — a game that appeared yesterday and never before, a chat client you
+  have not heard of. It sits above the totals because it is the one thing on that card you might
+  need to act on, and it names how much history is behind the claim: "against 32 earlier days" and
+  "against 1 earlier day" are very different statements, and only you can weigh them.
+  <br>It notices an app when it is **used**, not when it is installed — which is also how the
+  commercial tools do it, and it is the only signal available to a tool that deliberately watches no
+  registry. An app installed and never opened is not a fact about your child's day. On the first day
+  of history it says nothing at all rather than declaring everything new, and a quiet day shows no
+  panel: a notice that appears every day stops being read.
+- **The live view is dramatically cheaper, and you can choose how often it refreshes.** It used to
+  send a full, lossless picture of the whole screen every three seconds — on a 4K monitor showing a
+  game that is **20 MB per frame**, over your home network, from a laptop that is often your child's,
+  to fill a panel a few hundred pixels tall. Live frames are now sized for the panel they go in:
+  around **30 KB**, and near enough the same on any monitor. Clicking the picture, or **Expand**,
+  still fetches a full-resolution one, because that is the moment you actually want to read
+  something. A **2s / 5s / 15s** choice sits beside the Live toggle, and the live view now stops
+  itself after fifteen minutes rather than running all day in a tab you left open.
 - **A light/dark switch, in the top bar.** ☀️ and 🌙, with **Auto** beside them and selected by
   default — Auto follows whatever your phone or laptop is set to, which is what the dashboard has
   been doing since the theme was unpinned. The switch is for when that setting is wrong for the
@@ -99,6 +123,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   choice costs — including what it does to the source addresses in your access log.
 
 ### Improved
+- **The picture now tells you how old it is.** Under a live view you get "updated 4s ago", counting
+  up on its own — and if the frames stop arriving it says so, in red, naming the time of the last
+  one. Previously a live view that had stopped working looked *exactly* like a child sitting
+  perfectly still: the last good picture stayed on screen, the toggle stayed lit, and nothing
+  anywhere said the service had stopped, the child had signed out, or the capture had failed. For a
+  feature you open at the moments you are most worried, that was the worst thing it could do.
+- **Turning the live view off now stops it at once.** A capture already in flight is cancelled
+  instead of being allowed to land afterwards — a picture that appears seconds after you said stop.
 - **Five panels you rarely open are now folded away.** Routines, Time codes, Recent access, Usage
   history and Change password sit behind a heading you tap to open. On a phone — the device the
   setup QR hands you — you passed all five in full before reaching anything else, in the order they
@@ -124,6 +156,40 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the first mistake.
 
 ### Fixed
+- **Days over budget are now marked by a pattern, not only by colour.** The screen-time chart showed
+  them in red against green, and in this theme those two are almost exactly as bright as each other
+  — so to a red-green colour-blind parent the chart's whole point was invisible. Over-budget bars
+  now carry diagonal stripes as well, at the opposite angle to the ones already used for days that
+  weren't measured, so those two can't be confused either. The wording screen readers get was always
+  correct and is unchanged.
+- **Pausing the rules now records that it happened, and says which kind of pause it was.** The usage
+  history logged when a session of active use *began* but, on the pause path, never that it ended —
+  so a history read back later showed sessions starting and never finishing. It also called two
+  different things "paused": the toggle you pressed, and simply having no rules set up. Those now
+  read as **paused** and **no rules** respectively, because only one of them is something you did.
+- **The screen capture no longer comes back black for fullscreen games or for Netflix.** This is
+  the most serious thing in this release. The capture was reading the composited desktop, which
+  covers ordinary windows and ordinary browsing, and misses anything drawn straight to the screen —
+  a game in **exclusive fullscreen**, and DRM-protected video. It was not a rare edge case: it is a
+  radio button in nearly every game's own display settings, so a child who noticed could switch it
+  on and permanently defeat the screenshot with no prompt, no password and no administrator right.
+  You would have seen a black rectangle, which looks identical to a monitor that is switched off.
+  <br>Windows now draws a **yellow border** around the screen while you are watching. That is the
+  operating system's doing and this app neither can nor tries to suppress it — and on reflection it
+  is the right trade for a tool that already tells your child, on their own page, that you can see
+  their screen. The border makes that promise something they can verify rather than something they
+  have to take on trust.
+  <br>This raises the Windows requirement to **version 1903 or newer** for screenshots specifically.
+  Everything else — screen-time limits, curfew, blocked apps, per-app limits — still runs on older
+  builds, and the installer says so rather than refusing.
+- **Screenshots on a scaled display should no longer lose part of the screen.** On the 125% and 150%
+  scaling Windows picks by default for most laptops, the capture asked the system for a picture
+  larger than the screen it was reading from — predicted to lose about a third of the frame at 125%
+  and over half at 150%. Marked *should* deliberately: this one is reasoned from the two APIs
+  involved and has not yet been confirmed on real hardware.
+- **The screenshot is now of the primary monitor, as the app always claimed.** With two screens it
+  took whichever Windows happened to list first, which is not necessarily the main one — so it could
+  have been quietly watching the wrong screen, indefinitely, with nothing on the page to say so.
 - **Updating over an existing install could silently do nothing.** If anyone was signed in to the PC,
   the update failed to replace the program file and quietly restarted the old version instead — so you
   would run the installer, see it finish, and still be on the previous build. The cause was a
@@ -246,6 +312,17 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   scrolling to the block does not look. All eight now match, and the lint that catches it is on.
 
 ### Security
+- **An hour of live viewing no longer erases your security history.** Every live frame wrote its own
+  line to the access log. At the old refresh rate that is 1,200 lines an hour, and the log keeps
+  about 4 MB — so roughly **two days of live viewing would push out every login record**, every app
+  closed, every password change, to make room for a timer. Watching a screen and losing the record
+  of who signed in is a bad trade. Detailed captures — the button, and **Expand** — are still logged
+  one for one, because those are few and deliberate; the live view's small frames are now counted
+  and written as one line every five minutes. The log reads better for it: *the screen was watched
+  for forty minutes, and looked at closely five times*.
+- **Nothing served by Nestwatch is stored in your browser's cache any more.** A picture of your
+  child's screen is the most sensitive thing this app produces, and nothing had ever told the
+  browser not to keep it on disk.
 - **The dashboard can no longer run code built from a string.** `script-src` is now `'self'` alone
   — earlier this release it stopped allowing inline scripts, and it now also refuses `eval` and
   anything like it. That closes the last route by which injected text on the page could become
@@ -271,6 +348,21 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   the gap between "we don't do that" and "that can't happen".
 
 ### Internal
+- **The build no longer claims the stylesheet is out of date when it isn't.** Tailwind skips writing
+  the file when the compiled output would be byte-identical, so the build's freshness check — which
+  compares modification times — reported a successful rebuild as stale after almost any edit that
+  didn't change a class name. A warning that fires when nothing is wrong is worse than no warning,
+  because it teaches you to ignore the one time it's right. The build now stamps the stylesheet on
+  success. Contributor-facing only; nothing about the app changes.
+- **The capture backend is now named in `Cargo.toml` instead of inherited**, with a test that fails
+  if it is ever left to a default again. The dependency declares no default, so a plain version
+  requirement silently selected the older of its two implementations — no warning, no error, no
+  failing test, which is how it survived thirteen review passes. The test reads the manifest as
+  text, so it works from any machine rather than needing Windows and a game.
+- Screen captures are JPEG rather than PNG. Two crates added; the PNG stack stays regardless,
+  because the capture library pins that feature itself — verified with `cargo tree` after
+  predicting the opposite and being wrong. Raising PNG's compression instead was measured at
+  **1,477 ms per frame** against 44.7 ms today, and rejected.
 - **Curfew's two halves are one decision again.** The part that schedules the shutdown and the part
   that gives your child the heads-up were separate machines, joined only by the loop that called
   them — so rules about how they interact ("don't promise bedtime is coming while it is already

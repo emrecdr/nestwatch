@@ -38,7 +38,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-use crate::control::{ControlError, SessionState};
+use crate::control::{ControlError, SessionState, ShotTier};
 
 const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -47,16 +47,19 @@ const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 const NOTIFY_TIMEOUT_SECS: u32 = 30;
 
 /// Capture the screen by delegating to a helper in the interactive session, reading its
-/// PNG output over a pipe.
-pub fn capture_via_session_helper() -> Result<Vec<u8>, ControlError> {
+/// image output over a pipe.
+///
+/// `tier` is handed to the helper as an argument rather than applied to the result: the helper is
+/// the last point before the bytes cross the pipe, and that is where sizing them is worth anything.
+pub fn capture_via_session_helper(tier: ShotTier) -> Result<Vec<u8>, ControlError> {
     let exe = std::env::current_exe().map_err(|e| ControlError::Capture(e.to_string()))?;
-    let png = spawn_and_capture(&exe.to_string_lossy())?;
-    if png.is_empty() {
+    let bytes = spawn_and_capture(&exe.to_string_lossy(), tier)?;
+    if bytes.is_empty() {
         return Err(ControlError::Capture(
             "helper produced no screenshot; is a user logged in?".into(),
         ));
     }
-    Ok(png)
+    Ok(bytes)
 }
 
 fn to_wide(s: &str) -> Vec<u16> {
@@ -422,10 +425,12 @@ fn spawn_piped(
     }
 }
 
-/// Launch `<exe> helper --capture-stdout` in the active console session and return the PNG bytes
-/// it writes, bounded by a watchdog so a wedged helper cannot block the caller forever.
-fn spawn_and_capture(exe: &str) -> Result<Vec<u8>, ControlError> {
-    let (mut file, proc_info) = spawn_piped(exe, "helper --capture-stdout")?;
+/// Launch `<exe> helper --capture-stdout --tier <tier>` in the active console session and return
+/// the image bytes it writes, bounded by a watchdog so a wedged helper cannot block the caller
+/// forever.
+fn spawn_and_capture(exe: &str, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
+    let args = format!("helper --capture-stdout --tier {}", tier.as_arg());
+    let (mut file, proc_info) = spawn_piped(exe, &args)?;
 
     // SAFETY: Win32 process FFI. `proc_info`'s handles come from `spawn_piped` and are closed
     // exactly once, below, after the watchdog has finished using them.

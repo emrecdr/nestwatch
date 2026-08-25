@@ -4,7 +4,7 @@
 //! for screen capture, `sysinfo` for process enumeration/termination, and shells out to
 //! `shutdown.exe` for power-off (dependency-free, no `unsafe`, no `windows` crate).
 
-use super::{ControlError, ProcessInfo, RunningProcess, SessionState, SystemControl};
+use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
 pub struct WindowsControl;
 
@@ -14,14 +14,59 @@ impl WindowsControl {
     }
 }
 
+/// Declare this process per-monitor DPI aware, exactly once, before the first capture.
+///
+/// Without it the process is DPI *unaware*, which puts it in DPI virtualisation: its desktop device
+/// context is sized in logical pixels. `xcap` meanwhile takes the capture rectangle from
+/// `EnumDisplaySettingsW` — `dmPosition`, `dmPelsWidth`, `dmPelsHeight` — which are **physical**
+/// device pixels and DPI-independent by definition. The two disagree on every scaled display: the
+/// code asks for a rectangle larger than the surface it is reading from, and at the 150% Windows
+/// picks by default for a 4K laptop panel more than half the requested area lies outside it.
+///
+/// Called from `screenshot` rather than `new()` so it cannot be skipped by a future caller that
+/// constructs the controller differently, and `Once` so repeated captures pay nothing. The result is
+/// deliberately ignored: it fails if awareness was already set (by a manifest, or by a second call),
+/// and in every one of those cases the desired state already holds. There is nothing to recover
+/// from and nothing worth logging on a path that runs before every screenshot.
+#[allow(clippy::let_underscore_untyped)]
+fn ensure_dpi_aware() {
+    use std::sync::Once;
+    use windows::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    };
+
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: Win32 DPI FFI. `SetProcessDpiAwarenessContext` takes a constant context handle
+        // by value, borrows no memory we own, and returns a BOOL. It is process-wide and must run
+        // before any window or DC is created in this process — `Once` from inside the capture path
+        // is the earliest point every caller shares.
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        }
+    });
+}
+
 impl SystemControl for WindowsControl {
-    fn screenshot_png(&self) -> Result<Vec<u8>, ControlError> {
+    fn screenshot(&self, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
         use xcap::Monitor;
 
-        let monitor = Monitor::all()
-            .map_err(|e| ControlError::Capture(e.to_string()))?
-            .into_iter()
-            .next()
+        ensure_dpi_aware();
+
+        let monitors = Monitor::all().map_err(|e| ControlError::Capture(e.to_string()))?;
+        // The *primary* monitor, which is what `SystemControl::screenshot` promises — not
+        // whichever one enumerated first. `Monitor::all` is backed by `EnumDisplayMonitors`, which
+        // returns monitors in display-settings order; the primary is not guaranteed to lead, so on
+        // a two-screen setup this used to watch an arbitrary one, possibly forever and with nothing
+        // in the UI to say so.
+        //
+        // Falls back to the first entry rather than erroring: a machine where the flag cannot be
+        // read should still yield a picture. `unwrap_or(false)` on each probe for the same reason —
+        // one unreadable monitor must not hide the others.
+        let monitor = monitors
+            .iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .or_else(|| monitors.first())
             .ok_or_else(|| ControlError::Capture("no monitor found".into()))?;
 
         let captured = monitor
@@ -35,7 +80,10 @@ impl SystemControl for WindowsControl {
         let rgba = image::RgbaImage::from_raw(width, height, raw)
             .ok_or_else(|| ControlError::Capture("unexpected frame buffer size".into()))?;
 
-        super::encode_png(image::DynamicImage::ImageRgba8(rgba))
+        // Sized and encoded HERE, in the child's session, before the bytes reach the pipe home.
+        // See `SystemControl::screenshot` — this is the difference between 47 KiB and 20,641 KiB
+        // crossing it.
+        super::encode_shot(image::DynamicImage::ImageRgba8(rgba), tier)
     }
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {

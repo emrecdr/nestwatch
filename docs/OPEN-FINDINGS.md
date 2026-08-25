@@ -398,6 +398,41 @@ encoding nearly published two confounded numbers, and the failure mode transfers
   while the variant *named* `Default` is a different and slower setting — so "compare against the
   default" and "compare against `Default`" are opposite instructions. That API shape will catch the
   next person too.
+- **A number without its denominator is not a finding.** "2.42 GB/year of writes" headed a
+  recommendation to restructure the tally's persistence; against a conservative 10 TB endurance
+  budget it is **0.03%**, and the recommendation evaporated. The byte count was correct throughout.
+  Three separate numbers in this pass were accurate and misleading in exactly this way, so the rule
+  is not "measure more carefully" — it is that a magnitude only becomes an argument once it is
+  divided by the budget it is supposed to threaten.
+- **Anchor an edit on the attribute, not the signature — and know which gate catches it.** An
+  insertion anchored on `fn rollup_row_omits_budget_when_unknown() {` swallowed the `#[test]` above
+  it, leaving two stacked on the new test and none on the old one. **The suite went green with that
+  test silently not running**, because a test that stops being a test is invisible to the test
+  suite by definition — `cargo test` cannot report the absence of something it never registered.
+  Only `clippy -D warnings` caught it, as `duplicate attribute` plus `function is never used`. Two
+  consequences: anchor on the attribute line when editing near one, and treat a green `cargo test`
+  as insufficient evidence on its own for any change that moved test code.
+- **Cost what the hardware charges, not what the model counts.** The same withdrawal turned on
+  costing *logical bytes* where the device charges *physical pages*: `write_atomic` is
+  `File::create` → `write_all` → `sync_all` → `rename`, and 338 B and 3,451 B round to the same
+  single 4 KiB page. The payload was the free component; the fsync and two directory updates are the
+  cost, and none of them scale with size. Shrinking the payload would have saved nothing and added a
+  second fsync. Before optimising a size, confirm size is what is being billed.
+
+**The same trap, one level up: confirm the experiment ran before believing its result.** A mutation
+run in the same pass was reported as "the mutant survived, so the test is vacuous" when the `perl`
+pattern that was supposed to introduce the mutant had silently matched nothing. The source was
+never modified, so the passing test proved only that unchanged code still passes.
+
+This generalises past benchmarks and is the sharper half of this entry, because **a no-op experiment
+and a negative result are indistinguishable from the output alone** — both are green. The rule that
+separates them: a mutation you believe in is one you *watched fail*. If a mutant is reported as
+surviving, re-read the file and confirm the change is actually on disk before concluding anything
+about the test.
+
+(The test in question was vacuous anyway, for an unrelated reason — every case had two fields
+agreeing, so a mutant collapsing them passed. Being right about the conclusion does not make the
+method sound; the next one will not be right by luck.)
 
 **Trigger.** §D2 step 12, which already asks for this. It has simply never been done.
 
@@ -424,43 +459,233 @@ or a migration.
 
 **Trigger.** Any time; it touches no Win32 and cannot regress measurement. Lowest-risk entry here.
 
-### O41 · The screen-capture path has a Windows floor the README does not admit to
+### O45 · A selection control is only as visible as its *unselected* neighbours
 
-Any move from GDI `BitBlt` to Windows.Graphics.Capture needs `GraphicsCaptureItem::CreateForMonitor`,
-which is **Windows 10 1903 (build 18362)**. The README promises "Windows 10 or 11" with no floor, so
-an unconditional switch would silently stop working on 1809 — a build that is still out there on
-hand-me-down family PCs, which is most of this product's market.
+Found while verifying the new live-view cadence selector in a browser, and worth writing down
+because every automated gate passed it and the defect is invisible in source review.
 
-**The trap is the number.** This codebase already cites **1803** twice, correctly, for the removal of
-Interactive Service Detection. 1803 is therefore the version in everyone's head here, and it is the
-wrong one for this API. Anyone reasoning from memory rather than checking will be off by one release
-in the direction that ships a broken build.
+The cadence buttons shipped as `:class="o.ms === _refreshMs ? 'btn-active' : ''"`. The established
+pattern on this page — the theme switch and the 7/30/90 report range — is
+`? 'btn-active' : 'btn-ghost'`. The difference is one word in the *else* branch and it decides
+whether the control works: measured in Chrome, selected `rgb(33,38,47)` against unselected
+`rgb(36,41,51)` is a **1.04:1 contrast ratio**, with the selected button marginally *darker*. A
+parent could not see which cadence was chosen.
 
-**There is no fallback to fall back to, and that is the sharp part.** The obvious fix — runtime
-`GraphicsCaptureSession::IsSupported()` with a GDI fallback — **cannot be built on `xcap`**, which is
-the crate in use. Its two capture paths are mutually exclusive *at compile time*
-(`xcap-0.9.8/src/windows/mod.rs:5` is `#[cfg(not(feature = "wgc"))] mod gdi;` against `mod.rs:8`
-`#[cfg(feature = "wgc")] mod wgc;`), and `IsSupported` appears nowhere in the crate. Enabling `wgc`
-therefore **deletes** the GDI path rather than sitting in front of it. Keeping both would need a
-second capture crate or hand-written WinRT/D3D11 FFI.
+**What makes it a finding rather than a typo** is that nothing caught it.
+`every_form_control_can_be_named_by_a_screen_reader` passes, because `aria-pressed` is present and
+correct. `every_class_in_the_markup_has_a_rule_in_the_shipped_css` passes, because `btn-active` has
+a rule. The JS test asserting the cadence buttons exist and carry the right `aria-pressed` passes.
+The control is correct to a screen reader and invisible to everyone else — the same shape as the
+curfew toggle that had `aria-label` and no visible text.
 
-That inverts the finding: with no fallback available, the version floor stops being a graceful
-degradation and becomes a **hard requirement**, which is what makes the 1803-vs-1903 confusion above
-worth writing down.
+**The mechanism is worth understanding, because it is not about the selected element.** `btn-active`
+in this dark theme is a *subtle* fill. It reads as selected only when its neighbours have no button
+chrome at all, which is what `btn-ghost` removes. Against default `btn` neighbours it disappears.
+So the affordance lives in the contrast between states, not in either state — which is why
+reviewing the selected branch alone finds nothing wrong with it.
 
-**Also checked and disqualified:** DXGI Desktop Duplication, the one alternative that would give
-correct capture without WGC's yellow border. It fails `DXGI_ERROR_UNSUPPORTED` against the discrete
-GPU on a hybrid-GPU system — which describes every gaming laptop, i.e. precisely the machine this
-product cares about.
+**A measurement caveat, recorded because it nearly produced the wrong conclusion.** A first pass
+computed luminance by regex-extracting digits from `getComputedStyle`, which returns `oklch()` here,
+not `rgb()` — yielding values in the millions and a meaningless "221:1 contrast". A second pass
+resolved the colours through a canvas and got the real figures. A third reading was contaminated by
+the mouse resting on one button, reporting a `:hover` background as that button's resting state.
+And the final fill-luminance figure (1.15:1 after the fix) still *understates* the fixed control,
+because the real cue is that ghost buttons have no chrome — a shape difference a luminance metric
+cannot see. Three different measurement errors in one small check; the screenshot settled it.
 
-**Fix.** WGC only, failing loudly, with the OS build checked in `preflight` — never an unconditional
-switch, and never a fallback, which cannot exist. Either state the floor in the README or keep the
-README's promise true.
+**Not fixed here:** the residual weak fill contrast is a property of the shared `btn-active` /
+`btn-ghost` pattern and applies equally to the theme switch and the report range selector, both of
+which the parent has already reviewed and accepted. Restyling three unrelated controls during a
+capture-path change is the wrong moment. If it is ever revisited, note that `btn-primary` is
+**not** the answer — that was tried, and it made a settled choice look like a pending action, which
+is why the colour is reserved for *Save* and *Take screenshot*.
 
-Found by a peer session's validation pass and recorded here because that pass was report-only. The
-fix line above is its **second** version: the first said "runtime `IsSupported()` with a GDI
-fallback", which reads as obviously correct and does not compile. Verified against the vendored
-source before rewriting, which is the only reason it was caught.
+### O28, O33, O35, O36, O39 · The rest of the screen-cast and tracking pass
+
+Found in the same pass as the O25 group above and deliberately **not** taken with it. Each is real;
+none is a correctness bug; and the group that shipped already changes the capture path, the helper
+protocol, the audit log and the dashboard on a release nobody has watched run on Windows.
+**O37 has since been implemented** and moved to *Fixed*.
+
+**O28 · Live mode creates a whole process per frame.** Every tick runs, in the child's session:
+`WTSQueryUserToken`, `DuplicateTokenEx`, `CreateEnvironmentBlock` (which reads their profile
+environment), `CreatePipe`, `CreateProcessAsUserW` of the whole 3.79 MiB binary cold, xcap init, a
+watchdog thread. All fixed cost, paid to deliver one image. `session::spawn_piped` already exists
+and was generalised out of exactly this path for the resident watcher, so a `helper --cast` that
+lives for the length of a viewing session is a natural shape. **Do it last**, once the tiers have
+shown how much cost is actually left — the frames are now ~30 KB, so the process spawn may well be
+the entire remaining bill, or may be noise. Measure first. **And do not fold casting into the
+existing `--watch` helper**: that one runs as the child, is killable from Task Manager, and its
+supervisor backs off to 30 s between respawns — making it the screenshot source would hand the child
+a one-click way to blind the parent, with a delay that grows the more they use it.
+
+**O33 · Nothing detects that the frame has not changed.** A child reading or away from the desk
+produces a stream of near-identical frames, each captured, encoded and sent in full. An `ETag` over
+a hash of the raw frame would let an unchanged screen return `304` with no body. Much cheaper after
+the WGC move *if* its frame pool turns out to deliver only on change — **that property is
+unverified**; it could not be sourced from the documentation and should be measured rather than
+assumed.
+
+**O35 · 94% of every tally write is data the enforcer never reads — and it does not matter.**
+**Measured and withdrawn, 2026-08-25.** The premise holds and the conclusion does not.
+
+The premise, re-verified: `decide` reads none of `foreground_secs` or `page_secs`. Every reference in
+`rules.rs` is a struct definition, a rollover `clear()`, `today_summary`, the `PreRollover` snapshot,
+`record_foreground`'s writes, `rollup_row`, or a test — none in the decision path, which is what
+`foreground_time_cannot_trigger_a_per_app_limit` already pins. So the byte split is real: 195 B of
+enforcement data against 3,451 B modelled with a watcher running.
+
+**What is wrong is the significance, and the error is instructive: I costed logical bytes when the
+hardware charges physical pages.** `write_atomic` does `File::create` → `write_all` → `sync_all()` →
+`rename`. The payload is one component of four, and it is the free one — 338 B (measured on this
+machine, no watcher) and 3,451 B (modelled, watcher running) both round to a **single 4 KiB page**.
+The cost of a save is the fsync and the two directory updates, none of which scale with the payload.
+
+Worked through at the modelled size — 1,920 fsync'd saves over a 16-hour day:
+
+| | |
+|---|---|
+| Logical | 6.63 MB/day, 2.42 GB/year |
+| Physical, at 4 KiB granularity | 7.9 MB/day, 2.87 GB/year |
+| Against a conservative 10 TB endurance budget | **0.03% per year** |
+| `sync_all()` latency against the tick that awaits it | 50 ms worst case against 30,000 ms — **0.17% of one tick** |
+
+Splitting the file would therefore save **nothing measurable**, and would *add* a second
+create/fsync/rename whenever the report half is written. The one figure that sounded alarming —
+2.42 GB/year — is a true byte count with no consequence attached, and quoting it without the
+endurance denominator is how it came to head a recommendation.
+
+**The adversarial case does not rescue it either.** `page_secs` is capped at
+`foreground::MAX_PAGES` = 40 entries, but a key is a window title of up to 512 UTF-16 units, so a
+child deliberately generating long titles could reach ~40 KiB — ten pages a tick rather than one.
+That is still 0.1–0.3% of an endurance budget per year, bought with effort, to achieve nothing they
+would notice.
+
+**Disposition: do not implement for performance.** The only remaining argument is architectural —
+one file conflates enforcement-critical state with report-only state — and that is not a reason to
+restructure the persistence of the tally that locks a child's PC on a release nobody has watched run
+on Windows. It is the same stacking O2 and O4 decline, and the same reasoning that kept O42's job
+object out of the spawn path. Revisit only alongside O2, and only after the on-device pass.
+
+**The general lesson is worth more than the finding.** The declined row on lengthening the 30-second
+interval was right for a reason this entry missed: **the cost is the save, not the size.** Only
+saving less often would change anything, and that is exactly what must not change, because a reboot
+is the child's tool. There was never a cheap win here to find.
+
+**O36 · There is no time-of-day resolution anywhere.** Every figure answers *how much*; nothing
+answers *when*. "Was he on Roblox at two in the morning?" is currently unanswerable, and for many
+parents it matters more than the total. Every mainstream competitor leads with this — Microsoft
+Family Safety opens its day view with an hourly bar chart.
+<br>**The data blocker is now FIXED (2026-08-25); the timeline itself is still open.** The pause path
+records a `session_stop` before it discards `prev_active`, so starts and stops pair. Driven against
+a live enforcer rather than reasoned about: a configured instance wrote `session_start`, a live
+pause through `POST /api/rules` wrote `session_stop {"minutes_used": 0, "reason": "paused"}`, and a
+resume wrote a fresh `session_start` — strictly alternating, where the same sequence previously
+produced two starts and nothing between them.
+
+Two decisions inside that fix are worth keeping:
+
+- **`session_stop` rather than a new event name**, so *every start has a matching stop by
+  construction*. A distinct name would leave a future consumer to learn about it, and forgetting
+  would reproduce exactly the orphaning being fixed. A `reason` field carries the nuance — and it
+  is honest about what ended, since enforcement stopped observing while the child may well still
+  be sitting there.
+- **`paused` and `no_rules` are different labels.** `any_configured()` is
+  `enabled && has_targets()`, so a parent's pause toggle and a household that configured nothing
+  both reach that branch. The existing shutdown-abort line on the same path called both "paused",
+  which told a parent reading their own history that they had switched something off when they had
+  simply never switched it on. Both now share one computed reason.
+
+`rules::tests::standing_down_closes_an_open_session` is a **source scan**, because the property is
+the existence of a call site: no unit test can see one deleted — `inactive_reason` stays green
+whether or not anything calls it, and the emission lives inside the async loop. Mutation-checked
+three ways: deleting the close, making it unconditional, and collapsing the two reasons.
+
+**The timeline itself is now built** — *"When the PC was in use today"*, a 24-hour axis above the
+report totals, derived entirely from events `loadUsage()` already fetches. No endpoint, no extra
+request, no new storage; the claim that part was cheap survived, it was only the *data* that wasn't.
+
+Three things in it are worth not re-deriving:
+
+- **An unpaired start is drawn with no width, never as a duration.** A start with no stop before the
+  next start means the enforcer died in between and that span's end is unknowable. Giving it a
+  duration would shade a bar from an afternoon crash through to bedtime and call it use — the
+  original bug, one layer up. Mutation-checked: stretching it to the next start fails the suite.
+- **Colour is reinforcement, never the carrier.** Measured in Chrome on the dark theme,
+  `bg-primary` (159,232,141) against `bg-success` (98,239,189) is a contrast ratio of **1.01** —
+  identical luminance differing only in hue, and green-against-teal is the textbook deuteranopia
+  pair; `bg-warning` is 1.04 against primary, no better. A reader who cannot separate those hues
+  would have had nothing to go on. Each kind is therefore distinguishable by **shape** first: the
+  unknown-end marker is a hairline, the live span carries a ring (the device the screen-time chart
+  already uses for a pinned day), the ordinary case is a plain bar. This is the same defect class
+  as O45 and was found the same way — by measuring a screenshot that merely looked fine.
+- **A future-dated start clamps to zero width** rather than producing a negative one. Only reachable
+  through clock skew, but it costs one `Math.max`.
+
+**What remains open is the two orphan sources a running process cannot fix:**
+a service restart cannot write a stop for the session that died with it, so a consumer must treat a
+start with no preceding stop as *"previous span ended, time unknown"* rather than pairing across it.
+
+---
+
+**The "free half" was claimed and is REFUTED — corrected 2026-08-25.** The earlier version of this
+entry said a session timeline was "a pure rendering change" because `session_start` and
+`session_stop` are already timestamped in `usage.jsonl`, already returned by `GET /api/usage`, and
+already fetched by `loadUsage()` on every sign-in. All of that is true and **the conclusion does not
+follow**, because the stops are not reliable enough to pair into spans. Checked against real data:
+33 rollups and **6 `session_start` against 0 `session_stop`**.
+
+Three ways a start is orphaned, and only the first is a dev artefact:
+
+1. `FakeControl::session_state` always returns `Active`, so off Windows `active` never falls and no
+   stop is ever written. Dev-only.
+2. **The paused path writes no stop.** `rules.rs` sets `prev_active = None` and `continue`s when the
+   parent pauses, so pause→resume yields *start, start* with nothing between. Production behaviour.
+3. **A restart writes no stop.** `prev_active` begins `None`, so the first active tick after any
+   service restart emits a fresh start.
+
+**Nothing reads these events today, which is what makes the shape of this finding unusual.** Every
+mention outside `rules.rs` is a test fixture (`screentime.rs:1221`, `screentime.rs:1298`,
+`jsonl.rs:202`) or a doc comment (`usage.rs:32`). The dashboard *displays* the rows — `/api/usage`
+returns them and the history table renders each one's timestamp and raw event name — but no code
+pairs them, derives a span, or draws anything from them. An orphaned `session_start` therefore
+renders as an accurate unpaired row and misleads nobody.
+
+So the data is **fine unread and wrong the first time it is read**. That is the framing that matters:
+this is not "we have bad data on disk", it is a latent defect that arms itself the moment someone
+builds the timeline — and the person building the timeline is exactly the person who will have read
+the old version of this entry and concluded it was a rendering change.
+
+Pairing each start with the next stop would shade a bar from a 14:00 pause straight
+through to bedtime and call it use — a confident figure that is a different fact, which is the
+failure this codebase keeps catching. So the timeline is **not free**: it needs `session_stop`
+emitted on the pause path (a logging-only change, but in the enforcement loop) before spans can be
+drawn honestly. Until then only *start markers* are derivable, which answers "the PC was picked up
+at 02:14" but not "for how long".
+
+One further bound, unchanged: `recent(200)` caps the reachable history at roughly the last few days;
+a longer timeline wants `recent_matching_including_rotated`, which already exists for the
+screen-time report. Only per-app-per-hour costs storage, and that is where the "SQLite becomes
+defensible" note applies.
+
+**O39 · The executable's full path is fetched, used for one character class, and discarded.**
+`watcher.rs::process_name` calls `QueryFullProcessImageNameW`, then
+`path.rsplit(['\\', '/']).next()` throws everything but the basename away — at the only point in
+the system where the path is already in hand and costs nothing to keep. Where a program lives is a
+real signal, distinct from what it is called: `C:\Program Files\` means somebody installed it,
+`C:\Users\<child>\Downloads\` means a file was downloaded and run, and those are the same
+executable name and completely different facts.
+<br>**The codebase states the exact principle in shipped code, and applies it in one direction
+only.** `install::helpers_to_terminate` decides what to kill with
+`path.eq_ignore_ascii_case(&target)` against the full install path, under a comment reading that the
+file name is *"the filter, never the decision — `helpers_to_terminate` makes that on the full
+path."* `process_name` does the inverse, and the surviving basename then **is** the decision: the
+tally key and the blocklist key both.
+<br>Keep the **directory class** — installed / user-profile / removable / other — not the path. A
+full path is higher-cardinality and more identifying than anything else this system stores, and the
+watcher is untrusted input; a coarse class keeps the signal for a handful of bytes and cannot be
+used to enforce, consistent with how `foreground_secs` is already fenced off from `decide`. Rules
+are configured by name, so enforcement must keep keying on the name.
 
 ### O42 · Helper lifetime is reconstructed at teardown instead of established at spawn
 
@@ -536,9 +761,349 @@ config is by construction what is in the certificate.
 **Trigger.** Next change to the certificate path. Pre-existing; found during a cleanup review of the
 uninstall work and recorded rather than fixed, because it is not that change.
 
+## Fixed
+
+### ~~O46 · The 30-day chart signals over-budget by colour alone, at 1.22 contrast~~ — **fixed**
+
+`stBarClass` returns `bg-error` for an over-budget day and `bg-primary` otherwise
+(`app.js:1522`), and that class is the bar's **only** over/under distinction
+(`index.html:876` — the `ring-2` there encodes the *pinned* day, not the budget). The table
+beneath repeats the pattern with `text-error` (`index.html:904`).
+
+**Measured, not assumed.** Converting the `dim` theme's tokens oklch → linear sRGB → WCAG relative
+luminance gives **error vs primary = 1.22**. WCAG asks 3:1 for non-text UI. The same computation
+reproduces a peer session's independently measured `primary`/`success` = 1.01 and
+`primary`/`warning` = 1.04 exactly, which is what validates the method rather than the number.
+
+Whether a day went over budget is the single most important thing this chart says, and red-against-
+green is the textbook deuteranopia pair — roughly 8% of men. It also degrades for everyone on a
+phone in daylight, which is the device the setup QR hands the parent.
+
+**Scope it honestly: screen readers are fine.** `stDayLabel` appends `" (over budget)"` and reaches
+the bar through `stBarLabel`/`stBarTitle`, so assistive tech announces the state. The affected group
+is precisely the **sighted colour-blind parent**, who gets neither channel. That is narrower than
+"inaccessible" and is the accurate claim.
+
+**This is a palette property, not three unlucky choices.** In `dim`, `primary`, `success` and
+`warning` all sit at ~86.1% oklch lightness, so *any* pair of daisyUI semantic colours read as one.
+Anything built on this theme that encodes state by colour has this defect by default.
+
+**Fix.** Add a non-colour channel, as the timeline strip already did by making shape primary. The
+in-repo precedent is `.st-nodata` in `web/src/app.css`, which encodes "not measured" as a
+repeating-linear-gradient rather than a colour — deliberately, and for this reason. An over-budget
+bar wants the same treatment: a pattern, a cap, or a marker that survives being photocopied.
+
+**Trigger.** Next change to the screen-time chart. Found while verifying a peer's timeline fix;
+their fix is correct and does not cover this, because the chart predates it.
+
+**Fixed 2026-08-25, the same day it was filed.** `stBarClass` now returns `bg-error st-over`, and
+`.st-over` stripes the bar at **135deg** — deliberately the mirror of `.st-nodata`'s 45deg, so the
+two encoded states are distinguishable from each other and not merely from the ordinary case.
+
+**The measurement was reproduced independently before acting on it.** The filing computed contrast
+by converting the theme's oklch values to linear sRGB; this pass re-measured by rendering each class
+in Chrome and reading the pixel back. Two unrelated methods, identical results — primary/error
+**1.22**, primary/success 1.01, primary/warning 1.04, success/error 1.24, warning/error 1.17. That
+agreement is what justified the change, given how often in this work a correct number has meant the
+wrong thing.
+
+**Verified painting, not merely classed.** In the live DOM with a seeded month: 30 bars, the 10
+over-budget ones all carrying `repeating-linear-gradient(135deg, …)` and the 20 ordinary ones with
+`background-image: none`. A CSS rule that never paints is exactly the silent failure this project
+keeps meeting.
+
+Three things kept from the filing, unchanged because they were right:
+
+- **The scope is the sighted colour-blind parent**, not "inaccessible". `stBarTitle` and
+  `stDayLabel` both say "over budget", so a screen reader was always told. Claiming more would have
+  been overreach, and a test now pins that channel so fixing the visual one cannot regress it.
+- **The fix follows an in-repo precedent rather than inventing one.** `.st-nodata` already encodes
+  "not measured" as a gradient precisely so it does not depend on colour, and is written as plain
+  CSS — not `@utility` — because the class is produced by a method rather than written in markup.
+  `.st-over` is the same on both counts.
+- **The palette is the underlying cause.** daisyUI's semantic colours in this theme are
+  luminance-flat: *every* pair measured lands between 1.01 and 1.24, against WCAG's 3:1 for a
+  non-text component. Any future state encoded by picking another semantic colour will have the
+  same defect. Encode by shape or texture first; let colour reinforce.
+
+One pre-existing test had pinned the exact string `"bg-error"` and was updated rather than deleted —
+the exact-string assertion and the property assertions now sit either side of the same contract.
+
+
+
+### ~~O44 · `build.rs` reports a successful CSS build as stale~~ — **fixed**
+
+`build.rs` warns when any source is newer than `assets/app.css`, comparing mtimes with a strict
+`newer(src, css)`. Tailwind **does not rewrite the output file when the generated CSS is
+byte-identical**, which is the common case: most edits to `index.html` change markup without adding
+or removing a single utility class.
+
+So the sequence is — edit a source, run `npm run build`, it succeeds, and the warning stays. Nothing
+the developer can do makes it go away except `touch assets/app.css`.
+
+Measured rather than assumed, because the whole entry turns on it. Touching `assets/index.html` and
+running `npm run build` to success left `app.css`'s mtime **unchanged** at `1787663119` while the
+source moved to `1787665066`.
+
+**Why this is worth fixing rather than living with.** The warning is load-bearing — it exists
+because a developer keeping a stale local `app.css` never learns the two disagree, and this project
+has already shipped a stylesheet defect that no test caught. A warning that fires after a correct
+build teaches the reader to ignore it, and it will still be firing on the day it is telling the
+truth. It is the same failure the capture-floor check deliberately avoided by treating an unreadable
+build as new enough: **a check that cries wolf is worse than no check**, because it spends the
+credibility of every other warning in the build output.
+
+It also already cost real time — a peer session briefly believed a build had succeeded when it had
+not, because the signal it was reading said "stale" either way.
+
+**Fix.** Compare *content*, not mtime: hash the sources into a stamp file next to `app.css` and warn
+when the hash differs. Failing that, have the build script compare against the `.scan/` copies
+`npm run build` does rewrite, so success is observable. `touch`ing the output is a workaround, not a
+fix — it silences the check on exactly the machine that most needs it.
+
+**Trigger.** Next change to `build.rs` or the web build. Cheap, and it touches nothing that runs on
+the child's PC.
+
 ---
 
-## Fixed
+**Fixed 2026-08-25 by making the build declare its own completion.** `web/scripts/stamp-build.mjs`
+advances `assets/app.css`'s mtime after Tailwind succeeds, so the value `build.rs` reads means "when
+was this last built" — which is what it was already being read as.
+
+**The root cause, measured rather than inferred.** Tailwind does not write the file when the output
+is byte-identical. Touching `index.html` in a way that changes no class names left `app.css` at
+mtime `1787666447` / 89,906 bytes across a full successful build; adding one new class moved it to
+`1787667523` / 89,930. So Tailwind's mtime answers *"did the output change"* while `build.rs` asks
+*"did you rebuild"*, and the two diverge on every edit that does not affect the CSS — prose, a
+directive using only existing classes, Rust beside the markup. Verified after the fix on both sides:
+the byte-identical case now emits **0** warnings, and editing a source without rebuilding still
+emits **1**.
+
+**Why not the content hash originally recommended.** A stamp holding a hash of the inputs would also
+cover the residual case below, and costs a second generated artifact plus a format shared between
+the script and `build.rs` — a third thing to keep in step, for a warning whose real safety net is a
+test. `web::tests::every_class_in_the_markup_has_a_rule_in_the_shipped_css` compares the markup
+against the *compiled* stylesheet and fails naming the class; it runs in CI on Ubuntu and Windows
+and has no false positives. The warning is early feedback layered on that, which is why repairing it
+is worth a small script and not a large one.
+
+**Why a script rather than `touch`.** `npm run build` runs on `windows-latest` in both `ci.yml` and
+`release.yml`, where `touch` is not a command — a shell one-liner would have broken the release build
+on the only platform that ships.
+
+**The order of the build chain turned out to be load-bearing, and is now pinned by a test.** Raised
+by the peer session after the fix landed: the stamp only helps because `strip-comments.mjs`
+regenerates `web/.scan/` *before* Tailwind compiles it, and because the stamp runs *after* a
+successful compile. Reorder either and the warning inverts from a false alarm into a false
+**silence** — no complaint about a stylesheet that really is behind, which is strictly worse than
+the bug being fixed here. `web::tests::the_css_build_chain_stamps_only_after_a_successful_compile`
+reads `web/package.json` as text and pins all three steps plus the `&&` between the last two (with
+`;` a failed compile would still stamp). Mutation-checked three ways — stamp moved before Tailwind,
+`&&` weakened to `;`, and `strip-comments` dropped — each caught by the assertion written for it.
+
+**Residual, and left open deliberately:** anything that rewrites a source's mtime without changing
+its content still makes the sources look newer than a correct stylesheet.
+
+Called "rare" when first written, and **that was wrong — it has two systematic triggers**, both hit
+twice while finishing this work:
+
+* **`git checkout` or a rebase** landing a byte-identical file.
+* **Mutation testing**, which this project does constantly. Reverting a mutant by copying the
+  original back always bumps mtime, so every mutation round on a scanned asset ends with a
+  false-positive warning.
+
+Still left as-is. It clears on the next build, it cannot reach CI (a fresh checkout generates
+`app.css` after the sources, so the output is always newest there), and the alternative remains the
+stamp file rejected above. But a developer running mutation rounds will meet it often enough that
+calling it rare would have sent them looking for a fault that is not there.
+
+
+### ~~O37 · Nothing tells a parent an app is *new*~~ — **fixed**
+
+The most actionable thing a usage report can say is not a total but a **change**: something turned
+up that never had before. A parent previously had to spot it themselves in a list sorted by minutes,
+where a program used for twelve minutes sits near the bottom.
+
+`GET /api/screentime` now returns `first_seen`: the apps that had focus on the most recent day with
+focus evidence and on **no earlier day in the retained history**, with a `baseline_days` count
+saying how much history backs the claim. The dashboard renders it above the report totals.
+
+**Detection is by use, not installation — and that is the right design, not a fallback.** Qustodio,
+the market leader in this category, surfaces a new app once it has been *used* at least once rather
+than when it lands on disk; the norm exists because an app installed and never opened is not a fact
+about a child's day. It happens to also be the only signal available here, since this product
+watches no registry and reads no install log by design — but the ordering matters: the constraint
+and the correct answer coincide, and the entry should not read as though the constraint chose it.
+
+Four properties, each pinned by a test that was mutation-checked:
+
+- **One day of history proves nothing.** With no baseline, every app is trivially new; reporting
+  that would greet a parent with a list of everything their child uses, labelled new, on the first
+  day the watcher ran. `first_seen` is `None` instead.
+- **A day with no `focused` map is unknown focus, never zero focus** — the same rule
+  `DayRow::focused` already documents. Counting such a day as a baseline would make everything used
+  the next day look new.
+- **The baseline is all history, not the report window.** Otherwise narrowing the range to 7 days
+  would invent new apps, and the same app would be new or not depending on which button the parent
+  last pressed.
+- **An oversized baseline abandons the answer.** App names come from the watcher, a process running
+  as the child, and `foreground::MAX_APPS` bounds only *one day* at 200. A truncated baseline would
+  report familiar apps as new — a false alarm aimed at the parent — so passing `MAX_BASELINE_APPS`
+  returns `None` rather than a degraded answer.
+
+`None` and an empty list are deliberately different states end to end: the first means the report
+could not tell, the second that it checked and nothing was new. The dashboard shows a panel only for
+a non-empty list, because a notice that appears every quiet day stops being read.
+
+**Verified in a browser**, seeded with 33 days of history whose newest day introduced two apps: the
+API returned exactly those two, heaviest first, with `baseline_days: 32`, and the panel rendered as
+*"2 new apps — First seen 2026-08-24, against 32 earlier days of history"* with friendly names from
+`appLabel`. Zero console errors, which matters because the CSP build fails silently.
+
+### ~~O25, O26, O27, O29, O30, O31, O32, O34, O38 · The screen-cast path, which no review had ever looked at~~ — **fixed**
+
+Thirteen prior review passes produced twenty-four numbered findings and a page of declined rows, and
+**not one of them touched the capture path**. It is the most expensive thing this tool does, it is
+the feature a parent opens at the tensest moment, and it had never been measured. A pass that only
+looked there found nine things, of which three were correctness rather than cost.
+
+Numbered O25–O40 by a session that was report-only; the ones fixed here are recorded together
+because they had to ship as one change. O28, O33, O35, O36, O37, O39 and O40's idle half remain
+open and are listed under *Open* above.
+
+**O25 — the capture backend was chosen by a default that does not exist.** `xcap` declares **no
+`default` feature list**, so `xcap = "0.9"` compiled the `#[cfg(not(feature = "wgc"))]` arm: GDI
+`BitBlt` against the DWM-composited desktop. That is correct for ordinary windows and returns
+**black** for anything bypassing composition — a game in exclusive fullscreen, DRM video. Not an
+edge case: exclusive fullscreen is a radio button in the game's own settings, so it was an evasion
+a child could select with no prompt and no admin right, and the result is indistinguishable from a
+monitor that is off. Fixed by naming the backend, at the cost of Windows drawing a yellow border
+while the parent watches — which is O15's decision ("the child should know") enforced by the OS
+rather than by a sentence on a page. See O41 for the version floor that follows.
+
+**O27 — the capture helper was DPI-unaware, and the consequence is not blurriness.** `xcap`'s
+non-WGC path takes its rectangle from `EnumDisplaySettingsW` (`dmPelsWidth`/`dmPelsHeight` —
+*physical* pixels, DPI-independent by definition) and `BitBlt`s it against a **virtualised** desktop
+DC whose space is *logical* pixels. The code asks for a rectangle larger than the surface it reads
+from: 36% of the frame outside it at 125% scaling, **55.6% at 150%** — the scaling Windows itself
+picks for a 4K laptop panel. Fixed with `SetProcessDpiAwarenessContext` behind a `Once` in the
+capture path. **Still unverified**: this is reasoned from two APIs' documented coordinate spaces and
+has never run. §D1a of WINDOWS-TESTING settles it with one capture.
+
+**O26 — "the primary monitor" was whichever enumerated first.** The trait doc promised the primary;
+the code took `Monitor::all()?.into_iter().next()`, and `EnumDisplayMonitors` returns
+display-settings order. On two screens it could watch the wrong one indefinitely with nothing in the
+UI saying so. `is_primary()` existed in the same crate version, unused.
+
+**O29 — one frame was 20,641 KiB.** Measured through the exact encoder that shipped, on 4K game
+content. Fired every three seconds, that is **56.4 Mbit/s** sustained over TLS from the child's
+laptop, to fill a card 384 px tall. Two things made it that bad and only one is the codec: PNG's
+cost varies **132×** on content nobody controls, so it was never a predictable bill. Fixed with two
+tiers — 960×540 JPEG q70 for the timer, native q90 for a human — sized **in the helper**, because
+that is where the pipe is: the same frame is 32,400 KiB raw, 20,641 as PNG, and **47 KiB** resized
+and encoded first. Preview cost is now flat at 23–32 KiB across every content type and resolution
+tried, which is what makes it a tier rather than a gamble.
+
+**O30 — the live view evicted the security audit log.** One `screenshot_taken` line per frame, 61
+bytes, into a 2 MiB file with one rotated backup: **~57 hours of live viewing pushed out every login
+record**. Of fourteen `audit.record` call sites, thirteen are each bounded by a discrete human
+action — which is why the *Considered and declined* table correctly refuted the `/time-request`
+case. This was the only one a **clock** could drive. Fixed by coalescing preview frames into one
+`live_view` line per five minutes while full captures keep a line each, which also makes the log
+read better: five detailed looks plus forty minutes of ambient view, rather than 1,200 identical
+rows.
+
+**O31 — no `Cache-Control` on anything.** Five security headers were stamped on every response and
+no caching directive was among them. Now `no-store`, applied blanket rather than scoped to
+`/api/*`: every page is embedded and served over a LAN, so there is no round trip worth saving and
+scoping it would create a second rule to keep in step.
+
+**O32 — the cadence was hard-coded and unreachable.** `_refreshMs: 3000` was declared once, used
+once, and bound to no control, so the parent's only options were *off* and *the most expensive
+setting the tool has*. Now 2/5/15s beside the toggle, defaulting to 5, with a fifteen-minute
+auto-stop — `document.hidden` already covered a backgrounded tab, but a tab left *visible* on a
+second monitor cast all day.
+
+**O34 — a broken live view looked exactly like a child sitting still.** `takeScreenshot(silent =
+true)`'s `catch` arm did nothing at all, so a stopped service, a signed-out child or a wedged helper
+each left the last good frame up with the toggle still lit, indefinitely. For a feature used at
+moments of concern that is the worst available failure, and it is the same defect class as O10.
+Fixed with a capture timestamp rendered as "updated 4s ago", turning red and naming the last frame's
+time when one is missed.
+
+**O38 — every frame carried an alpha channel that was always 255.** A desktop capture is opaque by
+construction. Subsumed by the JPEG change, which has no alpha to carry.
+
+**Two things this pass got wrong about itself, recorded because the pattern repeats here.** The
+crate-count claim was backwards: dropping `image`'s `png` feature was predicted to remove seven
+crates, and removes none — **`xcap` pins that feature itself**, so feature unification keeps the
+whole PNG stack regardless. Verified with `cargo tree -i png` only after writing the opposite into
+a comment. And the first mutation run against the new tier test **passed**, which was read as the
+test being vacuous; the mutation had simply not applied. The lesson is the one O23 already records
+for benchmarks and it generalises: *verify the mutation landed before believing what the test
+result means*. The tier test was genuinely vacuous for a different reason — all three of its cases
+had `silent` and `tier` agree, so collapsing the two passed. It now asserts the two combinations no
+call site uses.
+
+### ~~O41 · The screen-capture path has a Windows floor the README does not admit to~~ — **fixed**
+
+Any move from GDI `BitBlt` to Windows.Graphics.Capture needs `GraphicsCaptureItem::CreateForMonitor`,
+which is **Windows 10 1903 (build 18362)**. The README promises "Windows 10 or 11" with no floor, so
+an unconditional switch would silently stop working on 1809 — a build that is still out there on
+hand-me-down family PCs, which is most of this product's market.
+
+**The trap is the number.** This codebase already cites **1803** twice, correctly, for the removal of
+Interactive Service Detection. 1803 is therefore the version in everyone's head here, and it is the
+wrong one for this API. Anyone reasoning from memory rather than checking will be off by one release
+in the direction that ships a broken build.
+
+**There is no fallback to fall back to, and that is the sharp part.** The obvious fix — runtime
+`GraphicsCaptureSession::IsSupported()` with a GDI fallback — **cannot be built on `xcap`**, which is
+the crate in use. Its two capture paths are mutually exclusive *at compile time*
+(`xcap-0.9.8/src/windows/mod.rs:5` is `#[cfg(not(feature = "wgc"))] mod gdi;` against `mod.rs:8`
+`#[cfg(feature = "wgc")] mod wgc;`), and `IsSupported` appears nowhere in the crate. Enabling `wgc`
+therefore **deletes** the GDI path rather than sitting in front of it. Keeping both would need a
+second capture crate or hand-written WinRT/D3D11 FFI.
+
+That inverts the finding: with no fallback available, the version floor stops being a graceful
+degradation and becomes a **hard requirement**, which is what makes the 1803-vs-1903 confusion above
+worth writing down.
+
+**Also checked and disqualified:** DXGI Desktop Duplication, the one alternative that would give
+correct capture without WGC's yellow border. It fails `DXGI_ERROR_UNSUPPORTED` against the discrete
+GPU on a hybrid-GPU system — which describes every gaming laptop, i.e. precisely the machine this
+product cares about.
+
+**Fix.** WGC only, failing loudly, with the OS build checked in `preflight` — never an unconditional
+switch, and never a fallback, which cannot exist. Either state the floor in the README or keep the
+README's promise true.
+
+Found by a peer session's validation pass and recorded here because that pass was report-only. The
+fix line above is its **second** version: the first said "runtime `IsSupported()` with a GDI
+fallback", which reads as obviously correct and does not compile. Verified against the vendored
+source before rewriting, which is the only reason it was caught.
+
+**Fixed as described, and the floor is now stated in three places rather than implied in none.**
+`Cargo.toml` declares `xcap = { version = "0.9", features = ["wgc"] }` with the reasoning above
+inline; `preflight::check_windows_build` reports a **caution** (never a blocker — screen-time,
+curfew and blocklists all work fine on an older build, and refusing to install would take a working
+parental control away to protect one feature of it); and the README now says
+"Windows 10 version 1903 (build 18362) or newer".
+
+Two things worth keeping from the implementation:
+
+- **The build number has to come from `RtlGetVersion`, not `GetVersionEx`.** The latter is shimmed
+  for binaries without an application-manifest compatibility declaration, and reports Windows 8's
+  6.2 forever. This binary deliberately has no manifest — it sets DPI awareness through an API call
+  precisely so it does not need one — so `GetVersionEx` would have reported a version below the
+  floor on *every* machine and warned every parent. That failure would have looked exactly like the
+  check working.
+- **An unreadable build number is treated as new enough.** Warning whenever one syscall misbehaved
+  would train a parent to ignore the warning, which costs more than the case it catches; a genuinely
+  too-old machine still reports the failure the moment a capture is attempted.
+
+`preflight::tests::the_capture_floor_is_1903_not_1809` pins the boundary as literal numbers rather
+than as `MIN_CAPTURE_BUILD ± 1`, so changing the constant fails there and has to be argued for.
 
 ### ~~O21 · An orphaned watcher never exits, so service restarts leak helpers~~ — **fixed**
 

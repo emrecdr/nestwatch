@@ -56,8 +56,13 @@ Full walkthrough, including what to check afterwards: **[the install guide](http
 
 ## Requirements
 
-- **Windows 10 or 11** on the managed PC (the child's account must be a **standard user**, not an
-  administrator — see [Tamper-resistance](#tamper-resistance--and-its-limits)).
+- **Windows 10 version 1903 (build 18362) or newer**, or Windows 11, on the managed PC. The
+  child's account must be a **standard user**, not an administrator — see
+  [Tamper-resistance](#tamper-resistance--and-its-limits).
+  <br>The floor is the screen capture: it uses an API that arrived in 1903. Everything else —
+  screen-time limits, curfew, blocked apps, per-app limits — runs on older builds, and `install`
+  reports the mismatch as a caution rather than refusing. Any Windows 10 still receiving updates
+  is well past this.
 - Any device with a browser on the same home network, for the parent.
 - Nothing else. No runtime to install, no Node, no Python, no service account.
 
@@ -75,9 +80,9 @@ one on the real machine with **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.
 | **Daily budget** | Minutes per day, optionally different per weekday. Counts only *active* use — not idle, locked or logged-out time. Survives reboots, resets at midnight. When spent: lock, shut down, or warn only. |
 | **Curfew** | One or more time windows per weekday, separate from the budget. Counts down on the child's screen, then shuts down — and re-issues if the shutdown is cancelled. |
 | **Warnings** | 15, 5 and 1 minutes before both the budget and bedtime, so the limit is never a surprise. A budget shorter than a threshold never announces it; a mid-day restart doesn't replay warnings; granting extra time re-arms them. |
-| **Screen-time report** | 7, 30 or 90 days as a chart, with a comparison against the period before. Click a column to drill into that day. Most-used lists cover the whole window — by app, by category, by time actually in front, and by browser page — so it answers "how much Roblox this month", not only "what happened last Tuesday". Days the service wasn't running show as **not measured**, never as zero, so a stopped enforcer can't look like a quiet week. |
+| **Screen-time report** | 7, 30 or 90 days as a chart, with a comparison against the period before. Click a column to drill into that day. Most-used lists cover the whole window — by app, by category, by time actually in front, and by browser page — so it answers "how much Roblox this month", not only "what happened last Tuesday". Days the service wasn't running show as **not measured**, never as zero, so a stopped enforcer can't look like a quiet week. **New apps are called out** — anything used for the first time, with the number of days of history behind the claim. |
 | **Asking for more** | The child's page shows time left and can request more; you approve or deny. Single-use offline codes cover times you're away or the network is down. |
-| **Remote control** | Screenshot the desktop (with live refresh), list and kill running apps, lock the screen, shut down with a warned countdown. |
+| **Remote control** | Screenshot the desktop (with live refresh at your choice of 2/5/15s), list and kill running apps, lock the screen, shut down with a warned countdown. Live frames are small and cheap; clicking **Expand** fetches a full-resolution one. **Windows draws a yellow border around the screen while it is being captured** — the child can see when you are looking. |
 | **App rules** | Blocklist, per-app daily limits, and groups sharing one pool. Habit-shaping, not a wall — see [Not included](#not-included). |
 | **Modes** | Pause the whole rules enforcer with one toggle for a free evening (curfew still applies). Save the current setup as a named routine and reapply with a click. |
 | **Trust the setup** | `nestwatch doctor` reports whether the service is up, the port listening, the firewall rule right, the network private, the certificate valid, and whether anything is actually being enforced. Every problem prints its fix. |
