@@ -473,7 +473,14 @@ mod tests {
         let text = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
         )
-        .expect("reading src/lib.rs");
+        .expect("reading src/lib.rs")
+        // Every split below anchors on "\n", so a CRLF checkout makes `split_once("\n}\n")`
+        // miss the closing brace: `}` is followed by `\r`, not `\n`. That is not theoretical —
+        // it is how the first v0.3.0 tag failed, with 335 tests green and this one panicking
+        // "run_helper must end" on a Windows runner and nowhere else. `.gitattributes` now pins
+        // LF repo-wide, but it cannot renormalise a working tree that predates it, so this test
+        // does not depend on a checkout setting it has no way to see.
+        .replace("\r\n", "\n");
         let body = text
             .split_once("\nfn run_helper(")
             .expect("run_helper must exist")

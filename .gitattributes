@@ -1,0 +1,25 @@
+# Line endings are LF in the working tree on every platform, not just in the object store.
+#
+# This is not a style preference. Several tests in this crate read the crate's own source as
+# **text** and parse its structure — `every_helper_flag_is_named_in_the_usage_it_prints` splits
+# `src/lib.rs` on "\n}\n" to find where a function ends, and `security.rs`, `server.rs`,
+# `rules.rs`, `web.rs` and `tests/spawn_paths.rs` all scan source or asset text similarly. Every
+# one of those anchors on "\n".
+#
+# GitHub's Windows runners ship `core.autocrlf=true`, so without this file `actions/checkout`
+# writes CRLF into the working tree and "\n}\n" can no longer match "\r\n}\r\n" — the `}` is
+# followed by `\r`. That is exactly how the v0.3.0 release failed: 335 tests passed, one scanner
+# panicked with "run_helper must end", and the release job was skipped. It cannot reproduce on a
+# macOS or Linux checkout, so every local gate was green.
+#
+# This has now bitten three times, which is why the fix belongs here rather than at a fourth call
+# site: `security.rs` added `'\r'` to a delimiter set, `tests/spawn_paths.rs` added a
+# `.replace("\r\n", "\n")` after failing on CI having passed everywhere else, and `src/lib.rs`
+# then repeated the bug because nothing carried the lesson to it. Those local guards stay — they
+# also cover a working tree checked out before this file existed — but they are compensating
+# controls, not the fix.
+#
+# `text=auto` still lets git detect binary content and leave it alone; every tracked file in this
+# repo is text today (.rs .md .js .mjs .yml .toml .html .json .css .lock LICENSE), and there are
+# no .bat/.cmd/.ps1 files that would genuinely want CRLF.
+* text=auto eol=lf
