@@ -981,6 +981,14 @@ monitor that is off. Fixed by naming the backend, at the cost of Windows drawing
 while the parent watches — which is O15's decision ("the child should know") enforced by the OS
 rather than by a sentence on a page. See O41 for the version floor that follows.
 
+**Binary cost, measured because the plan asked and nobody had:** turning on `wgc` enables nine
+`windows`-crate features, and the release profile is size-tuned (`opt-level = "s"`, `lto`,
+`strip`). Cross-built for `x86_64-pc-windows-gnu` both ways: **4,333,568 bytes with, 4,299,776
+without — +33,792 bytes, +0.79%**. Negligible. Worth recording so the question is not re-asked,
+and worth noting *how* it was nearly got wrong: the first attempt read a stale `nestwatch.exe`
+after a failed build and reported a +0 delta. The measurement now deletes the binary first and
+reports the run void if none reappears.
+
 **O27 — the capture helper was DPI-unaware, and the consequence is not blurriness.** `xcap`'s
 non-WGC path takes its rectangle from `EnumDisplaySettingsW` (`dmPelsWidth`/`dmPelsHeight` —
 *physical* pixels, DPI-independent by definition) and `BitBlt`s it against a **virtualised** desktop
