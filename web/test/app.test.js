@@ -1048,7 +1048,7 @@ test("a live frame asks for the preview tier and a human's click asks for full",
   const { app, calls } = appRecordingShots();
 
   await app.takeScreenshot();                    // the "Take screenshot" button
-  await app.takeScreenshot(false, "full");       // the modal's Refresh
+  await app.takeScreenshot(false, "full");       // the same request, asked for explicitly
   await app.takeScreenshot(true, "preview");     // the live timer
 
   assert.equal(calls.length, 3);
@@ -1165,19 +1165,81 @@ test("every offered cadence is slower than the one that shipped, and the default
   );
 });
 
-test("choosing a cadence while Live is running restarts it rather than stacking timers", () => {
+test("choosing a cadence re-arms the timer without buying another capture", async () => {
   const cleared = [];
-  const { app } = appRecordingShots({
+  const { app, calls } = appRecordingShots({
     setInterval: () => cleared.length + 100,
     clearInterval: (id) => cleared.push(id),
   });
   app.startAutoRefresh();
+  // Let the opening capture settle. Until it does, `_shotBusy` is still true and would swallow a
+  // second capture on its own — which would make the assertion below pass for the wrong reason.
+  for (let i = 0; i < 20 && app._shotBusy; i++) await Promise.resolve();
+  assert.equal(app._shotBusy, false, "the opening capture must settle before the cadence click");
+
   const first = app._shotTimer;
+  const afterStart = calls.length;
   app.setRefreshMs(15000);
 
   assert.equal(app._refreshMs, 15000);
   assert.ok(cleared.includes(first), "the previous interval must be cleared, not left running");
   assert.equal(app.autoRefresh, true, "changing cadence must not switch the live view off");
+  assert.equal(
+    calls.length,
+    afterStart,
+    "clicking a slower cadence to make the live view cheaper must not itself commission a " +
+      "capture — and the one it used to commission was full tier, the most expensive of all",
+  );
+});
+
+test("expanding a frame that is already full does not capture the desktop again", async () => {
+  const { app, calls } = appRecordingShots();
+
+  await app.takeScreenshot();                 // the "Take screenshot" button: full tier
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].endsWith("tier=full"));
+
+  app.openShotFull();
+  assert.equal(app.shotFull, true, "the overlay must still open");
+  assert.equal(
+    calls.length,
+    1,
+    "the browser already holds a full frame; expanding it must not spawn a second helper, " +
+      "capture the whole desktop and encode it again for bytes it has",
+  );
+});
+
+test("expanding a live preview still refetches, or the overlay stretches 960x540 to fill it", async () => {
+  const { app, calls } = appRecordingShots();
+
+  await app.takeScreenshot(true, "preview");  // a live timer frame
+  assert.equal(calls.length, 1);
+
+  app.openShotFull();
+  assert.equal(calls.length, 2, "a preview must be replaced by a full frame when opened large");
+  assert.ok(calls[1].endsWith("tier=full"), `expand asked for ${calls[1]}`);
+});
+
+test("the fifteen-minute auto-stop does not freeze the age line into a lie", async () => {
+  const { app } = appRecordingShots();
+  await app.takeScreenshot();
+  assert.ok(app.shotAt, "a frame must have landed for there to be an age to show");
+  assert.notEqual(app._clockTimer, null, "a frame on screen needs a clock to age it");
+
+  // Exactly what the auto-stop does when `_liveUntil` passes.
+  app.stopAutoRefresh();
+
+  assert.equal(app.autoRefresh, false, "the live view really has stopped");
+  assert.notEqual(
+    app._clockTimer,
+    null,
+    "the picture is still on screen and still getting older. Freezing the line at 'updated 4s " +
+      "ago' is not silence, it is a confident wrong answer — and it is the exact failure the age " +
+      "line was added to prevent, arriving through the one stop path that is not an error",
+  );
+
+  app.now = app.shotAt + 3_600_000;
+  assert.match(app.shotAge(), /updated 60m/, "the age must keep counting after the stop");
 });
 
 test("signing out forgets how old the picture was", () => {
@@ -1189,6 +1251,13 @@ test("signing out forgets how old the picture was", () => {
   app.resetSessionData();
   assert.equal(app.shotAt, null, "'updated 3s ago' must not outlive the session it belonged to");
   assert.equal(app.shotStale, false);
+  assert.equal(app.shotTier, null, "nor may the tier it was captured at");
+  assert.equal(
+    app._clockTimer,
+    null,
+    "the age clock outlives the Live toggle now, so signing out is the one place that must stop " +
+      "it — otherwise it ticks forever against a frame that is gone",
+  );
 });
 
 // --- the first-seen notice -------------------------------------------------
@@ -1198,14 +1267,14 @@ test("signing out forgets how old the picture was", () => {
 // on the first day the watcher ran; merging the last two shows an empty panel every quiet day,
 // and a notice that is always present stops being read.
 
+// `loadApp()` already starts with `screentime: emptyScreentime()` — the real shape, from the one
+// place that defines it. The hand-written stand-in that used to sit here was a third copy of that
+// shape and was already a field behind: it omitted `first_seen`, which is the field these very
+// tests are about, and only survived because `Object.assign` put it back.
 function appWithFirstSeen(first_seen) {
   const a = loadApp();
-  a.screentime = Object.assign(emptyish(), { first_seen });
+  a.screentime.first_seen = first_seen;
   return a;
-}
-function emptyish() {
-  return { days: [], total_mins: 0, measured_days: 0, daily_avg_mins: null, prev_total_mins: null,
-           change_pct: null, app_totals: [], focus_totals: [], page_totals: [], group_totals: [] };
 }
 
 test("a report that cannot tell shows no notice", () => {
@@ -1332,7 +1401,7 @@ test("events from other days are excluded", () => {
 });
 
 test("non-session events are ignored", () => {
-  const noise = { event: "budget_lock", ts: new Date("2026-08-25T12:00:00").toISOString() };
+  const noise = ev("budget_lock", "12:00");
   const spans = timelineOf([noise, STOP("10:00"), START("09:00")]);
   assert.equal(spans.length, 1, "a lock is not a session boundary");
 });
@@ -1424,6 +1493,36 @@ test("the three bar states are mutually distinguishable without colour", () => {
   assert.match(states.nodata, /\bst-nodata\b/);
   assert.doesNotMatch(states.nodata, /\bst-over\b/, "an unmeasured day is not an over-budget day");
   assert.equal(new Set(Object.values(states)).size, 3);
+});
+
+test("every swatch in the chart's key is painted by the same method as the bars", () => {
+  const a = loadApp();
+  // A real day row for each state the chart can draw.
+  const bars = {
+    "within budget": { date: "2026-08-01", minutes_used: 42, over_budget: false },
+    "over budget": { date: "2026-08-02", minutes_used: 300, over_budget: true },
+    "not measured": { date: "2026-08-03", minutes_used: null },
+  };
+
+  const key = a.stBarKey;
+  assert.equal(key.length, 3, "a key that omits a state the chart can draw is a puzzle");
+
+  for (const k of key) {
+    assert.ok(bars[k.label], `the key names a state this test does not know about: ${k.label}`);
+    assert.equal(
+      a.stBarClass(k),
+      a.stBarClass(bars[k.label]),
+      `the "${k.label}" swatch does not look like the bars it claims to explain. This is the ` +
+        "exact failure the key used to have: the markup spelled the three class strings out by " +
+        "hand, so adding the .st-over texture repainted the bars and left the swatch flat",
+    );
+  }
+
+  assert.equal(
+    new Set(key.map((k) => a.stBarClass(k))).size,
+    3,
+    "two swatches that render identically explain nothing",
+  );
 });
 
 test("the text cue that screen readers rely on is still there", () => {

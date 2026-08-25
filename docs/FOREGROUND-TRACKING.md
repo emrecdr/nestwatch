@@ -138,7 +138,7 @@ SYSTEM service (session 0)                 Child's session (winsta0\default)
 **Why a pipe and not a named pipe or a local port.** `session.rs` already creates an inheritable
 pipe and hands the write end to a `CreateProcessAsUserW` child. Reusing it adds no new IPC surface:
 no named-pipe ACL to get wrong, no loopback port for another local process to connect to, nothing on
-disk for a standard user to read or squat. The screenshot helper writes one PNG and exits; the
+disk for a standard user to read or squat. The screenshot helper writes one JPEG and exits; the
 watcher writes one JSON line every 30 seconds and stays. That is the only difference.
 
 **Supervision.** The watcher is long-lived in a session the child controls, so the service must

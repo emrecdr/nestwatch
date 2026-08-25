@@ -22,6 +22,18 @@ That second pass is also why several entries in *Considered and declined* record
 with the code, so what was checked and found false is worth as much shelf space as what was found
 true.
 
+Two cleanup passes (2026-08-25), each four independent reviewers over the same four angles, added
+**O47-O62** plus five *Considered and declined* rows. They are the first passes here to run against a
+diff that had **already been reviewed** — the second was given the first's decisions up front and told
+that re-raising them was worthless, which is why its findings are sharper and fewer. Both are recorded
+with their measurements, and three of the entries record a reviewer's claim that was checked and
+turned out to be wrong or not general: the thumbnail trade, the strip-comments trip point, and a
+mutation that proved nothing because it could not fail.
+
+One class escaped **all eight reviewers** and is worth the warning: twelve comments describing a wire
+format the code no longer used (O62). Every reviewer had been told "never flag comment volume", which
+is right, and each generalised it into not reading comments at all.
+
 A third pass (2026-08-25) added **O16-O24**, from a research review of per-app and web-page tracking
 against primary sources — Win32 documentation, Chromium's `ax_mode.h`, and Microsoft's own XInput
 guidance. Each entry states how it was established, because they are not equally solid: O18, O19, O21
@@ -434,6 +446,54 @@ about the test.
 agreeing, so a mutant collapsing them passed. Being right about the conclusion does not make the
 method sound; the next one will not be right by luck.)
 
+**Four instances in one day, which is why this now has its own heading: "the command ran" and "the
+command did the thing" are different claims, and only the second is evidence.** The entry above
+records two. A later pair made it four, and the two new ones failed in ways the first two do not
+cover:
+
+- **A stale artefact answered for a build that never happened.** Measuring the capture backend's
+  cost meant building with and without a feature and comparing `stat` output. The without-`wgc`
+  build *failed*; `stat` happily measured the previous run's binary still sitting on disk and
+  reported a difference of **+0 bytes**. A plausible number, from a real file, for a build that did
+  not exist. The correct figure is +33,792 bytes. Nothing in the output distinguished the two — the
+  fix is to make the build's exit status a precondition of reading its artefact, not a thing you
+  glance at above the number.
+- **The working directory drifted and the command ran somewhere else.** `npm run build` was invoked
+  from the repository root rather than `web/`, and a success was reported for a build that never
+  ran. It then recurred later in the same session in a subtler form: a compound command whose
+  earlier `cd` had silently persisted, so a mutation was applied to a path that did not exist, a
+  restore-from-backup failed, and the tree was left mutated while the summary said "restored". The
+  guard is absolute paths in anything that mutates, and a positive check afterwards — `grep` for the
+  thing you expect to be there or gone — rather than trusting the command's own exit.
+
+**A number you derived is not a number you measured, and careful algebra is not a defence.** Three
+consecutive wrong answers to one small question in a single session, each produced by someone
+reasoning correctly from an incomplete model of the thing:
+
+- "About 150 bytes of headroom" before `strip-comments.mjs` fails the build — wrong.
+- A peer's correction to "309 bytes", from `2 × out − src` — also wrong, because it assumed a
+  stripped comment contributes nothing to the output. It contributes its newline.
+- The corrected "~380 bytes" — wrong again, or rather **not general**: the scanner copies a comment's
+  leading whitespace before it recognises the `//`, so the answer depends on indentation. Measured by
+  sweeping it: roughly 7 lines at indent 0 and 8 at indent 8. **Deeper indentation buys more
+  headroom**, which nobody deduces, and which means outdenting a comment block moves the build
+  *closer* to failing.
+
+The shape is the same as the mutation case one level up. All three figures were arrived at by
+thinking, all three were plausible, and the question was only settled by running it across a range —
+at which point the honest answer turned out to be a range rather than a number.
+
+**Staleness and completeness are two different audits, and a green one says nothing about the
+other.** Asked whether the documentation was up to date, two sessions independently swept for
+*staleness* — "is anything written here now false" — found and fixed a dozen items apiece, and each
+reported the docs as current. Both were right and both had missed the same class, because neither had
+asked the other question: **"is anything true missing"**. `uninstall` had never been described beyond
+one clause, on the only surface a parent reads; no staleness pass can surface a section that was
+simply never written. The peer then applied the distinction a second time to its own new text and
+found a completeness gap *inside a completeness fix* — the new bullet did not say that `--purge` is
+irreversible and takes every recorded day, the pending requests and the certificate the family's
+devices already trust. Run the two passes separately and expect them to fail differently.
+
 **Trigger.** §D2 step 12, which already asks for this. It has simply never been done.
 
 ### O24 · Game portals are identifiable from page titles at zero syscall cost
@@ -761,7 +821,362 @@ config is by construction what is in the certificate.
 **Trigger.** Next change to the certificate path. Pre-existing; found during a cleanup review of the
 uninstall work and recorded rather than fixed, because it is not that change.
 
+### O47 · The full capture tier is unreachable in the mode a parent uses it from
+
+`openShotFull()` fetches a `full` frame when the overlay opens, and the overlay and the thumbnail
+bind the **same** `shotUrl`. While Live is running, the live timer keeps writing `preview` frames
+into that same slot — so the sharp frame survives at most `_refreshMs`, which is 2 s at the fastest
+cadence, and is then replaced by a 960×540 preview stretched across the whole window.
+
+The tier is decided by **who asked for the frame**, when the property that matters is **which
+surface is displaying it**. `shotFull` is a pure display flag that nothing in the capture path
+consults.
+
+Why it matters more than it sounds: the two-tier design traded 20 MB frames for 30 KB ones on the
+explicit promise that a parent who wants to *read* something can still get a full-resolution frame.
+That promise is kept when Live is off and broken when it is on — and Live being on is the state a
+parent is in when they click **Expand**. The modal's Refresh button is currently the only reliable
+way to hold a readable picture, which is not what any of the copy says.
+
+**Fix.** Make the tier follow the visible surface: either give the overlay its own buffer that only
+human-initiated captures write, or have the live timer request `full` while `shotFull` is set.
+
+**Not done here because it is a decision, not a tidy-up.** Both options change what live view costs
+while the overlay is open, and the plan that introduced the tiers explicitly chose "keep updating at
+preview, Refresh to sharpen". Re-deciding that needs the cost stated: at 2 s a full-tier stream is
+the most expensive thing this tool can be asked to do. The comment at the call site was corrected to
+describe what actually happens, since it previously claimed the opposite.
+
+### O48 · A parent's deliberate click is silently discarded while a live frame is in flight
+
+`takeScreenshot`'s `if (this._shotBusy) return;` guard is justified in its own comment as protection
+against the **live timer** stacking slow captures — the helper can take ~15 s and the timer fires
+every few seconds. But the guard sits on the shared function, so it also drops human-initiated
+captures: **Take screenshot**, **Expand**, and the modal's **Refresh** all return without doing
+anything if a silent preview happens to be in flight.
+
+`:disabled="loadingShot"` does not cover it, because `loadingShot` is only set when `!silent` — so
+during a live capture the buttons look enabled, accept the click, and do nothing. No toast, no
+spinner, no state change. With a 15 s worst case against a 2 s cadence, that is the common case
+rather than a race.
+
+**Fix.** Move the guard into the interval callback so the timer skips its own tick, or let a human
+capture supersede the in-flight preview — `_shotAbort` already exists for exactly that.
+
+**Not done here** because it needs a small concurrency design rather than a one-line move: two
+overlapping captures both assign `shotUrl` and both clear `_shotBusy`, so the naive fix trades a
+dropped click for a frame that arrives out of order. A capture-generation counter is probably the
+answer. Getting it wrong is worse than the current conservative behaviour.
+
+### O49 · The one case the baseline cap was written for is the one case nothing records
+
+`first_seen_in` gives up and returns `None` when the baseline exceeds `MAX_BASELINE_APPS` (2,000
+distinct names). `None` is also what it returns for "no focus history", "only one day of it" and
+"this is the first day" — so the UI, which renders `None` as no panel at all, cannot tell them
+apart, and neither can the logs.
+
+`foreground::MAX_APPS` is 200/day and `rollup_row` writes the map uncapped, so 2,000 distinct
+executable names is not something ordinary use produces. It is reachable essentially only by the
+deliberate renaming the cap's own comment names as the reason it exists — a child cycling executable
+names to keep every day looking new. That child silently and permanently disables the feature, and
+produces **exactly** the same dashboard and exactly the same audit log as a fresh install where the
+watcher has never run.
+
+**Fix.** At minimum record it (`audit.record("first_seen_baseline_overflow", …)`) so the one
+interesting case leaves a trace. Properly, it is a distinct state rather than a third spelling of
+`None`, and it should reach the parent as "this check has stopped working, and here is why".
+
+**Trigger.** Whenever [O52](#o52--first_seens-three-states-collapse-to-two-at-the-last-hop) is taken,
+since both are about the same `Option` losing information on its way to the reader.
+
+### O50 · `doctor` never asks whether the machine can capture at all
+
+`preflight::check_windows_build` compares the OS build against `MIN_CAPTURE_BUILD` (18362) and warns.
+It is reached only through `preflight::gather`, whose only two callers are in `install.rs`. `doctor`
+has its own `platform_checks` and does not consult preflight at all — verified independently by two
+sessions: `doctor.rs` contains the string "preflight" exactly once, in a doc comment referring to
+`preflight::apply`, not a call.
+
+So on Windows 10 below 1903 the position is: `install` mentions it once, as a caution among others,
+in a console the parent scrolls past — and then every screenshot fails forever while `doctor`, the
+tool the README points at for "anything wrong? this says what, and how to fix it", reports
+everything green.
+
+That is the bad kind of failure. A diagnostic that is merely silent leaves the parent no worse off;
+one that actively contradicts the symptom sends them looking somewhere else.
+
+**Fix.** One more `Check` in `doctor::platform_checks` calling the same `capture_build_ok(os_build())`,
+worded as "screenshots will not work on this build; everything else does". `capture_build_ok` is
+already `pub` and pure; `os_build` is private and would become `pub(crate)`.
+
+**Not done here** because it is a feature addition rather than a cleanup, and `doctor.rs` was outside
+the reviewed diff. Small, though — and it has now been declined by three sessions in a row purely on
+scope, which is exactly how a cheap fix falls through the gap between people who each correctly
+decided it was not theirs.
+
+### O51 · The property the audit change exists for is proved for a type and never for the endpoint
+
+`LiveViewAudit` has four unit tests covering the coalescer in isolation. `tests/api.rs` has three
+tests hitting `/api/screenshot`. Neither set covers the seam: **no test asserts that a preview
+request produces at most one `live_view` line per window, or that a full request produces a
+`screenshot_taken` line.**
+
+The mapping from tier to audit behaviour lives in an `if let` in `api::screenshot`, while the
+35 lines of reasoning explaining it live in `audit.rs`. Feeding a `Full` frame to `observe`, or
+dropping the `if let` — there is no `#[must_use]` — loses the count with every test still green.
+
+There is a concrete obstacle worth recording, because it is why this was not simply written:
+`tests/common` builds state with `AuditLog::disabled()`, so the integration harness has no audit log
+to assert against. Closing this means either a test-only constructor that writes to a temp dir, or
+moving the mapping into a method (`record_capture(&audit, tier, now)`) that can be unit-tested with
+the reasoning beside it.
+
+**Fix.** Prefer the method: it puts the tier→event decision next to the argument for it, and makes
+`observe` stop being a public entry point that accepts a frame it cannot classify.
+
+### O52 · `first_seen`'s three states collapse to two at the last hop
+
+`Option<FirstSeen>` carries three states deliberately: `None` = the report could not tell,
+`Some` with an empty `apps` = it checked and nothing was new, `Some` non-empty = the notice. That
+distinction is typed in Rust, serialized, mirrored in `emptyScreentime()`, argued for in a doc
+comment that says "the UI must distinguish that", and pinned by four tests across two languages.
+
+The UI does not distinguish it. `x-if="showFirstSeen"` requires `apps.length > 0`, so `None` and
+`Some{apps:[]}` render identically — nothing at all. `firstSeenNote()` computes a sentence for the
+quiet day and throws it away.
+
+To a parent, "checked, nothing new" and "gave up" are the same blank space, which is the failure the
+`Option` was introduced to prevent, arriving one layer past where it is guarded. Meanwhile two JS
+tests maintain an internal difference with no observable consequence.
+
+**Fix, and it is genuinely a choice.** Either the quiet-day state reaches the reader — one line where
+the panel would be, and `firstSeenNote()` already renders it — or `first_seen_in` returns `None` for
+it and the doc, the type's contract and four tests drop to two states. What is not defensible is
+carrying three states everywhere and rendering two.
+
+Weigh it against the reason the panel is hidden on quiet days at all: a notice that appears every day
+stops being read. That argument is sound and may well win — in which case the honest move is to
+*delete* the third state rather than keep paying for it.
+
+### O53 · The client records which tier it asked for, not which tier it got
+
+`shotTier` is set from the argument passed to `takeScreenshot`, so it records the request. Nothing
+confirms what the server actually served, and `ShotTier::from_arg` turns any unrecognised spelling
+into `Full` **silently** — that is deliberate and right for the endpoint, but it means a drift
+between the JS literal `"preview"` and Rust's `as_arg` produces no error anywhere: the live stream
+simply runs at full resolution, which is the exact outcome the shared spelling exists to prevent.
+
+`as_arg`'s doc says it exists so "preview" has one spelling across two boundaries. There is a third,
+in a third language, that it does not cover. The Rust round-trip test asserts the enum against
+itself; the JS test asserts the literal it typed. Both stay green through a drift. `openShotFull()`
+then branches on that same unverified string ([O47](#o47--the-full-capture-tier-is-unreachable-in-the-mode-a-parent-uses-it-from)).
+
+**Fix.** The handler already knows the tier and already builds the response headers — stamp it
+(`X-Shot-Tier`) and set `shotTier` from `r.headers.get(...)`. "Which tier is on screen" becomes an
+answer rather than an assumption, and a drift shows up as a mismatch instead of a silent cost.
+
+### O54 · Two source-text scanners and a standing exemption, for a property a shared list would make true
+
+`run_helper` reads `--tier` with a hand-rolled `args.iter().position(...)` scan, and its two usage
+strings are hand-maintained literals. Keeping those in step currently costs: an `in_run_helper` skip
+inside `every_flag_the_code_reads_is_listed_in_the_table` — a **standing exemption in the scanner
+that polices every other flag in the codebase** — plus a second test that slices `run_helper`'s body
+out of `src/lib.rs` with `split_once("\nfn run_helper(")` / `split_once("\n}\n")`, greps two string
+idioms out of it, and reassembles wrapped `eprintln!` continuation lines. That test carries a
+`flags.len() >= 4` self-check because, in its own words, "the scan drifted and proves nothing", and
+its comment records that an earlier version already reported two documented flags as undocumented.
+
+This is **not** the sanctioned source-scanning pattern. `the_capture_backend_is_named_not_defaulted`
+and `the_css_build_chain_stamps_only_after_a_successful_compile` scan text because the fact lives in
+`Cargo.toml` and `package.json`, where Rust cannot reach it. "Every flag I dispatch on appears in the
+message I print" is expressible in Rust.
+
+**Fix.** One `const HELPER_FLAGS: &[(&str, &str)]` that `run_helper` both matches against and renders
+its usage from. The property becomes true by construction; both text scanners and the exemption go
+away with it.
+
+**Not done here, and the reason is the interesting part.** This is argument dispatch on the capture
+helper — a path that has **never run on Windows hardware**. Rewriting it immediately before the
+on-device verification pass would mean that when something misbehaves on the machine, there is no way
+to tell the capture work from the refactor. Same reasoning as [O2](#o2--rulesrs-has-a-real-seam-between-the-pure-machine-and-the-loop)'s revised trigger.
+
+**Trigger.** After `docs/WINDOWS-TESTING.md` has been run on the device.
+
+### O55 · The build's comment-ratio guard is calibrated against a premise this codebase contradicts
+
+`web/scripts/strip-comments.mjs` fails the build when a file loses more than half its bytes to
+comment stripping, justified as: "Comments are a minority of any source here."
+
+Measured, they are not. `assets/app.js` at `849dc05` is **47.9%** comment — 2.1 points from failing —
+and this codebase's house style is deliberately heavy explanatory prose. A single cleanup pass pushed
+it to 50.4% and broke the build.
+
+Two things make it worse than a tight threshold:
+
+- **The message is false when it fires.** "That is not comments — the scanner mis-parsed it" sends
+  the reader hunting a parser bug that does not exist. Confirmed by running `git show HEAD:assets/app.js`
+  through the same scanner and getting 47.9%.
+- **The case it was written for can no longer reach it.** `ours(name)` is `!name.endsWith(".min.js")`
+  and the loop skips on it *before reading the file*, so `alpine.min.js` — the 13,543-byte incident
+  the guard's comment memorialises — never reaches `stripJs`. Every file that can still trip the
+  ratio is first-party, hand-written and comment-heavy: exactly the population the premise is wrong
+  about.
+
+**The trip point is a range, not a number, and it moves the wrong way.** `stripJs` copies a comment's
+leading whitespace before it recognises the `//`, so an indented comment returns more bytes to the
+output than an unindented one. Swept: roughly **7 added lines at indent 0, 8 at indent 8**.
+**Outdenting a comment block moves the build closer to failing** — which nobody deduces, and which is
+why it is written down here. See [O23](#o23--minimum-resources-is-the-stated-design-target-and-no-number-has-ever-been-taken)
+for the three wrong answers produced by deriving this instead of measuring it.
+
+**Fix.** Keep the throw and swap the trigger: `stripJs` finishing with a non-null `quote` means it ran
+off the end of a string, which is a **definite** mis-parse rather than a correlate of one — and it
+would make the message's claim true whenever it appears. Re-base or drop the ratio separately.
+
+**Deliberately not done in the pass that hit it.** Re-basing a safety limit that your own change
+pushed against is not a call to make quietly; the prose was trimmed back instead, restoring headroom
+to >14 lines. Recorded here so the decision belongs to whoever reads this rather than to whoever was
+inconvenienced by it.
+
+### O56 · The screen-time report pays for every day ever recorded, not the window asked for
+
+`build_report` parses the whole retained history, then does work on rows it will never render:
+
+- `DayRow::measured` **deep-clones** four vectors (`apps`, `focused`, `pages`, `groups`) out of
+  `by_date`, a map local to `build_report` that is dropped moments later. Bounded by `MAX_APPS` 200 +
+  200 + `MAX_PAGES` 40 + groups, so up to ~445 `String` allocations per measured day — up to ~40,000
+  per request at the 90-day window, realistically a few thousand.
+- Out-of-window rows are still four-way sorted by `app_minutes`, although their only consumer is
+  `first_seen_in`, which reads **only** `focused`'s names — not the minutes, not the order, and none
+  of `apps`/`pages`/`groups`. A year installed with a 30-day window is ~335 such rows, ~17,000 wasted
+  `String` allocations and ~1,300 wasted sorts per request.
+
+Cost scales with **how long the tool has been installed**, not with the window requested — the same
+shape as the `usage.jsonl` waste already fixed one level up.
+
+**Fix.** Run `window_total` and `first_seen_in` before the day loop (both only read), then build
+`day_rows` with `by_date.remove(&cursor)` and move the vectors in; and move the sort into
+`DayRow::measured`, the only consumer that needs an order.
+
+**Why it is here and not done.** Measured at sub-millisecond to ~2 ms on a request a parent triggers
+by hand, and — the deciding fact — **it predates the reviewed diff**, so it falls outside "wasted work
+this change introduces". Mechanical and safe when someone is next in that file for another reason.
+
 ## Fixed
+
+### ~~O57 · The chart's key disagreed with its bars, in the channel the texture was added for~~ — **fixed**
+
+[O46](#o46--the-30-day-chart-signals-over-budget-by-colour-alone-at-122-contrast) added `.st-over`, a
+texture, because `bg-error` against `bg-primary` measures **1.22** contrast and a red-green confusion
+pair carries no information for the reader it matters to. The bars were fixed. The **legend was not**,
+because it spelled its three swatch classes out by hand in the markup instead of asking `stBarClass`.
+
+Result: "over budget" rendered as a flat `bg-error` chip beside striped bars, and "not measured"
+rendered as `bg-base-200` beside `.st-nodata` ones. Two of three swatches wrong — and wrong in
+precisely the way O46 existed to fix, so the colour-blind parent was handed a key encoded in the one
+pair they cannot read, explaining bars that had already been corrected.
+
+**Fixed** by a `stBarKey` getter returning representative day rows, rendered through `stBarClass` —
+the same method the bars use, so a swatch cannot drift from them again. Same shape as `timelineKey`/
+`spanClass` next door. Swatches were enlarged to 20×12 px because `.st-nodata`'s stripes repeat every
+5 px and a 12 px chip shows barely two of them; verified by rendering the compiled stylesheet in a
+browser rather than by reasoning about it.
+
+Two guards, because one was not enough: a JS test pins every `stBarKey` entry against `stBarClass`
+and requires the three to be mutually distinct, and a Rust source scan (`web.rs`) asserts the markup
+carries `x-for="k in stBarKey"` and `:class="stBarClass(k)"` and no hand-written swatch label. The JS
+test alone cannot see the markup reverting to literals — the getter would go on agreeing with itself.
+
+### ~~O58 · The live view's age line froze into a confident wrong answer when it stopped itself~~ — **fixed**
+
+The "updated 4 s ago" line exists because a live view that has stopped and a child sitting still look
+identical. The fifteen-minute auto-stop added in the same change routed through `stopAutoRefresh`,
+which stopped the clock **without** setting `shotStale` — so the line kept rendering, in normal
+styling, frozen at whatever it last said, over a picture that was by then hours old.
+
+That is worse than having no line: it converts "I don't know how old this is" into a confident wrong
+answer, and it arrived through the one stop path that is not an error, so nothing else flagged it.
+
+**Fixed** by binding the clock to `shotAt` — the thing it describes — instead of to the Live toggle.
+The age now counts up for as long as a frame is on screen, so every way of stopping tells the truth
+for free, including the deliberate one. `resetSessionData` stops it, because that is the one place a
+frame stops existing.
+
+### ~~O59 · Every test travelled a capture path that production never takes~~ — **fixed**
+
+`FakeControl::screenshot` produced `Rgb8`. The shipping Windows controller produces `Rgba8`, and
+`encode_shot` matches on the variant — so every test in the suite went down the arm production never
+reaches, and the shipping arm was covered by a single bespoke unit test written specifically because
+of the gap.
+
+Worse than a coverage number: the arm the tests *did* exercise carries a full-frame `into_rgb8()`
+copy, the exact cost the same change had just removed from production. The tier size assertions were
+therefore measured on a path with different cost characteristics from the one that ships.
+
+`fake.rs` states the rule 80 lines below the defect — "a test that passed against a fake where they
+disagreed would be testing a world neither real implementation can produce" — and the same change had
+already moved the fake from 320×180 to 1280×720 for exactly this reason, then stopped one field short.
+
+**Fixed** by producing `Rgba8` with a constant 255 alpha. Coverage was then *measured* rather than
+assumed, by making the production arm hard-fail: **1 test before, 4 after** (three integration, one
+unit). A first attempt used a colour-transform mutation instead and showed nothing, because the size
+assertions compare tiers against each other and a transform applied to both preserves the ratio —
+recorded because picking a mutation that cannot fail is its own way of proving nothing.
+
+Byte output is unchanged: JPEG carries no alpha, verified by encoding one frame both ways with a
+deliberately varying alpha channel and diffing — byte-identical at q70 and q90. `WINDOWS-TESTING.md`'s
+recorded figures (21,985 B preview / 62,795 B full) were re-measured through the real code path after
+the change and still hold exactly.
+
+### ~~O60 · `FirstSeen` derived `Default`, manufacturing the state its `Option` exists to exclude~~ — **fixed**
+
+`FirstSeen::default()` is `{date: "", apps: [], count: 0, baseline_days: 0}` — and `baseline_days == 0`
+is precisely the condition `first_seen_in` returns `None` for. The derive handed back the one state
+the whole three-state design exists to keep out; anything reaching for it would render "First seen ,
+against 0 earlier days of history".
+
+**Fixed** by deleting `Default` from the derive — nothing called it. Recorded because the same pass
+*declined* `Report::default()` a few hundred lines away on the grounds that a struct literal is
+compiler-enforced complete and that property is wanted. The two decisions look contradictory and are
+not: adding `Default` to `Report` would have removed a compile error at the moment a new field needs a
+decision, while `FirstSeen`'s derive was already giving that property away on the type where an
+invalid value is meaningful rather than merely empty.
+
+### ~~O61 · A dimensional rule was asserted with a byte count~~ — **fixed**
+
+`a_small_frame_is_never_scaled_up` guards a rule about *pixels* — a 640×360 frame must not be
+stretched to the 960×540 preview box — and asserted it by comparing JPEG sizes across two tiers. That
+held largely because q70 < q90 on an all-black fixture, not because of the property it names. A future
+fixture that is textured or larger could upscale and still satisfy it.
+
+**Fixed** by decoding the preview and asserting `(width, height) == (640, 360)`. Noted because the
+neighbouring test argues bytes-over-dimensions correctly for *itself* — the tier genuinely is about
+bytes — and that reasoning does not transfer to this one.
+
+### ~~O62 · Twelve comments described a wire format the code had stopped using~~ — **fixed**
+
+Moving captures from PNG to JPEG left **nine** comments in `src/session.rs`, `src/lib.rs` and
+`src/control/fake.rs` still describing the live behaviour as PNG — the pipe contract, the
+stdout-purity rule, the helper's output, the fake's placeholder. Two more sat in the documents that
+get read most: `README.md`'s architecture diagram still ended `xcap ─→ PNG`, and
+`docs/FOREGROUND-TRACKING.md` said the helper "writes one PNG and exits". A twelfth claimed a live
+cadence of 3 s, which the same change had deleted in favour of a 2/5/15 s choice, and a rate derived
+from it was stated in the present tense.
+
+In a codebase where the comments *are* the documentation and a `SHOT_MIME` constant asserts the
+format, a comment naming the wrong wire format is a defect of the same kind as a wrong constant —
+someone debugging the pipe would be told to expect PNG magic bytes.
+
+**Fixed**, leaving the four genuinely historical mentions alone ("native PNG was 20,641 KiB", "the old
+PNG path"), which are measurements rather than claims about today.
+
+**Why four independent reviewers missed all twelve, which is the part worth keeping.** Every reviewer
+was instructed "never flag comment volume" — correct, since long comments are the house style — and
+each generalised it to *don't look at comments at all*. The instruction protecting the style also
+shielded the content. Two of the twelve were then found by a reviewer only after it was told the class
+existed, and the two in the most-read files were found by a reviewer rather than by the sweep of
+`src/` that preceded it. See [O23](#o23--minimum-resources-is-the-stated-design-target-and-no-number-has-ever-been-taken)
+on staleness and completeness being separate audits.
 
 ### ~~O46 · The 30-day chart signals over-budget by colour alone, at 1.22 contrast~~ — **fixed**
 
@@ -1608,6 +2023,11 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 | **An embedded database — DuckDB, as used in a sibling project** | The precedent is real and defeats the obvious objection: that project builds `x86_64-pc-windows-msvc` natively on `windows-latest`, exactly as this one does. **What does not transfer is the shape.** A realistic rollup row measures 763 bytes typical / 1,891 worst case, so ten years is 3,650 rows and under 7 MiB — a `Vec` holds the entire history. The shipped binary is 3.79 MiB and DuckDB's bundled amalgamation alone sits at crates.io's 10 MB *source* ceiling. And `bundled` cross-compilation is best-effort and needs a C++ cross-compiler for the target, which would cost the `x86_64-pc-windows-gnu` check that is the only way to lint eight `#[cfg(windows)]` `unsafe` blocks from a Mac. **SQLite becomes defensible** if the model ever changes from one blob per day to a row per `(day, app)` — that is ~11,000 rows a year and makes aggregation a query rather than a fold. Not yet earned. |
 | **Shortening the 30-second enforcement tick to improve resolution** | The reflex when someone asks for better tracking, and it buys nothing: focus changes are caught within 250 ms by the watcher's hook, and the tick only decides how often that is folded into the day's tally. Resolution is already an order of magnitude finer than the tick, and every cost in the loop would multiply. |
 | **Five suspicions about the install and enforcement paths, all refuted by reading** | Recorded because each is plausible enough that someone will suspect it again. **Localised group names** — `doctor` queries the Administrators group by SID (`S-1-5-32-544`) precisely *because* the name is localised; "Administratoren"/"Beheerders" appear only in the comment saying why. **Secrets written before the lockdown** — `prepare_data_dir` runs `create_dir_all` then `harden_acl` *before* the config is constructed, under a comment stating the ordering is deliberate. **ACL hardening** — `icacls /inheritance:r` strips inherited entries first, grants are by SID, and a failure bails the install rather than continuing. **An arbitrary 825-day certificate** — it is Apple's hard limit, and both bounds are set because Apple measures `not_after − not_before`. **Curfew defeatable by `shutdown /a`** — still on past `deadline + slack` re-issues as the *uncancellable* `ShutdownNow`, so cancelling buys one interval, not an evening. |
+| **`thumbnail()` instead of `Triangle` for the preview downscale** | Raised on strong numbers: `imageops::resize` runs `vertical_sample` first, which returns `Rgba32FImage` — always 4×f32 whatever the source — so a 4K preview allocates a **33.2 MiB** intermediate every frame, and `thumbnail()` is 16.8 ms → 9.1 ms and 35.4 MB → 2.2 MB allocated. **Declined on a re-measurement.** The reviewer's quality figure (4.2/255) came from a deliberately aliasing-heavy frame; on a desktop-like fixture the visual difference is ≤1/255 and the argument had to be made on bytes instead — where `thumbnail` produces **5–15% larger JPEGs** (4K +10.1%, 1080p +15.4%, 1440p +4.8%). Wire bytes are the one thing the preview tier exists to minimise, and the 33 MiB is transient in a ~50 ms helper process. Also measured so nobody re-proposes them: two-stage is *slower* (18.2 ms), `CatmullRom` 28.2 ms. |
+| **`Vec::with_capacity` for the JPEG encode buffer, and for the helper pipe read** | The encoder buffer starts at `Vec::new()` and doubles ~20 times on a full-tier frame; the pipe read gets no size hint because `GetFileInformationByHandle` fails on an anonymous pipe, so it doubles from 32 B (~11 reallocations for a 23 KiB preview). Both declined for the same reason: a capacity large enough to help the **rare** full tier taxes every **preview** frame, which is the one on a timer, and the cumulative memcpy is microseconds against a ~50 ms capture. |
+| **Memoizing `FakeControl`'s gradient, and `stBarPct`'s chart peak** | Both real: the fake rebuilds a 1280×720 image per call, and `stBarPct` recomputes the peak once per bar (8,100 element reads at a 90-day window, 0.177 ms). Declined — the first is dev/test-only and a cache adds global mutable state to a deliberately simple fake; the second predates the reviewed diff and is sub-millisecond once per report load. |
+| **Collapsing `takeScreenshot(silent, tier)` to one parameter** | The two agree at every production call site, and a reviewer correctly showed the comment defending their independence described the *shipped* behaviour as the failure it prevents. Declined anyway: they answer different questions — how loudly a failure is reported, versus how many pixels are asked for — and the plan that introduced tiers chose the split deliberately and mutation-tested it. **The stale justification was corrected rather than the signature**, which is the part that was actually wrong. |
+| **Deriving "today" in the timeline from `this.today.day` rather than the browser clock** | A genuine second definition of "today" on a page where every other today-figure comes from the server. Declined **from a cleanup pass**: it changes timezone semantics, needs a fallback for the pre-load `null`, and belongs in a correctness review rather than a tidy-up. |
 | An `Enforcer` trait unifying the two background loops | The genuinely shared skeleton is ~6 lines. The blocks that *look* duplicated aren't: curfew calls `disarm()` when a shutdown fails so it retries with a fresh countdown; the rules enforcer deliberately doesn't, and returns as the uncancellable `ShutdownNow`. A shared helper would extract the boilerplate and leave the divergent part behind. |
 
 ---

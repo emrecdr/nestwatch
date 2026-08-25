@@ -358,7 +358,7 @@ fn check_windows_build(out: &mut Vec<Finding>) {
         return;
     }
     out.push(Finding::caution(
-        format!("Windows build {build} is older than 18362 (version 1903)"),
+        format!("Windows build {build} is older than {MIN_CAPTURE_BUILD} (version 1903)"),
         "Screenshots and the live view need an API that arrived in Windows 10 version 1903. \
          Everything else — screen-time limits, curfew, blocked apps — works normally on this \
          build; only the picture of the screen will fail.",

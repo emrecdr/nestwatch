@@ -1,14 +1,14 @@
 //! Windows-only: launch a short-lived helper process **in the interactive user session**
 //! from the SYSTEM service, so it can capture the screen (which Session 0 cannot).
 //!
-//! The helper's PNG is streamed back over an **inherited stdout pipe** — no temp file — so
+//! The helper's JPEG is streamed back over an **inherited stdout pipe** — no temp file — so
 //! there's nothing on disk for a standard user to read, spoof, or squat, and no torn-read
 //! race. A watchdog thread terminates the helper if it exceeds the timeout.
 //!
 //! Flow: find the active console session → get its user token → duplicate to a primary
 //! token → create a pipe (child-inheritable write end) → `CreateProcessAsUserW` running
 //! `<exe> helper --capture-stdout` on the user's desktop with stdout = pipe → read the pipe
-//! to EOF → PNG bytes.
+//! to EOF → JPEG bytes (`control::SHOT_MIME`).
 //!
 //! Requires `SE_TCB_NAME` (SYSTEM has it). All `unsafe` FFI; compile/link-checked via the
 //! Windows target and must be runtime-verified on an actual Windows machine.
@@ -347,7 +347,7 @@ fn pump_watcher(exe: &str, feed: &crate::foreground::Feed) -> Result<(), Control
 /// Launch `<exe> <args>` in the active console session with stdout wired to a pipe, and hand back
 /// the read end plus the process handles.
 ///
-/// Shared by the screenshot helper (which reads one PNG and lets a watchdog bound it) and the
+/// Shared by the screenshot helper (which reads one JPEG and lets a watchdog bound it) and the
 /// foreground watcher (which streams JSON lines for the life of the session). The difference
 /// between those two is entirely in what the caller does with the pipe — so the token, pipe,
 /// environment block and desktop handling live here once rather than being copied and drifting.
@@ -444,7 +444,7 @@ fn spawn_and_capture(exe: &str, tier: ShotTier) -> Result<Vec<u8>, ControlError>
             }
         });
 
-        // Read the PNG from the pipe (File owns the read handle and closes it on drop).
+        // Read the JPEG from the pipe (File owns the read handle and closes it on drop).
         let mut buf = Vec::new();
         let read_result = file.read_to_end(&mut buf);
         drop(file);

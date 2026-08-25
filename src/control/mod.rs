@@ -118,17 +118,20 @@ impl ShotTier {
 }
 
 /// Longest edge of a preview frame. See [`ShotTier::Preview`] for why this size.
-pub const PREVIEW_W: u32 = 960;
+pub(crate) const PREVIEW_W: u32 = 960;
 /// Tallest a preview frame gets. Paired with [`PREVIEW_W`] as a bounding box, not a forced aspect —
 /// the capture is fitted inside it so a 16:10 or rotated monitor is never stretched.
-pub const PREVIEW_H: u32 = 540;
+pub(crate) const PREVIEW_H: u32 = 540;
 /// JPEG quality for [`ShotTier::Preview`]. Ample for "what kind of thing is on screen".
 const PREVIEW_QUALITY: u8 = 70;
 /// JPEG quality for [`ShotTier::Full`]. Higher because this tier exists to make text legible.
 const FULL_QUALITY: u8 = 90;
 
-/// The MIME type every capture is returned as, so handlers and tests share one definition.
-pub const SHOT_MIME: &str = "image/jpeg";
+/// The MIME type every capture is returned as, named once for the handler that stamps the header
+/// and the trait doc that promises it. `tests/api.rs` asserts the literal `"image/jpeg"` rather
+/// than this constant on purpose: a wire test comparing the response against the same constant the
+/// response was built from would pass just as happily if the constant and the encoder disagreed.
+pub(crate) const SHOT_MIME: &str = "image/jpeg";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ControlError {
@@ -228,17 +231,15 @@ pub async fn notify(control: &Arc<dyn SystemControl>, title: &str, body: &str) -
 /// Fit `img` to `tier` and encode it as JPEG. Shared by the real and fake controllers so the
 /// sizing, quality and error-mapping live in one place (child modules see this private helper).
 ///
-/// **The alpha channel is dropped here, and that is a saving rather than a loss.** A desktop
+/// **The alpha channel never reaches the encoder, and arranging that costs nothing.** A desktop
 /// capture is opaque by construction, so a quarter of every byte the old PNG path fed its encoder
 /// was the constant 255. Measured on a 4K frame with the compression level held fixed, dropping it
-/// alone was 10% smaller and 15% faster; JPEG has no alpha channel to carry, so `to_rgb8` gets that
-/// for free rather than as a separate step.
+/// alone was 10% smaller and 15% faster. JPEG has no alpha channel at all, so the encoder discards
+/// it without being asked — see the note on the `match` below for why converting first was waste.
 ///
 /// `Triangle` for the resample: `Nearest` shimmers on text as the window moves and `Lanczos3` costs
 /// several times as much for a frame the parent glances at.
 fn encode_shot(img: image::DynamicImage, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
-    use image::ImageEncoder;
-
     let (fitted, quality) = match tier {
         // Only ever **down**. `DynamicImage::resize` fits the image *to* the box in both
         // directions, so a 640x360 frame would be scaled up to 960x540 — spending bytes to invent
@@ -254,16 +255,34 @@ fn encode_shot(img: image::DynamicImage, tier: ShotTier) -> Result<Vec<u8>, Cont
         ShotTier::Full => (img, FULL_QUALITY),
     };
 
-    let rgb = fitted.to_rgb8();
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
-        .write_image(
-            rgb.as_raw(),
-            rgb.width(),
-            rgb.height(),
-            image::ExtendedColorType::Rgb8,
-        )
+    {
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality);
+        // Hand the encoder the buffer that already exists, in whatever shape it arrived.
+        //
+        // There used to be a `to_rgb8()` here, and it bought nothing: `image`'s JPEG encoder sends
+        // `Rgba8` and `Rgb8` down the same `encode_rgb`, whose `rgb_to_ycbcr` reads three channels
+        // and ignores any fourth. So the conversion allocated and filled a second copy of the frame
+        // — 23.7 MiB on a 4K capture, 1.48 MiB on *every* preview frame — to hand the encoder bytes
+        // it would have derived itself.
+        //
+        // Checked rather than reasoned about, by encoding one frame both ways and diffing the
+        // output. The test frame carried a deliberately **varying** alpha channel, so a leak of any
+        // kind — premultiplication, a fourth plane — would have changed the bytes. It did not:
+        // byte-identical at q70 and q90, and a shade faster (44.1 ms against 45.1 at 4K).
+        //
+        // The `match` is load-bearing, not tidiness. Passing `&fitted` straight in compiles and
+        // looks cleaner, but `DynamicImage`'s own `GenericImageView` re-matches the enum on every
+        // single `get_pixel`: measured at 48.1 ms, slower than the copy this removes. Naming the
+        // variant hands the encoder a flat slice instead.
+        match fitted {
+            image::DynamicImage::ImageRgba8(buf) => enc.encode_image(&buf),
+            // Everything else, the fake controller's `Rgb8` included. `into_` rather than `to_`, so
+            // a frame already in this shape is moved rather than cloned.
+            other => enc.encode_image(&other.into_rgb8()),
+        }
         .map_err(|e| ControlError::Capture(e.to_string()))?;
+    }
     Ok(out)
 }
 
@@ -347,6 +366,44 @@ mod tests {
         );
     }
 
+    /// The arm that actually ships is the one no CI machine runs.
+    ///
+    /// `control/windows.rs` always hands `encode_shot` an `ImageRgba8`, and every controller a test
+    /// can reach is the fake, which produces `Rgb8` — so the RGBA arm of the encoder `match` has no
+    /// coverage at all on Linux or macOS. This supplies it, and pins the property that let the
+    /// `to_rgb8()` call be deleted: JPEG carries no alpha channel, so an opaque frame and its RGB
+    /// equivalent must encode to the same bytes. If a future edit reintroduces a conversion, or
+    /// swaps the arms, this still passes — it is here for the case where the RGBA arm stops
+    /// producing a correct picture, which is invisible from any other test on this platform.
+    #[test]
+    fn a_frame_with_alpha_encodes_exactly_as_the_same_frame_without_it() {
+        let px = |x: u32, y: u32| [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8];
+        let rgb = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(320, 200, |x, y| {
+            image::Rgb(px(x, y))
+        }));
+        // Opaque, as a desktop capture always is.
+        let rgba = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(320, 200, |x, y| {
+            let [r, g, b] = px(x, y);
+            image::Rgba([r, g, b, 255])
+        }));
+
+        for tier in [ShotTier::Preview, ShotTier::Full] {
+            let from_rgb = encode_shot(rgb.clone(), tier).expect("rgb encodes");
+            let from_rgba = encode_shot(rgba.clone(), tier).expect("rgba encodes");
+            assert_eq!(
+                from_rgb,
+                from_rgba,
+                "{} tier: {} B from Rgb8 against {} B from Rgba8 — the alpha channel is reaching \
+                 the encoder, so the capture path and the fake are no longer producing the same \
+                 picture",
+                tier.as_arg(),
+                from_rgb.len(),
+                from_rgba.len()
+            );
+            assert!(!from_rgba.is_empty(), "an empty JPEG is not a picture");
+        }
+    }
+
     /// A frame already smaller than the preview box is not scaled **up**.
     ///
     /// Upscaling would cost bytes to invent detail, and would hide the very defect
@@ -355,14 +412,15 @@ mod tests {
     #[test]
     fn a_small_frame_is_never_scaled_up() {
         let small = image::DynamicImage::ImageRgb8(image::RgbImage::new(640, 360));
-        let preview = encode_shot(small.clone(), ShotTier::Preview).expect("encodes");
-        let full = encode_shot(small, ShotTier::Full).expect("encodes");
-        // Same pixels either way; only the quality setting differs, so preview cannot be larger.
-        assert!(
-            preview.len() <= full.len(),
-            "a {}x{} frame must not grow when asked for a preview",
-            640,
-            360
+        let preview = encode_shot(small, ShotTier::Preview).expect("encodes");
+        // Assert the DIMENSION, because that is the rule. This used to compare byte counts against
+        // a full-tier encode, which held mostly because q70 < q90 on an all-black fixture — a
+        // future fixture (textured, or larger) could upscale and still satisfy it.
+        let decoded = image::load_from_memory(&preview).expect("a preview is a decodable image");
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            (640, 360),
+            "a 640x360 frame must come back at its own size, not stretched to the preview box"
         );
     }
 

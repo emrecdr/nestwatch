@@ -114,7 +114,7 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
                           │  │                     → kill · lock · shutdown)
                           │  ├─ processes / kill / shutdown         [direct, Session 0 OK]
                           │  ├─ screenshot + lock ─→ helper in user session (WTSQueryUserToken +
-                          │  │                        CreateProcessAsUserW) ─→ xcap ─→ PNG
+                          │  │                        CreateProcessAsUserW) ─→ xcap ─→ JPEG
                           │  └─ foreground watcher ─→ RESIDENT helper in the child's session
                           │                           (SetWinEventHook + 5s poll) ─→ JSONL ─→ pipe
                           └─ SystemControl trait ─→ ServiceControl │ WindowsControl │ FakeControl
@@ -231,9 +231,10 @@ the origin check in a real browser) can only be verified there.
 nestwatch.exe install     # password + TLS cert; copies binary, registers & starts the
                           # SYSTEM service, hardens ACLs; prints a QR to pair your phone
 nestwatch.exe doctor      # check the install; report anything wrong and how to fix it
+#                           (including if this binary is newer than the installed service)
 nestwatch.exe pair        # print a fresh QR to sign in another phone/laptop
 nestwatch.exe fingerprint # re-print the TLS cert SHA-256 (to verify a new device later)
-nestwatch.exe uninstall   # stop + delete the service (add --purge to remove data too)
+nestwatch.exe uninstall   # remove service, firewall rule and files; --purge also removes data
 nestwatch.exe version     # print this build's version (also --version / -V)
 nestwatch.exe remote-setup # print a script that enables remote admin (--off to undo)
 
@@ -255,6 +256,14 @@ nestwatch.exe remote-setup # print a script that enables remote admin (--off to 
 - `install` copies the binary to `C:\Program Files\HostHealth\host-health.exe` and registers
   the auto-start, auto-restart LocalSystem service `HostHealthService`. Re-running it updates in
   place and preserves your port, curfew, and rules.
+- `uninstall` removes **everything** `install` put on the machine: the service, the firewall rule,
+  the binary directory, and any resident helper still running in a signed-in session (which holds
+  the binary open, and was why an uninstall used to leave it behind). It then **checks** that each
+  is actually gone and **fails, naming what remains**, rather than reporting success on a partial
+  removal — you should never walk away believing the controls are gone while a service is still
+  running. Your settings, certificate and history stay unless you add `--purge`, which is
+  irreversible: it deletes the whole data directory, including every day of recorded screen
+  time, the pending time requests and the certificate your devices already trust.
 - **Upgrading from a build older than this one: re-run `install` once.** The clock anchor that stops a time-zone
   change from resetting the day's screen time (or moving the curfew window) is recorded *at install
   time*, so an install upgraded in place doesn't have one and falls back to plain local time.

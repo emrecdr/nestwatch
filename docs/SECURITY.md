@@ -241,6 +241,15 @@ This is deliberately a **password bypass**, so it's bounded tightly:
   speed. It always redirects to `/`, never revealing whether a pairing is pending.
 - **Not left behind.** `uninstall` clears any pending token.
 
+**Uninstall is verified, not assumed.** Removal is a security property here, not just tidiness: a
+service that survives an uninstall is a monitoring capability the parent believes they removed.
+`uninstall` therefore checks its own end state rather than each step — the service registration is
+re-queried after deletion (Windows only *marks* a service for deletion, and an open Services
+console keeps the record alive), the firewall rule is confirmed gone (deleting it is best-effort by
+design, so a failure was previously silent), and any resident helper is terminated first because a
+running executable holds its own image open. Anything that survives makes the command exit non-zero
+and names it. It cannot report success on a partial removal.
+
 **The residual risk, stated plainly:** the QR is displayed on a console *on the child's own PC*.
 For those 15 minutes, someone standing at that screen could photograph and use it. The mitigation
 is procedural — scan it yourself while you're at the machine, which consumes it immediately — and

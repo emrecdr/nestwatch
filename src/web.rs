@@ -238,6 +238,62 @@ mod tests {
         }
     }
 
+    /// The chart's key must be rendered from `stBarKey`, not written out in the markup.
+    ///
+    /// It *was* written out in the markup, and that is exactly how it broke: the three swatch
+    /// classes were spelled out as literals in `index.html`, so adding the `.st-over` texture
+    /// restyled the bars and left the key behind. Two of the three swatches then disagreed with the
+    /// chart they explained — and disagreed in the one channel the texture exists for, since a
+    /// reader who cannot separate `bg-primary` from `bg-error` (measured at 1.22 contrast) was
+    /// handed a key encoded in precisely the pair they cannot read.
+    ///
+    /// `web/test/app.test.js` pins `stBarKey`'s entries against `stBarClass`, but a JS test cannot
+    /// notice the *markup* reverting to literals — the getter would keep agreeing with itself while
+    /// nothing rendered it. That is what this scan is for.
+    ///
+    /// The labels are the tell: they live in `app.js` beside the classes they are paired with, so
+    /// finding one in the markup means the key was re-inlined. "not measured" is deliberately not
+    /// checked — it legitimately appears in the chart's own `aria-label`, which is a different
+    /// sentence for a different reader.
+    #[test]
+    fn the_chart_key_is_rendered_from_the_bar_classes_not_written_into_the_markup() {
+        let html = PAGES
+            .iter()
+            .find(|(name, _)| *name == "index.html")
+            .expect("index.html must be one of the served pages")
+            .1;
+        // The bindings that actually hold the property. Asserting these is the positive half:
+        // without them nothing renders the key at all, and `stBarKey` merely appearing somewhere in
+        // the file (in a comment, say) would satisfy a bare name check.
+        for binding in ["x-for=\"k in stBarKey\"", ":class=\"stBarClass(k)\""] {
+            assert!(
+                html.contains(binding),
+                "the screen-time chart's key must be rendered by {binding}, so each swatch is \
+                 painted by the same method as the bars it explains."
+            );
+        }
+
+        // And the negative half: a label in the markup means a swatch is being hand-painted again.
+        // "not measured" is deliberately absent from this list — it legitimately appears in the
+        // chart's own `aria-label`. If this ever fires on ordinary dashboard copy that happens to
+        // contain one of these phrases, narrow the list rather than deleting the check.
+        for label in ["within budget", "over budget"] {
+            assert!(
+                !html.contains(label),
+                "index.html spells out the chart-key label {label:?}. The key is built by \
+                 `stBarKey` in assets/app.js so each swatch is painted by `stBarClass` — the same \
+                 method the bars use — and cannot drift from them. A label in the markup means a \
+                 swatch is being hand-painted again, which is how the key came to show a flat \
+                 `bg-error` chip beside striped `st-over` bars."
+            );
+        }
+        assert!(
+            html.contains("stBarKey"),
+            "nothing in index.html renders `stBarKey`, so the screen-time chart has no key at \
+             all. Three encoded states without one is a puzzle rather than a chart."
+        );
+    }
+
     /// The CSS build chain must strip, then compile, then stamp — in that order.
     ///
     /// `web/scripts/stamp-build.mjs` advances `assets/app.css`'s mtime after a successful build, so

@@ -109,6 +109,9 @@ function app() {
     // picture up with the toggle still on, and nothing on the page ever says so.
     shotAt: null,
     shotStale: false,
+    // Which tier produced the frame currently on screen, so `openShotFull` can tell whether it
+    // already has a sharp one. `null` before the first capture.
+    shotTier: null,
     // Re-read once a second so "updated 4s ago" counts up on its own rather than only when a new
     // frame lands — the case that matters is precisely the one where no new frame is landing.
     now: Date.now(),
@@ -559,7 +562,11 @@ function app() {
       // two describe it and would otherwise outlive it — leaving "updated 3s ago" under a picture
       // that has been cleared, or a stale-view warning on the login page.
       this.shotAt = null;
+      this.shotTier = null;
       this.shotStale = false;
+      // No frame, nothing to age. The clock now outlives the Live toggle, so this is the one place
+      // that must stop it.
+      this.stopShotClock();
       // The title outlives the component state, so a sign-out that left "(2) Nestwatch" up would
       // advertise the previous session's child from the login page.
       this.syncTitle();
@@ -580,11 +587,9 @@ function app() {
 
     // Fetch one frame.
     //
-    // `tier` is passed explicitly rather than derived from `silent`. The two look interchangeable
-    // and are not: `toggleAutoRefresh` fires a NON-silent capture the instant Live is switched on,
-    // so that a live view which cannot start says so immediately. Map the tier onto `silent` and
-    // that first frame arrives sharp while every later one is a preview — a visible softening one
-    // second in, which reads as a bug rather than as a mode.
+    // `tier` is separate from `silent` because they answer different questions: `silent` is how
+    // loudly a failure is reported, `tier` is how many pixels are asked for. They agree at every
+    // call site today, but that is a fact about the call sites rather than a rule.
     async takeScreenshot(silent = false, tier = "full") {
       // Never overlap captures: the service helper can take up to ~15s, but the Live timer
       // fires every few seconds — without this guard slow captures would pile up.
@@ -601,7 +606,11 @@ function app() {
         if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
         this.shotUrl = URL.createObjectURL(blob);
         this.shotAt = Date.now();
+        this.shotTier = tier;
         this.shotStale = false;
+        // There is a frame on screen now, so the age line under it needs a clock — whatever put
+        // the frame there. See `startShotClock`.
+        this.startShotClock();
       } catch (e) {
         // An abort is the parent switching Live off mid-capture. Nothing failed, so it must not
         // raise a toast or mark the picture stale.
@@ -631,6 +640,16 @@ function app() {
       // The first frame is full so switching Live on gives an immediately sharp picture and
       // surfaces a failure at once; every frame after it is a preview.
       this.takeScreenshot();
+      this._armShotTimer();
+    },
+
+    // Arm, or re-arm, the capture timer at the current cadence.
+    //
+    // Split out of `startAutoRefresh` because changing the cadence must not restage the session:
+    // that path aborts the in-flight capture and commissions a **full-tier** one, so clicking
+    // "15s" to make the live view cheaper bought the most expensive capture available.
+    _armShotTimer() {
+      if (this._shotTimer) clearInterval(this._shotTimer);
       // Skip while the tab is hidden, matching the data poll. Each tick spawns a helper
       // in the child's session to capture and encode their whole desktop — by far
       // the most expensive thing this tool does — and without the guard it kept doing it
@@ -639,27 +658,39 @@ function app() {
         if (Date.now() > this._liveUntil) { this.stopAutoRefresh(); return; }
         if (!document.hidden) this.takeScreenshot(true, "preview");
       }, this._refreshMs);
-      this.startShotClock();
     },
 
     // Change cadence without making the parent toggle Live off and on.
     setRefreshMs(ms) {
       this._refreshMs = ms;
-      if (this.autoRefresh) this.startAutoRefresh();
+      if (!this.autoRefresh) return;
+      // Re-arming pushes the auto-stop out again, exactly as restarting the session used to: a
+      // parent adjusting the cadence is plainly still watching, and should not be cut off because
+      // they touched a button at minute fourteen.
+      this._liveUntil = Date.now() + this._liveMaxMs;
+      this._armShotTimer();
     },
 
     stopAutoRefresh() {
       if (this._shotTimer) { clearInterval(this._shotTimer); this._shotTimer = null; }
       // Drop an in-flight capture on the floor: its frame would land after the parent said stop.
       if (this._shotAbort) { this._shotAbort.abort(); this._shotAbort = null; }
-      this.stopShotClock();
+      // The age clock deliberately keeps running. The picture is still on screen and still getting
+      // older, and this is the path the fifteen-minute auto-stop takes — see `startShotClock`.
       this.autoRefresh = false;
     },
 
-    // Ticks `now` so the age under the picture counts up by itself. Only runs while Live is on —
-    // a still screenshot has no staleness to report.
+    // Ticks `now` so the age under the picture counts up by itself.
+    //
+    // Runs whenever a frame is on screen, **not** only while Live is on. Bound to the toggle it
+    // lied: the fifteen-minute auto-stop calls `stopAutoRefresh`, which stopped this clock without
+    // setting `shotStale`, so the age froze at "updated 4s ago" — in `opacity-60`, over a picture
+    // by then hours old. That is not silence, it is a confident wrong answer, and it is the exact
+    // failure the line was added to prevent. Following `shotAt` makes every stop path truthful.
+    //
+    // Idempotent, so landing a frame does not restart the interval.
     startShotClock() {
-      this.stopShotClock();
+      if (this._clockTimer) return;
       this._clockTimer = setInterval(() => { this.now = Date.now(); }, 1000);
     },
 
@@ -771,16 +802,24 @@ function app() {
 
     // Open the full-size view, refetching at full tier first.
     //
-    // The refetch is not optional. The thumbnail and this overlay bind the same `shotUrl`, so
-    // while Live is running that value holds a 960x540 preview — opening the overlay without
-    // asking for a sharp one would stretch it across the whole window, turning the bandwidth
-    // saving into a visible regression at the exact moment the parent is looking hardest.
+    // The thumbnail and this overlay bind the same `shotUrl`, so while Live is running that value
+    // holds a 960x540 preview, and opening the overlay on it would stretch a preview across the
+    // whole window at the moment the parent is looking hardest.
     //
     // The overlay is shown *before* the fetch resolves, so it opens instantly with the frame
     // already on screen and sharpens a moment later, rather than pausing on a click.
+    //
+    // **Known gap.** While Live runs, this sharp frame survives at most `_refreshMs` before the
+    // timer replaces it with a preview, so the full tier lands reliably only when Live is OFF;
+    // with it on, the modal's Refresh is the way to hold a readable picture. Fixing it means the
+    // tier following the visible surface rather than whoever asked for the frame, which changes
+    // what live view costs while the overlay is open — a decision, not a tidy-up.
     openShotFull() {
       this.shotFull = true;
-      this.takeScreenshot();
+      // Only when the frame on screen is not already a full one. Pressing "Take screenshot" and
+      // then Expand used to commission a second complete capture — helper process, whole desktop,
+      // resize, encode, pipe, 15s watchdog — for bytes the browser already had.
+      if (this.shotTier !== "full") this.takeScreenshot();
     },
 
     // Close the full-size view, and leave real fullscreen if we entered it -- otherwise the
@@ -1180,15 +1219,23 @@ function app() {
     // with no width, never as a duration.
 
     // Local minutes from midnight, or `null` if the event is not from `dayISO` (or is unparseable).
+    // A Date's LOCAL calendar day, as YYYY-MM-DD. Never `toISOString()`, which is UTC and would
+    // file a 01:00 session under yesterday. Written once because the timeline compares two
+    // independently built day stamps: if one site took the toISOString shortcut they would stop
+    // agreeing and every span would vanish with nothing failing — `dayTimeline` is tested against
+    // a literal `dayISO`, never through the getter that builds one.
+    localDayISO(d) {
+      return d.getFullYear() + "-" +
+        String(d.getMonth() + 1).padStart(2, "0") + "-" +
+        String(d.getDate()).padStart(2, "0");
+    },
+
     minutesIntoDay(ts, dayISO) {
       if (!ts) return null;
       const d = new Date(ts);
       if (isNaN(d.getTime())) return null;
       // Compare in local time, because the axis is the parent's day, not UTC's.
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      if (y + "-" + m + "-" + day !== dayISO) return null;
+      if (this.localDayISO(d) !== dayISO) return null;
       return d.getHours() * 60 + d.getMinutes();
     },
 
@@ -1227,23 +1274,18 @@ function app() {
 
     // The spans for today, ready to render.
     get todayTimeline() {
-      const now = new Date();
-      const dayISO = now.getFullYear() + "-" +
-        String(now.getMonth() + 1).padStart(2, "0") + "-" +
-        String(now.getDate()).padStart(2, "0");
-      return this.dayTimeline(this.usage, dayISO, now.getHours() * 60 + now.getMinutes());
-    },
-
-    get hasTodayTimeline() {
-      return this.todayTimeline.length > 0;
+      const d = new Date();
+      return this.dayTimeline(this.usage, this.localDayISO(d), d.getHours() * 60 + d.getMinutes());
     },
 
     // Percent-of-day geometry, so the markup needs no arithmetic (and no template literal, which
     // the CSP build cannot parse in an attribute).
     spanStyle(s) {
       const left = (s.from / 1440) * 100;
-      // A zero-width span would be invisible; give an unknown-end marker a hairline instead.
-      const width = s.kind === "unknown" ? 0.4 : Math.max(0.4, ((s.to - s.from) / 1440) * 100);
+      // Every span gets a hairline floor: a single minute is 0.07% of the axis and an unknown-end
+      // marker is 0%, and both would be invisible. `unknown` needs no branch of its own —
+      // `dayTimeline` builds it with `from === to`, which this floor already covers.
+      const width = Math.max(0.4, ((s.to - s.from) / 1440) * 100);
       return "left:" + left.toFixed(3) + "%;width:" + width.toFixed(3) + "%";
     },
 
@@ -1530,6 +1572,18 @@ function app() {
     stBarClass(d) {
       if (d.minutes_used == null) return "st-nodata";
       return d.over_budget ? "bg-error st-over" : "bg-primary";
+    },
+
+    // The chart's key. Each entry is a representative day row passed through `stBarClass`, so a
+    // swatch cannot drift from the bars it explains — which is what happened when the classes were
+    // spelled out in the markup and `.st-over` restyled the bars without them. Full story in
+    // `web::tests::the_chart_key_is_rendered_from_the_bar_classes_not_written_into_the_markup`.
+    get stBarKey() {
+      return [
+        { label: "within budget", minutes_used: 1, over_budget: false },
+        { label: "over budget", minutes_used: 1, over_budget: true },
+        { label: "not measured", minutes_used: null },
+      ];
     },
 
     stBarStyle(d) {

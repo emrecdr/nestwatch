@@ -15,7 +15,7 @@ use tower_sessions::Session;
 use crate::timereq::{MAX_REQUEST_MINUTES, PendingRequest};
 
 use crate::config::Config;
-use crate::control::{ProcessInfo, SystemControl};
+use crate::control::{ProcessInfo, SHOT_MIME, ShotTier, SystemControl};
 use crate::curfew::Curfew;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -108,25 +108,22 @@ pub async fn screenshot(
     State(state): State<AppState>,
     Query(q): Query<ShotQuery>,
 ) -> Result<Response, AppError> {
-    let tier = crate::control::ShotTier::from_arg(q.tier.as_deref());
+    let tier = ShotTier::from_arg(q.tier.as_deref());
     let bytes = blocking(state.control.clone(), move |c| c.screenshot(tier)).await?;
 
     // Full captures are audited one for one: there are few, a person asked for each, and they are
     // the ones that make text legible. Preview frames arrive on a timer and are coalesced, because
     // a per-frame line evicts the entire security history in about 57 hours of live viewing.
     match tier {
-        crate::control::ShotTier::Full => state.audit.record("screenshot_taken", json!({})),
-        crate::control::ShotTier::Preview => {
-            if let Some(frames) = state
-                .live_audit
-                .observe(std::time::Instant::now(), crate::audit::LIVE_AUDIT_WINDOW)
-            {
+        ShotTier::Full => state.audit.record("screenshot_taken", json!({})),
+        ShotTier::Preview => {
+            if let Some(frames) = state.live_audit.observe(std::time::Instant::now()) {
                 state.audit.record("live_view", json!({ "frames": frames }));
             }
         }
     }
 
-    Ok(([(header::CONTENT_TYPE, crate::control::SHOT_MIME)], bytes).into_response())
+    Ok(([(header::CONTENT_TYPE, SHOT_MIME)], bytes).into_response())
 }
 
 /// `GET /api/processes` → JSON array of running processes.

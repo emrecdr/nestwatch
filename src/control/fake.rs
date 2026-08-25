@@ -1,7 +1,7 @@
 //! A deterministic, side-effect-free [`SystemControl`] for macOS development and tests.
 //!
 //! It keeps an in-memory process list (so "kill" visibly removes an entry), synthesises a
-//! small placeholder PNG for screenshots, and makes "shutdown" a logged no-op — so you can
+//! placeholder JPEG for screenshots, and makes "shutdown" a logged no-op — so you can
 //! exercise every endpoint and the full UI without a Windows box or real side effects.
 
 use std::sync::Mutex;
@@ -56,18 +56,26 @@ impl SystemControl for FakeControl {
     /// A diagonal gradient, so the UI has something real to display and the tiers are
     /// distinguishable.
     ///
-    /// Deliberately **larger than [`super::PREVIEW_W`]×[`super::PREVIEW_H`]** — it used to be
+    /// Deliberately **larger than `PREVIEW_W`×`PREVIEW_H`** — it used to be
     /// 320×180. A source smaller than the preview box is returned untouched by `encode_shot`, so
     /// with the old size both tiers produced identical bytes and no test could tell whether the
     /// tier had reached the implementation at all. 1280×720 is the smallest ordinary desktop shape
     /// that actually exercises the downscale.
+    ///
+    /// **`Rgba8`, because that is what the shipping controller produces.** `windows.rs` always
+    /// hands `encode_shot` an `ImageRgba8`, and `encode_shot` matches on the variant — so a fake
+    /// producing `Rgb8` sent every test down the arm production never takes, and left the arm it
+    /// does take covered by a single bespoke unit test. Worse, the fallback arm carries a
+    /// full-frame `into_rgb8()` copy, so the size assertions measured on it were measuring a path
+    /// with different costs from the real one. Alpha is a constant 255: a desktop capture is
+    /// opaque, and JPEG discards the channel anyway.
     fn screenshot(&self, tier: ShotTier) -> Result<Vec<u8>, ControlError> {
         let (w, h) = (1280u32, 720u32);
-        let mut img = image::RgbImage::new(w, h);
+        let mut img = image::RgbaImage::new(w, h);
         for (x, y, px) in img.enumerate_pixels_mut() {
-            *px = image::Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 128]);
+            *px = image::Rgba([(x * 255 / w) as u8, (y * 255 / h) as u8, 128, 255]);
         }
-        super::encode_shot(image::DynamicImage::ImageRgb8(img), tier)
+        super::encode_shot(image::DynamicImage::ImageRgba8(img), tier)
     }
 
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, ControlError> {

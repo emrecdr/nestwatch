@@ -879,10 +879,15 @@
                 </template>
               </div>
 
+              <!-- Swatches are painted by `stBarClass`, the same method the bars use, so the key
+                   cannot disagree with the chart. Wider and taller than a plain colour chip needs
+                   to be because two of the three states are now textures, and `.st-nodata`'s
+                   stripes repeat every 5px — a 12px swatch would show barely two of them. -->
               <div class="mt-1 flex flex-wrap items-center gap-3 text-xs opacity-70">
-                <span><span class="inline-block h-2 w-3 align-middle bg-primary"></span> within budget</span>
-                <span><span class="inline-block h-2 w-3 align-middle bg-error"></span> over budget</span>
-                <span><span class="inline-block h-2 w-3 align-middle bg-base-200 border border-base-content/40"></span> not measured</span>
+                <template x-for="k in stBarKey" :key="k.label">
+                  <span><span class="inline-block h-3 w-5 rounded-sm align-middle"
+                              :class="stBarClass(k)"></span> <span x-text="k.label"></span></span>
+                </template>
               </div>
 
               <!-- Text alternative for the chart above: the SVG <title> elements sit on
@@ -917,7 +922,7 @@
                    A gold marker is a session whose end is unknowable because the service stopped
                    between two starts — drawn with no width on purpose. Giving it a duration would
                    shade a bar from an afternoon crash through to bedtime and call it use. -->
-              <template x-if="hasTodayTimeline">
+              <template x-if="todayTimeline.length">
                 <div class="mt-3">
                   <div class="mb-1 flex items-baseline justify-between">
                     <span class="text-sm font-semibold">When the PC was in use today</span>

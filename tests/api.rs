@@ -74,17 +74,7 @@ async fn session_endpoint_reflects_auth_state() {
 
 /// Fetch a capture, returning its content-type and body.
 async fn shot(app: &axum::Router, cookie: &str, query: &str) -> (String, Vec<u8>) {
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/screenshot{query}"))
-                .header(header::COOKIE, cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let res = get(app, &format!("/api/screenshot{query}"), Some(cookie)).await;
     assert_eq!(res.status(), StatusCode::OK);
     let mime = res
         .headers()
@@ -158,16 +148,7 @@ async fn a_capture_is_not_cacheable() {
     let app = test_app();
     let cookie = login(&app, PASSWORD).await.unwrap();
 
-    let res = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/screenshot")
-                .header(header::COOKIE, &cookie)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let res = get(&app, "/api/screenshot", Some(&cookie)).await;
 
     assert_eq!(
         res.headers().get(header::CACHE_CONTROL).unwrap(),

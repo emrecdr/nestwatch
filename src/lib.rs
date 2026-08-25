@@ -111,7 +111,7 @@ fn accepts(cmd: &str) -> Option<Accepts> {
         "version" | "--version" | "-V" | "help" | "--help" | "-h" => a(&[], &[]),
         // Deliberately unchecked:
         // `helper` already rejects anything it does not recognise, and is handled before this
-        // point so nothing can write to the stdout it streams a PNG on.
+        // point so nothing can write to the stdout it streams a JPEG on.
         // `service-run` is started by the SCM, not typed. A wrong entry in this table would turn
         // into a service that refuses to start — much worse than the typo it would catch.
         // An unknown command falls through here and is reported by the dispatch below.
@@ -153,7 +153,7 @@ pub fn run_cli() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("run");
 
-    // The screenshot helper streams raw PNG bytes to stdout — do NOT initialize tracing (or
+    // The screenshot helper streams raw JPEG bytes to stdout — do NOT initialize tracing (or
     // anything else that writes stdout) before handling it, or it would corrupt the stream.
     if cmd == "helper" {
         return run_helper(&args);
@@ -322,7 +322,7 @@ fn run_server() -> Result<()> {
 /// **stdout** where a console exists. The `service-run` subcommand runs as the SYSTEM service
 /// in Session 0 — which has **no console** — so its diagnostics would otherwise vanish; it logs
 /// to a daily-rotated file in the ACL-hardened data dir instead, where a standard user can't
-/// read them. Never called for `helper` (that path streams raw PNG to stdout).
+/// read them. Never called for `helper` (that path streams raw JPEG to stdout).
 fn init_tracing(cmd: &str) {
     use tracing_subscriber::{EnvFilter, fmt};
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
@@ -380,7 +380,8 @@ USAGE:
                           --port N        listen on a port other than 8443
                           --fix           apply pre-flight fixes without asking
                           --reset-config  replace an unreadable config.json
-  nestwatch uninstall     stop + remove the service (--purge also removes data)
+  nestwatch uninstall     remove the service, firewall rule and files; fails if any
+                          remain, naming them (--purge also removes settings + history)
   nestwatch doctor        check the install and report anything wrong
   nestwatch pair          show a QR code to sign in another phone or laptop
   nestwatch fingerprint   print the TLS cert SHA-256 (to verify a new device)
@@ -518,7 +519,7 @@ mod tests {
     /// Commands whose arguments this table must not police.
     #[test]
     fn the_internal_commands_are_left_alone() {
-        // `helper` validates its own, and must not be intercepted before it streams PNG bytes.
+        // `helper` validates its own, and must not be intercepted before it streams JPEG bytes.
         assert!(check_flags("helper", &argv(&["helper", "--capture-stdout"])).is_ok());
         // `service-run` is started by the SCM. Refusing here would mean a service that won't run.
         assert!(check_flags("service-run", &argv(&["service-run", "--whatever"])).is_ok());

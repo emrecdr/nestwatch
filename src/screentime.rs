@@ -218,7 +218,10 @@ const TOP_FIRST_SEEN: usize = 8;
 /// product deliberately watches no registry and reads no install log. That also matches what the
 /// market does: Qustodio surfaces a new app once it has been used at least once, not when it lands
 /// on disk. An app installed and never opened is not a fact about a child's day.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+// No `Default`. It would produce `baseline_days: 0`, which is exactly the condition
+// `first_seen_in` returns `None` for — a fabricated answer sitting inside the state the `Option`
+// exists to keep out, rendering as "First seen , against 0 earlier days of history".
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FirstSeen {
     /// The day these were first seen, `YYYY-MM-DD`. The most recent **completed** day with focus
     /// evidence — never today, because today's rollup has not been written yet.
@@ -276,18 +279,12 @@ fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> 
         .filter(|a| !baseline.contains(a.name.as_str()))
         .cloned()
         .collect();
-    if fresh.is_empty() {
-        // A day that introduced nothing is the normal case, and it is still an answer worth
-        // returning: the UI can say so, or say nothing, but it must not be confused with "we could
-        // not tell". `None` is reserved for the latter.
-        return Some(FirstSeen {
-            date: target.to_string(),
-            apps: Vec::new(),
-            count: 0,
-            baseline_days,
-        });
-    }
-
+    // A day that introduced nothing is the normal case, and it is still an answer worth returning:
+    // the UI can say so, or say nothing, but it must not be confused with "we could not tell".
+    // `None` is reserved for the latter. That case needs no branch of its own — an empty `fresh`
+    // sorts and truncates to itself and reports `count: 0`, which is precisely the answer. It used
+    // to have one, which meant two `FirstSeen` literals to keep in step; `FirstSeen` derives
+    // `Default`, so a field added to only one of them would not have failed to compile.
     fresh.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
     let count = fresh.len();
     fresh.truncate(TOP_FIRST_SEEN);
@@ -663,6 +660,9 @@ mod tests {
         assert!(fs.apps.is_empty());
         assert_eq!(fs.count, 0);
         assert_eq!(fs.baseline_days, 1);
+        // The answer is about the newest day carrying evidence, not an older one — otherwise an
+        // empty list could be a stale day's verdict rather than today's.
+        assert_eq!(fs.date, "2026-08-19");
     }
 
     /// With nothing to compare against, *every* app is trivially new — which is not a finding, it
