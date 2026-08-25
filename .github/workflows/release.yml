@@ -22,6 +22,32 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      # The tag and the manifest must agree, and nothing else checks that they do.
+      #
+      # Releases are tagged by hand. A tag of v0.3.0 against a Cargo.toml still reading 0.2.3
+      # publishes a binary that reports the wrong version from `version` and `doctor` — and from
+      # the install record, which decides whether an install is an upgrade or a reinstall. The
+      # release page would say one number while the thing it links to says another, and nobody
+      # would find out until someone ran `doctor` on a real machine and believed it.
+      #
+      # First on purpose: it costs a second and fails before the toolchain, the build, the tests,
+      # or anything that publishes. `awk` over the `[package]` table rather than `cargo metadata`
+      # or a bare grep — it needs no toolchain (so it really can run first), and scoping to the
+      # table means neither `rust-version` nor a dependency's version can be read as the crate's.
+      - name: Tag matches Cargo.toml
+        shell: bash
+        run: |
+          manifest=$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version[ \t]*=/{gsub(/["]/,"",$3); print $3; exit}' Cargo.toml)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ -z "$manifest" ]; then
+            echo "::error::could not read a version from Cargo.toml's [package] table"
+            exit 1
+          fi
+          if [ "$manifest" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME says $tag, Cargo.toml says $manifest — bump one to match the other"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches Cargo.toml $manifest"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

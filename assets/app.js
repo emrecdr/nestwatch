@@ -533,7 +533,11 @@ function app() {
       // This used to clear three fields and leave eight. `audit`, `usage`, `screentime`, `codes`,
       // `timeRequests`, `routines`, `rules` and `curfew` all survived a sign-out, so a second
       // person signing in on the same browser saw the first one's child. `resetSessionData` is one
-      // place rather than an inventory to keep aligned with the state above.
+      // place rather than clearing scattered across the callers — but it *is* still an inventory
+      // that must be kept aligned with the state above, and its own doc says so. The alignment is
+      // deliberate rather than fixed: the thirteen fields sit beside the comments explaining them
+      // and beside their `loading*` partners, and hoisting them into a shared factory would buy one
+      // inventory at the price of detaching every one of them from its reason.
       this.resetSessionData();
     },
 
@@ -1177,21 +1181,6 @@ function app() {
       return this.stRecentDayWith(key);
     },
 
-    // The heading over a breakdown, which has to say *why* it is showing the date it shows.
-    //
-    // Unpinned, each panel independently picks the newest day carrying its own kind of data, so the
-    // date needs the qualifier — three panels can legitimately name three different days. Pinned,
-    // they all show the chosen day and the qualifier would be a lie.
-    // What to call an executable when showing it to a parent.
-    //
-    // The keys stay as process names everywhere they matter — enforcement matches on them, and
-    // `apps` and `focused` are rendered side by side on the same key, so renaming the data would
-    // split one app into two rows. Only the presentation changes.
-    //
-    // A curated set rather than asking Windows. Reading `FileDescription` out of the version
-    // resource means file I/O per app and still misses Store-packaged programs, which is exactly
-    // the Roblox case this product most cares about. Anything unknown falls back to the executable
-    // without its extension, which is already an improvement on "RobloxPlayerBeta.exe".
     // Minutes as something a person reads. Over a month a heavy app reaches four digits, and
     // "1847 min" is a number you have to do arithmetic on before it means anything.
     fmtDuration(mins) {
@@ -1218,7 +1207,6 @@ function app() {
     // blocked on, wearing a different hat. Such a span is marked `unknown` and drawn as a marker
     // with no width, never as a duration.
 
-    // Local minutes from midnight, or `null` if the event is not from `dayISO` (or is unparseable).
     // A Date's LOCAL calendar day, as YYYY-MM-DD. Never `toISOString()`, which is UTC and would
     // file a 01:00 session under yesterday. Written once because the timeline compares two
     // independently built day stamps: if one site took the toISOString shortcut they would stop
@@ -1230,6 +1218,7 @@ function app() {
         String(d.getDate()).padStart(2, "0");
     },
 
+    // Local minutes from midnight, or `null` if the event is not from `dayISO` (or is unparseable).
     minutesIntoDay(ts, dayISO) {
       if (!ts) return null;
       const d = new Date(ts);
@@ -1385,6 +1374,16 @@ function app() {
       return n + " new " + noun;
     },
 
+    // What to call an executable when showing it to a parent.
+    //
+    // The keys stay as process names everywhere they matter — enforcement matches on them, and
+    // `apps` and `focused` are rendered side by side on the same key, so renaming the data would
+    // split one app into two rows. Only the presentation changes.
+    //
+    // A curated set rather than asking Windows. Reading `FileDescription` out of the version
+    // resource means file I/O per app and still misses Store-packaged programs, which is exactly
+    // the Roblox case this product most cares about. Anything unknown falls back to the executable
+    // without its extension, which is already an improvement on "RobloxPlayerBeta.exe".
     appLabel(name) {
       if (!name) return "";
       const known = {
@@ -1421,6 +1420,11 @@ function app() {
       return String(name).replace(/\.exe$/i, "");
     },
 
+    // The heading over a breakdown, which has to say *why* it is showing the date it shows.
+    //
+    // Unpinned, each panel independently picks the newest day carrying its own kind of data, so the
+    // date needs the qualifier — three panels can legitimately name three different days. Pinned,
+    // they all show the chosen day and the qualifier would be a lie.
     stHeading(key) {
       const d = this.stDayFor(key);
       if (!d) return "";
@@ -1614,38 +1618,16 @@ function app() {
       return `${dir} ${Math.abs(c)}% vs the previous period (${prev} min)`;
     },
 
-    // The most recent day carrying per-app data — not necessarily the most recent
-    // *measured* day: a day can be measured (the service was running) and still have no
-    // apps entry, because per-app tracking only exists for apps with a limit set (see the
-    // footnote below the card). Returns null if no day in the window has any, so the
-    // heading's date makes the substitution visible instead of silently showing an older day.
-    // "The newest day whose `key` list has anything in it" — the rule behind the three helpers
-    // below, held in one place. They differ only in which list they ask about, and each has its
-    // own reason for existing, so they stay as named methods the markup and tests can call.
+    // "The newest day whose `key` list has anything in it", held in one place for `stDayFor`.
+    //
+    // Note that is not the same as the most recent *measured* day: a day can be measured (the
+    // service was running) and still carry nothing under `key` — per-app data only exists for
+    // apps with a limit set, and focus data only for days the watcher was alive. Returning null
+    // rather than the newest measured day is what lets the heading name the date it is actually
+    // showing, instead of silently substituting an older one.
     stRecentDayWith(key) {
       const days = this.screentime.days.filter(d => d[key] && d[key].length);
       return days.length ? days[days.length - 1] : null;
-    },
-
-    stRecentAppDay() {
-      return this.stDayFor('apps');
-    },
-
-    // The most recent day carrying *focus* data, chosen independently of stRecentAppDay above.
-    //
-    // The two measure different things and a day can carry either, both, or neither: every day
-    // recorded before the watcher existed has apps and no focus, and so does any day it was dead
-    // for. Reusing the running-apps day would put an empty focus list under a heading naming a
-    // date that does have focus data somewhere else in the window — which reads as "he looked at
-    // nothing that day" rather than as "nothing was watching".
-    stRecentFocusDay() {
-      return this.stDayFor('focused');
-    },
-
-    // The most recent day carrying browser page titles, chosen independently again — a day can
-    // have focused apps and no browser time at all, which is a normal evening rather than a gap.
-    stRecentPageDay() {
-      return this.stDayFor('pages');
     },
 
     // Shared by the "Today" panel banner and the screen-time card, so the two can never

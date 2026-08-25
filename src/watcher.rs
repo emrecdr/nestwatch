@@ -258,8 +258,6 @@ struct Seen {
     idle_ms: u64,
 }
 
-/// Take one reading. A single `GetForegroundWindow` serves both the app and the page, so the two
-/// always describe the same window — see the note at the call site.
 /// Remembers the last window resolved, so an unchanged foreground costs nothing to re-identify.
 ///
 /// Keyed on the `HWND` **and** its process id: window handles are recycled, so a handle alone
@@ -289,6 +287,8 @@ impl Resolver {
     }
 }
 
+/// Take one reading. A single `GetForegroundWindow` serves both the app and the page, so the two
+/// always describe the same window — see the note at the call site.
 fn observe(resolver: &mut Resolver) -> Seen {
     let idle_ms = idle_millis();
 

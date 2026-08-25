@@ -51,6 +51,11 @@ fn serve_asset(path: &str) -> Response {
 #[cfg(test)]
 mod tests {
     /// The served pages contain both HTML files, so both scans below share this list.
+    /// The served script, for the guards that can only learn a fact by reading it. Checked in and
+    /// not generated, unlike `assets/app.css`, so `include_str!` is safe here — a fresh clone has
+    /// this file before it has run anything.
+    const APP_JS: &str = include_str!("../assets/app.js");
+
     const PAGES: [(&str, &str); 2] = [
         ("index.html", include_str!("../assets/index.html")),
         ("ask.html", include_str!("../assets/ask.html")),
@@ -156,28 +161,89 @@ mod tests {
     ///
     /// `x-`, `@` and `:` attributes only — those are the ones Alpine evaluates. A plain `class` or
     /// `href` is inert text as far as the expression parser is concerned.
+    ///
+    /// Both quote styles are read, for the reason `static_class_attrs` states below: the failure
+    /// this feeds — a CSP-build violation like a `[...spread]` — renders nothing and raises no
+    /// error, so a directive the scanner skips is covered by nothing at all. Matching only `="`
+    /// would go on "working" in silence the day someone writes `x-text='…'`.
     fn alpine_directives(html: &str) -> Vec<(String, String)> {
         let mut out = Vec::new();
-        let bytes = html.as_bytes();
         let mut i = 0;
-        while i < bytes.len() {
-            let Some(eq) = html[i..].find("=\"") else {
+        while i < html.len() {
+            let Some(eq) = html[i..].find('=') else { break };
+            let at = i + eq;
+            let open = at + 1;
+            // Quoted values only. An unquoted `disabled=true` carries no expression, and an `=`
+            // inside a value is already skipped past by the cursor jump at the end of the loop.
+            let Some(q @ ('"' | '\'')) = html[open..].chars().next() else {
+                i = open;
+                continue;
+            };
+            let value = open + q.len_utf8();
+            let Some(end) = html[value..].find(q) else {
                 break;
             };
-            let at = i + eq;
+            let end = value + end;
             // Walk back over the attribute name.
             let start = html[..at]
                 .rfind(|c: char| c.is_whitespace())
                 .map_or(0, |p| p + 1);
             let name = &html[start..at];
-            let rest = &html[at + 2..];
-            let Some(end) = rest.find('"') else { break };
             if name.starts_with("x-") || name.starts_with('@') || name.starts_with(':') {
-                out.push((name.to_string(), rest[..end].to_string()));
+                out.push((name.to_string(), html[value..end].to_string()));
             }
-            i = at + 2 + end + 1;
+            i = end + q.len_utf8();
         }
         out
+    }
+
+    /// What the directive scan does and does not pick up, pinned.
+    ///
+    /// Same reasoning as `the_class_scan_reads_static_attributes_and_only_those` below: this
+    /// helper decides what the CSP guard can see, so a gap in it makes that guard pass while
+    /// checking less than it claims. Without this test, narrowing the scan back to double quotes
+    /// only breaks nothing and fails nothing — the directives simply stop being examined.
+    #[test]
+    fn the_directive_scan_reads_both_quote_styles_and_only_alpine_attributes() {
+        let html = concat!(
+            r#"<div x-text="a" :class='b' @click="c" x-bind:value='d'"#,
+            r#" class="plain" href='/x' disabled=true data-x="e">"#,
+        );
+        let found = alpine_directives(html);
+        let names: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+
+        assert!(names.contains(&"x-text"), "double-quoted x- attribute");
+        assert!(
+            names.contains(&":class"),
+            "single-quoted `:class` must be read — it holds an expression the CSP build has to              be able to parse, and quoting it differently must not hide it"
+        );
+        assert!(names.contains(&"@click"), "double-quoted @ attribute");
+        assert!(names.contains(&"x-bind:value"), "single-quoted x-bind");
+
+        assert!(
+            !names.contains(&"class"),
+            "a plain class attribute is inert text"
+        );
+        assert!(
+            !names.contains(&"href"),
+            "so is href, in either quote style"
+        );
+        assert!(!names.contains(&"data-x"), "and so is a data- attribute");
+
+        let value = |n: &str| {
+            found
+                .iter()
+                .find(|(k, _)| k == n)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            value("x-text"),
+            "a",
+            "the value stops at its own closing quote"
+        );
+        assert_eq!(value(":class"), "b");
+        assert_eq!(value("x-bind:value"), "d");
     }
 
     /// The stylesheet that ships, so the scan below compares markup against what a browser will
@@ -200,42 +266,116 @@ mod tests {
         })
     }
 
-    /// The chart's two textured states must have rules in the **shipped** stylesheet.
+    /// Every class a `*Class` method builds at run time must have a rule in the **shipped**
+    /// stylesheet.
     ///
-    /// These are the only classes in the product that no other guard can see. `stBarClass` builds
-    /// them at run time — `"st-nodata"`, `"bg-error st-over"` — so they appear in no `class=`
-    /// attribute, and `the_class_scan_reads_static_attributes_and_only_those` pins that scanner to
-    /// static attributes deliberately, because reading Alpine expressions yields `===` and `null`
-    /// as class names. So the markup guard cannot cover these two by construction.
+    /// These are the classes no other guard can see. A `*Class` method returns them as strings, so
+    /// they appear in no `class=` attribute, and `the_class_scan_reads_static_attributes_and_only_those`
+    /// pins that scanner to static attributes deliberately, because reading Alpine expressions
+    /// yields `===` and `null` as class names. So the markup guard cannot cover them by construction.
     ///
-    /// The JavaScript tests either side of this one assert the *strings* `stBarClass` returns, and
-    /// would all still pass if these rules vanished from the CSS. What would ship is a bar carrying
-    /// a class with nothing behind it: an over-budget day rendered identically to an ordinary one,
-    /// with no error anywhere. That is the same silent failure the markup guard exists to prevent,
-    /// arriving through the one door it does not watch.
+    /// The JavaScript tests assert the *strings* these methods return, and would all still pass if
+    /// the rules vanished from the CSS. What would ship is an element carrying a class with nothing
+    /// behind it: an over-budget day rendered identically to an ordinary one, a live timeline span
+    /// with no ring, with no error anywhere. That is the same silent failure the markup guard
+    /// exists to prevent, arriving through the one door it does not watch.
     ///
-    /// Both are plain CSS rather than `@utility`, and the reason is narrower than it first looks —
-    /// see the comment beside `.st-over` in `web/src/app.css`. Converting them today would *not*
-    /// drop them: `@source` covers `.scan/app.js` and `stBarClass` writes the literal `"st-over"`
-    /// there, so the scanner sees the name. Plain CSS protects against the day that string stops
-    /// being literal — a name built as `"st-" + kind` — at which point a utility survives only if
-    /// something else happens to mention it. This test catches the rule going missing; nothing
-    /// catches it being reachable only by luck, which is what the plain-CSS choice is for.
+    /// **This scan is derived rather than listed, and that is the point.** It replaced a hard-coded
+    /// `[".st-nodata", ".st-over"]`, whose doc claimed those were "the only classes in the product
+    /// that no other guard can see". They were not. Three more builders had been added in the same
+    /// diff — `spanClass`, `glanceClass`, `shotAgeClass` — and five of their names (`bg-primary`,
+    /// `bg-error`, `bg-success`, `ring-inset`, `ring-base-content`) occur in **no** static `class=`
+    /// attribute on either page, so nothing covered them at all. A list that must be extended by
+    /// hand records the day it was written; this one reads the code.
+    ///
+    /// Note the two kinds are protected differently, and only one of them by this test.
+    /// `.st-nodata` / `.st-over` are plain CSS in `web/src/app.css`, emitted unconditionally. The
+    /// rest are Tailwind utilities, emitted **only** because the literal string appears in
+    /// `web/.scan/app.js` for `@source` to find. So a name built as `"st-" + kind` rather than
+    /// written as a literal keeps its rule; a utility built the same way loses one silently. This
+    /// test catches a rule going missing. Nothing catches it being reachable only by luck, which is
+    /// what the plain-CSS choice for the two `.st-*` names is for.
     #[test]
-    fn the_chart_state_classes_survive_into_the_shipped_stylesheet() {
-        let css = app_css();
-        for class in [".st-nodata", ".st-over"] {
-            assert!(
-                css.contains(class),
-                "{class} has no rule in the shipped CSS. It is produced by `stBarClass` at run \
-                 time, so no markup scan and no JS test can catch its absence — the bar would \
-                 render untextured and nothing would fail.\nLikely causes, in order: the rule was \
-                 deleted from `web/src/app.css`; or it became an `@utility` *and* the literal class \
-                 name stopped appearing in a scanned file, so Tailwind no longer emits it. \
-                 `@utility` alone is not the cause — the scanner still sees the literal in \
-                 `stBarClass` today."
-            );
+    fn every_class_a_runtime_builder_returns_survives_into_the_shipped_stylesheet() {
+        let css = unescape_css(&app_css());
+        let built = runtime_built_classes(APP_JS);
+
+        // A floor, not a count: the failure this guards against is the scan silently finding
+        // nothing — a renamed convention, a reformat — at which point the loop below passes
+        // vacuously and this guard reports coverage it no longer has.
+        assert!(
+            built.len() >= 12,
+            "only {} runtime-built classes found in assets/app.js, expected at least a dozen.              The scan has stopped finding `*Class` methods — check the convention it relies on              (a method named `…Class` at four-space indent, returning string literals) before              lowering this floor.",
+            built.len()
+        );
+
+        let missing: Vec<&str> = built
+            .iter()
+            .map(String::as_str)
+            .filter(|c| !css_has_rule(&css, c))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "built at run time by a `*Class` method in assets/app.js, but with no rule in the \
+             shipped CSS: {missing:?}\n\nNo markup scan and no JS test can catch this — the \
+             element renders unstyled and nothing fails.\nLikely causes, in order: the rule was \
+             deleted from `web/src/app.css`; or a Tailwind utility stopped appearing as a literal \
+             in a scanned file, so it is no longer emitted; or `npm run build` has not run since \
+             the class was added."
+        );
+    }
+
+    /// Every class name a `*Class` method in `app.js` can return.
+    ///
+    /// Derived from the source text because that is the only place these names exist — by the time
+    /// they reach a browser they are the result of a branch nothing static can follow.
+    fn runtime_built_classes(js: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut inside = false;
+
+        for line in js.lines() {
+            let body = line.trim_start();
+            let indent = line.len() - body.len();
+
+            if !inside {
+                // `    someNameClass(` — a method at object-literal indent whose name says what it
+                // returns. `stBarKey` and friends are getters over these, not builders themselves.
+                if indent == 4
+                    && let Some(open) = body.find('(')
+                    && body[..open].ends_with("Class")
+                    && body[..open]
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    inside = true;
+                }
+                continue;
+            }
+
+            if indent == 4 && (body == "}," || body == "}") {
+                inside = false;
+                continue;
+            }
+
+            // Every double-quoted literal on a `return` line, split into individual class names —
+            // one `return` can carry several (`"bg-error st-over"`) and a ternary carries two.
+            if let Some(r) = body.find("return ") {
+                let mut rest = &body[r + "return ".len()..];
+                while let Some(a) = rest.find('"') {
+                    let after = &rest[a + 1..];
+                    let Some(b) = after.find('"') else { break };
+                    for tok in after[..b].split_whitespace() {
+                        if !out.iter().any(|c| c == tok) {
+                            out.push(tok.to_string());
+                        }
+                    }
+                    rest = &after[b + 1..];
+                }
+            }
         }
+
+        out
     }
 
     /// The chart's key must be rendered from `stBarKey`, not written out in the markup.

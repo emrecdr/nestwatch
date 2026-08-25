@@ -81,6 +81,19 @@ impl JsonlLog {
         recent
     }
 
+    /// The live file and its single rotated backup, oldest events first.
+    ///
+    /// **Backup first: rotation renames the live file to `.1`, so its events are the older ones.**
+    /// The one place that ordering lives, for the same reason [`newest_first`](Self::newest_first)
+    /// exists — the plain and filtered rotation-inclusive readers had a copy each, and only one
+    /// carried the explanation. The other was correct by luck, with nothing pointing a future
+    /// editor at the rule it was obeying.
+    fn with_rotated(path: &Path, read: impl Fn(&Path) -> Vec<Value>) -> Vec<Value> {
+        let mut events = read(&path.with_extension("jsonl.1"));
+        events.extend(read(path));
+        events
+    }
+
     /// The most recent `limit` events, newest first. Malformed lines are skipped; a missing
     /// file (nothing logged yet) yields an empty list.
     pub fn recent(&self, limit: usize) -> Vec<Value> {
@@ -99,10 +112,7 @@ impl JsonlLog {
         let Some(path) = &self.path else {
             return Vec::new();
         };
-        // Backup first: rotation renames the live file to `.1`, so its events are the older ones.
-        let mut events = Self::read_events(&path.with_extension("jsonl.1"));
-        events.extend(Self::read_events(path));
-        Self::newest_first(events, limit)
+        Self::newest_first(Self::with_rotated(path, Self::read_events), limit)
     }
 
     /// Parse only the lines whose `event` tag is `event`, oldest first.
@@ -140,9 +150,10 @@ impl JsonlLog {
         let Some(path) = &self.path else {
             return Vec::new();
         };
-        let mut events = Self::read_events_matching(&path.with_extension("jsonl.1"), event);
-        events.extend(Self::read_events_matching(path, event));
-        Self::newest_first(events, limit)
+        Self::newest_first(
+            Self::with_rotated(path, |p| Self::read_events_matching(p, event)),
+            limit,
+        )
     }
 }
 

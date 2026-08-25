@@ -1,6 +1,6 @@
 [package]
 name = "nestwatch"
-version = "0.2.3"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 # Matches the pin in rust-toolchain.toml, which CI and local builds both use — so this is the
@@ -124,7 +124,11 @@ panic = "abort"
 #   * The two paths are mutually exclusive at COMPILE time — xcap's `mod.rs` gates `mod gdi` on
 #     `cfg(not(feature = "wgc"))` — so turning this on removes the GDI fallback entirely. There is
 #     no runtime `IsSupported()` arrangement available here; `preflight` checks the OS build
-#     instead and fails loudly.
+#     instead and **cautions — it does not block**. A pre-1903 machine installs, runs, enforces
+#     everything else, and simply cannot capture. That is `check_windows_build`'s deliberate
+#     choice (see its doc: refusing to install would take a working parental control away to
+#     protect one feature of it), so the compensating control here is a warning a human reads,
+#     not a gate. Do not read this entry as "the pre-1903 case is handled".
 #   * `CreateForMonitor` needs Windows 10 **1903** (10.0.18362). Note the trap: this codebase cites
 #     **1803** twice, for Interactive Service Detection, so the wrong number is the familiar one.
 #

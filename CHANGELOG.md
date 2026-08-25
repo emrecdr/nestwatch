@@ -4,6 +4,21 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-26
+
+### Before you update
+**Screenshots and the live view now need Windows 10 version 1903 or newer.** This is the one
+thing here that can take away something you already had: the capture backend was replaced to
+fix a child being able to defeat screenshots from a game's own display settings, and the new
+one has no fallback on older builds. Everything else — screen-time limits, curfew, blocked
+apps, the whole enforcement half — works normally on an older Windows, and `install` tells you
+rather than refusing. Check with `winver`; anything still getting Windows updates is well past
+it.
+
+**Windows also draws a yellow border around the screen while it is being captured.** That is
+the operating system's own disclosure and this app neither can nor tries to suppress it. Your
+child will see when you are looking.
+
 ### Added
 - **The report now shows *when* the PC was used today, not just how much.** A 24-hour strip above the
   totals, so "was he on at two in the morning?" is a glance rather than a guess — the one question

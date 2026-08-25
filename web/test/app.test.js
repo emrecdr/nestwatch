@@ -438,74 +438,24 @@ test("fmtBytes scales units and shows a dash for nothing", () => {
   assert.equal(app.fmtBytes(5 * 1024 ** 3), "5.0 GB", "stops at GB");
 });
 
-// --- stRecentFocusDay ------------------------------------------------------
-//
-// Focus minutes and running minutes are two different measurements of the same day, and a day can
-// carry either, both, or neither. The screen-time card picks the most recent day that has focus
-// data to show, which must be chosen independently of the running-app data — a day can have apps
-// and no focus (recorded before the watcher existed, or while it was dead) and picking that one
-// would render an empty focus list under a heading claiming otherwise.
-
-test("stRecentFocusDay picks the newest day that actually has focus data", () => {
-  const app = withState({
-    screentime: {
-      days: [
-        { date: "2026-08-14", apps: [{ name: "a.exe", minutes: 5 }], focused: [{ name: "a.exe", minutes: 3 }] },
-        { date: "2026-08-15", apps: [{ name: "b.exe", minutes: 9 }], focused: [] },
-      ],
-    },
-  });
-
-  const day = app.stRecentFocusDay();
-  assert.ok(day, "a day with focus data exists");
-  assert.equal(day.date, "2026-08-14", "the newer day has no focus data, so it is not the one");
-});
-
-test("stRecentFocusDay is null when nothing has been measured", () => {
-  const app = withState({
-    screentime: {
-      days: [{ date: "2026-08-15", apps: [{ name: "b.exe", minutes: 9 }], focused: [] }],
-    },
-  });
-
-  assert.equal(
-    app.stRecentFocusDay(),
-    null,
-    "no focus data must render as absent, not as an empty list under a date heading",
-  );
-});
-
-test("stRecentPageDay picks the newest day carrying browser page titles", () => {
-  const app = withState({
-    screentime: {
-      days: [
-        { date: "2026-08-14", pages: [{ name: "Roblox", minutes: 40 }] },
-        { date: "2026-08-15", pages: [] },
-      ],
-    },
-  });
-
-  assert.equal(app.stRecentPageDay().date, "2026-08-14");
-});
-
-test("stRecentPageDay is null when no browser time was recorded", () => {
-  const app = withState({ screentime: { days: [{ date: "2026-08-15", pages: [] }] } });
-  assert.equal(app.stRecentPageDay(), null);
-});
-
-// The rule the three stRecent*Day helpers share, stated once. Worth its own test because a change
-// to it — days no longer sorted oldest-first, or "carries data" becoming a flag rather than a
-// non-empty list — is otherwise a three-place edit with no signal if you miss one.
+// The rule `stDayFor` falls back on when no day is pinned, stated once. Worth its own test
+// separate from stDayFor's, because a change to it — days no longer sorted oldest-first, or
+// "carries data" becoming a flag rather than a non-empty list — breaks every panel at once,
+// and a failure here says which of the two halves moved.
 test("stRecentDayWith returns the newest day whose named list has entries", () => {
   const app = withState({
     screentime: {
       days: [
-        { date: "2026-08-13", apps: [{ name: "a.exe", minutes: 1 }] },
+        { date: "2026-08-12", apps: [{ name: "a.exe", minutes: 1 }] },
+        { date: "2026-08-13", apps: [{ name: "b.exe", minutes: 2 }] },
         { date: "2026-08-14", apps: [] },
       ],
     },
   });
 
+  // Two days carry data, so this pins the *pick* as well as the filter. With only one day left
+  // after filtering, `days[0]` and `days[days.length - 1]` are the same element and reversing the
+  // order is invisible — which is what this fixture used to be, and it passed either way.
   assert.equal(app.stRecentDayWith("apps").date, "2026-08-13", "newest with data, not newest");
   assert.equal(app.stRecentDayWith("focused"), null, "a key no day carries is absent, not empty");
 });

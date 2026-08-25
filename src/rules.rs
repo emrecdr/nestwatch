@@ -807,10 +807,6 @@ pub(crate) fn norm(name: &str) -> String {
     name.trim().to_lowercase()
 }
 
-/// Convert a per-app second tally into the whole-minute map stored in the daily rollup.
-///
-/// Sub-minute entries are dropped: they are noise in a daily report, and keeping them would let a
-/// long tail of briefly-run processes dominate the row's size.
 /// How many apps and page titles today's live panel carries.
 ///
 /// A card, not a report: the daily rollup keeps everything, and this is the "what has he been on
@@ -854,6 +850,10 @@ fn top_by_minutes(secs: &BTreeMap<String, u64>, n: usize) -> Vec<Value> {
         .collect()
 }
 
+/// Convert a per-app second tally into the whole-minute map stored in the daily rollup.
+///
+/// Sub-minute entries are dropped: they are noise in a daily report, and keeping them would let a
+/// long tail of briefly-run processes dominate the row's size.
 fn per_app_minutes(per_app_secs: &BTreeMap<String, u64>) -> serde_json::Map<String, Value> {
     per_app_secs
         .iter()
@@ -959,6 +959,20 @@ pub async fn run_rules_enforcer(
         let elapsed = now.duration_since(last_tick).min(CHECK_INTERVAL * 2);
         last_tick = now;
 
+        // Empty the watcher's buffer **every** tick, including ticks that return early below.
+        //
+        // `Feed::submit` accrues between drains and its doc assumes they are "thirty seconds
+        // apart", while `elapsed` above is capped at twice the interval. Draining only on ticks
+        // that enforce broke that pairing: a pause of any length piled up in the buffer and then
+        // landed clamped to at most 60 s on the tick that resumed, so a paused weekend rendered as
+        // about a minute of "time in front" — a fabricated small number where the truth is "not
+        // measured", and `MAX_PAGES` had already evicted the tail before the clamp saw it.
+        //
+        // Held rather than recorded here: `record_foreground` must run *after* `decide`, which
+        // clears the day's maps on a rollover (see its doc). So the sample is taken now, to bound
+        // what can accumulate, and folded in further down where the ordering is still correct.
+        let reported = foreground.drain();
+
         // `accounting_day` may hold the previous date if the clock just jumped — a rollover
         // wipes the tally, so it needs a monotonic sanity check, not just a trusted clock.
         let today = enforcer.accounting_day(crate::config::today(), now);
@@ -1033,6 +1047,15 @@ pub async fn run_rules_enforcer(
                 // Unchanged on purpose: a failure skips the whole tick rather than falling through
                 // with an empty list. An empty list reads as "nothing is running" — no per-app time
                 // accrued, nothing killed — which is enforcement silently off for that tick.
+                //
+                // This drops the tick's foreground sample too, and unlike the stand-down above that
+                // is a real loss: the machine *is* in use, we simply could not read the process
+                // list. Accepted deliberately rather than by omission. Carrying it to the next tick
+                // would put the buffer back outside the "thirty seconds apart" envelope
+                // `Feed::submit` is written against, to save at most one interval — and the tick it
+                // landed on would then charge two intervals of focus against one of elapsed time,
+                // which is the same fabricated number in miniature. One interval unmeasured is the
+                // honest answer, and it is the one `total_secs` gives on this path as well.
                 _ => continue, // transient list failure; try again next tick
             }
         };
@@ -1053,10 +1076,14 @@ pub async fn run_rules_enforcer(
         // Fold in what the foreground watcher reported, **after** `decide` — see
         // `record_foreground` for why the order is load-bearing.
         //
-        // `drain` returning `None` means no watcher has reported at all: the helper is dead, or
-        // nobody is signed in. That leaves the maps untouched rather than writing zeros, so an
-        // unmeasured stretch stays unmeasured rather than becoming a confident nothing.
-        if let Some(sample) = foreground.drain() {
+        // `None` means no watcher reported during this tick at all: the helper is dead, or nobody
+        // is signed in. That leaves the maps untouched rather than writing zeros, so an unmeasured
+        // stretch stays unmeasured rather than becoming a confident nothing.
+        //
+        // Taken at the top of the tick, not here — see the drain for why. A tick that returned
+        // early dropped its sample, which is the same answer the rest of this card gives while
+        // enforcement is stood down: nothing accrued, because nothing was being counted.
+        if let Some(sample) = reported {
             enforcer.record_foreground(sample, elapsed);
         }
 
@@ -1872,6 +1899,55 @@ mod tests {
     /// nothing — so losing the stop again would produce no symptom at all until somebody builds the
     /// timeline, and then it would produce a wrong one: spans shaded from a mid-afternoon pause
     /// through to bedtime, labelled as use. See `docs/OPEN-FINDINGS.md`, O36.
+    /// The foreground feed must be drained on **every** tick, not only on ticks that enforce.
+    ///
+    /// A source scan, for the reason `standing_down_closes_an_open_session` gives: the property is
+    /// *where a call site sits* relative to two early `continue`s, and no unit test can see one
+    /// move. `record_foreground` stays correct in isolation whatever the loop does with it.
+    ///
+    /// The failure this guards is a fabricated number, not a missing one. `Feed::submit` accrues
+    /// between drains — its own doc assumes they are "thirty seconds apart" — while `elapsed` is
+    /// capped at `CHECK_INTERVAL * 2`. So if the drain sits below the stand-down branch, a paused
+    /// weekend accumulates in the buffer and then lands clamped to at most 60 s on the tick that
+    /// resumes: the report shows about a minute of "time in front" for two days of real use, which
+    /// reads as measured rather than as unmeasured. `MAX_APPS`/`MAX_PAGES` evict the tail first, so
+    /// the surviving minute is not even a fair sample of it.
+    ///
+    /// Draining above the branch and dropping the sample when the tick returns early is deliberate:
+    /// `decide` does not run there either, so `total_secs` and `per_app_secs` do not accrue while
+    /// paused. Banking focus time alone would leave the card internally inconsistent, and a sample
+    /// carries no timestamps, so across a multi-day pause it cannot be attributed to a day anyway.
+    #[test]
+    fn the_foreground_feed_is_drained_before_any_early_continue() {
+        const SRC: &str = include_str!("rules.rs");
+        let code = SRC
+            .split_once("\n#[cfg(test)]")
+            .map_or(SRC, |(before, _)| before);
+
+        // Anchored on the loop and its *first* `continue`, not on any line of tick arithmetic.
+        // An earlier version split on the literal `let elapsed = now.duration_since(last_tick)`,
+        // which pins prose rather than the property: renaming that binding would have silently
+        // retired the guard while leaving it green. Whatever the tick comes to look like, the rule
+        // is the same — the drain happens before the loop can take any early exit.
+        let loop_body = code
+            .split_once("\n    loop {")
+            .expect("`run_rules_enforcer` must still be a `loop`")
+            .1;
+        let before_first_exit = loop_body
+            .split_once("continue;")
+            .expect("the loop must still have an early `continue`")
+            .0;
+
+        assert!(
+            before_first_exit.contains("foreground.drain()"),
+            "`foreground.drain()` does not run before the stand-down branch, so a pause of any \
+             length accumulates in the feed and lands clamped to one tick when it resumes — \
+             roughly a minute of \"time in front\" for a whole paused weekend, rendered as \
+             measured. Drain once, above both early `continue`s, and drop the sample if the tick \
+             returns early."
+        );
+    }
+
     #[test]
     fn standing_down_closes_an_open_session() {
         const SRC: &str = include_str!("rules.rs");

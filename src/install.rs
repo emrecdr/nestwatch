@@ -1197,12 +1197,13 @@ fn terminate_and_wait(pid: u32) -> bool {
     }
 }
 
-/// Terminate every resident watcher still running the installed binary. Returns how many died.
+/// Terminate every resident watcher still running the installed binary.
 ///
 /// Called before the binary is overwritten (upgrade) and before it is deleted (uninstall), because
 /// Windows holds a running executable's image open and both operations fail against it. See
 /// [`helpers_to_terminate`] for why the helper is there to begin with and why it does not leave on
 /// its own.
+///
 /// Reports its own result rather than returning a count for each caller to phrase. Both call sites
 /// printed the same event under two different names — "resident watcher" in one, "helper" in the
 /// other — which is one program describing one action to one person in two vocabularies.
@@ -1587,23 +1588,6 @@ pub(crate) fn render_leftovers(items: &[Leftover]) -> String {
 // Helpers left resident in a user's session
 // ---------------------------------------------------------------------------
 
-/// Which running processes are our own resident watchers, and must be terminated.
-///
-/// **Why this is needed at all.** `run_watcher_supervisor` spawns the installed binary as
-/// `helper --watch` inside each interactive session, and nothing stops it: the supervisor is a
-/// detached thread that dies with the service without running its `TerminateProcess`, and the
-/// helper ignores the resulting broken pipe. The helper's image *is* the installed binary, and
-/// Windows holds a running executable open — so a leftover helper makes `std::fs::copy` fail on
-/// upgrade and `remove_dir_all` fail on uninstall. `deploy` already names "a lingering helper
-/// process" as a likely cause of a failed copy without doing anything about it.
-///
-/// **Matched on the full path, never on the name.** A child can put a file called
-/// `host-health.exe` anywhere they can write. Terminating processes by name would hand them a way
-/// to make the installer kill something else; matching the exact path we installed to cannot be
-/// influenced from a directory they control.
-///
-/// Case-insensitive because process enumeration returns whatever case the OS recorded, which is
-/// not necessarily the case we wrote.
 /// The executable name out of a `PROCESSENTRY32W::szExeFile` buffer.
 ///
 /// **Truncates at the first NUL; it must never trim trailing ones.** `szExeFile` is a
@@ -1622,6 +1606,24 @@ pub(crate) fn exe_name_from_buf(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..end])
 }
 
+/// Which running processes are our own resident watchers, and must be terminated.
+///
+/// **Why this is needed at all.** `run_watcher_supervisor` spawns the installed binary as
+/// `helper --watch` inside each interactive session, and nothing stops it: the supervisor is a
+/// detached thread that dies with the service without running its `TerminateProcess`, and the
+/// helper ignores the resulting broken pipe. The helper's image *is* the installed binary, and
+/// Windows holds a running executable open — so a leftover helper makes `std::fs::copy` fail on
+/// upgrade and `remove_dir_all` fail on uninstall. `deploy` already names "a lingering helper
+/// process" as a likely cause of a failed copy without doing anything about it.
+///
+/// **Matched on the full path, never on the name.** A child can put a file called
+/// `host-health.exe` anywhere they can write. Terminating processes by name would hand them a way
+/// to make the installer kill something else; matching the exact path we installed to cannot be
+/// influenced from a directory they control.
+///
+/// Case-insensitive because process enumeration returns whatever case the OS recorded, which is
+/// not necessarily the case we wrote.
+///
 /// Only called from the Windows teardown paths, but tested on every platform — the selection rule
 /// is the security-relevant half and it must not be the part that only compiles on the target.
 #[cfg_attr(not(windows), allow(dead_code))]

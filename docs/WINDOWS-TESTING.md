@@ -10,7 +10,7 @@ depend on a **real browser** rather than a test client, such as the origin check
 
 Run through it once on his PC after installing.
 
-## Short on time? Do these eight first
+## Short on time? Do these nine first
 
 The full list is 159 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
@@ -49,10 +49,10 @@ Each links to its full entry below.
 Everything below is worth doing eventually. Nothing below is worth doing before these.
 
 **One addition since this list was written.** Foreground tracking (§D2) is new code that has never
-executed anywhere — not on this machine, not on any machine. It is not in the seven above because
+executed anywhere — not on this machine, not on any machine. It is not in the nine above because
 nothing depends on it: it measures and reports, it never enforces, so if all of it is broken the
 locks and limits behave exactly as they do today. That is also why it is safe to leave until after
-the seven. But it is the largest untested surface in the build, so when you do reach it, expect
+the nine. But it is the largest untested surface in the build, so when you do reach it, expect
 failures rather than being surprised by them.
 
 ---
