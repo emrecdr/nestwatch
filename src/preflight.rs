@@ -330,6 +330,14 @@ pub fn gather(port: u16) -> Vec<Finding> {
 /// build that is broken on 1809.
 pub const MIN_CAPTURE_BUILD: u32 = 18362;
 
+/// The marketing name for [`MIN_CAPTURE_BUILD`], as a person reads it in Windows Update.
+///
+/// Beside the number rather than spelled out at each message, because the two are one fact and
+/// four sites were restating half of it. If the floor ever moves, a constant that moves alone
+/// prints "build 20348 is older than 20348 (version 1903)" — worse than saying nothing, since it
+/// reads as a bug in the check rather than a fact about the machine.
+pub const MIN_CAPTURE_VERSION: &str = "1903";
+
 /// Whether `build` can run the capture path, as a pure function so the boundary is testable
 /// anywhere. Kept separate from the FFI that reads the number for the reason `foreground::idle_state`
 /// is: the arithmetic that decides something should not live in a module the dev machine never
@@ -358,8 +366,10 @@ fn check_windows_build(out: &mut Vec<Finding>) {
         return;
     }
     out.push(Finding::caution(
-        format!("Windows build {build} is older than {MIN_CAPTURE_BUILD} (version 1903)"),
-        "Screenshots and the live view need an API that arrived in Windows 10 version 1903. \
+        format!(
+            "Windows build {build} is older than {MIN_CAPTURE_BUILD} (version {MIN_CAPTURE_VERSION})"
+        ),
+        "Screenshots and the live view need an API that arrived in that version of Windows 10. \
          Everything else — screen-time limits, curfew, blocked apps — works normally on this \
          build; only the picture of the screen will fail.",
         "Run Windows Update. Any Windows 10 that still receives updates is well past this.",

@@ -139,18 +139,6 @@ fn fail(text: impl Into<String>, fix: impl Into<String>) -> Check {
     }
 }
 
-/// Compare the build that is *installed* against the build running this check.
-///
-/// They are routinely different and nothing else on the machine says so. Copying a new binary onto
-/// the PC is not installing it, so a parent who downloads an update and runs `doctor` from the
-/// download directory gets a clean bill of health about a service still running the old code —
-/// which is the report they will trust when deciding whether a fix is present.
-///
-/// `installed` is whether there is an install for a missing record to describe; on a machine with
-/// no config, "no version record" would only repeat "not installed" one line further down.
-///
-/// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
-/// than restated so there is one definition and one set of tests for it.
 /// What `doctor` should say about this machine's ability to capture the screen at all.
 ///
 /// **Three states, never two.** A supported build reports as checked, an unreadable build says it
@@ -184,16 +172,29 @@ fn capture_check(build: u32) -> Check {
     }
     warn(
         format!(
-            "Windows build {build} is older than {} (version 1903) — screenshots and the live \
+            "Windows build {build} is older than {} (version {}) — screenshots and the live \
              view cannot work on this machine",
-            crate::preflight::MIN_CAPTURE_BUILD
+            crate::preflight::MIN_CAPTURE_BUILD,
+            crate::preflight::MIN_CAPTURE_VERSION
         ),
         "Everything else works normally on this build: screen-time limits, curfew, blocked apps \
          and the whole enforcement half are unaffected. Only the picture of the screen fails. \
-         Run Windows Update — any Windows 10 still receiving updates is well past 1903.",
+         Run Windows Update — any Windows 10 still receiving updates is well past it.",
     )
 }
 
+/// Compare the build that is *installed* against the build running this check.
+///
+/// They are routinely different and nothing else on the machine says so. Copying a new binary onto
+/// the PC is not installing it, so a parent who downloads an update and runs `doctor` from the
+/// download directory gets a clean bill of health about a service still running the old code —
+/// which is the report they will trust when deciding whether a fix is present.
+///
+/// `installed` is whether there is an install for a missing record to describe; on a machine with
+/// no config, "no version record" would only repeat "not installed" one line further down.
+///
+/// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
+/// than restated so there is one definition and one set of tests for it.
 fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool) -> Option<Check> {
     use crate::install::InstallKind;
 

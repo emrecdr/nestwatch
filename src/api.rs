@@ -130,7 +130,8 @@ pub async fn screenshot(
     //
     // This used to switch on `tier`, which worked only while the timer always asked for previews.
     // Once live frames began following the visible surface — full while the full-size view is open
-    // — that proxy silently became ~1,800 one-for-one lines an hour. `audit.jsonl` rotates at 2 MiB
+    // — that proxy silently became ~1,800 one-for-one lines an hour at the fastest cadence a
+    // parent can select. `audit.jsonl` rotates at 2 MiB
     // and keeps one backup, so it would evict every login, kill and password change to make room
     // for a timer: exactly the failure the coalescer exists to prevent, arriving through the other
     // tier.

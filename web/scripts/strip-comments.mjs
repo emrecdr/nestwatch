@@ -41,9 +41,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ASSETS = join(here, "..", "..", "assets");
 const OUT = join(here, "..", ".scan");
 
-/** Remove `<!-- … -->`. They cannot nest, so a non-greedy sweep is exact. */
+/**
+ * Remove `<!-- … -->`. They cannot nest, so a non-greedy sweep is exact.
+ *
+ * Returns `stripJs`'s shape rather than a bare string so `build` has one contract instead of a
+ * special case per format. `unterminated` is always false and not merely unused: a sweep that
+ * never finds a closing `-->` leaves the text alone, so there is no state this can end in that
+ * means "mis-parse" — unlike the scanner, which can run off the end of a string.
+ */
 function stripHtml(src) {
-  return src.replace(/<!--[\s\S]*?-->/g, "");
+  return { text: src.replace(/<!--[\s\S]*?-->/g, ""), unterminated: false };
 }
 
 /**
@@ -128,10 +135,7 @@ function build() {
     const ext = extname(name);
     if ((ext !== ".html" && ext !== ".js") || !ours(name)) continue;
     const src = readFileSync(join(ASSETS, name), "utf8");
-    const scanned =
-      ext === ".html"
-        ? { text: stripHtml(src), unterminated: false }
-        : stripJs(src);
+    const scanned = ext === ".html" ? stripHtml(src) : stripJs(src);
     const out = scanned.text;
     // A scan that ended still inside a string never found its closing quote, so everything after
     // the opening one was read as string body. That is a **definite** mis-parse, which is what
@@ -162,9 +166,9 @@ function build() {
     if (scanned.unterminated) {
       throw new Error(
         `strip-comments: ${name} ended inside an unterminated string, so everything after the ` +
-          `opening quote was read as string body. The likely cause in first-party code is a regex ` +
-          `literal containing a quote character, which this scanner cannot parse. Refusing to ` +
-          `build from it.`,
+          `opening quote was read as string body. The likely cause in first-party code is a ` +
+          `regex literal containing a quote character, which this scanner cannot parse. ` +
+          `Refusing to build from it.`,
       );
     }
     // A catastrophe backstop, deliberately far away from anything prose can reach. Losing four

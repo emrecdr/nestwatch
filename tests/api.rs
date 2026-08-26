@@ -15,8 +15,8 @@ use nestwatch::server::build_router;
 
 mod common;
 use common::{
-    PASSWORD, app_with, body_json, get, login, post_json, state_with, test_app, test_config,
-    test_state,
+    PASSWORD, app_with, app_with_audit_file, body_json, get, login, post_json, state_with,
+    test_app, test_config, test_state,
 };
 
 #[tokio::test]
@@ -684,25 +684,19 @@ async fn time_request_is_lan_gated_but_not_auth_gated() {
 /// and shutdown. Same defect previously found in `login` and in the pairing endpoint.
 #[tokio::test]
 async fn unauthenticated_logout_cannot_flood_the_audit_log() {
-    let dir = std::env::temp_dir().join(format!("nw-logout-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let log = dir.join("audit.jsonl");
-
-    let mut state = state_with(test_config());
-    state.audit = std::sync::Arc::new(nestwatch::audit::AuditLog::new(log.clone()));
-    let app = app_with(state);
+    let audit = app_with_audit_file("logout");
+    let app = &audit.app;
+    let log = &audit.path;
 
     for _ in 0..200 {
-        let res = post_json(&app, "/logout", None, json!({})).await;
+        let res = post_json(app, "/logout", None, json!({})).await;
         assert_eq!(res.status(), StatusCode::OK);
     }
 
-    let lines = std::fs::read_to_string(&log)
+    let lines = std::fs::read_to_string(log)
         .unwrap_or_default()
         .lines()
         .count();
-    let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         lines, 0,
         "200 cookie-less logouts wrote {lines} audit lines; they must write none"
@@ -861,23 +855,16 @@ async fn a_capture_names_the_tier_it_actually_served() {
 /// the other tier. The audit now keys on **who asked**, which is what it always meant.
 #[tokio::test]
 async fn a_timer_driven_capture_is_coalesced_whatever_tier_it_carries() {
-    let dir = std::env::temp_dir().join(format!("nw-shotaudit-live-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("audit.jsonl");
-
-    let mut state = test_state();
-    state.audit = std::sync::Arc::new(nestwatch::audit::AuditLog::new(path.clone()));
-    let app = app_with(state);
-    let cookie = login(&app, PASSWORD).await.unwrap();
+    let audit = app_with_audit_file("shotaudit-live");
+    let app = &audit.app;
+    let cookie = login(app, PASSWORD).await.unwrap();
 
     for _ in 0..5 {
-        let res = get(&app, "/api/screenshot?tier=full&live=1", Some(&cookie)).await;
+        let res = get(app, "/api/screenshot?tier=full&live=1", Some(&cookie)).await;
         assert_eq!(res.status(), StatusCode::OK);
     }
 
-    let log = std::fs::read_to_string(&path).unwrap_or_default();
-    let _ = std::fs::remove_dir_all(&dir);
+    let log = std::fs::read_to_string(&audit.path).unwrap_or_default();
     assert_eq!(
         log.matches("screenshot_taken").count(),
         0,
@@ -889,23 +876,16 @@ async fn a_timer_driven_capture_is_coalesced_whatever_tier_it_carries() {
 /// log worth reading. Bounded by a human action, so it cannot run away.
 #[tokio::test]
 async fn a_capture_a_person_asked_for_is_still_audited_one_for_one() {
-    let dir = std::env::temp_dir().join(format!("nw-shotaudit-human-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("audit.jsonl");
-
-    let mut state = test_state();
-    state.audit = std::sync::Arc::new(nestwatch::audit::AuditLog::new(path.clone()));
-    let app = app_with(state);
-    let cookie = login(&app, PASSWORD).await.unwrap();
+    let audit = app_with_audit_file("shotaudit-human");
+    let app = &audit.app;
+    let cookie = login(app, PASSWORD).await.unwrap();
 
     for _ in 0..3 {
-        let res = get(&app, "/api/screenshot?tier=full", Some(&cookie)).await;
+        let res = get(app, "/api/screenshot?tier=full", Some(&cookie)).await;
         assert_eq!(res.status(), StatusCode::OK);
     }
 
-    let log = std::fs::read_to_string(&path).unwrap_or_default();
-    let _ = std::fs::remove_dir_all(&dir);
+    let log = std::fs::read_to_string(&audit.path).unwrap_or_default();
     assert_eq!(
         log.matches("screenshot_taken").count(),
         3,

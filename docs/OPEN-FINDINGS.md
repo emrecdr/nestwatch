@@ -784,3 +784,97 @@ and cross-compilation — the same three gates that were green when `install` fa
 hardware, and again when `remove_file` turned out not to be exclusive. See
 [WINDOWS-TESTING.md](WINDOWS-TESTING.md); it is the only method with a track record of finding what
 matters here.
+
+### O64 · The helper pipe is a 4 KiB buffer, and full frames now cross it every tick
+
+`spawn_piped` passes `nSize = 0` to `CreatePipe` (`src/session.rs`), which asks Windows for the
+system default — 4 KiB. That was unremarkable while a full-tier frame crossed the pipe only when a
+parent clicked. `liveTier()` now sends one every `_refreshMs` for as long as the full-size view is
+open, so a roughly megabyte payload is a per-tick event.
+
+At that size the frame is several hundred `WriteFile`/`ReadFile` pairs per tick, against about
+seven for a preview, with the helper blocking each time the buffer fills. `read_to_end` compounds
+it: the destination `Vec` starts empty, so it reallocates its way up and memcpys roughly twice the
+payload, every tick.
+
+**Estimated, not measured** — the 4 KiB figure is `CreatePipe`'s documented default for `nSize = 0`
+and the payload size is inferred from this repo's own 4K measurements. Nobody has run it.
+
+**Fix.** Give `CreatePipe` a real `nSize` (256 KiB) and hand `read_to_end` a `Vec::with_capacity`.
+Two lines, no behaviour change. **Measure first** — this is on the child's machine, which is where
+this project's guesses have been wrong before.
+
+### O65 · The audit's file append runs on the async runtime, not the blocking pool
+
+`state.audit.record(...)` is the only file-touching call in `api.rs` that does not go through
+`blocking` or `spawn`, so it appends on a tokio reactor thread. Per line `jsonl.rs::append_line`
+does a `metadata`, an `OpenOptions::open`, a `writeln!` (two `WriteFile`s, since there is no
+`BufWriter`) and a close — about seven syscalls, against an ACL-hardened `ProgramData` directory
+that Defender is scanning in real time.
+
+`redeem_code` already does the right thing by putting its file work on `spawn`; this is the outlier.
+Note the frequency is **not** the problem and the live-view coalescer is what keeps it that way —
+this is about which thread pays, not how often.
+
+**Fix.** Wrap the record in `spawn`, or hold a buffered handle. One line. Not introduced by the
+capture work; found while tracing it.
+
+### O66 · A full frame is sized by the overlay being open, not by what the overlay can show
+
+`liveTier()` returns `full` whenever `shotFull` is set, and full means the native capture — 3840×2160
+on a 4K panel. The overlay renders it `object-contain` inside `inset-0`. On the parent's phone, which
+is the device the pairing QR exists for, that box resolves roughly 1170×658 of the frame: about a
+tenth of the pixels the child's PC captured, encoded, piped, encrypted and uploaded. On a 2560×1440
+desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
+
+**Fix, and it is a decision rather than a tidy-up.** The overlay could send its own device-pixel box
+(`?tier=full&w=…&h=…`, clamped to native) and let `encode_shot` fit to it; the machinery exists and
+`a_small_frame_is_never_scaled_up` already pins the never-upscale rule. Against that,
+`ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
+and a third size axis is exactly what it was written against. Weigh those before touching it.
+
+### O67 · Redeeming a code parses the whole code log, and the throttle is now the only defence
+
+`redeem` → `active()` → `JsonlLog::recent(usize::MAX)` reads `time_codes.jsonl` whole, runs
+`serde_json::from_str` on every line ever written, collects a `Vec<Value>`, reverses it and builds a
+`BTreeSet` of every code seen. A **wrong** guess pays that in full, and the cost grows with install
+age since the file only rotates at 2 MiB.
+
+That was affordable while eight characters carried the security. Shortening codes to six moved the
+defence onto the rate limiter — `redeem_code`'s own doc now says "that rate limit is the primary
+defence, not a secondary one" — which makes sustained wrong guesses the *expected* steady state
+rather than an anomaly: five a minute per IP, from as many LAN addresses as the household has.
+
+**Fix, already in-house.** `jsonl.rs::read_events_matching` documents this exact pattern — a
+`line.contains(…)` reject filter before `from_str`, with the authoritative check after the parse.
+`redeem` only asks "is *this* code active?", so pre-filtering turns a parsed `Value` tree per line
+into a substring scan. Mitigating meanwhile: it runs on the blocking pool, so it burns a pool thread
+and the disk rather than stalling the reactor.
+
+### O68 · An aborted live frame is captured on the child's PC and never counted
+
+When a click supersedes a timer frame, the handler future is dropped at the `await` in `blocking`,
+which is *before* `screenshot` reaches `live_audit.observe(...)`. `spawn_blocking` cannot be
+cancelled, so the capture still happens — the child's machine spawns the helper, captures and
+encodes — but the frame is never added to the `live_view` count.
+
+So `frames` means *frames delivered*, not *frames captured*. For a log whose question is "was this
+child's screen watched, and for how long", delivered is arguably the right measure, and the
+undercount is bounded by how often a parent clicks during a live session. It is recorded because
+the field's name does not say which of the two it means, and `SECURITY.md` describes it as "the
+number of frames it stands for".
+
+**Fix.** Either rename the field to say `delivered`, or say plainly in `LiveViewAudit`'s doc which
+one it counts. No behaviour change either way — this is about a name being read as the other thing.
+
+### O69 · A 401 during a capture orphans the frame's blob URL
+
+`takeScreenshot`'s 401 branch sets `authed = false`, stops the live view and returns — without
+revoking `shotUrl`. Every other exit revokes: supersede, replace, and logout. Pre-existing, and the
+session ends anyway so the leak is bounded by the tab's life.
+
+What changed is the size. While the full-size view is open the orphaned frame is now a megabyte-scale
+blob rather than a ~25 KiB preview.
+
+**Fix.** Revoke on the 401 path, or route it through `resetSessionData`, which already does.
+

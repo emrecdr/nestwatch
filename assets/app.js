@@ -634,16 +634,30 @@ function app() {
     // full frames.
     async takeScreenshot(silent = false, tier = "full", live = false) {
       // Two callers, two rules. The live timer must never stack captures — the helper can take
-      // ~15s while the timer fires every 2s — so a silent tick skips while one is in flight. A
+      // ~15s while the timer fires as often as every 2s — so a silent tick skips while one is in
+      // flight. A
       // person must never be ignored: their click IS the interaction, and the old shared guard
       // dropped it silently, with the button still looking enabled because `loadingShot` is only
-      // set for non-silent captures. At a 15s worst case against a 2s cadence that was the common
-      // case, not a race.
+      // set for non-silent captures. At a 15s worst case against the 5s default — 2s if the
+      // parent picks it — that was the common case, not a race.
       if (this._shotBusy) {
         if (silent) return;
-        // Supersede the frame in flight. This saves the download — up to 20 MB at full tier — but
-        // NOT the capture: the helper is already running and cannot be called back, which is why
-        // the generation guard below exists as well as this abort rather than instead of it.
+        // Supersede the frame in flight. This saves the DOWNLOAD — on the order of a megabyte at
+        // full tier against ~25 KiB for a preview — and nothing else.
+        //
+        // Do NOT reach for the 20,641 KiB figure here. That is `control/mod.rs`'s measurement of
+        // the same 4K frame as **PNG**, and this endpoint has served JPEG since the tiers landed;
+        // the closest measured JPEG number is `Cargo.toml`'s 979 KiB at q70, and full tier encodes
+        // at q90, so somewhat above that. The PNG figure is the memorable one in this codebase and
+        // it is the wrong one for anything on the wire — it was cited here once already.
+        //
+        // `spawn_blocking` on the server is not cancelled when the connection
+        // drops, so the helper it already started runs to completion and this click commissions a
+        // SECOND desktop capture alongside it. Two concurrent captures is the price of not
+        // dropping the click, and it is the deliberate trade: the click is the parent's, the frame
+        // it supersedes is a timer's. It is also why the generation guard below exists as well as
+        // this abort rather than instead of it — that first capture still finishes, and still
+        // replies.
         if (this._shotAbort) this._shotAbort.abort();
       }
       const gen = ++this._shotGen;
@@ -657,15 +671,14 @@ function app() {
         if (r.status === 401) { this.authed = false; this.stopAutoRefresh(); return; }
         if (!r.ok) throw new Error();
         const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
         // Superseded while in flight. Abort closes the connection, but a reply can still arrive
         // after a newer capture has started — the helper finished its work regardless. Letting it
         // land would replace a newer frame with an older one and mislabel the tier with it.
-        // Revoke the blob we just made rather than leaking it.
-        if (gen !== this._shotGen) {
-          URL.revokeObjectURL(url);
-          return;
-        }
+        //
+        // Checked BEFORE `createObjectURL`, so the superseded path never mints a URL it has to
+        // revoke on the next line. The blob itself is collected with the response.
+        if (gen !== this._shotGen) return;
+        const url = URL.createObjectURL(blob);
         if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
         this.shotUrl = url;
         this.shotAt = Date.now();
@@ -1476,16 +1489,6 @@ function app() {
       return n + " new " + noun;
     },
 
-    // What to call an executable when showing it to a parent.
-    //
-    // The keys stay as process names everywhere they matter — enforcement matches on them, and
-    // `apps` and `focused` are rendered side by side on the same key, so renaming the data would
-    // split one app into two rows. Only the presentation changes.
-    //
-    // A curated set rather than asking Windows. Reading `FileDescription` out of the version
-    // resource means file I/O per app and still misses Store-packaged programs, which is exactly
-    // the Roblox case this product most cares about. Anything unknown falls back to the executable
-    // without its extension, which is already an improvement on "RobloxPlayerBeta.exe".
     // Which game portal a page title names, or "" if none is recognised.
     //
     // The product question is "an evening of Roblox or an evening of homework". Native Roblox is
@@ -1506,6 +1509,16 @@ function app() {
       return "";
     },
 
+    // What to call an executable when showing it to a parent.
+    //
+    // The keys stay as process names everywhere they matter — enforcement matches on them, and
+    // `apps` and `focused` are rendered side by side on the same key, so renaming the data would
+    // split one app into two rows. Only the presentation changes.
+    //
+    // A curated set rather than asking Windows. Reading `FileDescription` out of the version
+    // resource means file I/O per app and still misses Store-packaged programs, which is exactly
+    // the Roblox case this product most cares about. Anything unknown falls back to the executable
+    // without its extension, which is already an improvement on "RobloxPlayerBeta.exe".
     appLabel(name) {
       if (!name) return "";
       const known = {

@@ -52,15 +52,17 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   written to the audit log.
 
 ### Fixed
-- **Buttons that looked enabled and quietly did nothing.** While the live view was fetching a frame,
-  **Take screenshot**, **Expand** and the overlay's **Refresh** accepted your click and discarded it
-  — no message, no spinner, nothing. Because a capture can take up to 15 seconds while the live view
-  refreshes every 2, that was the usual case rather than a rare one. Your click now takes priority
-  and cancels the frame already in flight.
+- **Buttons that looked enabled and quietly did nothing.** While the live view was fetching a
+  frame, **Take screenshot**, **Expand** and the overlay's **Refresh** accepted your click and
+  discarded it — no message, no spinner, nothing. Because a capture can take up to 15 seconds
+  while the live view refreshes every 5 seconds by default, and as often as every 2, that was the
+  usual case rather than a rare one. Your click now takes priority and cancels the frame already
+  in flight.
 - **Expand now stays sharp while the live view is running.** Opening the full-size view fetched a
-  full-resolution frame, and the live view replaced it with a stretched preview within one refresh —
-  and the live view being on is exactly the state you are in when you press Expand. Frames now
-  follow whichever view is on screen: full while the big picture is open, preview for the thumbnail.
+  full-resolution frame, and the live view replaced it with a stretched preview within one
+  refresh — and the live view being on is exactly the state you are in when you press Expand.
+  Frames now follow whichever view is on screen: full while the big picture is open, preview for
+  the thumbnail.
   <br>That is the most expensive thing this tool does, so it is bounded: it lasts only as long as
   you keep the overlay open, the unattended-session cap still applies, and the refresh-rate buttons
   are on the card if you would rather trade sharpness for cost.

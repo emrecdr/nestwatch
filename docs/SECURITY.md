@@ -197,8 +197,19 @@ open the door on its own.
   does — a live frame now follows whichever view is on screen, so the timer requests
   full-resolution ones for as long as the full-size view is open. Had the audit kept keying on
   tier, opening that view would have turned a coalesced line into roughly 1,800 individual rows an
-  hour: the exact failure below, arriving through the other tier. The request now says which it is
-  and the log believes the request rather than inferring it.
+  hour at the fastest cadence a parent can select: the exact failure below, arriving through the
+  other tier. The request now says which it is and the log believes the request rather than
+  inferring it.
+  <br>**The log therefore trusts the caller on this one point, so here is what that is worth.**
+  Anyone who can reach this endpoint already holds a signed-in parent session — the same session
+  that can watch the screen, kill processes and change the password — so the question is not
+  whether they get in, but what lying buys them once they are. Marking every capture as
+  timer-driven makes deliberate screenshots counted rather than listed one by one. It cannot
+  suppress the record: a `live_view` line still appears carrying the frame count, and no other
+  audit event is affected. The worst a lie achieves is that "looked closely eleven times" reads as
+  "watched for an hour" — detail lost inside an event that is still recorded, not a way to watch
+  unobserved. Nor is this new: `tier` was equally caller-supplied, and sending `tier=preview`
+  bought exactly the same coalescing before.
   <br>This is a **security** property rather than a tidiness one. At the old cadence a per-frame
   line was 1,200 rows an hour; `audit.jsonl` rotates at 2 MiB and keeps exactly one backup, so
   roughly 57 hours of live viewing would evict the entire security history — every login, every

@@ -1529,18 +1529,30 @@ test("an unrecognised or absent title is not labelled anything", () => {
 // the response that was already in flight: aborting a fetch closes the connection but the helper
 // keeps capturing, so a superseded reply can still arrive and must not win.
 
-/** A capture-capable app whose fetches are resolved by hand. */
-function appCapturing() {
+/**
+ * A capture-capable app whose fetches are resolved by hand.
+ *
+ * One factory for every capture test. They need the same six stubs and differ on only two axes —
+ * whether the mock fetch honours the abort signal, and which tier the response names — so this
+ * block stood in four copies while these tests were being written. A stub the app later needs
+ * would have had to be added in four places, and could have drifted in one.
+ *
+ * `honourAbort: false` is not a shortcut, it is the whole point of one test. Aborting a fetch
+ * closes the connection but cannot call the capture helper back, so a reply already on the wire
+ * still resolves. Ignoring the signal is the only way to reach the generation guard and prove it
+ * is not dead code that the abort path happens to hide.
+ */
+function captureHarness({ honourAbort = true, servedTier = null, hidden = null } = {}) {
   const calls = [];
   const pending = [];
   let blobs = 0;
-  const app = loadApp({
+  const globals = {
     fetch: (url, opts) => {
       const signal = opts && opts.signal;
       calls.push({ url, signal });
       return new Promise((resolve, reject) => {
-        pending.push({ url, resolve, reject });
-        if (signal) {
+        pending.push(resolve);
+        if (honourAbort && signal) {
           signal.addEventListener("abort", () => {
             const e = new Error("aborted");
             e.name = "AbortError";
@@ -1554,21 +1566,39 @@ function appCapturing() {
     Date,
     setInterval: () => 0,
     clearInterval: () => {},
-    // Deliberately no `document`: `takeScreenshot` never touches it, and `applyTheme` guards on
-    // `typeof document === "undefined"` at load time — supplying a partial stub defeats that guard
-    // and fails the whole file before a single assertion runs.
-  });
+  };
+  // `hidden` left null supplies NO `document`, which is what every capture test wants:
+  // `takeScreenshot` never touches it, and `applyTheme` guards on `typeof document === "undefined"`
+  // at load time, so a *partial* stub defeats that guard and fails the whole file before a single
+  // assertion runs. Passing a boolean supplies a FULL one instead — `applyTheme` reaches
+  // `documentElement` and `matchMedia`, so both have to be there. Same set, and the same reason, as
+  // `appRecordingShots` above.
+  if (hidden !== null) {
+    globals.document = {
+      hidden,
+      documentElement: { setAttribute() {}, removeAttribute() {} },
+      addEventListener() {},
+    };
+    globals.matchMedia = () => ({ matches: false, addEventListener() {} });
+  }
+  const app = loadApp(globals);
   app.toast = () => {};
   app.startShotClock = () => {};
-  const settle = (i, body) => {
-    pending[i].resolve({ status: 200, ok: true, blob: async () => body || {}, headers: { get: () => null } });
+  /** Resolve the i-th capture that reached the endpoint; a later request has the higher index. */
+  const settle = (i = 0) => {
+    pending[i]({
+      status: 200,
+      ok: true,
+      blob: async () => ({}),
+      headers: { get: (n) => (n.toLowerCase() === "x-shot-tier" ? servedTier : null) },
+    });
     return new Promise((r) => setImmediate(r));
   };
-  return { app, calls, pending, settle };
+  return { app, calls, settle };
 }
 
 test("a parent's click is not discarded while a live preview is in flight", async () => {
-  const { app, calls } = appCapturing();
+  const { app, calls } = captureHarness();
   app.takeScreenshot(true, "preview"); // the live timer, still in flight
   app.takeScreenshot(); // the parent presses Take screenshot
   await new Promise((r) => setImmediate(r));
@@ -1576,7 +1606,7 @@ test("a parent's click is not discarded while a live preview is in flight", asyn
 });
 
 test("the live timer still does not stack captures on itself", async () => {
-  const { app, calls } = appCapturing();
+  const { app, calls } = captureHarness();
   app.takeScreenshot(true, "preview");
   app.takeScreenshot(true, "preview");
   await new Promise((r) => setImmediate(r));
@@ -1584,7 +1614,7 @@ test("the live timer still does not stack captures on itself", async () => {
 });
 
 test("a superseded capture cannot overwrite the frame that replaced it", async () => {
-  const { app, calls, settle } = appCapturing();
+  const { app, calls, settle } = captureHarness();
   app.takeScreenshot(true, "preview");
   app.takeScreenshot(false, "full");
   await new Promise((r) => setImmediate(r));
@@ -1597,7 +1627,7 @@ test("a superseded capture cannot overwrite the frame that replaced it", async (
 });
 
 test("a superseded capture does not clear the loading state of the one that replaced it", async () => {
-  const { app, settle } = appCapturing();
+  const { app, settle } = captureHarness();
   app.takeScreenshot(true, "preview");
   app.takeScreenshot(false, "full");
   await new Promise((r) => setImmediate(r));
@@ -1608,34 +1638,11 @@ test("a superseded capture does not clear the loading state of the one that repl
 
 // The abort covers the common path, but not the one the generation guard is actually for: a reply
 // whose body was already on the wire when abort() landed still resolves. The helper had finished
-// capturing either way — aborting cannot call it back. This harness ignores the signal on purpose,
-// which is the only way to prove the guard is not dead code that the abort path happens to hide.
-function appCapturingIgnoringAbort() {
-  const calls = [];
-  const pending = [];
-  let blobs = 0;
-  const app = loadApp({
-    fetch: (url) => {
-      calls.push(url);
-      return new Promise((resolve) => pending.push(resolve));
-    },
-    AbortController,
-    URL: { createObjectURL: () => "blob:" + ++blobs, revokeObjectURL: () => {} },
-    Date,
-    setInterval: () => 0,
-    clearInterval: () => {},
-  });
-  app.toast = () => {};
-  app.startShotClock = () => {};
-  const settle = (i) => {
-    pending[i]({ status: 200, ok: true, blob: async () => ({}), headers: { get: () => null } });
-    return new Promise((r) => setImmediate(r));
-  };
-  return { app, calls, settle };
-}
+// capturing either way — aborting cannot call it back. `honourAbort: false` ignores the signal on
+// purpose, which is the only way to prove the guard is not dead code the abort path hides.
 
 test("a reply that outlives its abort still cannot win", async () => {
-  const { app, calls, settle } = appCapturingIgnoringAbort();
+  const { app, calls, settle } = captureHarness({ honourAbort: false });
   app.takeScreenshot(true, "preview");
   app.takeScreenshot(false, "full");
   await new Promise((r) => setImmediate(r));
@@ -1655,34 +1662,9 @@ test("a reply that outlives its abort still cannot win", async () => {
 // client believes it is showing previews — and `openShotFull` skips its refetch when it thinks the
 // frame is already full, so the mislabel decides whether the parent gets a sharp picture.
 
-/** A capture app whose responses declare a tier via the X-Shot-Tier header. */
-function appWithServedTier(served) {
-  const pending = [];
-  let blobs = 0;
-  const app = loadApp({
-    fetch: () => new Promise((resolve) => pending.push(resolve)),
-    AbortController,
-    URL: { createObjectURL: () => "blob:" + ++blobs, revokeObjectURL: () => {} },
-    Date,
-    setInterval: () => 0,
-    clearInterval: () => {},
-  });
-  app.toast = () => {};
-  app.startShotClock = () => {};
-  const settle = () => {
-    pending[0]({
-      status: 200,
-      ok: true,
-      blob: async () => ({}),
-      headers: { get: (n) => (n.toLowerCase() === "x-shot-tier" ? served : null) },
-    });
-    return new Promise((r) => setImmediate(r));
-  };
-  return { app, settle };
-}
 
 test("the recorded tier is the one the server served, not the one requested", async () => {
-  const { app, settle } = appWithServedTier("full");
+  const { app, settle } = captureHarness({ servedTier: "full" });
   app.takeScreenshot(true, "preview"); // asked for preview...
   await new Promise((r) => setImmediate(r));
   await settle(); // ...but the server says it served full
@@ -1690,7 +1672,7 @@ test("the recorded tier is the one the server served, not the one requested", as
 });
 
 test("a response that names no tier falls back to the one requested", async () => {
-  const { app, settle } = appWithServedTier(null);
+  const { app, settle } = captureHarness();
   app.takeScreenshot(true, "preview");
   await new Promise((r) => setImmediate(r));
   await settle();
@@ -1740,24 +1722,36 @@ test("a live tick past its own deadline stops instead of capturing", () => {
   assert.deepEqual(asked, [], "and it must not capture on the way out");
 });
 
+// A hidden tab is nobody watching, and every tick spawns a helper process in the child's session
+// to capture and JPEG-encode their whole desktop — by `_armShotTimer`'s own account the most
+// expensive thing this tool does. Without this guard a dashboard left open in a pocket keeps
+// paying that cost on the child's machine all day.
+//
+// It had no test. `_liveTick` was extracted from an interval closure precisely so its decisions
+// could be reached, and this decision was the one still left unreached: deleting the guard
+// outright left every JS test passing. Reaching it needs a document, and a full one — see
+// `captureHarness`.
+test("a hidden tab stops the live timer capturing, a visible one does not", () => {
+  const shown = captureHarness({ hidden: false });
+  shown.app._liveUntil = Number.MAX_SAFE_INTEGER;
+  shown.app._liveTick();
+  assert.equal(shown.calls.length, 1, "a visible tab must still refresh the picture");
+
+  const pocketed = captureHarness({ hidden: true });
+  pocketed.app._liveUntil = Number.MAX_SAFE_INTEGER;
+  pocketed.app._liveTick();
+  assert.equal(
+    pocketed.calls.length,
+    0,
+    "a hidden tab must not spawn a capture helper on the child's machine",
+  );
+});
+
 // The audit keys on who asked, so the request has to say. Tier cannot carry it any more: the timer
 // asks for `full` whenever the full-size view is open, and auditing those one-for-one would evict
 // the whole security history to make room for a timer.
 test("only the live timer marks its captures as timer-driven", async () => {
-  const urls = [];
-  const app = loadApp({
-    fetch: (u) => {
-      urls.push(u);
-      return new Promise(() => {});
-    },
-    AbortController,
-    URL: { createObjectURL: () => "blob:x", revokeObjectURL: () => {} },
-    Date,
-    setInterval: () => 0,
-    clearInterval: () => {},
-  });
-  app.toast = () => {};
-  app.startShotClock = () => {};
+  const { app, calls } = captureHarness();
   app._liveUntil = Number.MAX_SAFE_INTEGER;
 
   app._liveTick();
@@ -1765,7 +1759,7 @@ test("only the live timer marks its captures as timer-driven", async () => {
   app.takeScreenshot(); // a person, superseding the frame in flight
   await new Promise((r) => setImmediate(r));
 
-  assert.equal(urls.length, 2);
-  assert.ok(urls[0].includes("live=1"), `timer frame must be marked: ${urls[0]}`);
-  assert.ok(!urls[1].includes("live=1"), `a person's capture must not be: ${urls[1]}`);
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].url.includes("live=1"), `timer frame must be marked: ${calls[0].url}`);
+  assert.ok(!calls[1].url.includes("live=1"), `a person's capture must not be: ${calls[1].url}`);
 });

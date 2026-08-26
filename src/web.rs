@@ -139,6 +139,19 @@ mod tests {
         }
     }
 
+    /// The served `index.html`, by name.
+    ///
+    /// Two scanners want this one page rather than a loop over all of them, and both opened with
+    /// the same five-line `find`/`expect`. One copy means one spelling of the panic message when
+    /// the page is renamed.
+    fn index_html() -> &'static str {
+        PAGES
+            .iter()
+            .find(|(name, _)| *name == "index.html")
+            .expect("index.html must be one of the served pages")
+            .1
+    }
+
     /// Replace every `<!-- ... -->` with an equal-length run of spaces.
     ///
     /// Same length so byte offsets in a failure message still point at the real file. An
@@ -391,11 +404,12 @@ mod tests {
     /// keep passing its own tests while nothing in the markup called it for the second list.
     #[test]
     fn every_page_title_list_carries_the_game_portal_label() {
-        let html = PAGES
-            .iter()
-            .find(|(name, _)| *name == "index.html")
-            .expect("index.html must be one of the served pages")
-            .1;
+        // Stripped first, like every other counting scan here. `labelled` counts a literal
+        // directive, and the house style puts an explanatory comment directly above BOTH badge
+        // templates — so a comment that quoted the directive would inflate the count and let the
+        // test pass with a badge deleted from the report list, which is the exact state it exists
+        // to catch. Verified by putting that comment in and watching it fail.
+        let html = strip_html_comments(index_html());
         let lists =
             html.matches("in today.pages").count() + html.matches("in stRows('pages')").count();
         let labelled = html.matches("x-if=\"gamePortal(").count();
@@ -427,11 +441,7 @@ mod tests {
     /// sentence for a different reader.
     #[test]
     fn the_chart_key_is_rendered_from_the_bar_classes_not_written_into_the_markup() {
-        let html = PAGES
-            .iter()
-            .find(|(name, _)| *name == "index.html")
-            .expect("index.html must be one of the served pages")
-            .1;
+        let html = strip_html_comments(index_html());
         // The bindings that actually hold the property. Asserting these is the positive half:
         // without them nothing renders the key at all, and `stBarKey` merely appearing somewhere in
         // the file (in a comment, say) would satisfy a bare name check.

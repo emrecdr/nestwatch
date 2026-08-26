@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
@@ -64,6 +65,46 @@ pub fn app_with(state: AppState) -> Router {
 /// The common case: a router over a fresh disabled-log state.
 pub fn test_app() -> Router {
     app_with(test_state())
+}
+
+/// A router whose audit log writes to a real file, with the path to read it back.
+///
+/// Every other helper here disables the on-disk logs; a handful of tests need the opposite,
+/// because the property under test is what actually lands in `audit.jsonl`.
+///
+/// The self-cleaning directory is why this is shared rather than left as three copies. Each copy
+/// deleted its directory on the last line of the test body, so any of them that later grew an
+/// early return — or simply tripped an assertion, which is a panic — would leak one silently, and
+/// the next run would start against a directory it thought it had created fresh. Dropping the
+/// guard cleans up on every path.
+pub struct AuditFileApp {
+    pub app: Router,
+    /// The `audit.jsonl` this router appends to.
+    pub path: PathBuf,
+    dir: PathBuf,
+}
+
+impl Drop for AuditFileApp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// `tag` separates tests running concurrently inside one binary; the process id already separates
+/// the binaries from each other.
+pub fn app_with_audit_file(tag: &str) -> AuditFileApp {
+    let dir = std::env::temp_dir().join(format!("nw-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("audit.jsonl");
+
+    let mut state = test_state();
+    state.audit = Arc::new(AuditLog::new(path.clone()));
+    AuditFileApp {
+        app: app_with(state),
+        path,
+        dir,
+    }
 }
 
 /// `GET uri`, optionally carrying a session cookie.

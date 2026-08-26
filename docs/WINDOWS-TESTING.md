@@ -205,7 +205,8 @@ failures rather than being surprised by them.
       and leave it a few minutes, then read **Recent access** (or `GET /api/audit`). There must be
       *coalesced* `live_view` lines carrying frame counts — **not** one `screenshot_taken` row per
       frame. Frames the timer fetched are counted; only captures a person asked for get a line each.
-      This is the one item here with a security consequence: at roughly 1,800 rows an hour a timer
+      This is the one item here with a security consequence: at roughly 1,800 rows an hour — the
+      fastest cadence on offer — a timer
       would evict every login, kill and password change from the log to make room for itself.
 - [ ] **Turning Live off stops it immediately.** Toggle Live off while a capture is mid-flight
       (easiest at the 2s cadence). The picture must not change afterwards. A frame arriving after

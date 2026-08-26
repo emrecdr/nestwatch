@@ -146,7 +146,8 @@ mod tests {
     ///
     /// A literal rather than `CODE_LEN`, because asserting a constant against itself pins nothing:
     /// this is a product decision about what a person can retype without error, and it is also a
-    /// security parameter, so a change to it should have to be made here as well as at the constant.
+    /// security parameter, so a change to it should have to be made here as well as at the
+    /// constant.
     ///
     /// Six characters of this 32-symbol alphabet is 1,073,741,824 combinations. Against the redeem
     /// endpoint's 5-per-minute per-IP limit that is ~408 years of guessing with one code

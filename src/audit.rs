@@ -61,8 +61,8 @@ pub(crate) const LIVE_AUDIT_WINDOW: std::time::Duration = std::time::Duration::f
 /// This is not simply the noisiest of a known class. There are fourteen `audit.record` call sites
 /// and the other thirteen are each bounded by a discrete human action, which is precisely why
 /// `OPEN-FINDINGS.md` investigated the `/time-request` case and correctly refuted it. The live
-/// live stream is the only audit event a *clock* can produce, so it is the only one whose volume
-/// is bounded by nothing at all.
+/// stream is the only audit event a *clock* can produce, so it is the only one whose volume is
+/// bounded by nothing at all.
 ///
 /// # Why coalescing rather than a start/stop pair
 ///
@@ -106,8 +106,8 @@ impl LiveViewAudit {
         }
     }
 
-    /// Count one timer-driven frame. Returns `Some(n)` when a line is due, `n` being the frames since
-    /// the previous line.
+    /// Count one timer-driven frame. Returns `Some(n)` when a line is due, `n` being the frames
+    /// since the previous line.
     ///
     /// The first frame after a quiet spell always reports, so the log records that watching
     /// *started* promptly rather than five minutes late — and a parent who opens the live view for
