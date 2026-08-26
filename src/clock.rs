@@ -548,6 +548,87 @@ mod tests {
         }
     }
 
+    /// Swept properties of `decide`, over every plausible offset triple.
+    ///
+    /// The example tests above name the cases that motivated the design. These state what must hold
+    /// for *all* of them, which is the half that catches a change nobody thought to write a case
+    /// for. ±14h in 15-minute steps covers every real UTC offset including the quarter-hour ones
+    /// (Nepal, Chatham); 113³ ≈ 1.4M triples is small enough to enumerate and removes the question
+    /// of whether a generator happened to try the interesting ones.
+    ///
+    /// The first property is the security one, and it is stronger than "the child gains little":
+    /// **once the zone identity differs, nothing the child can set changes the answer at all.**
+    /// `observed` is the only input they control, and on that arm the result is a function of the
+    /// anchor and the high-water mark alone. A bound would still leave them a lever to pull; this
+    /// says there is no lever.
+    #[test]
+    fn swept_properties_of_the_trust_decision() {
+        const STEP: i32 = 15;
+        const LIMIT: i32 = 14 * 60;
+        let offsets: Vec<i32> = (-LIMIT..=LIMIT).step_by(STEP as usize).collect();
+        const HOME: &str = "W. Europe Standard Time";
+        // Every zone the child might switch to, plus the DST-checkbox variant of their own.
+        const OTHERS: [&str; 3] = [
+            "UTC",
+            "GMT Standard Time",
+            "W. Europe Standard Time (dst-off)",
+        ];
+
+        let effective = |t: Trust, observed: i32| match t {
+            Trust::Os { .. } => observed,
+            Trust::Anchored(o) => o,
+        };
+
+        let mut checked: u64 = 0;
+        for &anchor in &offsets {
+            for &high_water in &offsets {
+                // 1. A changed zone: the answer must not move with `observed`.
+                let baseline = decide(anchor, offsets[0], Some(HOME), Some(OTHERS[0]), high_water);
+                for &observed in &offsets {
+                    for other in OTHERS {
+                        let got = decide(anchor, observed, Some(HOME), Some(other), high_water);
+                        assert_eq!(
+                            got, baseline,
+                            "a changed zone must ignore the offset the child chose \
+                             (anchor={anchor} observed={observed} zone={other})"
+                        );
+                        assert_eq!(
+                            got,
+                            Trust::Anchored(high_water.max(anchor)),
+                            "and must fall back to the later of anchor and high-water mark"
+                        );
+                        checked += 1;
+                    }
+
+                    // 2. The machine's own zone: believed outright, no tolerance consulted.
+                    assert_eq!(
+                        decide(anchor, observed, Some(HOME), Some(HOME), high_water),
+                        Trust::Os { record: true },
+                        "an unchanged zone is the authority, whatever offset it reports"
+                    );
+
+                    // 3. No identity available: the old tolerance, and it must actually bound.
+                    let legacy = decide(anchor, observed, None, None, high_water);
+                    let off = effective(legacy, observed);
+                    assert!(
+                        (off - anchor).abs() <= MAX_DRIFT_MINS,
+                        "the fallback must keep the effective offset within {MAX_DRIFT_MINS} of \
+                         the anchor, got {off} against {anchor}"
+                    );
+                    // …and a reading it merely tolerated must never vouch for anything.
+                    if let Trust::Os { record } = legacy {
+                        assert!(!record, "the tolerance vouches for nothing");
+                    }
+                    checked += 2;
+                }
+            }
+        }
+        assert!(
+            checked > 1_000_000,
+            "only {checked} triples were checked — the sweep has been narrowed"
+        );
+    }
+
     #[test]
     fn recording_an_anchor_seeds_the_high_water_mark() {
         let _g = guard();

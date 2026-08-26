@@ -470,6 +470,22 @@ fn is_within(now: NaiveTime, start: NaiveTime, end: NaiveTime) -> bool {
 mod tests {
     use super::*;
 
+    /// The window predicate stated a second way: modular arithmetic rather than a branch on
+    /// `cmp`. Shared by the two tests below, which sweep it along different axes — keeping one
+    /// definition, so a wrong oracle cannot agree with a wrong implementation in one test and
+    /// disagree in the other.
+    fn window_oracle(now: i32, start: i32, end: i32) -> bool {
+        let span = (end - start).rem_euclid(1440); // 0 = empty window
+        let past_start = (now - start).rem_euclid(1440);
+        span != 0 && past_start < span
+    }
+
+    /// Minute-of-day to a `NaiveTime`, wrapping so a probe either side of a boundary is legal.
+    fn at_minute(m: i32) -> NaiveTime {
+        let m = m.rem_euclid(1440);
+        NaiveTime::from_hms_opt((m / 60) as u32, (m % 60) as u32, 0).expect("valid minute")
+    }
+
     fn t(h: u32, m: u32) -> NaiveTime {
         NaiveTime::from_hms_opt(h, m, 0).unwrap()
     }
@@ -503,16 +519,10 @@ mod tests {
 
     #[test]
     fn is_within_matches_modular_oracle_across_the_day() {
-        // An independent oracle via modular arithmetic (a different formulation than the
-        // branch-on-`cmp` implementation), swept over every minute of the day for same-day,
-        // midnight-wrapping, and empty windows.
-        fn oracle(m: i32, s: i32, e: i32) -> bool {
-            let span = (e - s).rem_euclid(1440); // window length (0 = empty)
-            let off = (m - s).rem_euclid(1440); // how far m is past the start
-            span != 0 && off < span
-        }
-        let nt =
-            |min: i32| NaiveTime::from_hms_opt((min / 60) as u32, (min % 60) as u32, 0).unwrap();
+        // Sweeps every minute of the day against a handful of representative window shapes.
+        // `is_within_matches_an_independent_definition_for_every_window_in_the_day` covers the
+        // other axis — every window, probed at its boundaries — and both share `window_oracle`.
+        let nt = at_minute;
         for &(s, e) in &[
             (9 * 60, 17 * 60),          // same day
             (22 * 60, 7 * 60),          // wraps midnight
@@ -523,7 +533,7 @@ mod tests {
             for m in 0..1440 {
                 assert_eq!(
                     is_within(nt(m), nt(s), nt(e)),
-                    oracle(m, s, e),
+                    window_oracle(m, s, e),
                     "m={m} s={s} e={e}"
                 );
             }
@@ -713,6 +723,69 @@ mod tests {
         assert_eq!(
             one_evening(&c, at(2026, 7, 9, 21, 30), 70),
             Vec::<u32>::new()
+        );
+    }
+
+    /// `is_within` against an independent definition, over **every** start/end pair of the day.
+    ///
+    /// # Why exhaustive rather than a property crate
+    ///
+    /// This is the shape random sampling is worst at and enumeration is best at: the whole risk
+    /// lives on three boundaries (`start`, `end`, and midnight) out of 1,440 minutes, so a
+    /// generator spends almost all its budget in the interior where nothing can go wrong. The pair
+    /// space is only 2,073,600 — small enough to walk completely — and probing each pair at the
+    /// boundaries and either side of them covers exactly the off-by-ones that a wrap-around
+    /// predicate gets wrong. It also needs no dependency, in a crate whose manifest argues about
+    /// every one it has.
+    ///
+    /// The reference is the standard circular half-open test — `(now - start) mod day` is inside
+    /// when it is less than `(end - start) mod day` — derived from the interval definition rather
+    /// than from the code under test, so agreement means something. `start == end` is the one case
+    /// where the two definitions genuinely differ: the reference calls it a zero-length window and
+    /// so does `is_within`, which is what "empty" must mean here — a window from 22:00 to 22:00
+    /// closing the machine forever would be the worst possible reading.
+    #[test]
+    fn is_within_matches_an_independent_definition_for_every_window_in_the_day() {
+        const DAY: i32 = 24 * 60;
+        let at = at_minute;
+
+        let mut checked: u64 = 0;
+        for start in 0..DAY {
+            for end in 0..DAY {
+                // Every boundary and its neighbours, plus midnight and the interior midpoint —
+                // the places a wrap-around comparison is wrong when it is wrong at all.
+                let probes = [
+                    start - 1,
+                    start,
+                    start + 1,
+                    end - 1,
+                    end,
+                    end + 1,
+                    0,
+                    DAY - 1,
+                    (start + end) / 2,
+                ];
+                for now in probes {
+                    let want = window_oracle(now, start, end);
+                    let got = is_within(at(now), at(start), at(end));
+                    assert_eq!(
+                        got,
+                        want,
+                        "is_within({:02}:{:02}, {:02}:{:02}, {:02}:{:02}) = {got}, expected {want}",
+                        now.rem_euclid(DAY) / 60,
+                        now.rem_euclid(DAY) % 60,
+                        start / 60,
+                        start % 60,
+                        end / 60,
+                        end % 60
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(
+            checked > 18_000_000,
+            "only {checked} comparisons ran — the sweep has been narrowed and no longer proves this"
         );
     }
 
