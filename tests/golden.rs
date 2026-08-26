@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 
 use nestwatch::auth::{LOGIN_LOCKOUT, LOGIN_MAX_FAILS};
 use nestwatch::rules::{Rules, Usage, today_summary};
-use nestwatch::timecode::{ActiveCode, CODE_LEN, MAX_ACTIVE_CODES, MAX_CODE_MINUTES, TimeCodes};
+use nestwatch::timecode::{ActiveCode, CODE_LEN, MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
 use nestwatch::timereq::PendingRequest;
 
 mod common;
@@ -140,31 +140,28 @@ fn time_codes() {
         minutes: 45,
     }];
 
-    // The sample's LENGTH is derived, not typed — because a literal cannot fail when the constant
-    // moves, and this file proved it: it carried an eight-character code for a day after codes
-    // became six, regenerating unchanged the whole time because the length lives in the source
-    // above rather than in `CODE_LEN`.
+    // The sample's LENGTH is checked against the constant, not typed — because a literal cannot
+    // fail when the constant moves, and this file proved it: it carried an eight-character code for
+    // a day after codes became six, regenerating unchanged the whole time because the length lives
+    // in the source above rather than in `CODE_LEN`.
     //
-    // `timecode`'s own unit test pins `CODE_LEN` to a literal deliberately — asserting a constant
-    // against itself pins nothing — so a change there fails *there*. What it cannot notice is this
-    // file, and this is the one a client sizes an input box and a reveal mask against. A sample
-    // that disagrees with what the server issues is a contract that lies, so it is checked against
-    // a real issued code rather than trusted.
-    let dir = std::env::temp_dir().join(format!("nw-golden-code-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let issued = TimeCodes::new(dir.join("time_codes.jsonl"))
-        .issue(45)
-        .expect("a fresh store must be able to issue one code");
-    let _ = std::fs::remove_dir_all(&dir);
+    // Against `CODE_LEN` directly rather than against a code from a live store. This used to build
+    // a temp directory, issue a real code and measure it, on the reasoning that a sample should be
+    // checked against what the server issues rather than trusted. But `issue` is
+    // `token::random(CODE_LEN)` and `token::random(n)` returns exactly `n` characters, so the
+    // issued length *was* `CODE_LEN` by construction — the store, the directory and the filesystem
+    // dependency in a pure-serialization suite all went to re-derive a number already in scope.
+    //
+    // The chain still closes, one link further along: `timecode`'s own
+    // `a_code_is_six_characters_long` pins `CODE_LEN` against a literal 6 — asserting a constant
+    // against itself pins nothing, so that test does it where a real code is issued.
     assert_eq!(
         codes[0].code.len(),
-        issued.len(),
-        "the sample code is {} characters but the server issues {} — the Android client sizes its \
-         input and its reveal mask against this file, so regenerate the sample to match rather \
-         than shipping a contract that disagrees with the server",
-        codes[0].code.len(),
-        issued.len()
+        CODE_LEN,
+        "the sample code is {} characters but the server issues {CODE_LEN} — the Android client \
+         sizes its input and its reveal mask against this file, so regenerate the sample to match \
+         rather than shipping a contract that disagrees with the server",
+        codes[0].code.len()
     );
 
     golden("time-codes", &serde_json::to_value(&codes).unwrap());

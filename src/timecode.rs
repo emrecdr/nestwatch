@@ -250,14 +250,10 @@ mod tests {
         // Regression: redeem must be atomic. Fire many threads at one single-use code and assert
         // exactly one wins — without the gate, several would each observe it as active and grant.
         use std::sync::Arc;
-        let dir = std::env::temp_dir().join(format!(
-            "nw-timecode-race-{}-{}",
-            std::process::id(),
-            next_suffix()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let codes = Arc::new(TimeCodes::new(dir.join("time_codes.jsonl")));
+        // `store()` rather than a second copy of its body: the `next_suffix()` fix that made these
+        // directories unique had to be applied to both copies, which is what a duplicate costs.
+        let (codes, dir) = store();
+        let codes = Arc::new(codes);
         let code = codes.issue(30).unwrap();
 
         let mut handles = Vec::new();
@@ -281,6 +277,6 @@ mod tests {
         let codes = TimeCodes::disabled();
         assert!(codes.issue(10).is_some(), "returns a code");
         assert!(codes.active().is_empty(), "but nothing persisted");
-        assert_eq!(codes.redeem("ABCDEFGH"), None);
+        assert_eq!(codes.redeem(&"A".repeat(CODE_LEN)), None);
     }
 }

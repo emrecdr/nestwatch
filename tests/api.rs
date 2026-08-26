@@ -876,9 +876,9 @@ async fn a_timer_driven_capture_is_coalesced_whatever_tier_it_carries() {
 ///
 /// The negative half — that timer frames write no `screenshot_taken` line — was covered first, and
 /// on its own it is satisfied by writing nothing at all. Deleting the `if let` in `api::screenshot`
-/// so the coalescer's count is computed and discarded left every test in this binary green, which
-/// is precisely the state `OPEN-FINDINGS.md` O51 predicted: `observe` is not `#[must_use]`, so the
-/// value can be dropped in silence and the log simply stops recording that the screen was watched.
+/// so the coalescer's count is computed and discarded left every test in this binary green: it is
+/// `observe`'s return value that carries the count, `observe` is not `#[must_use]`, so the value
+/// can be dropped in silence and the log simply stops recording that the screen was watched.
 ///
 /// That is the failure worth fearing here. A parent reading the audit log to answer "was anyone
 /// looking at this machine?" would get the same empty answer whether nobody looked or the line was

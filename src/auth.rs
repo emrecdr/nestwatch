@@ -331,7 +331,7 @@ fn prune(map: &mut HashMap<IpAddr, Attempts>, now: Instant) {
     map.retain(|_, a| a.consecutive_failures > 0 || a.locked_until.is_some_and(|u| now < u));
 }
 
-/// Wrong tries before a device is locked out, and for how long.
+/// Wrong tries before a device is locked out.
 ///
 /// Named rather than left as literals inside `default()`, because the lockout duration is also
 /// stated to the person it locks out — `app.js` tells them to "wait a minute" — and a number
@@ -340,7 +340,9 @@ fn prune(map: &mut HashMap<IpAddr, Attempts>, now: Instant) {
 /// the limit was the word "minute" inside a sentence: a literal at least announces itself as a
 /// number, prose does not manage even that.
 pub const LOGIN_MAX_FAILS: u32 = 5;
-/// See [`LOGIN_MAX_FAILS`]. Pinned against the message a parent reads by
+/// How long a device stays locked out after [`LOGIN_MAX_FAILS`] wrong tries.
+///
+/// Pinned against the message a parent reads by
 /// `web::tests::the_lockout_a_parent_is_told_to_wait_matches_the_one_enforced`.
 pub const LOGIN_LOCKOUT: Duration = Duration::from_secs(60);
 

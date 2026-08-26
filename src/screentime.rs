@@ -203,10 +203,6 @@ const MAX_BASELINE_APPS: usize = 2_000;
 /// genuinely introduces more than this, the count still reports the total so nothing is hidden.
 const TOP_FIRST_SEEN: usize = 8;
 
-/// Sum one `DayRow` field across the window, heaviest first, capped.
-///
-/// Takes an extractor rather than a key string so a typo cannot silently produce an empty list —
-/// the compiler picks the field, not a lookup that quietly misses.
 /// Apps that had focus on one day and on no earlier day in the retained history.
 ///
 /// The most actionable thing a usage report can say is not a total but a **change**: something
@@ -303,9 +299,12 @@ fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> 
     // A day that introduced nothing is the normal case, and it is still an answer worth returning:
     // the UI can say so, or say nothing, but it must not be confused with "we could not tell".
     // `None` is reserved for the latter. That case needs no branch of its own — an empty `fresh`
-    // sorts and truncates to itself and reports `count: 0`, which is precisely the answer. It used
-    // to have one, which meant two `FirstSeen` literals to keep in step; `FirstSeen` derives
-    // `Default`, so a field added to only one of them would not have failed to compile.
+    // sorts and truncates to itself and reports `count: 0`, which is precisely the answer.
+    //
+    // There is a second `FirstSeen` literal above, on the overflow path, and keeping the two in
+    // step is the compiler's job rather than a reader's: the struct deliberately does not derive
+    // `Default`, so a field added to one literal and not the other fails to build instead of
+    // defaulting quietly. (This comment previously asserted the opposite.)
     fresh.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
     let count = fresh.len();
     fresh.truncate(TOP_FIRST_SEEN);
@@ -318,6 +317,10 @@ fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> 
     })
 }
 
+/// Sum one `DayRow` field across the window, heaviest first, capped.
+///
+/// Takes an extractor rather than a key string so a typo cannot silently produce an empty list —
+/// the compiler picks the field, not a lookup that quietly misses.
 fn totals_across<F>(days: &[DayRow], pick: F) -> Vec<AppMinutes>
 where
     F: Fn(&DayRow) -> &Vec<AppMinutes>,

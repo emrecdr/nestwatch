@@ -50,16 +50,50 @@ fn serve_asset(path: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    /// The served pages contain both HTML files, so both scans below share this list.
+    use super::Assets;
+
     /// The served script, for the guards that can only learn a fact by reading it. Checked in and
     /// not generated, unlike `assets/app.css`, so `include_str!` is safe here — a fresh clone has
     /// this file before it has run anything.
     const APP_JS: &str = include_str!("../assets/app.js");
 
+    /// The served pages. Every scan below iterates this, so it is the list that decides what is
+    /// guarded at all — which is why [`every_served_page_is_reached_by_the_scans`] ties it to what
+    /// is actually served rather than to what someone remembered.
     const PAGES: [(&str, &str); 2] = [
         ("index.html", include_str!("../assets/index.html")),
         ("ask.html", include_str!("../assets/ask.html")),
     ];
+
+    /// Every page the binary will actually serve is in [`PAGES`].
+    ///
+    /// `Assets` embeds the whole `assets/` folder and [`static_handler`](super::static_handler)
+    /// serves any of it by path, so dropping `settings.html` in there publishes it with no code
+    /// change anywhere. Every scan in this module iterates `PAGES` — no inline `<script>`, CSP
+    /// parseability, form labels, table headers, class coverage — so a served page missing from
+    /// that list is checked by **none** of them, and nothing goes red. The list is what makes the
+    /// other guards mean anything, and it was the one part kept by hand.
+    ///
+    /// Both directions on purpose. A page served but unlisted is the dangerous one; a listed page
+    /// that no longer exists means a scan is passing over nothing and reporting success.
+    #[test]
+    fn every_served_page_is_reached_by_the_scans() {
+        let mut served: Vec<String> = Assets::iter()
+            .filter(|f| f.ends_with(".html"))
+            .map(|f| f.to_string())
+            .collect();
+        served.sort();
+
+        let mut scanned: Vec<String> = PAGES.iter().map(|(name, _)| name.to_string()).collect();
+        scanned.sort();
+
+        assert_eq!(
+            served, scanned,
+            "`assets/` serves the first list and `PAGES` carries the second. Every scan in this \
+             module iterates `PAGES`, so a page that is served but unlisted is guarded by none of \
+             them while the suite stays green. Add it to `PAGES` with its `include_str!`."
+        );
+    }
 
     /// No inline `<script>` on any served page.
     ///
@@ -213,7 +247,7 @@ mod tests {
         );
 
         // The same two limits reach a person as prose, in the toast shown when the server refuses.
-        let script = include_str!("../assets/app.js");
+        let script = APP_JS;
         for (phrase, what) in [
             (
                 format!(
@@ -248,65 +282,99 @@ mod tests {
     /// believe the tool rather than their own retry.
     #[test]
     fn the_lockout_a_parent_is_told_to_wait_matches_the_one_enforced() {
-        const SENTENCE: &str = "wait a minute and try again";
-        assert_eq!(
-            crate::auth::LOGIN_LOCKOUT,
-            std::time::Duration::from_secs(60),
-            "the lockout is no longer a minute, but `assets/app.js` still tells a locked-out \
-             parent to \"{SENTENCE}\". Change that sentence and this assertion together."
-        );
+        // Built FROM the constant, never compared beside it.
+        //
+        // This was two assertions — `LOGIN_LOCKOUT == 60s`, and `app.js` contains "wait a minute"
+        // — sharing one failure message that said to change them together. Nothing made that true.
+        // Raising the lockout to five minutes failed the first, and the obvious repair is to edit
+        // the `60` on the line that failed; the second never fires, because the sentence still
+        // exists. Verified: with `LOGIN_LOCKOUT` at 300s and the literal updated to match, this
+        // test PASSED while a locked-out parent was told to wait a minute for a five-minute
+        // lockout. A guard whose own repair silences it is worse than no guard, because the next
+        // person reads the green and stops looking.
+        //
+        // Deriving the sentence leaves only one thing to satisfy: the phrase has to be IN `app.js`,
+        // and the only way to produce it is to write the wait the constant actually names.
+        let secs = crate::auth::LOGIN_LOCKOUT.as_secs();
+        let wait = match secs {
+            60 => "a minute".to_string(),
+            s if s % 60 == 0 => format!("{} minutes", s / 60),
+            s => format!("{s} seconds"),
+        };
+        let sentence = format!("wait {wait} and try again");
         assert!(
-            include_str!("../assets/app.js").contains(SENTENCE),
-            "the lockout message changed and this test pins it, because prose cannot carry a \
-             constant. If it now names a different wait, make `LOGIN_LOCKOUT` agree with it."
+            APP_JS.contains(&sentence),
+            "`LOGIN_LOCKOUT` is {secs}s, so a locked-out parent must be told to \"{sentence}\", \
+             and no sentence in `assets/app.js` reads that. The lockout and the prose describing \
+             it have drifted — and the parent is reading this while trying to see their child's \
+             screen, which is when they are least willing to believe the tool over their own retry."
         );
     }
 
-    /// Every `show…` getter the component defines is actually rendered by the markup.
+    /// Every member that exists only to be displayed is actually displayed.
     ///
-    /// These exist for one purpose: to decide whether something appears. A getter nothing consults
-    /// is a decision computed and thrown away, and it fails silently in the worst direction — the
-    /// state it was written to distinguish reaches the reader as the same blank space as the state
-    /// it was distinguishing it *from*.
+    /// Two families, because the component has two: a `get show…()` decides whether something
+    /// appears, and a `…Note()` produces the sentence that appears. Both exist for the markup and
+    /// for nothing else, so either one going unreferenced is a decision computed and thrown away.
+    /// It fails silently in the worst direction — the state it was written to distinguish reaches
+    /// the reader as the same blank space as the state it was distinguishing it *from*.
     ///
     /// That is not hypothetical here. `first_seen` carried three states from `screentime.rs`,
     /// typed, serialized, argued for in a doc comment saying "the UI must distinguish that", and
     /// pinned by tests in two languages — and the card rendered two of them, for as long as the
     /// feature existed. `firstSeenNote()` computed a sentence for the quiet day that nothing ever
-    /// displayed. See `OPEN-FINDINGS.md` O52.
+    /// displayed.
     ///
-    /// Matched with the quotes around the name so `showFirstSeen` cannot be satisfied by
-    /// `showFirstSeenQuiet` happening to contain it.
+    /// **The note half is why this covers both.** Scanning only the getters left the exact shape of
+    /// the original bug uncovered: deleting `x-text="firstSeenQuietNote()"` from the markup leaves
+    /// `showFirstSeenQuiet` still referenced by its `x-if`, so the getter scan stays green while
+    /// the quiet day renders as an empty `<p>` — the bug reintroduced through the gap in its own
+    /// guard. Verified by doing it: 17 of 17 passed.
+    ///
+    /// Getters are matched with the quotes around the name so `showFirstSeen` cannot be satisfied
+    /// by `showFirstSeenQuiet` happening to contain it; notes are matched with their parentheses,
+    /// which separates them for the same reason.
     #[test]
-    fn every_show_getter_reaches_the_markup() {
-        let script = include_str!("../assets/app.js");
+    fn every_display_only_member_reaches_the_markup() {
         let html = strip_html_comments(index_html());
 
-        let mut checked = 0;
-        for rest in script.split("get show").skip(1) {
-            let Some(name) = rest.split("()").next() else {
-                continue;
-            };
-            let name = format!("show{name}");
-            checked += 1;
+        let shown: Vec<String> = APP_JS
+            .split("get show")
+            .skip(1)
+            .filter_map(|rest| rest.split_once("()"))
+            .map(|(name, _)| format!("show{name}"))
+            .collect();
+
+        let notes: Vec<String> = APP_JS
+            .lines()
+            .filter_map(|line| line.trim().strip_suffix("Note() {"))
+            .map(|stem| format!("{stem}Note"))
+            .collect();
+
+        assert!(
+            shown.len() >= 3 && notes.len() >= 3,
+            "expected the first-seen getters and notes at least; found {} getters and {} notes, so \
+             this scan has stopped matching how they are declared",
+            shown.len(),
+            notes.len()
+        );
+
+        for name in &shown {
             assert!(
                 html.contains(&format!("\"{name}\"")),
                 "`{name}` decides whether something is shown and nothing in index.html asks it, so \
                  whatever state it distinguishes renders as the same nothing as every other state"
             );
         }
-        assert!(
-            checked >= 3,
-            "expected the first-seen getters at least; found {checked}, so this scan has stopped \
-             matching how they are declared"
-        );
+        for name in &notes {
+            assert!(
+                html.contains(&format!("{name}()")),
+                "`{name}` builds a sentence for the markup and nothing in index.html renders it, \
+                 so the state it describes reaches the reader as blank space"
+            );
+        }
     }
 
-    /// The served `index.html`, by name.
-    ///
-    /// Two scanners want this one page rather than a loop over all of them, and both opened with
-    /// the same five-line `find`/`expect`. One copy means one spelling of the panic message when
-    /// the page is renamed.
     fn index_html() -> &'static str {
         PAGES
             .iter()

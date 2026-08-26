@@ -739,7 +739,7 @@ function app() {
       this.shotStale = false;
       this._liveUntil = Date.now() + this._liveMaxMs;
       // The first frame is full so switching Live on gives an immediately sharp picture and
-      // surfaces a failure at once; every frame after it is a preview.
+      // surfaces a failure at once; every frame after it follows `liveTier()`.
       this.takeScreenshot();
       this._armShotTimer();
     },
@@ -751,10 +751,6 @@ function app() {
     // "15s" to make the live view cheaper bought the most expensive capture available.
     _armShotTimer() {
       if (this._shotTimer) clearInterval(this._shotTimer);
-      // Skip while the tab is hidden, matching the data poll. Each tick spawns a helper
-      // in the child's session to capture and encode their whole desktop — by far
-      // the most expensive thing this tool does — and without the guard it kept doing it
-      // on their laptop for as long as the parent left the tab open in a pocket.
       this._shotTimer = setInterval(() => this._liveTick(), this._refreshMs);
     },
 
@@ -779,8 +775,12 @@ function app() {
     // the state a parent is in when they press Expand. The tier was being decided by *who asked for
     // the frame* when the property that matters is *which surface is displaying it*.
     //
-    // The cost is real and deliberate: a full frame is roughly thirty times a preview's bytes, so
-    // this is the most expensive thing the tool can be asked to do. It is bounded three ways -- the
+    // The cost is real and deliberate, and larger than the obvious arithmetic suggests. Dividing
+    // the measured numbers gives about thirty -- `Cargo.toml`'s 979 KiB against a ~25-32 KiB
+    // preview -- but that 979 KiB was measured at **q70** and this tier encodes at `FULL_QUALITY`
+    // (q90), so thirty is a floor rather than an estimate. The true multiple at q90 has not been
+    // measured; do not quote one until it has. Either way this is the most expensive thing the
+    // tool can be asked to do, and it is bounded three ways -- the
     // overlay is a transient state a person opened, `_liveUntil` still caps an unattended session,
     // and the cadence selector is on the card if the parent would rather trade rate for cost.
     //
@@ -942,9 +942,8 @@ function app() {
     //
     // While Live runs, the timer keeps this sharp rather than overwriting it: `liveTier()` returns
     // "full" for as long as the overlay is open. It used to return a preview regardless of what was
-    // on screen, so the frame fetched here survived at most one refresh interval and was then
-    // replaced by a 960x540 preview stretched across the window -- at the moment the parent was
-    // looking hardest. See `liveTier` for what that costs and why it is bounded.
+    // on screen, so the frame fetched here survived at most one refresh interval. See `liveTier`
+    // for what that costs and why it is bounded.
     openShotFull() {
       this.shotFull = true;
       // Only when the frame on screen is not already a full one. Pressing "Take screenshot" and
@@ -1500,13 +1499,18 @@ function app() {
       return !!fs && !!fs.baseline_overflow;
     },
 
-    // Same strength-of-claim clause as `firstSeenNote`: "nothing new against 40 days" and "nothing
-    // new against 1 day" are different statements, and only the parent can weigh them.
+    // The strength-of-claim clause both notes end with: "against 40 earlier days" and "against 1
+    // earlier day" are different statements, and only the parent can weigh them. One function
+    // because both sentences render on the same card, so a wording or pluralisation change to one
+    // copy would have left the card phrasing one fact two ways, with nothing comparing them.
+    _baselineDaysPhrase(fs) {
+      return fs.baseline_days === 1 ? "1 earlier day" : fs.baseline_days + " earlier days";
+    },
+
     firstSeenQuietNote() {
       const fs = this.firstSeen;
       if (!fs) return "";
-      const days = fs.baseline_days === 1 ? "1 earlier day" : fs.baseline_days + " earlier days";
-      return "Checked — nothing new today, against " + days + " of history";
+      return "Checked — nothing new today, against " + this._baselineDaysPhrase(fs) + " of history";
     },
 
     // Says what stopped and what to do, not just that something is wrong. The cause is worth
@@ -1520,13 +1524,11 @@ function app() {
       );
     },
 
-    // The claim's strength, stated rather than implied. "New, against 40 days" and "new, against
-    // 1 day" are different statements and only the parent can weigh them.
+    // The claim's strength, stated rather than implied. See `_baselineDaysPhrase`.
     firstSeenNote() {
       const fs = this.firstSeen;
       if (!fs) return "";
-      const days = fs.baseline_days === 1 ? "1 earlier day" : fs.baseline_days + " earlier days";
-      return "First seen " + fs.date + ", against " + days + " of history";
+      return "First seen " + fs.date + ", against " + this._baselineDaysPhrase(fs) + " of history";
     },
 
     // Named separately from the list because the count can exceed what is shown.
