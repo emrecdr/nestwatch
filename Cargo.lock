@@ -1627,6 +1627,7 @@ dependencies = [
  "axum",
  "axum-server",
  "chrono",
+ "flate2",
  "image",
  "pem 4.0.0",
  "qrcode",

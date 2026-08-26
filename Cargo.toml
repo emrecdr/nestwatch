@@ -72,6 +72,18 @@ axum-server = { version = "0.8", default-features = false, features = ["tls-rust
 # the first of those every three seconds. Raising PNG's compression instead was measured too and
 # is far worse — 63% smaller for 1,477 ms per frame, against 44.7 ms today.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# gzip for the embedded dashboard assets (`web.rs`). **Zero new crates, anywhere**: flate2 is
+# already in the Windows graph via png <- image <- xcap, so `Cargo.lock` grows by exactly one line
+# — the dependency edge — and no new package. Verified by diffing the lockfile, after
+# `cargo tree -i flate2 --target x86_64-pc-windows-gnu`.
+#
+# The one real cost is host-only and does not reach the .exe: on macOS/Linux `xcap` is absent, so
+# `image` carries no png stack there, and flate2 + miniz_oxide + crc32fast now compile in dev/CI
+# builds where previously they did not.
+#
+# gzip and not brotli, which is ~15% smaller again: `dart:io`'s `HttpClient.autoUncompress`
+# handles gzip alone, so a `br` body would reach the Android client as undecodable bytes.
+flate2 = "1"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
 pem = "4"
 # Renders the pairing URL as a QR in the install console. `default-features = false` drops its

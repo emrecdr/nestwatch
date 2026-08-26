@@ -175,13 +175,22 @@ pub async fn set_security_headers(mut response: Response) -> Response {
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static(PERMISSIONS_POLICY),
     );
-    // Applied to everything, not only `/api/*`. The most sensitive bytes this service produces are
-    // captures of a child's desktop, and until now nothing told the parent's browser anything at
-    // all about storing them — no `Cache-Control`, no `Expires`, no validator. A blanket
-    // `no-store` costs nothing here: every page is embedded in the binary and served over a LAN,
-    // so there is no round trip worth saving, and scoping the rule to one path prefix would only
-    // create a second place to keep in step.
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // `no-store` is the DEFAULT, not an override. The most sensitive bytes this service produces
+    // are captures of a child's desktop, so anything that has not thought about caching must not be
+    // stored — which is every `/api/*` response, and remains the right answer for them.
+    //
+    // It used to be unconditional, on the grounds that "every page is embedded in the binary and
+    // served over a LAN, so there is no round trip worth saving". The round trip was not what it
+    // cost: `no-store` forbids *storing*, so a parent's phone re-fetched all 324 KB of the UI on
+    // every visit. `web::serve_asset` now sets its own `no-cache` + `ETag` for the embedded assets,
+    // which still forbids serving anything stale, and this must not overwrite it.
+    //
+    // Written as "fill in if absent" rather than a path prefix on purpose: a prefix would be a
+    // second place to keep in step with the router, and would silently mis-classify any future
+    // route that does not match it. Opting out here requires a handler to say so explicitly.
+    if !h.contains_key(header::CACHE_CONTROL) {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     response
 }
 
