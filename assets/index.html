@@ -534,7 +534,7 @@
               <div class="mt-1 flex flex-wrap items-end gap-3">
                 <label class="flex flex-col" x-show="!rules.budget_by_weekday">
                   <span class="text-sm mb-1">Daily limit (min, 0 = off)</span>
-                  <input type="number" min="0" x-model.number="rules.daily_budget_mins"
+                  <input type="number" min="0" max="10080" x-model.number="rules.daily_budget_mins"
                          class="input w-40" />
                 </label>
                 <label class="flex flex-col">
@@ -560,7 +560,7 @@
                     <template x-for="(d, i) in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="i">
                       <label class="flex flex-col">
                         <span class="text-sm mb-1 text-center" x-text="d"></span>
-                        <input type="number" min="0" x-model.number="rules.budget_by_weekday[i]"
+                        <input type="number" min="0" max="10080" x-model.number="rules.budget_by_weekday[i]"
                                class="input input-sm w-16 text-center" />
                       </label>
                     </template>
@@ -594,7 +594,7 @@
                     <div class="flex items-center gap-2">
                       <input type="text" x-model="row.name" placeholder="chrome.exe"
                              aria-label="App filename to limit" class="input input-sm w-64" />
-                      <input type="number" min="0" x-model.number="row.mins" placeholder="min"
+                      <input type="number" min="0" max="10080" x-model.number="row.mins" placeholder="min"
                              aria-label="Daily limit in minutes" class="input input-sm w-24" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
                     </div>
@@ -615,7 +615,7 @@
                       <input type="text" x-model="g.appsText" placeholder="minecraft.exe, roblox.exe"
                              aria-label="Apps in this group, comma separated"
                              class="input input-sm w-64" />
-                      <input type="number" min="0" x-model.number="g.limit_mins" placeholder="min"
+                      <input type="number" min="0" max="10080" x-model.number="g.limit_mins" placeholder="min"
                              aria-label="Shared daily limit in minutes"
                              class="input input-sm w-24" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>

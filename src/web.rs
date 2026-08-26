@@ -313,20 +313,69 @@ mod tests {
     /// cannot ask why the number is wrong.
     ///
     /// A source scan because the property lives in markup and in strings, which no Rust type
-    /// reaches — the sanctioned case in `OPEN-FINDINGS.md` O54. `min="1"` selects these inputs
-    /// exactly: every other number input on either page uses `min="0"`. An unrecognised one is a
-    /// panic rather than a skip, so adding a third minutes box cannot pass unchecked.
+    /// reaches — the sanctioned case in `OPEN-FINDINGS.md` O54. **Every `type="number"` input on
+    /// either page is selected**, and an unrecognised one is a panic rather than a skip, so a new
+    /// number box cannot pass unchecked.
+    ///
+    /// That selector was `min="1"`, which reached two inputs of the eight. It was chosen when the
+    /// other six were unbounded, and it made their unboundedness invisible to the one test placed
+    /// to notice: four of them accepted any number at all while `Rules::validate` rejected
+    /// anything over `MAX_BUDGET_MINS`, so a parent typing 99,999 got a 400 the box had just told
+    /// them was fine. Selecting on `min="1"` also meant *removing* a `max` would drop an input out
+    /// of the scan silently, which is the same failure as deleting a golden file to make a test
+    /// pass. Keying on `type="number"` closes both: an input cannot leave this test's attention by
+    /// losing an attribute, only by ceasing to be a number input.
     #[test]
     fn every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces() {
+        use crate::curfew::MAX_WARN_SECS;
+        use crate::rules::MAX_BUDGET_MINS;
         use crate::timecode::{MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
         use crate::timereq::MAX_REQUEST_MINUTES;
 
+        // Marker → the constant whose value that box is restating. Keyed on `x-model` rather than
+        // position, so reordering the form cannot silently repoint a row at a different field.
         let inputs = [
             (
                 "index.html",
                 "x-model.number=\"newCodeMins\"",
                 MAX_CODE_MINUTES,
                 "the code a parent issues",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"curfew.warn_secs\"",
+                MAX_WARN_SECS,
+                "the curfew's warning",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"rules.warn_secs\"",
+                MAX_WARN_SECS,
+                "the budget's warning",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"rules.daily_budget_mins\"",
+                MAX_BUDGET_MINS,
+                "the daily limit",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"rules.budget_by_weekday[i]\"",
+                MAX_BUDGET_MINS,
+                "a per-weekday limit",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"row.mins\"",
+                MAX_BUDGET_MINS,
+                "a per-app limit",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"g.limit_mins\"",
+                MAX_BUDGET_MINS,
+                "an app-group limit",
             ),
             (
                 "ask.html",
@@ -341,7 +390,7 @@ mod tests {
             let html = strip_html_comments(page);
             for tag in html.split("<input").skip(1) {
                 let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
-                if !tag.contains("min=\"1\"") {
+                if !tag.contains("type=\"number\"") {
                     continue;
                 }
                 seen += 1;
@@ -350,9 +399,10 @@ mod tests {
                     .find(|(p, marker, _, _)| *p == name && tag.contains(marker))
                 else {
                     panic!(
-                        "{name} carries a `min=\"1\"` minutes input this test does not recognise, \
-                         so nothing is checking it against a server limit. Add it to the table \
-                         with the constant its endpoint enforces:\n{tag}"
+                        "{name} carries a `type=\"number\"` input this test does not recognise, so \
+                         nothing is checking it against a server limit. Add it to the table with \
+                         the constant its endpoint enforces — and if it has no server limit, that \
+                         is the thing to fix, not this test:\n{tag}"
                     );
                 };
                 assert!(
