@@ -24,6 +24,7 @@
 //!     GET  /api/screentime
 //!     GET  /api/export
 //!     POST /api/re-anchor
+//!     POST /api/language
 //!     POST /api/extra-time
 //!     GET  POST /api/rules
 //!     GET  POST /api/routines
@@ -75,6 +76,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/screentime", get(api::screentime))
         .route("/export", get(api::export))
         .route("/re-anchor", post(api::re_anchor))
+        .route("/language", post(api::set_language))
         .route("/extra-time", post(api::extra_time))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/routines", get(api::list_routines).post(api::save_routine))

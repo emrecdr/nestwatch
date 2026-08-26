@@ -26,7 +26,7 @@ use chrono::{Datelike, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::Config;
+use crate::config::{Config, Language};
 use crate::control::{ControlError, RunningProcess, SystemControl};
 use crate::countdown::Countdown;
 use crate::curfew::{MAX_WARN_SECS, default_warn_secs};
@@ -977,9 +977,13 @@ pub async fn run_rules_enforcer(
         // wipes the tally, so it needs a monotonic sanity check, not just a trusted clock.
         let today = enforcer.accounting_day(crate::config::today(), now);
         // Snapshot the config under the lock, then drop the guard before any await.
-        let (rules, extra) = {
+        let (rules, extra, lang) = {
             let guard = crate::state::recover_read(&config);
-            (guard.rules.clone(), guard.extra.for_day(today))
+            (
+                guard.rules.clone(),
+                guard.extra.for_day(today),
+                guard.language,
+            )
         };
 
         if !rules.any_configured() {
@@ -1182,19 +1186,13 @@ pub async fn run_rules_enforcer(
                 }
                 RuleAction::Warn => has_warn = true,
                 RuleAction::LockWarning => {
-                    notify_child(
-                        &control,
-                        &format!(
-                            "Screen time is up. This computer will lock in {} seconds.",
-                            rules.warn_secs
-                        ),
-                    )
-                    .await;
+                    notify_child(&control, &lock_warning_message(rules.warn_secs, lang), lang)
+                        .await;
                 }
                 RuleAction::TimeWarning(mins) => {
                     // Record the heads-up only if the OS actually took the message. A countdown
                     // the child never saw must not look, in the history, like one they did.
-                    if notify_child(&control, &budget_countdown_message(mins)).await {
+                    if notify_child(&control, &budget_countdown_message(mins, lang), lang).await {
                         usage_log.record(
                             "budget_countdown",
                             serde_json::json!({
@@ -1213,7 +1211,7 @@ pub async fn run_rules_enforcer(
         // already shows Windows' own countdown, so it isn't doubled up.) Checked before the
         // `log_transition` calls below, which flip `warning`.
         if has_warn && !warning {
-            notify_child(&control, "You've reached today's screen-time limit.").await;
+            notify_child(&control, limit_reached_message(lang), lang).await;
         }
 
         // Log budget events once per episode (on the transition into enforcement).
@@ -1360,18 +1358,45 @@ async fn maybe_abort_budget_shutdown(
 /// pass the body. Returns whether the OS took the message — see [`crate::control::notify`]; the
 /// countdown checks it before recording, the at-zero warnings don't (their history rows already
 /// record the enforcement action itself, which is the thing that matters).
-async fn notify_child(control: &Arc<dyn SystemControl>, body: &str) -> bool {
-    crate::control::notify(control, "Screen time", body).await
+async fn notify_child(control: &Arc<dyn SystemControl>, body: &str, lang: Language) -> bool {
+    let title = match lang {
+        Language::En => "Screen time",
+        Language::Nl => "Schermtijd",
+    };
+    crate::control::notify(control, title, body).await
+}
+
+/// "The machine is about to lock", with its countdown. Child-facing.
+fn lock_warning_message(secs: u32, lang: Language) -> String {
+    match lang {
+        Language::En => format!("Screen time is up. This computer will lock in {secs} seconds."),
+        Language::Nl => {
+            format!("Je schermtijd is op. Deze computer gaat over {secs} seconden op slot.")
+        }
+    }
+}
+
+/// "You are out of time", shown once when the budget runs out. Child-facing.
+fn limit_reached_message(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "You've reached today's screen-time limit.",
+        Language::Nl => "Je hebt je schermtijd voor vandaag opgebruikt.",
+    }
 }
 
 /// What the child is told at each remaining-time threshold. `mins` is one of
 /// [`crate::countdown::WARN_AT_MINS`]; the catch-all keeps the wording sane if that list ever
 /// changes, and sidesteps pluralising "1 minute" by naming the singular case outright.
-fn budget_countdown_message(mins: u32) -> String {
-    match mins {
-        1 => "1 minute of screen time left!".to_string(),
-        5 => "5 minutes of screen time left — good time to save.".to_string(),
-        m => format!("{m} minutes of screen time left today."),
+fn budget_countdown_message(mins: u32, lang: Language) -> String {
+    match (lang, mins) {
+        (Language::En, 1) => "1 minute of screen time left!".to_string(),
+        (Language::En, 5) => "5 minutes of screen time left — good time to save.".to_string(),
+        (Language::En, m) => format!("{m} minutes of screen time left today."),
+        // See the note in `curfew::bedtime_message`: the 1/5/rest shape survives into Dutch
+        // because minuut/minuten splits where minute/minutes does.
+        (Language::Nl, 1) => "Nog 1 minuut schermtijd!".to_string(),
+        (Language::Nl, 5) => "Nog 5 minuten schermtijd — sla je werk even op.".to_string(),
+        (Language::Nl, m) => format!("Nog {m} minuten schermtijd vandaag."),
     }
 }
 
@@ -2254,15 +2279,20 @@ mod tests {
     #[test]
     fn budget_countdown_messages_read_naturally_at_every_threshold() {
         for m in crate::countdown::WARN_AT_MINS {
-            let msg = budget_countdown_message(m);
-            assert!(
-                msg.contains(&m.to_string()),
-                "{msg} should name the minutes"
-            );
-            assert!(
-                !msg.contains("1 minutes"),
-                "singular must not be pluralised: {msg}"
-            );
+            // Both languages, because a translation that pluralises "1 minuten" is exactly the
+            // trap the singular arms exist to avoid, and English passing says nothing about Dutch.
+            for lang in [Language::En, Language::Nl] {
+                let msg = budget_countdown_message(m, lang);
+                assert!(
+                    msg.contains(&m.to_string()),
+                    "{msg} should name the minutes"
+                );
+                assert!(
+                    !msg.contains("1 minutes") && !msg.contains("1 minuten"),
+                    "singular must not be pluralised ({lang:?}): {msg}"
+                );
+                assert!(!msg.is_empty(), "{lang:?} must have a string for {m}");
+            }
         }
     }
 

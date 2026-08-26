@@ -246,3 +246,79 @@ async fn re_anchoring_records_the_machine_s_current_zone_and_says_so_in_the_log(
         "the line must say what it moved to, not merely that it moved"
     );
 }
+
+// --- The child's language ----------------------------------------------------------------
+
+/// The parent chooses what the child is told, in every sense — including which language.
+#[tokio::test]
+async fn only_the_parent_can_change_the_child_s_language() {
+    let app = common::test_app();
+
+    let res = common::post_json(&app, "/api/language", None, json!({ "language": "nl" })).await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // The child's own router must not expose it under any shorter path either.
+    let res = common::post_json(&app, "/language", None, json!({ "language": "nl" })).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn setting_the_language_changes_what_the_child_s_page_is_told_to_render() {
+    let app = common::test_app();
+    let cookie = login(&app, PASSWORD).await.expect("login");
+
+    // Default is English, so an install that never touches this behaves as it always did.
+    let body = body_json(get(&app, "/status", None).await).await;
+    assert_eq!(body["language"], json!("en"));
+
+    let res = common::post_json(
+        &app,
+        "/api/language",
+        Some(&cookie),
+        json!({ "language": "nl" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = body_json(get(&app, "/status", None).await).await;
+    assert_eq!(
+        body["language"],
+        json!("nl"),
+        "the child's page reads this to decide which strings to show"
+    );
+}
+
+/// Rejecting rather than falling back matters: a silent fallback to English is indistinguishable
+/// from the setting not having saved, and the parent would have no way to tell which happened.
+#[tokio::test]
+async fn a_language_this_build_cannot_speak_is_refused_and_says_which_it_can() {
+    let app = common::test_app();
+    let cookie = login(&app, PASSWORD).await.expect("login");
+
+    for tag in ["de", "", "nl-BE", "EN"] {
+        let res = common::post_json(
+            &app,
+            "/api/language",
+            Some(&cookie),
+            json!({ "language": tag }),
+        )
+        .await;
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "{tag:?} has no strings in this build and must be refused, not silently ignored"
+        );
+        let msg = body_json(res).await["error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            msg.contains("en") && msg.contains("nl"),
+            "say what this build can speak: {msg:?}"
+        );
+    }
+
+    // …and nothing changed.
+    let body = body_json(get(&app, "/status", None).await).await;
+    assert_eq!(body["language"], json!("en"));
+}

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
-    <title>Your screen time</title>
+    <title data-i18n="title">Your screen time</title>
     <link rel="stylesheet" href="/app.css" />
     <!-- Deferred, so it runs after the markup it reads with getElementById, exactly as it did
          when it sat at the end of <body>. -->
@@ -15,30 +15,30 @@
       <div class="card w-full max-w-sm bg-base-100 shadow-xl">
         <!-- Today: answers "how much time do I have?" without asking a parent. -->
         <div class="card-body items-center pb-3 text-center">
-          <h1 class="card-title text-xl">Your screen time</h1>
+          <h1 data-i18n="title" class="card-title text-xl">Your screen time</h1>
           <div id="today" aria-live="polite" aria-atomic="true" class="w-full">
-            <p class="text-sm opacity-70">Checking…</p>
+            <p data-i18n="checking" class="text-sm opacity-70">Checking…</p>
           </div>
         </div>
 
-        <div class="divider my-0">need more?</div>
+        <div data-i18n="needMore" class="divider my-0">need more?</div>
 
         <form class="card-body pt-2" id="form" aria-labelledby="askHeading">
-          <h2 id="askHeading" class="text-center text-base font-semibold">Ask for more time</h2>
-          <p class="text-center text-sm opacity-70">Your request goes to a parent to approve.</p>
+          <h2 id="askHeading" data-i18n="askHeading" class="text-center text-base font-semibold">Ask for more time</h2>
+          <p data-i18n="askBlurb" class="text-center text-sm opacity-70">Your request goes to a parent to approve.</p>
 
           <label class="flex flex-col mt-2">
-            <span class="text-sm mb-1">Minutes</span>
+            <span data-i18n="minutes" class="text-sm mb-1">Minutes</span>
             <input id="minutes" type="number" min="1" max="240" value="30"
                    class="input" />
           </label>
           <label class="flex flex-col mt-1">
-            <span class="text-sm mb-1">Why? (optional)</span>
-            <input id="reason" type="text" maxlength="200" placeholder="finished my homework"
+            <span data-i18n="why" class="text-sm mb-1">Why? (optional)</span>
+            <input id="reason" type="text" maxlength="200" placeholder="finished my homework" data-i18n-placeholder="whyHint"
                    class="input" />
           </label>
 
-          <button id="btn" type="submit" class="btn btn-primary mt-2">Send request</button>
+          <button id="btn" data-i18n="send" type="submit" class="btn btn-primary mt-2">Send request</button>
           <p id="msg" role="alert" aria-live="assertive" aria-atomic="true"
              class="mt-1 text-center text-sm"></p>
           <!-- What happened to the last request. Separate from #msg, which reports only what this
@@ -49,18 +49,18 @@
              class="mt-1 text-center text-sm"></p>
         </form>
 
-        <div class="divider my-0">or</div>
+        <div data-i18n="or" class="divider my-0">or</div>
 
         <form class="card-body pt-2" id="codeForm" aria-labelledby="codeHeading">
-          <h2 id="codeHeading" class="text-center text-base font-semibold">Have a code?</h2>
-          <p class="text-center text-sm opacity-70">Enter a time code to add minutes now.</p>
+          <h2 id="codeHeading" data-i18n="codeHeading" class="text-center text-base font-semibold">Have a code?</h2>
+          <p data-i18n="codeBlurb" class="text-center text-sm opacity-70">Enter a time code to add minutes now.</p>
           <label class="flex flex-col mt-1">
-            <span class="text-sm mb-1">Time code</span>
+            <span data-i18n="codeLabel" class="text-sm mb-1">Time code</span>
             <input id="code" type="text" maxlength="12" autocomplete="off"
                    inputmode="latin" autocapitalize="characters" spellcheck="false"
                    placeholder="A1B2C3" class="input uppercase tracking-widest" />
           </label>
-          <button id="codeBtn" type="submit" class="btn btn-secondary mt-2">Redeem</button>
+          <button id="codeBtn" data-i18n="redeem" type="submit" class="btn btn-secondary mt-2">Redeem</button>
           <p id="codeMsg" role="alert" aria-live="assertive" aria-atomic="true"
              class="mt-1 text-center text-sm"></p>
         </form>
@@ -70,8 +70,9 @@
              not addresses specifically so it cannot rebuild a browsing history, and declines to
              read browser history at all as disproportionate. A tool that careful about what it
              should not know is a strange one to have a silent camera in. -->
-        <aside aria-label="What this tool can see" class="px-6 pb-5 text-center text-xs">
-          <p>
+        <aside data-i18n-label="disclosureLabel" aria-label="What this tool can see"
+               class="px-6 pb-5 text-center text-xs">
+          <p data-i18n="disclosure">
             A parent set this up and can see this screen, which apps you use, and how long for.
             Windows puts a yellow border around the screen while it is being looked at.
           </p>

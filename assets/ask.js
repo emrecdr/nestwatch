@@ -1,3 +1,100 @@
+// --- Language --------------------------------------------------------
+// The page ships English in the markup and swaps it here when the parent has chosen otherwise, so
+// a browser with JS disabled still shows something readable rather than empty elements. `/status`
+// carries the choice; `Accept-Language` deliberately does not decide it, because that is set in
+// the child's own browser and the child does not choose the language of the notice explaining what
+// is being watched.
+//
+// Keys match `data-i18n` in ask.html. `nl` must answer every key `en` does — the test at the
+// bottom of web/test/app.test.js holds the two tables to the same shape, because a missing key
+// would silently leave one English sentence in an otherwise Dutch page.
+const STRINGS = {
+  en: null, // the markup is already English; nothing to swap
+  nl: {
+    title: "Jouw schermtijd",
+    checking: "Even kijken\u2026",
+    needMore: "meer nodig?",
+    askHeading: "Vraag om meer tijd",
+    askBlurb: "Je verzoek gaat naar je ouder.",
+    minutes: "Minuten",
+    why: "Waarom? (niet verplicht)",
+    whyHint: "mijn huiswerk is af",
+    send: "Verstuur verzoek",
+    or: "of",
+    codeHeading: "Heb je een code?",
+    codeBlurb: "Voer een tijdcode in om nu minuten toe te voegen.",
+    codeLabel: "Tijdcode",
+    redeem: "Inwisselen",
+    disclosureLabel: "Wat dit programma kan zien",
+    disclosure:
+      "Een ouder heeft dit ingesteld en kan dit scherm zien, welke apps je gebruikt en hoe lang. " +
+      "Windows zet een gele rand om het scherm terwijl er gekeken wordt.",
+
+    // Strings this script builds rather than swaps.
+    noLimit: "Vandaag geen tijdslimiet \u{1F389}",
+    minuteLeft: "minuut over vandaag",
+    minutesLeft: "minuten over vandaag",
+    usedOf: (used, budget) => `${used} van ${budget} min gebruikt`,
+    usedAria: (used, budget) => `${used} van ${budget} minuten vandaag gebruikt`,
+    cantCheck: "Kan je tijd nu niet ophalen.",
+    sent: "Verstuurd \u2014 je ouder krijgt bericht.",
+    tooMany: "Te veel verzoeken \u2014 wacht even en probeer het opnieuw.",
+    sendFailed: "Versturen mislukt (klopt het aantal minuten?).",
+    noServer: "Geen verbinding met de server.",
+    approved: (n) => `Je ouder zei ja tegen ${n} extra minuten.`,
+    denied: "Je ouder zei deze keer nee.",
+    codeNoLimit: "Code geaccepteerd \u2014 maar vandaag geldt er toch geen limiet.",
+    codeAdded: (n) => `${n} minuten toegevoegd!`,
+    codeTooMany: "Te veel pogingen \u2014 wacht even en probeer het opnieuw.",
+    codeInvalid: "Die code klopt niet.",
+  },
+};
+
+// English lives in the markup, so this is only ever consulted for another language.
+const EN = {
+  noLimit: "No time limit today \u{1F389}",
+  minuteLeft: "minute left today",
+  minutesLeft: "minutes left today",
+  usedOf: (used, budget) => `used ${used} of ${budget} min`,
+  usedAria: (used, budget) => `${used} of ${budget} minutes used today`,
+  cantCheck: "Couldn't check your time right now.",
+  sent: "Sent \u2014 waiting for a parent to reply.",
+  tooMany: "Too many requests \u2014 wait a bit and try again.",
+  sendFailed: "Couldn't send (check the minutes).",
+  noServer: "Couldn't reach the server.",
+  approved: (n) => `A parent said yes to ${n} more minutes.`,
+  denied: "A parent said no this time.",
+  codeNoLimit: "Code accepted \u2014 but there's no limit today anyway.",
+  codeAdded: (n) => `Added ${n} minutes!`,
+  codeTooMany: "Too many tries \u2014 wait a bit and try again.",
+  codeInvalid: "That code isn't valid.",
+};
+
+let strings = EN;
+
+// Swap the markup once, the first time /status names a language other than the one already shown.
+let appliedLang = "en";
+function applyLanguage(tag) {
+  if (!tag || tag === appliedLang) return;
+  const table = STRINGS[tag];
+  if (!table) return; // unknown tag: leave the English markup rather than blanking it
+  appliedLang = tag;
+  strings = table;
+  document.documentElement.lang = tag;
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    const v = table[el.dataset.i18n];
+    if (typeof v === "string") el.textContent = v;
+  }
+  for (const el of document.querySelectorAll("[data-i18n-placeholder]")) {
+    const v = table[el.dataset.i18nPlaceholder];
+    if (typeof v === "string") el.placeholder = v;
+  }
+  for (const el of document.querySelectorAll("[data-i18n-label]")) {
+    const v = table[el.dataset.i18nLabel];
+    if (typeof v === "string") el.setAttribute("aria-label", v);
+  }
+}
+
 // --- Today -----------------------------------------------------------
 // Knowing how much time is left is the question that otherwise gets asked out loud, so
 // it's the first thing on the page. /status is deliberately narrow: totals only, never
@@ -30,8 +127,8 @@ function showOutcome(request) {
   }
   const approved = state === "approved";
   outcomeEl.textContent = approved
-    ? `A parent said yes to ${request.minutes} more minutes.`
-    : "A parent said no this time.";
+    ? strings.approved(request.minutes)
+    : strings.denied;
   // Not styled as an error: a denial is a normal answer to a fair question, and colouring it red
   // makes the page look like the child did something wrong by asking.
   outcomeEl.className = `mt-1 text-center text-sm ${approved ? "text-success" : "opacity-70"}`;
@@ -46,13 +143,14 @@ async function loadStatus() {
     limitedToday = !!s.limited;
     // Rendered before the early return below: a pending request still has an answer worth
     // showing on a day that has no minute limit at all.
+    applyLanguage(s.language);
     showOutcome(s.request);
     todayEl.innerHTML = "";
 
     if (!s.limited) {
       const p = document.createElement("p");
       p.className = "py-2 text-lg font-semibold text-success";
-      p.textContent = "No time limit today \u{1F389}";
+      p.textContent = strings.noLimit;
       todayEl.append(p);
       return;
     }
@@ -63,7 +161,7 @@ async function loadStatus() {
     const unit = document.createElement("p");
     unit.className = "text-sm opacity-70";
     unit.textContent =
-      s.remaining_mins === 1 ? "minute left today" : "minutes left today";
+      s.remaining_mins === 1 ? strings.minuteLeft : strings.minutesLeft;
 
     const bar = document.createElement("progress");
     bar.className = "progress progress-primary mt-3 w-full";
@@ -71,12 +169,12 @@ async function loadStatus() {
     bar.value = Math.min(s.used_mins, s.budget_mins);
     bar.setAttribute(
       "aria-label",
-      `${s.used_mins} of ${s.budget_mins} minutes used today`,
+      strings.usedAria(s.used_mins, s.budget_mins),
     );
 
     const detail = document.createElement("p");
     detail.className = "mt-1 text-xs opacity-60";
-    detail.textContent = `used ${s.used_mins} of ${s.budget_mins} min`;
+    detail.textContent = strings.usedOf(s.used_mins, s.budget_mins);
 
     todayEl.append(left, unit, bar, detail);
   } catch {
@@ -84,7 +182,7 @@ async function loadStatus() {
     todayEl.innerHTML = "";
     const p = document.createElement("p");
     p.className = "text-sm opacity-70";
-    p.textContent = "Couldn't check your time right now.";
+    p.textContent = strings.cantCheck;
     todayEl.append(p);
   }
 }
@@ -116,19 +214,19 @@ form.addEventListener("submit", async (e) => {
       body: JSON.stringify({ minutes, reason }),
     });
     if (r.ok) {
-      setMsg(msg, "Sent — waiting for a parent to reply.", true);
+      setMsg(msg, strings.sent, true);
       form.reset();
       // Clear any previous answer straight away rather than at the next poll: leaving "a parent
       // said no this time" on screen underneath "sent, waiting for a reply" reads as a refusal of
       // the request just made.
       loadStatus();
     } else if (r.status === 429) {
-      setMsg(msg, "Too many requests — wait a bit and try again.");
+      setMsg(msg, strings.tooMany);
     } else {
-      setMsg(msg, "Couldn't send (check the minutes).");
+      setMsg(msg, strings.sendFailed);
     }
   } catch {
-    setMsg(msg, "Couldn't reach the server.");
+    setMsg(msg, strings.noServer);
   } finally {
     btn.disabled = false;
   }
@@ -157,19 +255,19 @@ codeForm.addEventListener("submit", async (e) => {
       setMsg(
         codeMsg,
         limitedToday === false
-          ? "Code accepted — but there's no limit today anyway."
-          : `Added ${j.minutes} minutes!`,
+          ? strings.codeNoLimit
+          : strings.codeAdded(j.minutes),
         true,
       );
       codeForm.reset();
       loadStatus();
     } else if (r.status === 429) {
-      setMsg(codeMsg, "Too many tries — wait a bit and try again.");
+      setMsg(codeMsg, strings.codeTooMany);
     } else {
-      setMsg(codeMsg, "That code isn't valid.");
+      setMsg(codeMsg, strings.codeInvalid);
     }
   } catch {
-    setMsg(codeMsg, "Couldn't reach the server.");
+    setMsg(codeMsg, strings.noServer);
   } finally {
     codeBtn.disabled = false;
   }

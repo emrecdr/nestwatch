@@ -109,12 +109,63 @@ pub struct Config {
     /// offset tolerance alone (the old behaviour) rather than guessing.
     #[serde(default)]
     pub tz_zone: Option<String>,
+    /// Which language the child's own surfaces speak — `/ask` and the desktop countdown warnings.
+    /// The dashboard stays English. Defaults to English, so an install that never sets it behaves
+    /// exactly as it always did.
+    #[serde(default)]
+    pub language: Language,
     /// The addresses baked into the current certificate as SANs. Lets `install` tell "the cert
     /// still covers this machine" (reuse it, keeping the fingerprint stable) from "the LAN address
     /// changed" (reissue, because otherwise the browser adds a name-mismatch error on top of the
     /// expected trust warning). Empty on configs written before this existed.
     #[serde(default)]
     pub cert_sans: Vec<String>,
+}
+
+/// Which language the **child's** surfaces speak.
+///
+/// # Why this is a setting and not detected
+///
+/// This is the first presentation setting in a `Config` that is otherwise entirely enforcement and
+/// infrastructure, so it is worth saying why it earns the place rather than being derived.
+///
+/// The obvious alternative is to read `Accept-Language` for the web page and the Windows UI
+/// language for the desktop warnings, which would need no setting at all. It is wrong here for a
+/// reason specific to this product: `Accept-Language` is set in the child's own browser. The most
+/// important sentence on `/ask` is the one telling the child what is being watched, and letting the
+/// person being watched choose the language of their own disclosure notice gets the ownership
+/// exactly backwards. The parent configures what the child is told, the same way they configure
+/// everything else here.
+///
+/// Deliberately an enum and not a free string. A locale this build has no strings for would fall
+/// back silently to English, which looks identical to the setting not having been saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    /// The default, and what every install had before this existed.
+    #[default]
+    En,
+    Nl,
+}
+
+impl Language {
+    /// The BCP-47 tag, for `<html lang>` and for the client's string table.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Language::En => "en",
+            Language::Nl => "nl",
+        }
+    }
+
+    /// Parse a tag from the API. `None` for anything this build has no strings for — the caller
+    /// rejects it rather than quietly serving English.
+    pub fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "en" => Some(Language::En),
+            "nl" => Some(Language::Nl),
+            _ => None,
+        }
+    }
 }
 
 /// Resolved on-disk locations, derived from [`data_dir`].

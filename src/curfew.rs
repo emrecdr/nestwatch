@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Datelike, FixedOffset, NaiveTime, TimeDelta, Weekday};
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+use crate::config::{Config, Language};
 use crate::control::SystemControl;
 use crate::countdown::{Countdown, LOOKAHEAD_MINS};
 
@@ -333,7 +333,7 @@ pub async fn run_enforcer(
     loop {
         crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Curfew).await;
 
-        let (active, warn_secs, upcoming) = {
+        let (active, warn_secs, upcoming, lang) = {
             let guard = crate::state::recover_read(&config);
             let curfew = &guard.curfew;
             // One clock reading for both questions, so "is it bedtime?" and "how soon?" can't
@@ -347,7 +347,7 @@ pub async fn run_enforcer(
             } else {
                 Upcoming::In(curfew.mins_until_active(now))
             };
-            (active, curfew.warn_secs, upcoming)
+            (active, curfew.warn_secs, upcoming, guard.language)
         };
         let warn = Duration::from_secs(warn_secs as u64);
 
@@ -359,7 +359,8 @@ pub async fn run_enforcer(
         // Advance heads-up before the window opens, so the shutdown dialog isn't the first
         // the child hears of bedtime.
         if let Some(mins) = warning
-            && crate::control::notify(&control, "Bedtime", &bedtime_message(mins)).await
+            && crate::control::notify(&control, bedtime_title(lang), &bedtime_message(mins, lang))
+                .await
         {
             // Recorded only on delivery — see the same reasoning in `rules`.
             usage_log.record(
@@ -414,11 +415,25 @@ pub async fn run_enforcer(
 
 /// What the child is told as bedtime approaches. `mins` is one of
 /// [`crate::countdown::WARN_AT_MINS`]; mirrors `rules::budget_countdown_message`.
-fn bedtime_message(mins: u32) -> String {
-    match mins {
-        1 => "Bedtime in 1 minute!".to_string(),
-        5 => "Bedtime in 5 minutes — good time to save.".to_string(),
-        m => format!("Bedtime in {m} minutes."),
+fn bedtime_message(mins: u32, lang: Language) -> String {
+    match (lang, mins) {
+        (Language::En, 1) => "Bedtime in 1 minute!".to_string(),
+        (Language::En, 5) => "Bedtime in 5 minutes — good time to save.".to_string(),
+        (Language::En, m) => format!("Bedtime in {m} minutes."),
+        // Dutch splits singular/plural at the same place English does (minuut/minuten), so the
+        // shape of the match carries over. That is luck, not a rule — a language that pluralises
+        // differently needs its own arms rather than a translated catch-all.
+        (Language::Nl, 1) => "Over 1 minuut is het bedtijd!".to_string(),
+        (Language::Nl, 5) => "Over 5 minuten is het bedtijd — sla je werk even op.".to_string(),
+        (Language::Nl, m) => format!("Over {m} minuten is het bedtijd."),
+    }
+}
+
+/// The notification title beside [`bedtime_message`].
+fn bedtime_title(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "Bedtime",
+        Language::Nl => "Bedtijd",
     }
 }
 
@@ -704,15 +719,20 @@ mod tests {
     #[test]
     fn bedtime_messages_read_naturally_at_every_threshold() {
         for &m in &crate::countdown::WARN_AT_MINS {
-            let msg = bedtime_message(m);
-            assert!(
-                msg.contains(&m.to_string()),
-                "{msg} should name the minutes"
-            );
-            assert!(
-                !msg.contains("1 minutes"),
-                "singular must not be pluralised: {msg}"
-            );
+            // Both languages, because a translation that pluralises "1 minuten" is exactly the
+            // trap the singular arms exist to avoid, and English passing says nothing about Dutch.
+            for lang in [Language::En, Language::Nl] {
+                let msg = bedtime_message(m, lang);
+                assert!(
+                    msg.contains(&m.to_string()),
+                    "{msg} should name the minutes"
+                );
+                assert!(
+                    !msg.contains("1 minutes") && !msg.contains("1 minuten"),
+                    "singular must not be pluralised ({lang:?}): {msg}"
+                );
+                assert!(!msg.is_empty(), "{lang:?} must have a string for {m}");
+            }
         }
     }
 

@@ -256,6 +256,33 @@ pub async fn screentime(
     Ok(Json(report))
 }
 
+#[derive(Deserialize)]
+pub struct LanguageBody {
+    language: String,
+}
+
+/// `POST /api/language` → set the language the **child's** surfaces speak.
+///
+/// Parent-authenticated for the reason in [`crate::config::Language`]: the child does not choose
+/// the language of their own disclosure notice. Rejects a tag this build has no strings for rather
+/// than falling back to English, which would look identical to the setting not having saved.
+pub async fn set_language(
+    State(state): State<AppState>,
+    Json(body): Json<LanguageBody>,
+) -> Result<Json<Value>, AppError> {
+    let Some(language) = crate::config::Language::from_tag(&body.language) else {
+        return Err(AppError::BadRequest(format!(
+            "unsupported language {:?} — this build has strings for: en, nl",
+            body.language
+        )));
+    };
+    update_config(&state, move |c| c.language = language).await?;
+    state
+        .audit
+        .record("language_changed", json!({ "language": language.tag() }));
+    Ok(Json(json!({ "ok": true, "language": language.tag() })))
+}
+
 /// `POST /api/re-anchor` → re-record the trusted clock against this machine's *current* time zone.
 ///
 /// # Why this is a route and not a CLI command
@@ -489,12 +516,13 @@ pub async fn child_status(
     let today = crate::config::today();
     // Only the two numbers, computed under the guard — cloning `Rules` here would deep-copy the
     // blocklist, app limits and groups just to read a budget off them.
-    let (enabled, budget) = {
+    let (enabled, budget, language) = {
         let cfg = crate::state::recover_read(&state.config);
         let extra = cfg.extra.for_day(today);
         (
             cfg.rules.enabled,
             cfg.rules.effective_budget_mins(today, extra),
+            cfg.language,
         )
     };
     let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
@@ -521,6 +549,10 @@ pub async fn child_status(
         // it, so it needs deciding rather than slipping in beside an unrelated fix. The child is
         // still warned — the enforcer puts a countdown on their desktop at 15, 5 and 1 minutes.
         "request": state.time_requests.latest(),
+        // Which strings this page should render. Not negotiated from `Accept-Language`: that is set
+        // in the child's own browser, and the child does not get to choose the language of the
+        // notice telling them what is being watched.
+        "language": language.tag(),
     })))
 }
 
