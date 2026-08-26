@@ -219,6 +219,51 @@ mod tests {
         );
     }
 
+    /// The child's page keeps its accessible names and atomic live regions.
+    ///
+    /// # Why this one page and not both
+    ///
+    /// Scoped deliberately, and the scope is the finding. `index.html` would fail both halves today
+    /// — three forms with no accessible name, and five `aria-live` regions of which three are
+    /// atomic — so a page-agnostic guard could only exist with a standing exemption for the larger
+    /// page, which is the shape this project already dislikes.
+    ///
+    /// The asymmetry is also real rather than convenient. A parent who cannot use the dashboard has
+    /// a phone, a laptop and the `doctor` command; the child has this page and nothing else, and it
+    /// is the surface that tells them how much time they have and carries the disclosure about what
+    /// is being watched. If only one page is held to this, it is this one.
+    ///
+    /// `aria-atomic` matters here specifically because every one of these regions is rewritten
+    /// wholesale — "23 minutes left today" becomes "22 minutes left today" — and without it a
+    /// screen reader may announce only the changed fragment, which is the number stripped of what
+    /// it counts.
+    #[test]
+    fn the_childs_page_keeps_its_accessible_names_and_atomic_live_regions() {
+        let page = strip_html_comments(include_str!("../assets/ask.html"));
+
+        for (at, _) in page.match_indices("<form") {
+            let tag_end = page[at..].find('>').expect("unterminated <form>") + at;
+            let tag = &page[at..tag_end];
+            assert!(
+                tag.contains("aria-labelledby=") || tag.contains("aria-label="),
+                "a form on the child's page has no accessible name, so a screen reader announces \
+                 only \"form\": {tag}"
+            );
+        }
+
+        let live = page.matches("aria-live=").count();
+        let atomic = page.matches("aria-atomic=").count();
+        assert!(
+            live > 0,
+            "the time-remaining region must stay a live region — it is the whole point of the page"
+        );
+        assert_eq!(
+            live, atomic,
+            "every live region here is rewritten whole, so each needs aria-atomic; found {live} \
+             live and {atomic} atomic"
+        );
+    }
+
     /// No inline `<script>` on any served page.
     ///
     /// `security::CSP` dropped `'unsafe-inline'` from `script-src` once both pages moved their

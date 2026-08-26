@@ -16,15 +16,15 @@
         <!-- Today: answers "how much time do I have?" without asking a parent. -->
         <div class="card-body items-center pb-3 text-center">
           <h1 class="card-title text-xl">Your screen time</h1>
-          <div id="today" aria-live="polite" class="w-full">
+          <div id="today" aria-live="polite" aria-atomic="true" class="w-full">
             <p class="text-sm opacity-70">Checking…</p>
           </div>
         </div>
 
         <div class="divider my-0">need more?</div>
 
-        <form class="card-body pt-2" id="form">
-          <h2 class="text-center text-base font-semibold">Ask for more time</h2>
+        <form class="card-body pt-2" id="form" aria-labelledby="askHeading">
+          <h2 id="askHeading" class="text-center text-base font-semibold">Ask for more time</h2>
           <p class="text-center text-sm opacity-70">Your request goes to a parent to approve.</p>
 
           <label class="flex flex-col mt-2">
@@ -39,18 +39,20 @@
           </label>
 
           <button id="btn" type="submit" class="btn btn-primary mt-2">Send request</button>
-          <p id="msg" role="alert" class="mt-1 text-center text-sm"></p>
+          <p id="msg" role="alert" aria-live="assertive" aria-atomic="true"
+             class="mt-1 text-center text-sm"></p>
           <!-- What happened to the last request. Separate from #msg, which reports only what this
                page just did: #msg is cleared by the next action, and the answer may arrive minutes
                later. `aria-live` so the outcome is announced when it changes rather than only being
                there for whoever happens to look. -->
-          <p id="outcome" aria-live="polite" class="mt-1 text-center text-sm"></p>
+          <p id="outcome" aria-live="polite" aria-atomic="true"
+             class="mt-1 text-center text-sm"></p>
         </form>
 
         <div class="divider my-0">or</div>
 
-        <form class="card-body pt-2" id="codeForm">
-          <h2 class="text-center text-base font-semibold">Have a code?</h2>
+        <form class="card-body pt-2" id="codeForm" aria-labelledby="codeHeading">
+          <h2 id="codeHeading" class="text-center text-base font-semibold">Have a code?</h2>
           <p class="text-center text-sm opacity-70">Enter a time code to add minutes now.</p>
           <label class="flex flex-col mt-1">
             <span class="text-sm mb-1">Time code</span>
@@ -59,7 +61,8 @@
                    placeholder="A1B2C3" class="input uppercase tracking-widest" />
           </label>
           <button id="codeBtn" type="submit" class="btn btn-secondary mt-2">Redeem</button>
-          <p id="codeMsg" role="alert" class="mt-1 text-center text-sm"></p>
+          <p id="codeMsg" role="alert" aria-live="assertive" aria-atomic="true"
+             class="mt-1 text-center text-sm"></p>
         </form>
         <!-- What this tool can see, said to the person it watches.
              Not a legal notice and not a warning — one quiet sentence, because the product already
@@ -67,10 +70,12 @@
              not addresses specifically so it cannot rebuild a browsing history, and declines to
              read browser history at all as disproportionate. A tool that careful about what it
              should not know is a strange one to have a silent camera in. -->
-        <p class="px-6 pb-5 text-center text-xs opacity-60">
-          A parent set this up and can see this screen, which apps you use, and how long for.
-          Windows puts a yellow border around the screen while it is being looked at.
-        </p>
+        <aside aria-label="What this tool can see" class="px-6 pb-5 text-center text-xs">
+          <p>
+            A parent set this up and can see this screen, which apps you use, and how long for.
+            Windows puts a yellow border around the screen while it is being looked at.
+          </p>
+        </aside>
       </div>
     </div>
 
