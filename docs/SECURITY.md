@@ -26,6 +26,7 @@ authenticated session*:
 | Kill any app | `POST /api/processes/{pid}/kill` |
 | Lock the screen | `POST /api/lock` |
 | Power off the PC | `POST /api/shutdown` |
+| **Download the whole recorded history** | `GET /api/export` |
 | Read / change the curfew | `GET`·`POST /api/curfew` |
 | Read / change usage rules (budget, blocklist, per-app limits) | `GET`·`POST /api/rules` |
 | Read the access log / usage history | `GET /api/audit`, `GET /api/usage` |
@@ -442,6 +443,30 @@ keylogging this project refuses. They are:
 Neither installs a keyboard hook, and nothing anywhere reads key state. The design reasoning is in
 [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md); this section exists so the answer is also where
 someone checking the privacy claim will look.
+
+## Taking the data off the machine (`GET /api/export`)
+
+The history lives in JSONL inside a data directory `install` ACL-locks to SYSTEM and
+Administrators, which is what stops the child reading it — and, until this endpoint existed, also
+stopped the parent. `uninstall --purge` deletes all of it irreversibly and offered no way to keep a
+copy first.
+
+- **It is the same prize as everything else above**, not a wider one: an authenticated session could
+  already read every day of history through `GET /api/screentime`, one window at a time. This makes
+  it one file instead of many requests. It adds convenience for the attacker who already won, and it
+  changes nothing about who can reach it — same `require_auth`, same LAN gate, same origin check,
+  same `Cache-Control: no-store`.
+- **It is audited**, one line per call. Unlike the capture timer, nothing can reach this in a loop,
+  so a line each is right and cannot evict the log.
+- **It is verbatim.** Rows are returned exactly as stored — duplicate dates preserved, nothing
+  reconciled or filtered. An export that quietly tidies is one you cannot check the tool against,
+  and checking the tool against its own claims is the point of publishing this document.
+- **It cannot recover what rotation already deleted.** There is no retention policy, only rotation:
+  each log keeps two generations of 2 MiB and the older is discarded. That cap is a fact; how many
+  days it buys is a *model* — it depends on how many apps and pages the child uses, since that sets
+  the size of a daily row. Independent estimates put it in the decades for light use and around two
+  to three years for a child hitting the 40-page cap daily, differing by ~40% on assumed name
+  lengths alone. Nothing warns a parent when the oldest days fall off.
 
 ## Outbound connections
 

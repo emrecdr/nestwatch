@@ -256,6 +256,93 @@ pub async fn screentime(
     Ok(Json(report))
 }
 
+/// `GET /api/export` → every screen-time rollup this install holds, as a downloadable file.
+///
+/// # Why this exists
+///
+/// The whole history lives in JSONL under a data directory `install` ACL-locks to SYSTEM and
+/// Administrators. The dashboard renders slices of it and nothing offered it as a file, so for a
+/// product whose thesis is that your data stays yours, "yours" meant "in a directory you need an
+/// admin shell to reach, on a machine you may be replacing". `uninstall --purge` is documented as
+/// irreversible — "every day of recorded screen time" — and had no escape hatch attached.
+///
+/// # Why it is a faithful dump and not the report
+///
+/// [`crate::screentime::build_report`] collapses duplicate dates by preferring the richer row, and
+/// that rule is private to it. Restating it here would put one fact in two places — the defect
+/// class this codebase keeps finding — and the two would drift the first time either changed.
+/// It would also inherit `build_report`'s 365-day clamp and its exclusion of today, both correct
+/// for a chart and both silent data loss in an export.
+///
+/// # What it cannot recover
+///
+/// There is no retention policy here, only rotation, and rotation destroys. `jsonl.rs` renames the
+/// live file to `.1` once it passes 2 MiB and **clobbers any existing `.1`**, so each log keeps two
+/// generations and everything older was deleted at rotation time, silently, long before anyone runs
+/// `--purge`. An export cannot bring that back and must not imply otherwise.
+///
+/// **The 4 MiB across two generations is the fact. How many days that buys is a model.** A daily
+/// row's size is set by how many apps, pages and groups the child used, so the horizon is a
+/// property of the household rather than of the tool. Two independent estimates, from different
+/// assumed name and title lengths, agreed on shape and differed by about 40%:
+///
+/// | a day with | bytes/day | days held |
+/// |---|---|---|
+/// | 2 apps, 1 page | 303–475 | ~8,800–13,800 (decades) |
+/// | 8 apps, 10 pages | 1,114–1,537 | ~2,700–3,800 |
+/// | 40 apps, 40 pages (`MAX_PAGES`) | 4,600–6,101 | ~690–910 (**~2–2.5 yr**) |
+///
+/// Quote it as a range with the assumption named, never as a figure: a parent will otherwise read
+/// "7.5 years" as something the product guarantees.
+///
+/// One asymmetry, and it is narrower than it first looks. `usage.jsonl` carries the rollups among
+/// session starts, stops, locks, warnings and grants, so it rotates far sooner and its copy of a
+/// given day dies first — but `screentime.jsonl` holds nothing but rollups, so this only affects
+/// installs predating that file. It is still why [`crate::screentime::history_rows`] reads both:
+/// for those installs, reading one returns a partial history that looks complete.
+///
+/// So this returns the stored rows verbatim, from the same reader the report uses
+/// ([`crate::screentime::history_rows`], which covers the rotated backup and the legacy
+/// `usage.jsonl`). Duplicate dates are possible and are *preserved deliberately*; the manifest says
+/// so, because an export that quietly reconciles is an export you cannot check the tool against.
+pub async fn export(State(state): State<AppState>) -> Result<Response, AppError> {
+    let screentime = state.screentime.clone();
+    let usage = state.usage.clone();
+    let rollups = spawn(move || crate::screentime::history_rows(&screentime, &usage)).await?;
+
+    // A deliberate parent action against the most complete record this tool holds, and one that
+    // leaves the machine. Few, human-driven, and exactly what the audit log is for — unlike the
+    // capture timer, no path here can reach this in a loop.
+    state
+        .audit
+        .record("export", json!({ "rollups": rollups.len() }));
+
+    let today = crate::config::today();
+    let body = json!({
+        "nestwatch_version": crate::VERSION,
+        "exported_on": today.to_string(),
+        "rollup_count": rollups.len(),
+        // Said in the file rather than only in the docs, because the file is what outlives both.
+        "note": "Daily screen-time rollups exactly as stored, newest first. Rows from an install \
+    that predates screentime.jsonl come from usage.jsonl, so the same date can appear twice; the \
+    dashboard prefers whichever row carries more detail. Nothing here is reconciled or filtered.",
+        "rollups": rollups,
+    });
+
+    let filename = format!("nestwatch-history-{today}.json");
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        Json(body),
+    )
+        .into_response())
+}
+
 #[derive(Deserialize)]
 pub struct ExtraTimeBody {
     minutes: u32,

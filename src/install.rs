@@ -243,6 +243,21 @@ pub fn uninstall() -> Result<()> {
 
     if purge {
         let dir = config::data_paths().dir;
+        // Say what is about to go, and name the one way to have kept it.
+        //
+        // `--purge` is irreversible and asks nothing first. A prompt is not the fix: `uninstall` is
+        // run from scripts and from a remote session, and a blocking question would hang exactly
+        // the case that cannot answer it. What was missing is that the parent had no way to take a
+        // copy at all — the history lives in a directory ACL-locked to SYSTEM and Administrators —
+        // so the warning had nothing to offer them. `GET /api/export` is now that copy, and this
+        // is where a parent finds out it exists, even if only in time for the next machine.
+        println!(
+            "Purging {} — this deletes every day of recorded screen time, the pending time \
+             requests, and the certificate your devices already trust. It cannot be undone.\n\
+             (A copy could have been saved first from the dashboard: GET /api/export while the \
+             service was running.)",
+            dir.display()
+        );
         let removed = std::fs::remove_dir_all(&dir);
         if removed.is_ok() {
             println!("Purged config/cert at {}", dir.display());

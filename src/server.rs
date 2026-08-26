@@ -71,6 +71,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/usage", get(api::usage))
         .route("/usage/today", get(api::usage_today))
         .route("/screentime", get(api::screentime))
+        .route("/export", get(api::export))
         .route("/extra-time", post(api::extra_time))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/routines", get(api::list_routines).post(api::save_routine))
