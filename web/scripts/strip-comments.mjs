@@ -175,12 +175,31 @@ function build() {
     // fifths of a first-party file is not a comment ratio, it is a scanner that has come apart in
     // some way the check above does not model. Re-based from 0.5 rather than deleted, and said out
     // loud rather than quietly, because re-basing a limit your own change pushed against is exactly
-    // the move that deserves scrutiny: the measurement is `app.js` at 49.6%, ~9 comment lines short
+    // the move that deserves scrutiny: the measurement was `app.js` at 49.6%, ~9 comment lines short
     // of failing, in a codebase whose reviewers are told to explain themselves at length.
+    //
+    // That 49.6% is a HISTORICAL reading taken when the re-base was made, not a live one. `app.js`
+    // measures 52.1% today — it has since crossed the old 0.5 floor and would now fail it outright,
+    // which makes the re-base corrective rather than preemptive. Re-measure before quoting it.
+    //
+    // **Audit this margin with `.length`, not `wc -c`.** The comparison below is over UTF-16 code
+    // units; a byte counter answers a different question and inflates BOTH sides of it, so the
+    // reading looks precise, reproduces perfectly, and is wrong — the error is proportional, which
+    // is why it survives review. `assets/app.js` carries 112 non-ASCII characters (103 of them em
+    // dashes, plus … – → ≤ ▲ ▼), each one byte-vs-unit +2, so the two readings differ by exactly
+    // 224: 89,198 bytes against 88,974 units. Three sessions measured this file with `wc -c` before
+    // anyone noticed. The divergence is caused by this project's own prose style, sitting inside
+    // the very comments this scanner counts — an ASCII-only codebase would hide it forever.
+    //
+    // The reliable way to check is to import `stripJs` from this file and measure what it returns.
     if (src.length > 200 && out.length < src.length * 0.2) {
       throw new Error(
-        `strip-comments: ${name} lost ${src.length - out.length} of ${src.length} bytes — over ` +
-          `four fifths. That is not comments. Refusing to build from it.`,
+        // "characters", not "bytes": the figures interpolated here are `.length`, i.e. UTF-16 code
+        // units. This message is the last hop outward — whoever trips this guard reads the error,
+        // not the note above it — and it previously handed them the very unit confusion that note
+        // exists to prevent. On `app.js` the two differ by 224.
+        `strip-comments: ${name} lost ${src.length - out.length} of ${src.length} characters — ` +
+          `over four fifths. That is not comments. Refusing to build from it.`,
       );
     }
     writeFileSync(join(OUT, name), out);
