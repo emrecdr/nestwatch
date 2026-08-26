@@ -186,3 +186,63 @@ async fn exporting_is_recorded_in_the_access_log() {
         "taking the whole history off the machine must be visible in Recent access: {after}"
     );
 }
+
+// --- Re-anchoring the trusted clock ------------------------------------------------------
+//
+// Grouped here rather than in `api.rs` because it shares this file's concern: operations that act
+// on the record itself rather than on the machine.
+
+/// The anchor exists to catch a child moving the time zone, so "parent-authenticated" and "the
+/// child cannot reach it" have to be the same statement. Re-anchoring to a zone the child just
+/// chose would launder the tamper into the trusted state.
+///
+/// Tested from both directions a child actually has: no session at all, and the unauthenticated
+/// child router, which is a different router rather than the same one with a weaker guard.
+#[tokio::test]
+async fn re_anchoring_is_out_of_the_child_s_reach() {
+    let app = common::test_app();
+
+    let res = common::post_json(&app, "/api/re-anchor", None, json!({})).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "without the parent's password this must not move"
+    );
+
+    // The child's surfaces live on the outer router. Nothing there may answer this path.
+    for path in ["/re-anchor", "/status/re-anchor"] {
+        let res = common::post_json(&app, path, None, json!({})).await;
+        assert_eq!(
+            res.status(),
+            StatusCode::NOT_FOUND,
+            "{path} must not exist on the unauthenticated router"
+        );
+    }
+}
+
+#[tokio::test]
+async fn re_anchoring_records_the_machine_s_current_zone_and_says_so_in_the_log() {
+    let audit = common::app_with_audit_file("reanchor-audit");
+    let cookie = login(&audit.app, PASSWORD).await.expect("login");
+
+    let res = common::post_json(&audit.app, "/api/re-anchor", Some(&cookie), json!({})).await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = body_json(res).await;
+    assert_eq!(body["ok"], json!(true));
+    assert_eq!(
+        body["offset_mins"],
+        json!(nestwatch::clock::current_offset_mins()),
+        "it must record what this machine reports now, which is the whole point"
+    );
+
+    let log = std::fs::read_to_string(&audit.path).unwrap_or_default();
+    assert!(
+        log.contains("\"event\":\"clock_reanchored\""),
+        "moving the anchor is exactly the line you want when a curfew misbehaves later: {log}"
+    );
+    assert!(
+        log.contains("to_offset_mins"),
+        "the line must say what it moved to, not merely that it moved"
+    );
+}

@@ -256,6 +256,68 @@ pub async fn screentime(
     Ok(Json(report))
 }
 
+/// `POST /api/re-anchor` → re-record the trusted clock against this machine's *current* time zone.
+///
+/// # Why this is a route and not a CLI command
+///
+/// The anchor and the zone identity are recorded at install, and until now that was the only way to
+/// set them. The README's instruction for a house move is "re-run `install`" — an elevated console,
+/// physically at the child's PC, for a setting that has nothing to do with installing. A parent who
+/// does not know the rule gets something worse than inconvenience: the service keeps enforcing
+/// against the old zone, so the curfew is silently an hour or two out, in the direction the child
+/// benefits from, with nothing on screen saying so.
+///
+/// A CLI command would not have helped. Writing `config.json` needs elevation because the data
+/// directory is ACL-locked, so `nestwatch re-anchor` costs exactly what re-running `install` costs.
+/// The service is already SYSTEM, so asking *it* to re-record needs no elevation at all — only the
+/// session the child cannot obtain.
+///
+/// # Why it is safe to expose
+///
+/// This is the one operation where "the child could reach it" would be fatal, since re-anchoring to
+/// a zone they just chose would launder the tamper into the trusted state. It sits behind
+/// `require_auth` with everything else, so reaching it costs the parent's password; the child's
+/// unauthenticated surfaces are a separate router. It is audited, and it records what it moved from
+/// and to, because "the anchor changed" is exactly the line you want when a curfew starts behaving
+/// oddly a month later.
+pub async fn re_anchor(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let offset = crate::clock::current_offset_mins();
+    let zone = crate::clock::current_zone_identity();
+
+    let (was_offset, was_zone) = {
+        let cfg = crate::state::recover_read(&state.config);
+        (cfg.tz_offset_mins, cfg.tz_zone.clone())
+    };
+
+    let zone_for_cfg = zone.clone();
+    update_config(&state, move |c| {
+        c.tz_offset_mins = Some(offset);
+        c.tz_zone = zone_for_cfg;
+    })
+    .await?;
+
+    // Apply immediately. Without this the enforcers keep the old anchor until the service restarts,
+    // so the parent would press the button, see it succeed, and watch the curfew stay wrong.
+    crate::clock::set_anchor(offset);
+    crate::clock::set_anchor_zone(zone.clone());
+
+    state.audit.record(
+        "clock_reanchored",
+        json!({
+            "from_offset_mins": was_offset,
+            "to_offset_mins": offset,
+            "from_zone": was_zone,
+            "to_zone": zone,
+        }),
+    );
+
+    Ok(Json(json!({
+        "ok": true,
+        "offset_mins": offset,
+        "zone": zone,
+    })))
+}
+
 /// `GET /api/export` → every screen-time rollup this install holds, as a downloadable file.
 ///
 /// # Why this exists

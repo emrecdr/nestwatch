@@ -131,6 +131,63 @@ fn warn(text: impl Into<String>, fix: impl Into<String>) -> Check {
     }
 }
 
+/// What `doctor` should say about the trusted clock, given what was recorded and what the machine
+/// reports now.
+///
+/// Pure and taking both readings as arguments, for the same reason `clock::decide` is: the zone
+/// identity only exists on Windows, so a function that read it itself could not be tested anywhere
+/// this suite runs.
+///
+/// This section exists because nothing reported on the tamper defence at all. `doctor` is what a
+/// parent runs to find out whether the controls are actually working, and the clock is what stops
+/// the two controls that hold — the budget reset and the curfew window — from being moved by a
+/// child with no administrator rights and no prompt. A defence nobody can see the state of is one
+/// nobody can tell has stopped applying.
+fn clock_check(recorded_zone: Option<&str>, current_zone: Option<&str>, anchored: bool) -> Check {
+    const REINSTALL: &str = "Re-run `nestwatch install` from an elevated console. It re-records \
+both,\nand preserves your port, curfew and rules.";
+
+    match (recorded_zone, current_zone) {
+        (Some(recorded), Some(current)) if recorded == current => ok(format!(
+            "clock anchored to this machine's time zone ({recorded})"
+        )),
+        // The one that matters. Either the PC genuinely moved, or someone changed the zone —
+        // and the service is currently ignoring the OS clock because of it, which is correct but
+        // is not a state to leave running silently.
+        (Some(recorded), Some(current)) => fail(
+            format!(
+                "time zone changed since install — recorded {recorded}, now {current}. \
+                 Screen-time and curfew are using the recorded zone, not this one."
+            ),
+            "If the PC genuinely moved, re-anchor it: sign in to the dashboard and use\n             `Re-anchor the clock`, or re-run `nestwatch install`. If it did not move,\n             someone changed the time zone — the controls held, and that is what this says.",
+        ),
+        // Windows could not tell us, or this is a dev build. Not an error; just not the strong check.
+        (Some(recorded), None) if anchored => ok(format!(
+            "clock anchored (zone {recorded} recorded; this platform cannot read the current one)"
+        )),
+        (None, _) if anchored => warn(
+            "clock anchored by offset only — no time zone recorded",
+            format!(
+                "This install predates the zone check, so it uses the weaker one: an offset \
+                 alone\ncannot tell two zones apart, and a child can shift the clock up to two \
+                 hours in\nsummer by choosing one that shares the offset.\n{REINSTALL}"
+            ),
+        ),
+        (None, _) => warn(
+            "clock NOT anchored — plain local time is in use",
+            format!(
+                "Changing the time zone needs no administrator rights, so the daily budget \
+                 and the\ncurfew window can both be moved by the child until this is \
+                 recorded.\n{REINSTALL}"
+            ),
+        ),
+        (Some(_), None) => warn(
+            "clock anchored, but the current time zone could not be read",
+            "Non-fatal: the service falls back to the offset check, which is what it always\n             used. Worth a look if this is Windows — it means a system call is failing.",
+        ),
+    }
+}
+
 fn fail(text: impl Into<String>, fix: impl Into<String>) -> Check {
     Check {
         level: Level::Fail,
@@ -280,6 +337,16 @@ pub fn run() -> Result<()> {
     // --- Network -----------------------------------------------------------
     {
         let hosts = crate::cert::reachable_hosts();
+        // --- Trusted clock -----------------------------------------------------
+        {
+            let checks = report.section("Trusted clock");
+            checks.push(clock_check(
+                config.as_ref().and_then(|c| c.tz_zone.as_deref()),
+                crate::clock::current_zone_identity().as_deref(),
+                config.as_ref().is_some_and(|c| c.tz_offset_mins.is_some()),
+            ));
+        }
+
         let checks = report.section("Network");
         match hosts.first() {
             Some(ip) => checks.push(ok(format!("reachable at https://{ip}:{port}"))),
@@ -689,6 +756,76 @@ fn platform_checks(report: &mut Report) {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every branch a parent can land on, because this section is read rather than run.
+    ///
+    /// The `Fail` case is the one that earns the section: a changed zone means the service is
+    /// deliberately ignoring the OS clock, which is correct and is not a state to leave running
+    /// unseen.
+    mod clock {
+        use super::super::{Level, clock_check};
+
+        const HOME: &str = "W. Europe Standard Time";
+
+        #[test]
+        fn a_matching_zone_is_reported_ok_and_names_it() {
+            let c = clock_check(Some(HOME), Some(HOME), true);
+            assert_eq!(c.level, Level::Ok);
+            assert!(c.text.contains(HOME), "name the zone: {}", c.text);
+        }
+
+        #[test]
+        fn a_changed_zone_fails_and_says_which_way_it_moved() {
+            let c = clock_check(Some(HOME), Some("UTC"), true);
+            assert_eq!(
+                c.level,
+                Level::Fail,
+                "a zone change is the exact thing the anchor exists to catch"
+            );
+            assert!(
+                c.text.contains(HOME) && c.text.contains("UTC"),
+                "{}",
+                c.text
+            );
+            let fix = c.fix.unwrap_or_default();
+            assert!(
+                fix.contains("Re-anchor") || fix.contains("re-anchor"),
+                "the fix must name the action that resolves it: {fix}"
+            );
+        }
+
+        #[test]
+        fn an_install_predating_the_zone_check_is_warned_not_failed() {
+            let c = clock_check(None, Some(HOME), true);
+            assert_eq!(c.level, Level::Warn);
+            assert!(
+                c.fix.unwrap_or_default().contains("two hours"),
+                "say what the weaker check actually costs"
+            );
+        }
+
+        #[test]
+        fn no_anchor_at_all_is_warned_with_what_it_leaves_open() {
+            let c = clock_check(None, None, false);
+            assert_eq!(c.level, Level::Warn);
+            assert!(c.text.contains("NOT anchored"), "{}", c.text);
+        }
+
+        /// A dev build, or a Windows call that failed. Not an error either way -- the service
+        /// falls back to the check it always used.
+        #[test]
+        fn an_unreadable_current_zone_never_fails() {
+            for anchored in [true, false] {
+                let c = clock_check(Some(HOME), None, anchored);
+                assert_ne!(
+                    c.level,
+                    Level::Fail,
+                    "not being able to read the zone is not a fault (anchored={anchored})"
+                );
+            }
+        }
+    }
+
     use super::*;
 
     /// `doctor` is where the README sends a parent when something looks wrong, so a green report on
