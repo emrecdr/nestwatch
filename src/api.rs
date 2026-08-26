@@ -261,6 +261,16 @@ pub struct LanguageBody {
     language: String,
 }
 
+/// `GET /api/language` → the language the child's surfaces currently speak.
+///
+/// The dashboard needs this to show which option is selected. It is also on `/status`, but that is
+/// the child's own endpoint and the parent's page should not have to read the child's to learn a
+/// setting the parent owns.
+pub async fn get_language(State(state): State<AppState>) -> Json<Value> {
+    let language = crate::state::recover_read(&state.config).language;
+    Json(json!({ "language": language.tag() }))
+}
+
 /// `POST /api/language` → set the language the **child's** surfaces speak.
 ///
 /// Parent-authenticated for the reason in [`crate::config::Language`]: the child does not choose

@@ -129,6 +129,17 @@ function app() {
       { key: "light", glyph: "\u2600\uFE0F", label: "Light" },
       { key: "dark", glyph: "\u{1F319}", label: "Dark" },
     ],
+    // What language the CHILD's surfaces speak. Not the parent's dashboard, which stays English.
+    //
+    // Deliberately absent from `resetSessionData`, for the reason recorded there about `rules` and
+    // `curfew`: it describes the machine rather than the session, it is the same for whoever signs
+    // in next, and it drives a control — blanking it would flash an unselected row and then a
+    // saved-looking one.
+    childLanguage: null,
+    languageOptions: [
+      { key: "en", label: "English" },
+      { key: "nl", label: "Nederlands" },
+    ],
     authed: null,
     busy: false,
     password: "",
@@ -278,6 +289,7 @@ function app() {
     loadAll() {
       this.loadProcesses();
       this.loadCurfew();
+      this.loadLanguage();
       this.loadRules();
       this.loadRoutines();
       this.loadToday();
@@ -303,6 +315,67 @@ function app() {
 
     stopPolling() {
       if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    },
+
+    // Re-record the trusted clock against this machine's current time zone.
+    //
+    // Confirmed first, and the wording matters: doing this while the child has *just* changed the
+    // zone would launder their tamper into the trusted state. The parent is the only one who knows
+    // which of the two happened, so this asks them rather than guessing.
+    async reAnchorClock() {
+      if (!confirm(
+        "Re-anchor screen time and curfew to this PC's current time zone?\n\n" +
+        "Do this only if the computer genuinely moved to another time zone. If the zone changed " +
+        "for any other reason, this accepts that change as correct."
+      )) return;
+      try {
+        const r = await fetch("/api/re-anchor", { method: "POST" });
+        if (r.ok) {
+          const j = await r.json();
+          this.toast("Clock re-anchored to " + (j.zone || (j.offset_mins + " min")) + ".", "success");
+        } else {
+          this.toast("Couldn't re-anchor the clock.", "error");
+        }
+      } catch {
+        this.toast("Couldn't reach the server.", "error");
+      }
+    },
+
+    // Which language the child's page and their desktop warnings use.
+    async loadLanguage() {
+      try {
+        const r = await fetch("/api/language");
+        if (r.ok) this.childLanguage = (await r.json()).language;
+      } catch {}
+    },
+
+    // Change it. Optimistic only after the server agrees: a selector that moves and then silently
+    // reverts on the next load is worse than one that pauses, because the parent walks away
+    // believing the child's page changed.
+    async setChildLanguage(tag) {
+      if (tag === this.childLanguage) return;
+      try {
+        const r = await fetch("/api/language", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ language: tag }),
+        });
+        if (r.ok) {
+          this.childLanguage = (await r.json()).language;
+          this.toast("The child's page is now " + this.languageLabel(tag) + ".", "success");
+        } else {
+          this.toast("Couldn't change the language.", "error");
+        }
+      } catch {
+        this.toast("Couldn't reach the server.", "error");
+      }
+    },
+
+    // The human name for a tag, for the confirmation. Falls back to the tag so an option added to
+    // the server before this list still reads as something rather than "undefined".
+    languageLabel(tag) {
+      const o = this.languageOptions.find((x) => x.key === tag);
+      return o ? o.label : tag;
     },
 
     async loadCurfew() {

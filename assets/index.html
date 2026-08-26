@@ -866,10 +866,20 @@
             <div class="card-body">
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">Screen time</h2>
-                <button class="btn btn-ghost btn-sm" @click="loadScreentime()" :disabled="loadingScreentime">
-                  <span x-show="loadingScreentime" class="loading loading-spinner loading-xs"></span>
-                  Refresh
-                </button>
+                <div class="flex items-center gap-1">
+                  <!-- A plain link, not a fetch: the response carries
+                       `Content-Disposition: attachment`, so the browser saves it and the session
+                       cookie rides along on a same-origin navigation. No blob handling, no
+                       JavaScript that can fail silently.
+                       Here rather than in a settings drawer because this is the data being
+                       exported — a parent who wants to keep this chart is looking at it. -->
+                  <a class="btn btn-ghost btn-sm" href="/api/export" download
+                     title="Download every day this install still holds, as a JSON file">Download</a>
+                  <button class="btn btn-ghost btn-sm" @click="loadScreentime()" :disabled="loadingScreentime">
+                    <span x-show="loadingScreentime" class="loading loading-spinner loading-xs"></span>
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               <template x-if="stEnforcementStale()">
@@ -1231,6 +1241,53 @@
                   </tbody>
                 </table>
               </div>
+            </div>
+          </details>
+
+          <!-- Trusted clock -->
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Trusted clock</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <p class="text-sm opacity-70">
+                Screen time and the curfew are anchored to the time zone this PC was set to when it
+                was installed, so changing the zone can't move bedtime. If the computer genuinely
+                moved to another time zone, re-anchor it here — otherwise the curfew stays on the
+                old zone. <code>nestwatch doctor</code> reports which zone is anchored.
+              </p>
+              <div class="mt-2">
+                <button class="btn btn-sm btn-ghost" @click="reAnchorClock()">Re-anchor the clock</button>
+              </div>
+            </div>
+          </details>
+
+          <!-- The child's language -->
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">The child's language</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <p class="text-sm opacity-70">
+                Which language your child's own page and their on-screen countdown warnings use.
+                This dashboard stays in English.
+              </p>
+              <!-- Set here rather than detected from their browser: the sentence on their page
+                   explaining what this tool can see is the one that most needs to be understood,
+                   and the person being watched should not be the one choosing its language. -->
+              <div class="join mt-2" role="group" aria-label="Language for the child's page">
+                <template x-for="l in languageOptions" :key="l.key">
+                  <button class="btn btn-sm join-item"
+                          :class="childLanguage === l.key ? 'btn-active' : 'btn-ghost'"
+                          :aria-pressed="childLanguage === l.key"
+                          @click="setChildLanguage(l.key)" x-text="l.label"></button>
+                </template>
+              </div>
+              <p class="mt-2 text-xs opacity-60" x-show="childLanguage === null">
+                Couldn't read the current setting.
+              </p>
             </div>
           </details>
 

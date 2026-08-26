@@ -219,6 +219,69 @@ mod tests {
         );
     }
 
+    /// Every authenticated endpoint is reachable from the only interface that can authenticate.
+    ///
+    /// # The state this exists to prevent
+    ///
+    /// `GET /api/export` and `POST /api/language` were each implemented, tested, documented in
+    /// `server.rs`'s route map — and referenced nowhere in `app.js` or `index.html`. A parent had
+    /// no way to reach either. That is worse than not having built them: the cost is paid, the
+    /// risk surface exists, and the value is not collected. Nothing failed, because nothing was
+    /// looking.
+    ///
+    /// `POST /api/re-anchor` was the sharper version of the same thing. `doctor`'s failure text
+    /// told the parent to "sign in to the dashboard and use `Re-anchor the clock`" — naming a
+    /// control that did not exist. A diagnostic whose fix instruction is fiction is worse than one
+    /// that says nothing, and no test could catch it while the two files were checked separately.
+    ///
+    /// Matches on the path stem, so a route with a `{param}` is satisfied by the client building
+    /// the URL around it. That is deliberately loose: this asks "does anything reference this
+    /// endpoint at all", which is the question. Whether it is wired to the *right* control is what
+    /// review is for.
+    #[test]
+    fn every_authenticated_route_is_reachable_from_the_dashboard() {
+        const SERVER_RS: &str = include_str!("server.rs");
+        let router_src = SERVER_RS
+            .split_once("#[cfg(test)]")
+            .map_or(SERVER_RS, |(before, _)| before);
+        let guarded = router_src
+            .split_once("route_layer(middleware::from_fn(auth::require_auth))")
+            .expect("the /api router must apply require_auth")
+            .0
+            .split_once("let api = Router::new()")
+            .expect("the guarded router must still be built here")
+            .1;
+
+        let ui = format!(
+            "{}{}",
+            include_str!("../assets/app.js"),
+            include_str!("../assets/index.html")
+        );
+
+        let mut unreachable = Vec::new();
+        let mut seen = 0;
+        for (i, m) in guarded.match_indices(".route(\"") {
+            let rest = &guarded[i + m.len()..];
+            let path = &rest[..rest.find('"').expect("unterminated route path")];
+            seen += 1;
+            // The stem before any `{param}` — the client builds the rest.
+            let stem = path.split('{').next().unwrap_or(path).trim_end_matches('/');
+            if !ui.contains(&format!("/api{stem}")) {
+                unreachable.push(path);
+            }
+        }
+
+        assert!(
+            seen > 10,
+            "only found {seen} guarded routes — the split above has probably gone stale"
+        );
+        assert!(
+            unreachable.is_empty(),
+            "these endpoints exist, are authenticated, and nothing in the dashboard references \
+             them, so a parent cannot reach them: {unreachable:?}"
+        );
+    }
+
     /// Every progress bar derives its urgency colour from a named helper, never a literal.
     ///
     /// Three bars, two decisions: `budgetTone` (three states, keyed on minutes *remaining*, with an
