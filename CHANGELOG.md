@@ -4,6 +4,26 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ## [Unreleased]
 
+### Added
+- **The pairing QR now carries the certificate's fingerprint, so an app can check it instead of
+  asking you to.** Groundwork rather than a feature you can see today: nothing in the browser flow
+  changes, because the fingerprint rides in the part of a web address that is never sent to a
+  server. Scan the QR with a phone camera and it behaves exactly as it always has.
+  <br>What it is for is the difference between *trusting* the first connection and *checking* it.
+  Any app that pins this PC's certificate has to learn what the right one looks like from
+  somewhere, and until now the only honest answer was to show you 95 characters and ask you to
+  compare them against `nestwatch fingerprint` by eye. People do not really do that, and the
+  research on it is unkind — attacks on inattentive comparers succeed somewhere between 6% and 72%
+  of the time depending purely on how the characters are laid out. A fingerprint that arrives in a
+  photograph of your own console is one nobody on your network was in a position to substitute, so
+  the very first connection is verified rather than assumed.
+  <br>The one visible consequence is that **the QR is denser** — it holds about three times as
+  much, which takes it from 41 to 53 characters wide in the console. That was measured against the
+  longest computer name the printed address can use, not just against a short IP, because a QR that
+  wrapped would be unscannable and the whole thing would be worse than not doing it. If your
+  certificate file cannot be read for any reason, the QR is printed exactly as it was before rather
+  than the install failing over a decoration.
+
 ## [0.3.0] — 2026-08-26
 
 ### Before you update

@@ -146,10 +146,24 @@ async fn a_link_or_qr_scan_to_the_dashboard_still_opens() {
 /// A client that sends no fetch metadata — `curl`, a health probe, a browser too old to send it
 /// — is unaffected. Those carry no ambient cookie authority for a third party to abuse, and
 /// failing closed here would break every non-browser caller.
+///
+/// **One of those callers is now a shipped product.** The Android client in `nestwatch-mobile`
+/// talks to this server with Dart's `HttpClient`, which sends no `Sec-Fetch-*` headers at all —
+/// so the `None` arm of `security::is_same_origin` is the only reason it is admitted, on every
+/// request it makes. That is worth naming here because the change that would break it looks
+/// like hardening: tightening `None` to reject reads as closing a hole, passes every other test
+/// in this file, and silently kills the phone app. Both verbs are covered below because the app
+/// uses both — it polls `/api/time-requests` and posts approvals to it.
 #[tokio::test]
 async fn a_client_that_sends_no_fetch_metadata_is_unaffected() {
     let app = test_app();
     let cookie = login(&app, PASSWORD).await.expect("login");
+
     let status = post_without_metadata(&app, "/api/lock", &cookie).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "a bodyless POST was blocked");
+
+    // The mobile client's most frequent call, and the one a background poll makes while nobody
+    // is watching it fail.
+    let status = send(&app, "GET", "/api/time-requests", Some(&cookie), None).await;
+    assert_eq!(status, StatusCode::OK, "a metadata-less GET was blocked");
 }

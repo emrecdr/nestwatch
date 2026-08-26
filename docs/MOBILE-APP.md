@@ -192,13 +192,25 @@ It converts first contact from trust-on-*first-use* into *verified* first use: t
 impostor outright instead of asking a human to compare 64 hexadecimal characters, which nobody
 does. As a URL fragment it is invisible to the server and to the existing browser flow.
 
-It was **deliberately not done yet**, and the reasoning is worth keeping because it looks like a
-free win. Today the only thing that scans that QR is a phone camera, which opens a **browser** —
-and a browser cannot read a certificate fingerprint from JavaScript, so the value would sit there
-inert. Worse, a page that displayed the expected fingerprint would prove nothing: an impostor
-serves its own page showing its own. The check is only meaningful in a client that pins. Deferring
-costs nothing, because the pairing URL is regenerated at every `install` and `pair`, so a later
-build simply emits the newer one.
+**This is now done**, and the reasoning for having waited is worth keeping, because it was right
+at the time and the condition that released it is a specific one. It was deliberately deferred
+because the only thing that scanned that QR was a phone camera, which opens a **browser** — and a
+browser cannot read a certificate fingerprint from JavaScript, so the value would have sat there
+inert. Worse, a page that displayed the expected fingerprint would have proved nothing: an
+impostor serves its own page showing its own. **The check is only meaningful in a client that
+pins**, and now one exists — an Android client that compares SHA-256 of the leaf DER inside
+`badCertificateCallback`. Deferring cost nothing, exactly as predicted: the pairing URL is minted
+fresh at every `install` and `pair`, so the change simply started emitting the newer one.
+
+Measured while doing it, because two things about the format turned out not to be obvious. The
+fingerprint roughly triples the payload — 44 characters to 143 — which pushes the console QR from
+version 4 to version 7, rendering 53 columns wide against 41. That still fits an 80-column
+terminal at the longest hostname `reachable_hosts` can produce, which is the only thing that
+mattered; an unscannable QR would have been worse than no change at all. The colons cost one of
+those versions: a colon-less spelling lands at version 6. They are kept anyway, because being
+byte-identical to what `nestwatch fingerprint` prints means there is one spelling of a fingerprint
+in this project rather than two. **Upper versus lower case buys nothing** — measured, they produce
+the identical version and width, so any argument resting on QR alphanumeric mode is empty.
 
 **A cheaper fix for a real problem:** the certificate bakes in IP addresses at install time, so a
 DHCP lease change breaks the browser today. Because pinning is name-independent, an app can sweep
@@ -209,11 +221,24 @@ and no multicast.
 
 ## If it gets built
 
-In order, smallest commitment first:
+In order, smallest commitment first. **Steps 1 and 2 are done**, and step 2 turned out not to be
+the gate this list called it.
 
-1. **Fingerprint into the pairing QR** (server-side, small, testable here).
-2. **Audit every dependency that opens a socket** for whether a custom `HttpClient` can be injected.
-   This is the step that decides whether the project is possible, and it is where Immich failed.
+1. ~~**Fingerprint into the pairing QR**~~ — **done.** `pair_url` appends `#fp=<fingerprint>`;
+   see the section above for what it measured. First contact is now *verified* rather than
+   trust-on-first-use, for a client that reads the QR itself.
+2. ~~**Audit every dependency that opens a socket**~~ — **done, and this list overstated it.** It
+   is called "the step that decides whether the project is possible" above; it isn't, because
+   Dart's `HttpClient` *factory constructor* consults `HttpOverrides.current` before constructing
+   anything. Setting `HttpOverrides.global` in `main()` therefore pins every `dart:io` consumer in
+   the process, `Image.network` included — which is the specific thing Immich could not solve. The
+   audit still matters, but as a bounded rule rather than a gate: **no dependency may bypass
+   `dart:io`'s `HttpClient`**, which rules out `cupertino_http` and `cronet_http`, since those hand
+   off to the platform stack where the override never sees them.
+   <br>One trap the audit does not cover, found while building: `HttpOverrides._global` is a plain
+   static, and **Dart statics are per-isolate**. A WorkManager task runs in its own isolate that
+   never executes `main()`, so it starts unpinned — and the plugin's own documentation demonstrates
+   exactly that shape. Every background entry point has to install the pin itself.
 3. **The thinnest client that is worth having**: scan QR → verify pin → log in → persist the session
    cookie in secure storage. Then three screens — pending time requests with approve/deny, today's
    usage, and the screenshot. Leave rules, routines and the audit log in the browser; they are

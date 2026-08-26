@@ -289,13 +289,26 @@ pub fn print_access_block(port: u16) {
     // A pairing token turns "type an IP and a passphrase on a phone" into "point the camera".
     match crate::pairing::mint(&config::data_paths().pairing) {
         Ok(token) => {
-            let url = crate::pairing::pair_url(primary, port, &token);
+            // Read back off disk rather than threaded down from `generate`, because this block
+            // is shared with `nestwatch pair`, where the cert may be months old and no
+            // fingerprint is in hand. `.ok()` on purpose: an unreadable cert costs the QR its
+            // fragment — a client falls back to comparing the fingerprint by eye — and that is
+            // strictly better than failing an install over a QR decoration.
+            let fingerprint = crate::cert::read_fingerprint(&config::data_paths().cert).ok();
+            let scanned = crate::pairing::pair_url(primary, port, &token, fingerprint.as_deref());
+            // The fingerprint goes in the QR and NOT in the line underneath it, because the two
+            // are read by different things. Only a client that scans can use it; anyone reading
+            // this line is going to type it into a browser, which cannot check a fingerprint and
+            // would just be handed 95 characters of noise. Measured, printing the pinned form
+            // here takes the line from 46 columns to 145 — it wraps on an 80-column console,
+            // which is the format a person copies from.
+            let typed = crate::pairing::pair_url(primary, port, &token, None);
             println!("\nScan this with your phone's camera — it opens the dashboard, signed in:");
-            match crate::pairing::qr_code(&url) {
+            match crate::pairing::qr_code(&scanned) {
                 Some(qr) => println!("\n{qr}"),
                 None => println!(),
             }
-            println!("  {url}");
+            println!("  {typed}");
             println!(
                 "  (valid {} minutes, one use — run `nestwatch pair` for a new one)",
                 crate::pairing::TTL_SECS / 60

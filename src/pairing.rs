@@ -152,9 +152,40 @@ pub fn qr_code(url: &str) -> Option<String> {
     )
 }
 
-/// The full pairing URL to encode: `https://<host>:<port>/p/<TOKEN>`.
-pub fn pair_url(host: &str, port: u16, token: &str) -> String {
-    format!("https://{host}:{port}/p/{token}")
+/// The full pairing URL to encode: `https://<host>:<port>/p/<TOKEN>#fp=<FINGERPRINT>`.
+///
+/// **The fingerprint rides in a fragment, and that is the whole reason this is safe to add.**
+/// A fragment is never sent to the server, so the flow this URL already serves — parent's
+/// camera opens it, [`crate::auth::pair`] redeems the token — cannot tell the difference.
+/// Nothing routes on it, no handler reads it, and a browser strips it before the request. Only
+/// a client that reads the QR *itself*, rather than handing it to a browser, ever sees it.
+///
+/// What it buys is the difference between trust-on-first-use and **verified** first use. A
+/// pinning client that learns the fingerprint here got it over a channel the network was never
+/// on — a photograph of a console — so its very first handshake is checked against a value
+/// nobody on the LAN could have supplied. Without it, such a client has to display what it saw
+/// and ask a parent to compare 95 characters by eye against `nestwatch fingerprint`, which is
+/// a check people reliably decline to actually perform.
+///
+/// `None` when the certificate could not be read. The URL is then exactly what it always was,
+/// and a client that wanted the fingerprint falls back to comparing by eye — degraded, not
+/// broken. See [`crate::install::print_access_block`] for why that must not be an error.
+///
+/// **Format is [`crate::cert::read_fingerprint`]'s verbatim** — uppercase hex, colon-separated.
+/// Measured, that costs one QR version against a colon-less spelling (version 7 rather than 6;
+/// 53 columns rather than 49, both comfortably inside an 80-column console). It buys being
+/// byte-identical to what `nestwatch fingerprint` prints and what a parent compares by eye, so
+/// there is one spelling of a fingerprint in this project rather than two. Uppercase is *not*
+/// worth anything on its own here: measured, upper- and lowercase hex produce the identical
+/// version and width, so any argument resting on QR alphanumeric mode is empty.
+pub fn pair_url(host: &str, port: u16, token: &str, fingerprint: Option<&str>) -> String {
+    // Built by appending to the old string rather than as one format!, so the pre-fragment
+    // prefix is byte-identical to what this returned before by construction, not by care.
+    let base = format!("https://{host}:{port}/p/{token}");
+    match fingerprint {
+        Some(fp) => format!("{base}#fp={fp}"),
+        None => base,
+    }
 }
 
 #[cfg(test)]
@@ -165,6 +196,72 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nw-pair-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("pairing.json")
+    }
+
+    /// A realistic fingerprint, in the exact shape `cert::read_fingerprint` returns.
+    const FP: &str = "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:\
+                      AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+
+    /// Adding the fragment must not disturb one byte of what came before it.
+    ///
+    /// Anything already reading this URL — a parent typing it, a note taped to a router, the
+    /// browser flow itself — must see exactly what it saw before. Asserted against the
+    /// fingerprint-less form rather than a hardcoded string, so the two spellings cannot drift.
+    #[test]
+    fn the_fragment_is_appended_and_changes_nothing_before_it() {
+        let plain = pair_url("192.168.1.42", 8443, "EG629F4DQDDHS44V", None);
+        let pinned = pair_url("192.168.1.42", 8443, "EG629F4DQDDHS44V", Some(FP));
+
+        assert_eq!(plain, "https://192.168.1.42:8443/p/EG629F4DQDDHS44V");
+        assert_eq!(pinned, format!("{plain}#fp={FP}"));
+        assert!(
+            pinned.starts_with(&plain),
+            "the pre-fragment prefix changed: {pinned}"
+        );
+    }
+
+    /// The fragment must never be mistaken for part of the token.
+    ///
+    /// `/p/{token}` routes on the path segment, and a fragment never leaves the client, so this
+    /// holds today for two independent reasons. It is asserted anyway because the failure would
+    /// be silent: a refactor that passed a whole URL where a token is expected would not error,
+    /// it would simply stop matching, and pairing would quietly never work again.
+    #[test]
+    fn the_fragment_is_not_part_of_the_token() {
+        let path = tmp("fragment");
+        let t = mint(&path).unwrap();
+        let url = pair_url("192.168.1.42", 8443, &t, Some(FP));
+
+        // What axum hands `pair` as `{token}`: the path segment, fragment already gone.
+        let segment = url.split("/p/").nth(1).unwrap().split('#').next().unwrap();
+        assert_eq!(
+            segment, t,
+            "the path segment must be the token and nothing else"
+        );
+        assert!(
+            redeem(&path, segment),
+            "the token from a pinned URL must pair"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// The denser payload must still render a QR a phone can actually read.
+    ///
+    /// The fingerprint roughly triples the URL, and an unscannable QR is worse than no change
+    /// at all — the feature would be invisible in code review and broken on a kitchen table.
+    /// Measured at the worst case `reachable_hosts` can produce, which is a long hostname
+    /// rather than an IP.
+    #[test]
+    fn a_pinned_url_still_fits_a_console_qr() {
+        let host = "DESKTOP-A1B2C3D4E5F6G7H";
+        let url = pair_url(host, 8443, "EG629F4DQDDHS44V", Some(FP));
+        let qr = qr_code(&url).expect("a pinned pairing URL must still encode as a QR");
+
+        let widest = qr.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+        assert!(
+            widest <= 80,
+            "the QR wrapped at {widest} columns, which makes it unscannable"
+        );
     }
 
     #[test]
