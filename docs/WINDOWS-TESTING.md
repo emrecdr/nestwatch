@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 161 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 180 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -724,6 +724,85 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
       `Get-Service WinRM` must show Stopped with StartupType Manual.
 
 ---
+
+## H. New in this release — none of it has run on Windows
+
+Everything in this section was written, tested and reviewed on a Mac. The parts that talk to
+Windows are compile- and lint-verified for the target and have **never executed**. Each item below
+says what it proves, because several of them pass trivially when the underlying call is failing —
+a check that cannot fail is worse than no check.
+
+### H1. The trusted clock reports itself
+
+- [ ] **`doctor` has a `Trusted clock` section and it says `[ok]`.** Run `nestwatch doctor` from an
+      elevated console. It must name your zone, e.g. `clock anchored to this machine's time zone
+      (W. Europe Standard Time)`. **If it says "anchored by offset only"**, `tz_zone` was not
+      recorded — either this install predates it (re-run `install`) or
+      `GetDynamicTimeZoneInformation` is failing, and every zone check in §E3 is then passing
+      vacuously.
+- [ ] **The `[FAIL]` case is reachable.** As HIM, change the time zone. Re-run `doctor` as admin: it
+      must go to `[FAIL]` and print both zones — recorded and current. Change it back and confirm it
+      returns to `[ok]`. This is the only check that proves the comparison runs against live data
+      rather than against a value it wrote itself.
+
+### H2. Re-anchoring from the dashboard
+
+- [ ] **The button exists and works.** Sign in, open **Trusted clock**, press **Re-anchor the
+      clock**, confirm. A toast must name the zone it recorded. `doctor` must then agree.
+      <br>Worth doing right after H1's `[FAIL]`: re-anchor, and confirm `doctor` returns to `[ok]`
+      without touching `install`. That is the whole point of the endpoint — a house move should not
+      need an elevated console.
+- [ ] **It is written to disk, not just to memory.** After re-anchoring, `type
+      C:\ProgramData\HostHealth\config.json` as admin and confirm `tz_zone` matches. Then restart
+      the service (`sc stop` / `sc start` as admin) and re-run `doctor`: still `[ok]`. A value that
+      only lived in the running process would pass every check above and be lost on the next reboot.
+- [ ] **The child cannot reach it.** As HIM, browse to `https://<pc>:8443/api/re-anchor` — must not
+      act (a `GET` is not routed; there is no unauthenticated path). The automated test covers both
+      routes, but this is the one place where "parent-authenticated" and "the child cannot reach it"
+      have to be the same sentence.
+
+### H3. Taking the history off the machine
+
+- [ ] **The download works and is not empty.** Sign in, open **Screen time**, press **Download**.
+      A `nestwatch-history-YYYY-MM-DD.json` should save. Open it: `rollup_count` must be greater
+      than zero and `rollups` must contain days you recognise.
+      <br>This is the check that matters most on real hardware: the service reads those files as
+      SYSTEM out of an ACL-locked directory, which is exactly the arrangement that cannot be
+      exercised anywhere else.
+- [ ] **It includes the rotated half.** Only meaningful once `screentime.jsonl.1` exists (check with
+      `dir C:\ProgramData\HostHealth\*.jsonl*` as admin). If it does, confirm the export contains
+      days from before the rotation. Reading only the live file returns the newer half and looks
+      complete.
+- [ ] **It is recorded.** After exporting, the dashboard's **Recent access** panel must show the
+      export. Taking the whole history off the machine is exactly what that log is for.
+
+### H4. The child's page in Dutch
+
+- [ ] **The page switches.** Open **The child's language**, choose **Nederlands**. On the child's PC
+      (or any browser at `https://<pc>:8443/ask`), the page must be entirely Dutch — including the
+      sentence at the bottom about what a parent can see. **One English sentence left among Dutch
+      ones is the failure**, and the longest string is the likeliest to be missed.
+- [ ] **The desktop warnings switch too, and render correctly.** This is the half that cannot be
+      checked in a browser. Set a tiny daily budget so a countdown fires while HIM is signed in: the
+      pop-up must be Dutch (`Nog 5 minuten schermtijd — sla je werk even op.`). Check the **em dash
+      and the accented characters render** rather than appearing as boxes or `?` — the message goes
+      through `WTSSendMessageW` as UTF-16 with a byte length computed from the buffer, and nothing
+      about that path has ever run.
+- [ ] **Switching back to English works.** Same two surfaces. A one-way setting would look correct
+      in every test above.
+
+### H5. The dashboard's delivery
+
+- [ ] **A repeat visit transfers almost nothing.** On your phone, open the dashboard, then reload.
+      In the browser's network panel the second load should show `304` for `/app.js`, `/app.css` and
+      `/alpine.min.js`. If they are `200` every time, the validator is not being honoured and the
+      change bought nothing.
+- [ ] **The first visit is compressed.** Same panel, first load: the responses should carry
+      `content-encoding: gzip`. Roughly 85 KB total rather than 328 KB.
+- [ ] **The summary strip stays put and stays right.** Scroll the dashboard: the strip must remain
+      at the top, and its "min left" must match the Today card's when both are visible. A blank
+      strip means an Alpine directive failed to parse — the CSP build renders nothing rather than
+      erroring, so an empty strip is indistinguishable from "nothing to report".
 
 ## Troubleshooting
 
