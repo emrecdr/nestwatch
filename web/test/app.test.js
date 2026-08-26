@@ -1820,3 +1820,67 @@ test("only the live timer marks its captures as timer-driven", async () => {
   assert.ok(calls[0].url.includes("live=1"), `timer frame must be marked: ${calls[0].url}`);
   assert.ok(!calls[1].url.includes("live=1"), `a person's capture must not be: ${calls[1].url}`);
 });
+
+// --- rejection -------------------------------------------------------------
+//
+// Five `400` handlers used to name one cause and show it whatever the server had actually
+// objected to. The worst read "Warning seconds must be ≤ 600" for any rules rejection — so a
+// 5,000-minute daily budget sent the parent to a field they had not touched, and which could not
+// have been the problem since it is the one input carrying a `max`. `src/error.rs` renders every
+// `AppError` as `{"error": "..."}` and `Rules::validate` alone has five distinct reasons, so the
+// correct answer was already on the wire and being discarded.
+//
+// The fallback is not a nicety: axum's `Json` extractor rejects a malformed body before any
+// handler runs and answers in plain text, so "invalid type: string, expected u32 at line 1
+// column 42" is a reachable string. It must never reach a toast.
+
+const stubResponse = (body) => ({
+  json: async () => {
+    if (body instanceof Error) throw body;
+    return body;
+  },
+});
+
+test("rejection shows the reason the server gave, capitalised", async () => {
+  const app = loadApp();
+  const msg = await app.rejection(
+    stubResponse({ error: "daily limit must be <= 10080 minutes" }),
+    "Could not save rules",
+  );
+  assert.equal(msg, "Daily limit must be <= 10080 minutes");
+});
+
+test("rejection keeps a multi-line message whole rather than clipping it", async () => {
+  // `change_password` reuses console-shaped messages whose second line carries the counted and
+  // required totals. First-line-only would drop exactly the part worth reading.
+  const app = loadApp();
+  const msg = await app.rejection(
+    stubResponse({ error: "that password is too short.\n  counted:  5 characters" }),
+    "fallback",
+  );
+  assert.ok(msg.includes("counted:  5 characters"), `detail was dropped: ${msg}`);
+});
+
+test("rejection falls back when the body is not ours", async () => {
+  const app = loadApp();
+  // Axum's own extractor rejection: plain text, so `.json()` throws.
+  assert.equal(
+    await app.rejection(stubResponse(new SyntaxError("Unexpected token")), "Could not save rules"),
+    "Could not save rules",
+  );
+  // Valid JSON, but not our envelope.
+  assert.equal(
+    await app.rejection(stubResponse({ detail: "nope" }), "Could not save curfew"),
+    "Could not save curfew",
+  );
+  // Present but empty, which would otherwise toast an empty alert.
+  assert.equal(
+    await app.rejection(stubResponse({ error: "   " }), "Could not save routine"),
+    "Could not save routine",
+  );
+  // Present but not a string.
+  assert.equal(
+    await app.rejection(stubResponse({ error: 400 }), "Could not save rules"),
+    "Could not save rules",
+  );
+});

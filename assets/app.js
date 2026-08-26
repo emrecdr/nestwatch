@@ -354,7 +354,7 @@ function app() {
         if (r.ok) {
           this.toast("Curfew saved", "success");
         } else if (r.status === 400) {
-          this.toast("Invalid times — use HH:MM", "error");
+          this.toast(await this.rejection(r, "Could not save curfew"), "error");
         } else {
           this.toast("Could not save curfew", "error");
         }
@@ -464,7 +464,7 @@ function app() {
           this.toast("Rules saved", "success");
           this.loadToday(); // keep the Today card (budget/paused badge) in sync
         } else if (r.status === 400) {
-          this.toast("Warning seconds must be ≤ 600", "error");
+          this.toast(await this.rejection(r, "Could not save rules"), "error");
         } else {
           this.toast("Could not save rules", "error");
         }
@@ -491,7 +491,7 @@ function app() {
           this.newRoutineName = "";
           this.loadRoutines();
         } else if (r.status === 400) {
-          this.toast("Invalid name, or too many routines (max 20)", "error");
+          this.toast(await this.rejection(r, "Could not save routine"), "error");
         } else {
           this.toast("Could not save routine", "error");
         }
@@ -1025,6 +1025,56 @@ function app() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+    },
+
+    // The reason the server gave for rejecting a save, or `fallback` when it did not give one.
+    //
+    // Every `AppError` renders as `{"error": "..."}` (`src/error.rs`) and those strings are
+    // written for a parent to read: "daily limit must be <= 10080 minutes" names which of the
+    // five rules in `Rules::validate` was broken. Each caller here used to name one cause and
+    // show it for all of them -- so a 5,000-minute daily budget was reported as "Warning
+    // seconds must be <= 600", sending the parent to a field they had not touched and which
+    // could not have been the problem, since that input is the one carrying a `max`.
+    //
+    // Two guards, both load-bearing:
+    //
+    // `fallback` covers a body that is not ours. Axum's `Json` extractor rejects a malformed
+    // body before any handler runs, and answers with plain text rather than our envelope --
+    // "invalid type: string, expected u32 at line 1 column 42" in a toast is worse than a
+    // wrong-but-human sentence, so anything without a string `error` field is discarded.
+    //
+    // The message is passed through whole, deliberately. An earlier draft showed only its
+    // first line, because `change_password` reuses the several-line messages `install` prints
+    // to a console and those read awkwardly in a toast. But `x-text` collapses newlines rather
+    // than clipping, so a long message renders as a run-on sentence and stays complete --
+    // whereas first-line-only would have dropped exactly the part worth reading, the counted
+    // and required character totals. Dropping what the server said to make the result tidier
+    // is the failure this whole method exists to undo, so it is not reintroduced here.
+    //
+    // Three of the six `400` handlers deliberately do NOT use this, and converting them would
+    // be a regression rather than a tidy-up:
+    //
+    // `changePassword` keeps its own inline copy. Its 400 body is multi-line by design and its
+    // 401 means something entirely different, so it reads better beside those two branches.
+    //
+    // `grantExtra` and `createCode` keep their fixed strings because those name a *number* the
+    // server enforces but does not send: `AppError` says "minutes out of range", not what the
+    // range is. `web::tests::every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces`
+    // pins both strings against `MAX_REQUEST_MINUTES` and `MAX_CODE_MINUTES`, and it caught this
+    // exact substitution when it was attempted. Routing them through here would trade a limit a
+    // parent can act on for a sentence that only says they broke one. The real fix is server-side
+    // -- have those messages carry their own bounds, as the five in `Rules::validate` do -- after
+    // which these two can join the rest.
+    async rejection(response, fallback) {
+      let message = "";
+      try {
+        const body = await response.json();
+        if (typeof body?.error === "string") message = body.error.trim();
+      } catch {
+        // Not JSON, or the body was already consumed. Either way `fallback` is the answer.
+      }
+      if (!message) return fallback;
+      return message.charAt(0).toUpperCase() + message.slice(1);
     },
 
     // GET a list into `this[field]`. `flag` (optional) toggles a loading spinner; `errMsg`
