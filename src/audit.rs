@@ -109,6 +109,13 @@ impl LiveViewAudit {
     /// Count one timer-driven frame. Returns `Some(n)` when a line is due, `n` being the frames
     /// since the previous line.
     ///
+    /// **`n` counts frames DELIVERED, not frames captured**, and the two genuinely differ. A click
+    /// that supersedes a timer frame drops the handler future at the `await` in `api::blocking` —
+    /// before `screenshot` reaches this method — while `spawn_blocking` runs to completion
+    /// regardless, so the child's machine captured a frame that is never counted here. Delivered is
+    /// the right measure for the question this log answers (*was the screen watched, and for how
+    /// long*), but the name does not say which it is, so this does.
+    ///
     /// The first frame after a quiet spell always reports, so the log records that watching
     /// *started* promptly rather than five minutes late — and a parent who opens the live view for
     /// ten seconds still leaves a trace.

@@ -191,7 +191,11 @@ open the door on its own.
   *Take screenshot* button, **Expand**, or the overlay's *Refresh* — writes one `screenshot_taken`
   line each, because there are few of them and each is bounded by a human action. Frames the **live
   timer** fetched are counted instead and written as a single `live_view` line at most every five
-  minutes, carrying the number of frames it stands for.
+  minutes, carrying the number of frames it stands for. That count is frames **delivered** to the
+  parent — a frame a click superseded mid-flight was still captured on the child's PC and is not in
+  it, because the request was already abandoned by the time the log was reached. Delivered is the
+  measure this log wants, since the question is whether the screen was watched; it is spelled out
+  because the word "frames" does not choose between the two on its own.
   <br>Note what the split is on: **who asked**, not how many pixels came back. It used to key on
   the tier, which worked only while the timer always requested small preview frames. It no longer
   does — a live frame now follows whichever view is on screen, so the timer requests

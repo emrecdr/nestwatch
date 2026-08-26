@@ -118,6 +118,22 @@ impl TimeCodes {
         // Hold the gate across find → append so a single-use code can't be consumed twice by
         // concurrent redemptions (each would otherwise see it as still active and grant minutes).
         let _gate = self.gate.lock().unwrap_or_else(|p| p.into_inner());
+        // Reject a code the log has never contained without parsing it, which is the whole file:
+        // `active()` builds a `Value` for every line ever written and a `BTreeSet` of every code
+        // seen, to answer a question about one code. A **wrong** guess paid that in full.
+        //
+        // That was affordable while eight characters carried the security. Six moved the defence
+        // onto the rate limiter — see `api::redeem_code` — which makes sustained wrong guesses the
+        // expected steady state rather than an anomaly, at five a minute from every LAN address in
+        // the house.
+        //
+        // This can only ever shortcut the *failing* path. A code that is genuinely active appears
+        // in the file as text, so the scan cannot reject it, and everything that says yes still
+        // goes through `active()` unchanged. Mutation-checked: forcing this to `false` fails the
+        // redemption tests rather than passing silently.
+        if !self.log.any_line_contains(&code) {
+            return None;
+        }
         let found = self.active().into_iter().find(|c| c.code == code)?;
         self.log.record("redeemed", json!({ "code": code }));
         Some(found.minutes)
@@ -128,16 +144,29 @@ impl TimeCodes {
 mod tests {
     use super::*;
 
+    /// A suffix that is actually unique per call.
+    ///
+    /// This was `SystemTime::elapsed().as_nanos()`, under a comment calling it "monotonic-ish so
+    /// parallel tests don't collide". It is not: **measured on this machine, 5,165 of 10,000
+    /// consecutive reads returned an identical nanosecond value**, because the platform clock does
+    /// not resolve that finely. Six tests here start at once, so two of them shared a directory and
+    /// each folded the other's events — which surfaced as `active[0].code` not matching the code
+    /// just issued, in a test that looks entirely self-contained, roughly one run in dozens.
+    ///
+    /// A counter has no resolution to be wrong about. The `remove_dir_all` at each call site covers
+    /// the other half: the same pid can be reused by a later run.
+    fn next_suffix() -> u32 {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
     fn store() -> (TimeCodes, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "nw-timecode-{}-{}",
             std::process::id(),
-            // vary by a monotonic-ish suffix so parallel tests don't collide
-            std::time::SystemTime::UNIX_EPOCH
-                .elapsed()
-                .unwrap()
-                .as_nanos()
+            next_suffix()
         ));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         (TimeCodes::new(dir.join("time_codes.jsonl")), dir)
     }
@@ -220,11 +249,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "nw-timecode-race-{}-{}",
             std::process::id(),
-            std::time::SystemTime::UNIX_EPOCH
-                .elapsed()
-                .unwrap()
-                .as_nanos()
+            next_suffix()
         ));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let codes = Arc::new(TimeCodes::new(dir.join("time_codes.jsonl")));
         let code = codes.issue(30).unwrap();

@@ -103,6 +103,25 @@ impl JsonlLog {
         Self::newest_first(Self::read_events(path), limit)
     }
 
+    /// Whether any line in the current file contains `needle`, without parsing one of them.
+    ///
+    /// A **reject filter, never the decision** — the same contract as
+    /// [`read_events_matching`](Self::read_events_matching), and the same escaping caveat: `record`
+    /// never `\u`-escapes ASCII, and a writer that did would cause a miss rather than a false
+    /// accept. `false` is authoritative, because a value that never appears as text cannot appear
+    /// in a parsed field. `true` means only "worth parsing"; the caller still does the real check.
+    ///
+    /// Deliberately scans the current file only, matching [`recent`](Self::recent) exactly. Reading
+    /// the rotated backup here would be worse than useless: it could answer `true` for a code that
+    /// `recent` can no longer see, which is a slower path to the same answer, and answering over a
+    /// *wider* set than the caller searches is how a reject filter turns into a wrong one.
+    pub fn any_line_contains(&self, needle: &str) -> bool {
+        let Some(path) = &self.path else {
+            return false;
+        };
+        std::fs::read_to_string(path).is_ok_and(|c| c.contains(needle))
+    }
+
     /// Like [`recent`], but also reads the single rotated `.1` backup.
     ///
     /// `recent` deliberately does not: after a rotation up to 2 MiB of history is still on disk

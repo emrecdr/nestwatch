@@ -668,7 +668,19 @@ function app() {
       try {
         const endpoint = "/api/screenshot?tier=" + tier + (live ? "&live=1" : "");
         const r = await fetch(endpoint, { signal: ctrl.signal });
-        if (r.status === 401) { this.authed = false; this.stopAutoRefresh(); return; }
+        if (r.status === 401) {
+          this.authed = false;
+          this.stopAutoRefresh();
+          // Release the frame this was holding. Nothing will replace it — the dashboard is on the
+          // login screen now — and this was the one exit that did not revoke, where supersede,
+          // replace and sign-out all do. It cost ~25 KiB when a frame was a preview; with the
+          // full-size view open it is megabyte-scale, held for as long as the tab stays open.
+          if (this.shotUrl) {
+            URL.revokeObjectURL(this.shotUrl);
+            this.shotUrl = null;
+          }
+          return;
+        }
         if (!r.ok) throw new Error();
         const blob = await r.blob();
         // Superseded while in flight. Abort closes the connection, but a reply can still arrive

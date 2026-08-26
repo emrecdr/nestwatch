@@ -872,6 +872,43 @@ async fn a_timer_driven_capture_is_coalesced_whatever_tier_it_carries() {
     );
 }
 
+/// A live session must actually *leave a record*, carrying how many frames it stands for.
+///
+/// The negative half — that timer frames write no `screenshot_taken` line — was covered first, and
+/// on its own it is satisfied by writing nothing at all. Deleting the `if let` in `api::screenshot`
+/// so the coalescer's count is computed and discarded left every test in this binary green, which
+/// is precisely the state `OPEN-FINDINGS.md` O51 predicted: `observe` is not `#[must_use]`, so the
+/// value can be dropped in silence and the log simply stops recording that the screen was watched.
+///
+/// That is the failure worth fearing here. A parent reading the audit log to answer "was anyone
+/// looking at this machine?" would get the same empty answer whether nobody looked or the line was
+/// never written — and it is the coalesced line, not the per-frame one, that is supposed to carry
+/// that fact.
+#[tokio::test]
+async fn a_live_session_writes_one_coalesced_line_carrying_its_frame_count() {
+    let audit = app_with_audit_file("shotaudit-count");
+    let app = &audit.app;
+    let cookie = login(app, PASSWORD).await.unwrap();
+
+    for _ in 0..5 {
+        let res = get(app, "/api/screenshot?tier=preview&live=1", Some(&cookie)).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let log = std::fs::read_to_string(&audit.path).unwrap_or_default();
+    assert_eq!(
+        log.matches("live_view").count(),
+        1,
+        "five timer frames must leave exactly one coalesced line — the first after a quiet spell \
+         always reports, and the rest fold into it until the window closes:\n{log}"
+    );
+    assert!(
+        log.contains("\"frames\""),
+        "the coalesced line must carry the frame count it stands for, or it records that the \
+         screen was watched without recording for how long:\n{log}"
+    );
+}
+
 /// A capture a **person** asked for is still audited one line each — the property that makes the
 /// log worth reading. Bounded by a human action, so it cannot run away.
 #[tokio::test]

@@ -1545,6 +1545,7 @@ test("an unrecognised or absent title is not labelled anything", () => {
 function captureHarness({ honourAbort = true, servedTier = null, hidden = null } = {}) {
   const calls = [];
   const pending = [];
+  const revoked = [];
   let blobs = 0;
   const globals = {
     fetch: (url, opts) => {
@@ -1562,7 +1563,10 @@ function captureHarness({ honourAbort = true, servedTier = null, hidden = null }
       });
     },
     AbortController,
-    URL: { createObjectURL: () => "blob:" + ++blobs, revokeObjectURL: () => {} },
+    URL: {
+      createObjectURL: () => "blob:" + ++blobs,
+      revokeObjectURL: (u) => revoked.push(u),
+    },
     Date,
     setInterval: () => 0,
     clearInterval: () => {},
@@ -1584,17 +1588,21 @@ function captureHarness({ honourAbort = true, servedTier = null, hidden = null }
   const app = loadApp(globals);
   app.toast = () => {};
   app.startShotClock = () => {};
-  /** Resolve the i-th capture that reached the endpoint; a later request has the higher index. */
-  const settle = (i = 0) => {
+  /**
+   * Resolve the i-th capture that reached the endpoint; a later request has the higher index.
+   *
+   * `status` covers the exits that are not a frame — 401 when the session ended mid-capture.
+   */
+  const settle = (i = 0, status = 200) => {
     pending[i]({
-      status: 200,
-      ok: true,
+      status,
+      ok: status === 200,
       blob: async () => ({}),
       headers: { get: (n) => (n.toLowerCase() === "x-shot-tier" ? servedTier : null) },
     });
     return new Promise((r) => setImmediate(r));
   };
-  return { app, calls, settle };
+  return { app, calls, revoked, settle };
 }
 
 test("a parent's click is not discarded while a live preview is in flight", async () => {
@@ -1720,6 +1728,31 @@ test("a live tick past its own deadline stops instead of capturing", () => {
   a._liveTick();
   assert.equal(stopped, true, "the unattended-tab cap must still fire");
   assert.deepEqual(asked, [], "and it must not capture on the way out");
+});
+
+// A session that ends mid-capture is the one exit that never released the frame it was holding.
+// Every other one does — superseded, replaced, signed out. It mattered little while a frame was
+// ~25 KiB; with the full-size view open it is megabyte-scale, and the tab can live for hours on a
+// login screen afterwards.
+test("a session that ends mid-capture does not leak the frame it was holding", async () => {
+  const { app, revoked, settle } = captureHarness();
+
+  app.takeScreenshot();
+  await new Promise((r) => setImmediate(r));
+  await settle();
+  const held = app.shotUrl;
+  assert.ok(held, "a frame must be on screen before the session ends");
+
+  // The next capture finds the session gone.
+  app.takeScreenshot();
+  await new Promise((r) => setImmediate(r));
+  await settle(1, 401);
+
+  assert.equal(app.authed, false, "a 401 must sign the dashboard out");
+  assert.ok(
+    revoked.includes(held),
+    "the frame it was holding must be released — nothing will replace it once signed out",
+  );
 });
 
 // A hidden tab is nobody watching, and every tick spawns a helper process in the child's session
