@@ -1,8 +1,21 @@
-# Two actions in these workflows are pinned to commit SHAs on purpose — one executes downloaded
-# binaries, one holds a token that can publish releases, and one holds a signing identity. SHA
-# pinning removes the moved-tag risk but replaces it with a quieter one: a pinned SHA never
-# updates, including past an advisory. Dependabot is the half that makes pinning safe rather
-# than merely frozen — it opens a PR moving the SHA, and CI decides whether it lands.
+# Every third-party action in these workflows is pinned to a commit SHA on purpose. SHA pinning
+# removes the moved-tag risk but replaces it with a quieter one: a pinned SHA never updates,
+# including past an advisory. Dependabot is the half that makes pinning safe rather than merely
+# frozen — it opens a PR moving the SHA, and CI decides whether it lands.
+#
+# The rule used to be "pin the ones that hold something": `taiki-e/install-action` executes
+# downloaded binaries, `softprops/action-gh-release` holds a token that can publish, `actions/attest`
+# holds a signing identity. That reading is too narrow, and the release job is where it shows.
+# `dtolnay/rust-toolchain`, `Swatinem/rust-cache` and `ilammy/setup-nasm` hold nothing — they merely
+# run *before* `cargo build` in a job with `id-token: write` and `attestations: write`. Anyone able
+# to move one of those tags can edit the source tree between checkout and build, and the
+# attestation then signs the result perfectly truthfully. Provenance says which workflow produced
+# a file; it cannot say that the workflow's earlier steps left the inputs alone. So the rule is now
+# positional, not by role: **anything third-party that runs in a job which builds or signs the
+# artifact is SHA-pinned.**
+#
+# `actions/*` are first-party and stay on major tags — GitHub controls both the tag and the runner,
+# so a moved tag there is not a separate trust decision from using Actions at all.
 #
 # `cargo deny check advisories` already fails the build on a vulnerable crate. That reports;
 # this proposes the fix.

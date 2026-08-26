@@ -492,9 +492,18 @@ assumption is the one thing no runtime control can check, so it is established a
   published against a version already pinned changes nothing in the repository, so nothing
   triggers and nothing runs. For a tool installed once and then left alone for months, that made
   the detection window "however long since the last push".
-- **Actions that hold power are pinned to commits, not tags** — the one that executes downloaded
-  binaries, the one that can publish releases, and the one that holds the signing identity. A
-  moved tag on any of those would be arbitrary code execution or an unauthorised publish.
+- **Every third-party action is pinned to a commit, not a tag.** The rule used to be narrower —
+  pin the ones that *hold* something: the one that executes downloaded binaries, the one that can
+  publish releases, the one that holds the signing identity. That reading missed the release job.
+  `dtolnay/rust-toolchain`, `Swatinem/rust-cache` and `ilammy/setup-nasm` hold nothing, but they
+  run **before `cargo build`** in the job that carries `id-token: write` and `attestations: write`.
+  Whoever can move one of those tags can edit the source tree between checkout and build, and
+  `actions/attest` then signs the result — truthfully, because it really was produced by this
+  workflow from this commit. **Provenance attests to the build, not to the integrity of the build's
+  inputs**, so `gh attestation verify` would have passed on the parent's machine. The rule is now
+  positional rather than by role: anything third-party running in a job that builds or signs the
+  artifact is pinned to a full commit SHA. `actions/*` stay on tags — GitHub controls the tag and
+  the runner alike, so trusting a tag there is not a separate decision from using Actions at all.
 - **Pinning is paired with Dependabot**, because a pinned commit never moves on its own,
   including past an advisory. The pin removes the moved-tag risk; the updates stop it becoming
   a frozen one. Dependabot **alerts** and **automated security fixes** are both enabled on the

@@ -13,7 +13,7 @@ on:
   # This is a tool installed on a family PC and left alone for months at a time; without this
   # line the detection window is however long the maintainer goes without pushing.
   #
-  # It also re-runs `fmt` and `clippy`, which use `dtolnay/rust-toolchain@stable` — a moving
+  # It also re-runs `fmt` and `clippy`, which use `dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05` — a moving
   # target. A new stable's lints then surface on a quiet Monday instead of inside an unrelated PR.
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
@@ -52,15 +52,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # `ring` (rustls crypto provider) assembles its primitives with NASM on the MSVC
       # target; it isn't reliably preinstalled on windows-latest. (Perl is.)
       - name: Install NASM (Windows, for ring)
         if: runner.os == 'Windows'
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -102,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
       # Pinned to a commit: this action downloads and executes binaries, so a moved tag would be
       # arbitrary code execution in CI.
       - uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
@@ -125,10 +125,10 @@ jobs:
     needs: [test]
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install NASM (for ring)
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       - uses: actions/setup-node@v7
         with:
           node-version: 22
