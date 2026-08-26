@@ -261,6 +261,90 @@ pub struct LanguageBody {
     language: String,
 }
 
+/// Tell any open dashboard that `tag` went stale, so it can refetch that endpoint now rather than
+/// at its next minute boundary.
+///
+/// Best-effort by construction: `send` errors only when nobody is subscribed, which is the normal
+/// state, so the result is discarded. A handler must never fail because no dashboard is open.
+///
+/// The tags are a closed set, matching the `addEventListener` names in `app.js`. Kept as a function
+/// rather than inlined at each call site so a new one has to be added here, where the client's
+/// listeners are named in the doc, instead of being invented at a handler and silently ignored.
+///
+/// * `requests` — the pending time-request queue changed.
+/// * `usage` — today's minutes or budget changed.
+fn notify(state: &AppState, tag: &'static str) {
+    debug_assert!(
+        matches!(tag, "requests" | "usage"),
+        "unknown event tag {tag:?} — add it to app.js's listeners first"
+    );
+    let _ = state.events.send(tag);
+}
+
+/// `GET /api/events` → a Server-Sent Events stream naming what has changed.
+///
+/// # What this is for
+///
+/// The dashboard polls `/api/usage/today` and `/api/time-requests` once a minute. That sets the
+/// floor on the one interaction here where somebody is actually waiting: a child asks for more
+/// time and their parent's phone finds out up to sixty seconds later. Everything else the
+/// dashboard shows can wait a minute; this cannot, because a person is sitting in front of it.
+///
+/// # What it deliberately is not
+///
+/// It carries **no data** — only a tag naming which endpoint went stale. The client refetches the
+/// route it already used, so every JSON route stays the single source of truth and this cannot
+/// drift from them or grow a second serialisation to keep in step. Losing an event costs one
+/// slower refresh, never a wrong number: the 60-second poll stays exactly as it was, as the
+/// backstop for a dropped stream, a sleeping phone, or a browser that never opened one.
+///
+/// Parent-side only. The child's page would benefit from the same immediacy when a request is
+/// answered, but that page is unauthenticated by design, and an unauthenticated endpoint holding
+/// a connection open per client is a denial-of-service surface this LAN service does not need to
+/// grow. The child keeps their poll.
+pub async fn events(State(state): State<AppState>) -> Response {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+
+    let rx = state.events.subscribe();
+    type Ev = Result<Event, std::convert::Infallible>;
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
+        match rx.recv().await {
+            Ok(tag) => {
+                let ev: Ev = Ok(Event::default().event(tag).data("1"));
+                Some((ev, rx))
+            }
+            // Lagged: this subscriber fell behind and lost tags. Tell it to refetch everything
+            // rather than ending the stream — the cost of an extra reload beats a dashboard that
+            // silently stopped updating.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let ev: Ev = Ok(Event::default().event("all").data("1"));
+                Some((ev, rx))
+            }
+            // The sender lives in `AppState` for the process lifetime, so this is unreachable in
+            // practice; ending the stream lets the client's own reconnect handle it.
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+        }
+    });
+
+    // Without the keep-alive, a connection idle for minutes — the normal state — can be dropped by
+    // the OS or the browser, and the client would only find out at its next reconnect.
+    //
+    // `no-store` is set explicitly, overriding axum's own `no-cache`. `security.rs` fills in
+    // `no-store` only where a handler has not already spoken, and `Sse` speaks — so this route
+    // would otherwise have been the single `/api/*` response that permits storing, quietly, on the
+    // strength of a default nobody here chose. The stream carries no data, only tags, so little
+    // rides on it; the value is that "nothing under `/api` is ever stored" stays a rule without an
+    // exception, rather than a rule with one that has to be remembered.
+    let mut res = Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response();
+    res.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    res
+}
+
 /// `GET /api/language` → the language the child's surfaces currently speak.
 ///
 /// The dashboard needs this to show which option is selected. It is also on `/status`, but that is
@@ -473,6 +557,8 @@ pub async fn extra_time(
         "extra_time_granted",
         json!({ "minutes": minutes, "source": "parent" }),
     );
+    // A second dashboard, or the same parent's other device, is showing a budget that just moved.
+    notify(&state, "usage");
     Ok(Json(json!({ "ok": true, "minutes": minutes })))
 }
 
@@ -720,6 +806,9 @@ pub async fn time_request(
             "time_request_submitted",
             json!({ "src_ip": ip, "minutes": body.minutes }),
         );
+        // The reason `/api/events` exists: a child is now waiting on a person, and without this
+        // that person finds out at their next minute boundary.
+        notify(&state, "requests");
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -756,6 +845,9 @@ pub async fn approve_time_request(
         "extra_time_granted",
         json!({ "minutes": minutes, "source": "request" }),
     );
+    // Two panels moved: the queue lost a row and today's budget grew.
+    notify(&state, "requests");
+    notify(&state, "usage");
     Ok(Json(json!({ "ok": true, "minutes": minutes })))
 }
 
@@ -770,6 +862,7 @@ pub async fn deny_time_request(
         return Err(AppError::BadRequest("no such pending request".into()));
     }
     state.audit.record("time_request_denied", json!({}));
+    notify(&state, "requests");
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -856,6 +949,8 @@ pub async fn redeem_code(
         "extra_time_granted",
         json!({ "minutes": minutes, "source": "code" }),
     );
+    // Redeemed by the CHILD, so the parent has no other way to learn it happened until the poll.
+    notify(&state, "usage");
     Ok(Json(json!({ "ok": true, "minutes": minutes })))
 }
 

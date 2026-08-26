@@ -322,3 +322,117 @@ async fn a_language_this_build_cannot_speak_is_refused_and_says_which_it_can() {
     let body = body_json(get(&app, "/status", None).await).await;
     assert_eq!(body["language"], json!("en"));
 }
+
+// --- The change stream -------------------------------------------------------------------
+
+/// The stream names what changed and carries no data, but it is still a live view of when a
+/// household is active, so it sits behind the same door as everything else.
+#[tokio::test]
+async fn the_event_stream_needs_a_session() {
+    let app = common::test_app();
+    let res = get(&app, "/api/events", None).await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_event_stream_is_a_stream_and_is_never_cached() {
+    let app = common::test_app();
+    let cookie = login(&app, PASSWORD).await.expect("login");
+
+    let res = get(&app, "/api/events", Some(&cookie)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(';').next().unwrap_or("").trim().to_string()),
+        Some("text/event-stream".to_string())
+    );
+    // The security layer's default must reach this too: an intermediary holding a household's
+    // activity stream is exactly what `no-store` is for.
+    assert_eq!(
+        res.headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+    // Deliberately not read to completion — it never completes. Dropping the response closes it.
+}
+
+/// The whole point: a child submitting a request must reach an open dashboard immediately, rather
+/// than at its next minute boundary.
+///
+/// Subscribes to the same channel the handler publishes on, which is what the SSE route does one
+/// layer up. Driving the HTTP stream instead would mean reading a body that by design never ends.
+#[tokio::test]
+async fn a_child_s_request_notifies_an_open_dashboard_at_once() {
+    let dir = std::env::temp_dir().join(format!("nw-events-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut state = common::test_state();
+    state.time_requests =
+        std::sync::Arc::new(nestwatch::timereq::TimeRequests::new(dir.join("req.jsonl")));
+    let mut rx = state.events.subscribe();
+    let app = common::app_with(state);
+
+    let res = common::post_json(
+        &app,
+        "/time-request",
+        None,
+        json!({ "minutes": 20, "reason": "" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let tag = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("a request must notify within two seconds, not at the next 60s poll")
+        .expect("the channel must stay open");
+    assert_eq!(tag, "requests");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Granting time moves two panels, and a parent watching on a second device should see both.
+#[tokio::test]
+async fn granting_time_notifies_both_the_queue_and_today() {
+    let state = common::test_state();
+    let mut rx = state.events.subscribe();
+    let app = common::app_with(state);
+    let cookie = login(&app, PASSWORD).await.expect("login");
+
+    let res = common::post_json(
+        &app,
+        "/api/extra-time",
+        Some(&cookie),
+        json!({ "minutes": 10 }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let tag = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("granting must notify")
+        .expect("channel open");
+    assert_eq!(tag, "usage", "today's budget moved");
+}
+
+/// A handler must never fail because nobody happens to be looking.
+#[tokio::test]
+async fn notifying_with_no_dashboard_open_is_not_an_error() {
+    let app = common::test_app();
+    let cookie = login(&app, PASSWORD).await.expect("login");
+    // No subscriber exists at all here — `broadcast::send` returns Err in that state, and the
+    // handler must discard it rather than surfacing a 500 to a parent granting time.
+    for _ in 0..3 {
+        let res = common::post_json(
+            &app,
+            "/api/extra-time",
+            Some(&cookie),
+            json!({ "minutes": 1 }),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+}

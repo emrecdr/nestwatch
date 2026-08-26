@@ -53,6 +53,10 @@ argon2 = "0.5"
 async-trait = "0.1"
 axum = "0.8.9"
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+# The SSE stream in `api::events`. Already in the graph via axum — `cargo tree -i futures-util`
+# — so this declaration adds no package, only the right to name `Stream` and `stream::unfold`
+# directly instead of hand-rolling a `Stream` impl for a broadcast receiver.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # JPEG encoding only (screenshots). Default features drag in the whole decode stack — AV1
 # (rav1e/ravif), EXR, TIFF, WebP — ~54 crates this app never calls, since nothing here
 # ever *decodes* an image. xcap already declares image correctly; feature unification means

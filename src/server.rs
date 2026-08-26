@@ -22,6 +22,7 @@
 //!     GET  /api/usage
 //!     GET  /api/usage/today
 //!     GET  /api/screentime
+//!     GET  /api/events        (SSE: names what changed; carries no data)
 //!     GET  /api/export
 //!     POST /api/re-anchor
 //!     GET  POST /api/language
@@ -74,6 +75,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/usage", get(api::usage))
         .route("/usage/today", get(api::usage_today))
         .route("/screentime", get(api::screentime))
+        .route("/events", get(api::events))
         .route("/export", get(api::export))
         .route("/re-anchor", post(api::re_anchor))
         .route("/language", get(api::get_language).post(api::set_language))

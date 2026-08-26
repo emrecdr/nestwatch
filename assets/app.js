@@ -173,6 +173,7 @@ function app() {
     _shotAbort: null,
     _pollTimer: null,
     _pollMs: 60000,
+    _events: null,
     // How often the live view asks for a frame. Chosen by the parent from `refreshOptions`; 5s is
     // the default rather than the 3s this shipped with, because every tick spawns a helper in the
     // child's session and 3s was both the most expensive setting available and the only one.
@@ -311,10 +312,43 @@ function app() {
         this.loadToday();
         this.loadTimeRequests();
       }, this._pollMs);
+      this.startEvents();
+    },
+
+    // Listen for "something changed" and refetch immediately.
+    //
+    // The poll above stays exactly as it was. This is a hint, not a channel: the server sends a tag
+    // naming which endpoint went stale and nothing else, and these handlers call the same loaders
+    // the timer calls. So a dropped connection, a sleeping phone, or a browser that never opened
+    // one costs a slower refresh and never a wrong number — which is what makes it safe to add a
+    // second path to the same data at all.
+    //
+    // `EventSource` reconnects by itself, with its own backoff, and `connect-src 'self'` already
+    // permits it. Closed on sign-out with everything else, or a signed-out tab would hold an
+    // authenticated stream open.
+    startEvents() {
+      this.stopEvents();
+      if (typeof EventSource === "undefined") return; // no stream, just the poll
+      try {
+        const es = new EventSource("/api/events");
+        this._events = es;
+        es.addEventListener("requests", () => this.loadTimeRequests());
+        es.addEventListener("usage", () => this.loadToday());
+        // Sent when this client fell behind and tags were dropped. Refetch both rather than guess
+        // which one was missed.
+        es.addEventListener("all", () => { this.loadToday(); this.loadTimeRequests(); });
+      } catch {
+        this._events = null;
+      }
+    },
+
+    stopEvents() {
+      if (this._events) { this._events.close(); this._events = null; }
     },
 
     stopPolling() {
       if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+      this.stopEvents();
     },
 
     // Re-record the trusted clock against this machine's current time zone.

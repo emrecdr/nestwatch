@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 180 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 182 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -799,6 +799,14 @@ a check that cannot fail is worse than no check.
       change bought nothing.
 - [ ] **The first visit is compressed.** Same panel, first load: the responses should carry
       `content-encoding: gzip`. Roughly 85 KB total rather than 328 KB.
+- [ ] **A time request reaches the dashboard without waiting for the poll.** Open the dashboard on
+      your phone and leave it. On the child's PC, submit a request from `/ask`. The badge should
+      appear within a second or two — **not up to a minute later**. If it takes the full minute the
+      event stream is not connected and the poll is carrying it, which works but is the thing this
+      was built to improve. (Check the browser's network panel for `/api/events` held open.)
+- [ ] **It survives the phone sleeping.** Lock the phone for a few minutes, wake it, and submit
+      another request. `EventSource` reconnects on its own; if the badge stops arriving promptly
+      after a sleep, the reconnect is not happening and only the poll is left.
 - [ ] **The summary strip stays put and stays right.** Scroll the dashboard: the strip must remain
       at the top, and its "min left" must match the Today card's when both are visible. A blank
       strip means an Alpine directive failed to parse — the CSP build renders nothing rather than
