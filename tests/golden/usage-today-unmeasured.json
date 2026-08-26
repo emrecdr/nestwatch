@@ -1,0 +1,14 @@
+{
+  "budget_mins": 0,
+  "day": null,
+  "enabled": true,
+  "enforcer_age_secs": null,
+  "extra_mins": 0,
+  "focus_missing": true,
+  "focused": [],
+  "groups": [],
+  "pages": [],
+  "per_app": [],
+  "remaining_mins": null,
+  "used_mins": 10
+}

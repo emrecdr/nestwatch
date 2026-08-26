@@ -1,0 +1,34 @@
+{
+  "budget_mins": 135,
+  "day": "2026-08-26",
+  "enabled": true,
+  "enforcer_age_secs": 12,
+  "extra_mins": 15,
+  "focus_missing": false,
+  "focused": [
+    {
+      "minutes": 40,
+      "name": "minecraft"
+    },
+    {
+      "minutes": 15,
+      "name": "chrome"
+    }
+  ],
+  "groups": [],
+  "pages": [
+    {
+      "minutes": 13,
+      "name": "Poki - Free Online Games"
+    }
+  ],
+  "per_app": [
+    {
+      "limit_mins": 60,
+      "name": "minecraft",
+      "used_mins": 40
+    }
+  ],
+  "remaining_mins": 80,
+  "used_mins": 55
+}
