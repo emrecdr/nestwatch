@@ -35,7 +35,7 @@
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, watch } from "node:fs";
 import { join, dirname, extname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ASSETS = join(here, "..", "..", "assets");
@@ -54,7 +54,7 @@ function stripHtml(src) {
  * Regex literals are left alone by construction — a `/` is only treated as opening a comment when
  * the very next character is `/` or `*`, and `/\.exe$/i` starts `/\`.
  */
-function stripJs(src) {
+export function stripJs(src) {
   let out = "";
   let i = 0;
   let quote = null; // the character that closes the string we are inside, or null
@@ -98,7 +98,9 @@ function stripJs(src) {
     out += c;
     i += 1;
   }
-  return out;
+  // `quote` still set means the scan reached the end of the file still looking for a closing
+  // quote. That is a definite mis-parse, and it is the property the build guard fires on.
+  return { text: out, unterminated: quote !== null };
 }
 
 /**
@@ -126,11 +128,26 @@ function build() {
     const ext = extname(name);
     if ((ext !== ".html" && ext !== ".js") || !ours(name)) continue;
     const src = readFileSync(join(ASSETS, name), "utf8");
-    const out = ext === ".html" ? stripHtml(src) : stripJs(src);
-    // A file that lost most of itself was not understood. Comments are a minority of any source
-    // here; anything past half means the scanner mis-tracked a string or a regex and is deleting
-    // code. Failing the build is right — the alternative is a stylesheet quietly built from a
-    // corrupted reading of the input.
+    const scanned =
+      ext === ".html"
+        ? { text: stripHtml(src), unterminated: false }
+        : stripJs(src);
+    const out = scanned.text;
+    // A scan that ended still inside a string never found its closing quote, so everything after
+    // the opening one was read as string body. That is a **definite** mis-parse, which is what
+    // makes it worth failing a build on — and it makes the message below true whenever it appears.
+    //
+    // This replaced a ratio trigger (fail if more than half the bytes are lost), which was a
+    // *correlate* of a mis-parse rather than evidence of one, and was calibrated against a premise
+    // this codebase contradicts: "comments are a minority of any source here". They are not.
+    // `assets/app.js` measures ~49.6% comment, the house style is deliberately heavy explanatory
+    // prose, and the guard therefore tightened every time somebody documented something — the one
+    // habit this project most wants. It fired that way once already, with a message blaming a
+    // parser bug that did not exist.
+    //
+    // The case the ratio was written for cannot reach it any more either: `ours()` skips
+    // `.min.js` *before* the file is read, and `alpine.min.js` — the 13,543-byte incident the
+    // comment below memorialises — is the only file that ever tripped it for a real reason.
     //
     // **How this was found, because the tell is counter-intuitive and worth keeping.** Pointed at
     // `alpine.min.js` this scanner removed 13,543 bytes from a file containing no comments. Nothing
@@ -142,10 +159,24 @@ function build() {
     // So the diagnostic is: if a change meant to shrink the output grows it, something is being
     // mis-read rather than merely under-optimised. A silent deletion of code shows up as an
     // *increase* downstream, which is the opposite of where anyone looks first.
-    if (src.length > 200 && out.length < src.length * 0.5) {
+    if (scanned.unterminated) {
       throw new Error(
-        `strip-comments: ${name} lost ${src.length - out.length} of ${src.length} bytes. ` +
-          `That is not comments — the scanner mis-parsed it. Refusing to build from it.`,
+        `strip-comments: ${name} ended inside an unterminated string, so everything after the ` +
+          `opening quote was read as string body. The likely cause in first-party code is a regex ` +
+          `literal containing a quote character, which this scanner cannot parse. Refusing to ` +
+          `build from it.`,
+      );
+    }
+    // A catastrophe backstop, deliberately far away from anything prose can reach. Losing four
+    // fifths of a first-party file is not a comment ratio, it is a scanner that has come apart in
+    // some way the check above does not model. Re-based from 0.5 rather than deleted, and said out
+    // loud rather than quietly, because re-basing a limit your own change pushed against is exactly
+    // the move that deserves scrutiny: the measurement is `app.js` at 49.6%, ~9 comment lines short
+    // of failing, in a codebase whose reviewers are told to explain themselves at length.
+    if (src.length > 200 && out.length < src.length * 0.2) {
+      throw new Error(
+        `strip-comments: ${name} lost ${src.length - out.length} of ${src.length} bytes — over ` +
+          `four fifths. That is not comments. Refusing to build from it.`,
       );
     }
     writeFileSync(join(OUT, name), out);
@@ -154,8 +185,12 @@ function build() {
   return n;
 }
 
-const n = build();
-if (process.argv.includes("--watch")) {
+// Only build when run as a command. The module is imported by `test/strip-comments.test.js`,
+// which needs `stripJs` and must not trigger a build as a side effect of importing it.
+const isCommand =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const n = isCommand ? build() : 0;
+if (isCommand && process.argv.includes("--watch")) {
   // Tailwind watches what `@source` points at, which is now the stripped copies — so an edit to a
   // served file has to reach them or the dev loop silently stops updating.
   console.log(`scanning ${n} files, watching ${ASSETS}`);
@@ -164,6 +199,6 @@ if (process.argv.includes("--watch")) {
     clearTimeout(queued);
     queued = setTimeout(build, 50); // coalesce the burst an editor's save produces
   });
-} else {
+} else if (isCommand) {
   console.log(`scanning ${n} files`);
 }

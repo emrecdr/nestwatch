@@ -187,18 +187,24 @@ open the door on its own.
   recent events in the dashboard's **Recent access** panel or via `GET /api/audit`. This turns an
   otherwise invisible access into something you can see — a login from an unfamiliar IP at an odd
   hour stands out.
-- **The live view is logged as a session, not as frames.** A full-resolution capture — the
-  *Take screenshot* button, or **Expand** — writes one `screenshot_taken` line each, because there
-  are few of them, a person asked for each, and that is the tier detailed enough to read a message
-  over someone's shoulder. The live view's small preview frames are counted instead and written as
-  a single `live_view` line at most every five minutes, carrying the number of frames it stands
-  for.
+- **The live view is logged as a session, not as frames.** A capture **a person asked for** — the
+  *Take screenshot* button, **Expand**, or the overlay's *Refresh* — writes one `screenshot_taken`
+  line each, because there are few of them and each is bounded by a human action. Frames the **live
+  timer** fetched are counted instead and written as a single `live_view` line at most every five
+  minutes, carrying the number of frames it stands for.
+  <br>Note what the split is on: **who asked**, not how many pixels came back. It used to key on
+  the tier, which worked only while the timer always requested small preview frames. It no longer
+  does — a live frame now follows whichever view is on screen, so the timer requests
+  full-resolution ones for as long as the full-size view is open. Had the audit kept keying on
+  tier, opening that view would have turned a coalesced line into roughly 1,800 individual rows an
+  hour: the exact failure below, arriving through the other tier. The request now says which it is
+  and the log believes the request rather than inferring it.
   <br>This is a **security** property rather than a tidiness one. At the old cadence a per-frame
   line was 1,200 rows an hour; `audit.jsonl` rotates at 2 MiB and keeps exactly one backup, so
   roughly 57 hours of live viewing would evict the entire security history — every login, every
   kill, every password change — to make room for a timer. Of the fourteen places this codebase
-  writes an audit line, thirteen are each bounded by one human action; the live preview was the
-  only one a clock could drive, and so the only one whose volume nothing bounded. The coalesced
+  writes an audit line, thirteen are each bounded by one human action; live frames are the
+  only ones a clock can drive, and so the only ones whose volume nothing bounds. The coalesced
   line is also the more useful record: it says the screen was watched for forty minutes and looked
   at closely five times, rather than repeating one sentence 1,200 times.
 - Further append-only logs live beside it with independent retention: `usage.jsonl` (usage

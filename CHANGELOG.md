@@ -23,6 +23,22 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   wrapped would be unscannable and the whole thing would be worse than not doing it. If your
   certificate file cannot be read for any reason, the QR is printed exactly as it was before rather
   than the install failing over a decoration.
+- **The report now flags game portals by name.** A page called "Poki - Free Online Games" now
+  carries a small **Poki** badge beside it, on today's card and on every day of the screen-time
+  report. Roblox played through the native app was always measured exactly, by program name; played
+  through a browser it was just another page title in a list, which is the route a child takes when
+  the app itself is blocked. The badge costs nothing to produce — the title was already being
+  recorded — and it changes no measurement.
+  <br>**It is a label, not a claim of coverage.** A renamed tab defeats it, and so does any site not
+  on the list. The card says so: no badge means nothing was recognised, *not* that nothing was
+  played. The badge carries the site's name rather than only a colour, so it does not depend on
+  being able to tell two shades apart.
+- **`doctor` now tells you when the machine cannot take screenshots at all.** On Windows 10 older
+  than version 1903 the capture cannot work, and `doctor` used to report everything green while
+  every screenshot failed forever — sending you looking in the wrong place. It now names the build
+  and says plainly that only the picture of the screen is affected. On a supported machine it says
+  so too, rather than staying silent: a check that says nothing looks exactly like a check that
+  never ran.
 
 ### Changed
 - **Time codes are now six characters instead of eight.** The code you leave for your child to type
@@ -34,6 +50,20 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   to five attempts a minute from any one device, which puts guessing one at roughly four hundred
   years. Codes remain single-use, worth 1–240 minutes, capped at fifty outstanding, and are never
   written to the audit log.
+
+### Fixed
+- **Buttons that looked enabled and quietly did nothing.** While the live view was fetching a frame,
+  **Take screenshot**, **Expand** and the overlay's **Refresh** accepted your click and discarded it
+  — no message, no spinner, nothing. Because a capture can take up to 15 seconds while the live view
+  refreshes every 2, that was the usual case rather than a rare one. Your click now takes priority
+  and cancels the frame already in flight.
+- **Expand now stays sharp while the live view is running.** Opening the full-size view fetched a
+  full-resolution frame, and the live view replaced it with a stretched preview within one refresh —
+  and the live view being on is exactly the state you are in when you press Expand. Frames now
+  follow whichever view is on screen: full while the big picture is open, preview for the thumbnail.
+  <br>That is the most expensive thing this tool does, so it is bounded: it lasts only as long as
+  you keep the overlay open, the unattended-session cap still applies, and the refresh-rate buttons
+  are on the card if you would rather trade sharpness for cost.
 
 ## [0.3.0] — 2026-08-26
 

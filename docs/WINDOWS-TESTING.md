@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 159 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 161 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -187,22 +187,43 @@ failures rather than being surprised by them.
       line must turn red and read "not updating — last frame …". This is the whole point of it. A
       frozen live view and a child sitting still are the same picture, and before this the last
       good frame simply stayed on screen with the toggle still lit.
-- [ ] **Expand fetches a sharper frame.** With Live running, click the picture (or **⤢ Expand**).
-      The full-size view must be visibly sharper than the thumbnail — the live stream sends a
-      960×540 preview, and expanding asks for a full-resolution one. If it looks like a stretched,
-      soft version of the thumbnail, the refetch is not happening.
+- [ ] **Expand fetches a sharper frame, and *stays* sharp.** With Live running, click the picture
+      (or **⤢ Expand**). The full-size view must be visibly sharper than the thumbnail — the live
+      stream sends a 960×540 preview, and expanding asks for a full-resolution one. If it looks
+      like a stretched, soft version of the thumbnail, the refetch is not happening.
+      <br>**Then leave it open for several refreshes.** It must stay sharp. Live frames follow the
+      surface on screen, so while this view is open the timer asks for full-resolution frames too.
+      If the picture degrades to a soft one after a few seconds, `liveTier()` is not being consulted
+      and the old defect is back — the sharp frame surviving only until the next tick.
+- [ ] **A click is never silently swallowed.** With Live running at the 2s cadence, press **Take
+      screenshot** repeatedly, including while a frame is obviously mid-flight. Every press must do
+      something visible — a spinner, a new picture, or a failure toast. A press that produces no
+      reaction at all is the defect this replaced: the button stayed enabled, accepted the click and
+      discarded it, which at a 15s worst case against a 2s cadence was the usual outcome rather than
+      a rare race.
+- [ ] **The audit log does not fill up with live frames.** Open the full-size view with Live running
+      and leave it a few minutes, then read **Recent access** (or `GET /api/audit`). There must be
+      *coalesced* `live_view` lines carrying frame counts — **not** one `screenshot_taken` row per
+      frame. Frames the timer fetched are counted; only captures a person asked for get a line each.
+      This is the one item here with a security consequence: at roughly 1,800 rows an hour a timer
+      would evict every login, kill and password change from the log to make room for itself.
 - [ ] **Turning Live off stops it immediately.** Toggle Live off while a capture is mid-flight
       (easiest at the 2s cadence). The picture must not change afterwards. A frame arriving after
       the parent said stop means the in-flight request was not aborted.
 
-> **Already verified in a browser, on macOS, against the fake controller** (2026-08-25): the first
-> frame after switching Live on requests `tier=full` and every timer frame after it requests
-> `tier=preview`; **Expand** issues a fresh `tier=full` request; the age line renders and counts up;
+> **Partly verified in a browser, on macOS, against the fake controller** (2026-08-25) — and the
+> capture path has **changed since**, so the three lines marked below need redoing rather than
+> trusting. What still holds: the age line renders and counts up;
 > with `/api/*` returning 503 the line turns red and reads *"not updating — last frame Ns ago"*
 > while the toggle stays lit, and clears to *"updated 2s ago"* when the API returns. Preview was
-> 21,985 B against full's 62,795 B on the fake's 1280×720 frame, and 41 preview frames plus 3 full
-> captures wrote **4** audit lines rather than 44. The console showed no CSP or Alpine parser
-> errors — which matters because that build fails *silently*.
+> 21,985 B against full's 62,795 B on the fake's 1280×720 frame. The console showed no CSP or
+> Alpine parser errors — which matters because that build fails *silently*.
+>
+> **Superseded by later changes, and unverified since (2026-08-26):** that every timer frame
+> requests `tier=preview` — it now requests `full` while the full-size view is open; that
+> 41 preview frames plus 3 full captures wrote **4** audit lines — the audit now keys on who asked
+> rather than on tier, so the arithmetic differs; and that a mid-flight capture is simply aborted —
+> a person's click now supersedes it rather than being dropped.
 >
 > None of that touched Windows, a real desktop, or the WGC backend. The items above and in §D1a are
 > what those numbers do not cover.

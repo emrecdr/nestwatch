@@ -375,7 +375,7 @@ fn check_windows_build(out: &mut Vec<Finding>) {
 /// warn every parent. `RtlGetVersion` is the documented way to get the real number and is not
 /// subject to the shim.
 #[cfg(windows)]
-fn os_build() -> u32 {
+pub(crate) fn os_build() -> u32 {
     use windows::Wdk::System::SystemServices::RtlGetVersion;
     use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 

@@ -261,8 +261,28 @@ configuration that belongs in front of a parent as a decision, not inside an ins
 
 Note the consequence honestly on the dashboard: Roblox played in the **native app** is measured
 exactly (match both `RobloxPlayerBeta.exe` and the Microsoft Store build `Windows10Universal.exe`),
-while Roblox streamed through a **cloud-gaming site** in a browser tab counts as browser time and is
-not separately identified.
+while Roblox streamed through a **cloud-gaming site** in a browser tab counts as browser time.
+
+Since 2026-08-26 that browser time is at least **labelled**. A static title→portal table
+(`GAME_PORTALS` in `assets/app.js`) is applied at render time, so a page called
+`"Roblox - now.gg"` carries a **now.gg** badge and `"Poki - Free Online Games"` carries **Poki**.
+It costs no Win32 call, no COM, no browser reconfiguration and no privacy escalation — the title was
+already being recorded, and this only reads it.
+
+Three properties of that deserve stating, because they are what keep it honest:
+
+* **Render time, not collection time.** The stored row stays the raw title, so the list can change
+  without a migration and without re-collecting anything.
+* **Brand tokens on word boundaries, never the word "games".** A false positive is worse than a miss
+  because a parent acts on it — `\bpoki\b` does not match "Pokimane", and a news headline about
+  games matches nothing.
+* **Absence means "not recognised", never "no game sites visited".** A renamed tab defeats it, and
+  so does any portal not on the list. The dashboard says exactly that under the list rather than
+  leaving the reader to assume coverage — the same null-vs-zero rule as `measured` and
+  `focus_missing`.
+
+It is a label on data already collected, not a measurement, and it is emphatically not the domain
+capture declined above.
 
 ---
 

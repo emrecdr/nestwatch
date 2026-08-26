@@ -456,12 +456,22 @@
                     <template x-for="pg in today.pages" :key="pg.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="pg.name"></span>
+                        <!-- The badge carries the portal's NAME, so the text is the signal and the
+                             colour only reinforces it. A badge distinguished by colour alone would
+                             repeat the defect measured on the over-budget bar and the cadence
+                             buttons -- see docs/DECLINED-OPTIONS.md. -->
+                        <template x-if="gamePortal(pg.name)">
+                          <span class="badge badge-sm badge-warning" x-text="gamePortal(pg.name)"></span>
+                        </template>
                         <span class="opacity-70"><span x-text="pg.minutes"></span> min</span>
                       </div>
                     </template>
                   </div>
                   <p class="mt-1 text-xs opacity-60">
                     The title each page gave itself, never its address and never a browsing history.
+                    A game portal is labelled when the title names one; a renamed tab or a site not
+                    on the list is simply not labelled, so no badge means nothing was recognised —
+                    not that nothing was played.
                   </p>
                 </div>
               </template>
@@ -1097,6 +1107,12 @@
                     <template x-for="p in stRows('pages')" :key="p.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="p.name"></span>
+                        <!-- Same label as today's card. The two lists show the same kind of data,
+                             and labelling one but not the other would make a portal look like it
+                             stopped being one the moment the parent looked at a past day. -->
+                        <template x-if="gamePortal(p.name)">
+                          <span class="badge badge-sm badge-warning" x-text="gamePortal(p.name)"></span>
+                        </template>
                         <span class="opacity-70"><span x-text="p.minutes"></span> min</span>
                       </div>
                     </template>
@@ -1277,7 +1293,9 @@
          ratio so a 16:9 desktop is never stretched.
 
          Live refresh keeps working while open -- `shotUrl` is the same reactive value the
-         thumbnail binds to, so the toggle updates this view too. -->
+         thumbnail binds to, so the toggle updates this view too. Those refreshes arrive at the
+         FULL tier while this overlay is up: `liveTier()` follows the surface on screen, so the
+         picture stays readable instead of being replaced by a stretched preview. -->
     <div x-show="shotFull" x-cloak
          class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2"
          @click="closeShotFull()"

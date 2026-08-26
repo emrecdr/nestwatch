@@ -55,6 +55,36 @@ if (typeof document !== "undefined") {
   });
 }
 
+// Game portals, recognised from a page title alone.
+//
+// Module scope, built once: `gamePortal` is called twice per row by the template (once to decide
+// whether to show the badge, once to fill it) across up to `MAX_PAGES` rows, and regex literals in
+// a function body are re-created on every call.
+//
+// Word boundaries, not substrings, and brand tokens, never the word "games". A false positive is
+// worse than a miss because the parent acts on it -- \b keeps "poki" from matching "Pokimane", and
+// nothing here matches a news headline about games.
+//
+// Most-specific first: "Roblox - now.gg" is now.gg, because the interesting fact is that Roblox is
+// being played *through a browser*, which is how a blocked native app gets dodged.
+const GAME_PORTALS = [
+  [/\bnow\.gg\b/, "now.gg"],
+  [/\bcrazygames\b/, "CrazyGames"],
+  [/\bcoolmath\b/, "Coolmath Games"],
+  [/\bpoki\b/, "Poki"],
+  [/\bminiclip\b/, "Miniclip"],
+  [/\bkongregate\b/, "Kongregate"],
+  [/\bitch\.io\b/, "itch.io"],
+  [/\barmor games\b/, "Armor Games"],
+  [/\baddicting ?games\b/, "Addicting Games"],
+  [/\bgame ?jolt\b/, "Game Jolt"],
+  [/\bsilvergames\b/, "Silvergames"],
+  [/\by8\.com\b/, "Y8"],
+  [/\bfriv\b/, "Friv"],
+  [/\blagged\.com\b/, "Lagged"],
+  [/\broblox\b/, "Roblox"],
+];
+
 // The screen-time report before anything has been fetched.
 //
 // One definition, called from both the initial state and `resetSessionData`. It was written out
@@ -117,6 +147,9 @@ function app() {
     now: Date.now(),
     _shotTimer: null,
     _shotBusy: false,
+    // Which capture is the current one. Incremented on every start; a reply whose generation
+    // is no longer the newest has been superseded and must not touch shared state.
+    _shotGen: 0,
     _clockTimer: null,
     // Aborts the in-flight capture when Live is switched off or the session ends. Without it a
     // capture started at second 0 still assigns `shotUrl` when it returns, up to 15s after the
@@ -594,23 +627,54 @@ function app() {
     // `tier` is separate from `silent` because they answer different questions: `silent` is how
     // loudly a failure is reported, `tier` is how many pixels are asked for. They agree at every
     // call site today, but that is a fact about the call sites rather than a rule.
-    async takeScreenshot(silent = false, tier = "full") {
-      // Never overlap captures: the service helper can take up to ~15s, but the Live timer
-      // fires every few seconds — without this guard slow captures would pile up.
-      if (this._shotBusy) return;
+    // `live` is a third, separate question from `silent` and `tier`: *who asked*. Only the audit
+    // reads it, and it must not be inferred from the other two. It happens to agree with `silent`
+    // at every call site today, but that is a fact about the call sites -- the same trap that made
+    // the server key its audit on `tier` and then break silently when the timer started asking for
+    // full frames.
+    async takeScreenshot(silent = false, tier = "full", live = false) {
+      // Two callers, two rules. The live timer must never stack captures — the helper can take
+      // ~15s while the timer fires every 2s — so a silent tick skips while one is in flight. A
+      // person must never be ignored: their click IS the interaction, and the old shared guard
+      // dropped it silently, with the button still looking enabled because `loadingShot` is only
+      // set for non-silent captures. At a 15s worst case against a 2s cadence that was the common
+      // case, not a race.
+      if (this._shotBusy) {
+        if (silent) return;
+        // Supersede the frame in flight. This saves the download — up to 20 MB at full tier — but
+        // NOT the capture: the helper is already running and cannot be called back, which is why
+        // the generation guard below exists as well as this abort rather than instead of it.
+        if (this._shotAbort) this._shotAbort.abort();
+      }
+      const gen = ++this._shotGen;
       this._shotBusy = true;
       if (!silent) this.loadingShot = true;
       const ctrl = new AbortController();
       this._shotAbort = ctrl;
       try {
-        const r = await fetch("/api/screenshot?tier=" + tier, { signal: ctrl.signal });
+        const endpoint = "/api/screenshot?tier=" + tier + (live ? "&live=1" : "");
+        const r = await fetch(endpoint, { signal: ctrl.signal });
         if (r.status === 401) { this.authed = false; this.stopAutoRefresh(); return; }
         if (!r.ok) throw new Error();
         const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        // Superseded while in flight. Abort closes the connection, but a reply can still arrive
+        // after a newer capture has started — the helper finished its work regardless. Letting it
+        // land would replace a newer frame with an older one and mislabel the tier with it.
+        // Revoke the blob we just made rather than leaking it.
+        if (gen !== this._shotGen) {
+          URL.revokeObjectURL(url);
+          return;
+        }
         if (this.shotUrl) URL.revokeObjectURL(this.shotUrl);
-        this.shotUrl = URL.createObjectURL(blob);
+        this.shotUrl = url;
         this.shotAt = Date.now();
-        this.shotTier = tier;
+        // What the server says it served, not what was asked for. `ShotTier::from_arg` maps
+        // unknown and absent alike to full, so a typo in the query string would otherwise
+        // stream full frames on a two-second timer while this recorded "preview" -- and
+        // `openShotFull` reads this value to decide whether the frame is already sharp.
+        // Falls back to the request so an older service without the header still works.
+        this.shotTier = (r.headers && r.headers.get("X-Shot-Tier")) || tier;
         this.shotStale = false;
         // There is a frame on screen now, so the age line under it needs a clock — whatever put
         // the frame there. See `startShotClock`.
@@ -619,6 +683,9 @@ function app() {
         // An abort is the parent switching Live off mid-capture. Nothing failed, so it must not
         // raise a toast or mark the picture stale.
         if (e && e.name === "AbortError") return;
+        // A superseded capture's failure belongs to nobody: the parent is already watching a newer
+        // one, so neither a toast nor a stale mark should come from it.
+        if (gen !== this._shotGen) return;
         // A failed LIVE frame is the case this whole flag exists for. It used to be swallowed
         // entirely, so a stopped service, a signed-out child or a wedged helper all left the last
         // good picture on screen with the toggle still on, indefinitely.
@@ -626,8 +693,13 @@ function app() {
         else this.toast("Screenshot failed", "error");
       } finally {
         if (this._shotAbort === ctrl) this._shotAbort = null;
-        if (!silent) this.loadingShot = false;
-        this._shotBusy = false;
+        // Only the current capture may release the shared flags. Without this a superseded reply
+        // clears the spinner and the busy flag belonging to the capture that replaced it — which
+        // is exactly the "dropped click traded for out-of-order frames" the naive fix produces.
+        if (gen === this._shotGen) {
+          if (!silent) this.loadingShot = false;
+          this._shotBusy = false;
+        }
       }
     },
 
@@ -658,10 +730,40 @@ function app() {
       // in the child's session to capture and encode their whole desktop — by far
       // the most expensive thing this tool does — and without the guard it kept doing it
       // on their laptop for as long as the parent left the tab open in a pocket.
-      this._shotTimer = setInterval(() => {
-        if (Date.now() > this._liveUntil) { this.stopAutoRefresh(); return; }
-        if (!document.hidden) this.takeScreenshot(true, "preview");
-      }, this._refreshMs);
+      this._shotTimer = setInterval(() => this._liveTick(), this._refreshMs);
+    },
+
+    // One tick of the live timer. A method rather than a closure so the decisions in it can be
+    // tested; the interval callback that used to hold this body could not be reached from a test.
+    _liveTick() {
+      if (Date.now() > this._liveUntil) {
+        this.stopAutoRefresh();
+        return;
+      }
+      // A hidden tab is nobody watching, and a frame costs a whole helper process in the child's
+      // session. The `typeof` guard is for the tests, which have no document.
+      if (typeof document !== "undefined" && document.hidden) return;
+      this.takeScreenshot(true, this.liveTier(), true);
+    },
+
+    // Which tier a live frame should be: the one the surface currently on screen needs.
+    //
+    // The tiers were introduced on an explicit promise -- a parent who wants to READ something can
+    // still get a full-resolution frame. That held only while Live was OFF. With it on, the timer
+    // overwrote the overlay's sharp frame within one refresh interval, and Live being on is exactly
+    // the state a parent is in when they press Expand. The tier was being decided by *who asked for
+    // the frame* when the property that matters is *which surface is displaying it*.
+    //
+    // The cost is real and deliberate: a full frame is roughly thirty times a preview's bytes, so
+    // this is the most expensive thing the tool can be asked to do. It is bounded three ways -- the
+    // overlay is a transient state a person opened, `_liveUntil` still caps an unattended session,
+    // and the cadence selector is on the card if the parent would rather trade rate for cost.
+    //
+    // The rejected alternative was giving the overlay its own buffer that only human captures
+    // write. That keeps a *stale* sharp frame: a picture that looks live and is not, which is the
+    // failure mode this codebase exists to avoid rather than a fix for it.
+    liveTier() {
+      return this.shotFull ? "full" : "preview";
     },
 
     // Change cadence without making the parent toggle Live off and on.
@@ -813,11 +915,11 @@ function app() {
     // The overlay is shown *before* the fetch resolves, so it opens instantly with the frame
     // already on screen and sharpens a moment later, rather than pausing on a click.
     //
-    // **Known gap.** While Live runs, this sharp frame survives at most `_refreshMs` before the
-    // timer replaces it with a preview, so the full tier lands reliably only when Live is OFF;
-    // with it on, the modal's Refresh is the way to hold a readable picture. Fixing it means the
-    // tier following the visible surface rather than whoever asked for the frame, which changes
-    // what live view costs while the overlay is open — a decision, not a tidy-up.
+    // While Live runs, the timer keeps this sharp rather than overwriting it: `liveTier()` returns
+    // "full" for as long as the overlay is open. It used to return a preview regardless of what was
+    // on screen, so the frame fetched here survived at most one refresh interval and was then
+    // replaced by a 960x540 preview stretched across the window -- at the moment the parent was
+    // looking hardest. See `liveTier` for what that costs and why it is bounded.
     openShotFull() {
       this.shotFull = true;
       // Only when the frame on screen is not already a full one. Pressing "Take screenshot" and
@@ -1384,6 +1486,26 @@ function app() {
     // resource means file I/O per app and still misses Store-packaged programs, which is exactly
     // the Roblox case this product most cares about. Anything unknown falls back to the executable
     // without its extension, which is already an improvement on "RobloxPlayerBeta.exe".
+    // Which game portal a page title names, or "" if none is recognised.
+    //
+    // The product question is "an evening of Roblox or an evening of homework". Native Roblox is
+    // already exact -- it has a process name. Browser portals had nothing, and they are what a
+    // child reaches for when the native app is blocked. This costs no Win32 call, no COM, no
+    // browser reconfiguration and no privacy escalation: the watcher already has the title.
+    //
+    // Two limits that must reach the reader, not just this comment: a renamed tab defeats it, and
+    // so does any portal not in `GAME_PORTALS`. No match therefore means "nothing was recognised",
+    // never "no game sites were visited" -- the same null-vs-zero rule as everywhere else here.
+    // The card says so in as many words.
+    gamePortal(title) {
+      if (!title) return "";
+      const t = String(title).toLowerCase();
+      for (const [re, label] of GAME_PORTALS) {
+        if (re.test(t)) return label;
+      }
+      return "";
+    },
+
     appLabel(name) {
       if (!name) return "";
       const known = {

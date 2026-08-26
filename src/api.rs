@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 
 use axum::Json;
 use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::HeaderName;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -97,13 +98,23 @@ where
 #[derive(Deserialize)]
 pub struct ShotQuery {
     tier: Option<String>,
+    /// Present when the **live timer** asked, absent when a person did.
+    ///
+    /// Separate from `tier` because they answer different questions, and conflating them is what
+    /// broke: the audit used tier as a proxy for "who asked", which held only while the timer
+    /// always requested previews. It no longer does — live frames follow the surface on screen, so
+    /// the timer requests `full` whenever the full-size view is open.
+    live: Option<String>,
 }
 
 /// `GET /api/screenshot?tier=preview|full` → JPEG image of the primary monitor.
 ///
-/// The tier is chosen by **who asked**, not by a control the parent sets: the dashboard's live
-/// timer requests `preview`, and the two buttons a person presses request `full`. Defaulting to
-/// `full` keeps this endpoint behaving as it always has for anything that does not ask.
+/// The tier is chosen by **which surface is showing the frame**, not by a control the parent sets:
+/// the thumbnail cannot use more than a preview holds, while the full-size view exists so a parent
+/// can read what is on screen. Defaulting to `full` keeps this endpoint behaving as it always has
+/// for anything that does not ask.
+///
+/// `live=1` is a separate question — *who* asked — and only the audit reads it. See below.
 pub async fn screenshot(
     State(state): State<AppState>,
     Query(q): Query<ShotQuery>,
@@ -111,19 +122,40 @@ pub async fn screenshot(
     let tier = ShotTier::from_arg(q.tier.as_deref());
     let bytes = blocking(state.control.clone(), move |c| c.screenshot(tier)).await?;
 
-    // Full captures are audited one for one: there are few, a person asked for each, and they are
-    // the ones that make text legible. Preview frames arrive on a timer and are coalesced, because
-    // a per-frame line evicts the entire security history in about 57 hours of live viewing.
-    match tier {
-        ShotTier::Full => state.audit.record("screenshot_taken", json!({})),
-        ShotTier::Preview => {
-            if let Some(frames) = state.live_audit.observe(std::time::Instant::now()) {
-                state.audit.record("live_view", json!({ "frames": frames }));
-            }
+    // Audited by **who asked**, never by tier.
+    //
+    // Captures a person asked for are few and each is bounded by a human action, so one line each
+    // stays readable and cannot run away. Timer frames are coalesced into a periodic `live_view`
+    // line carrying a count.
+    //
+    // This used to switch on `tier`, which worked only while the timer always asked for previews.
+    // Once live frames began following the visible surface — full while the full-size view is open
+    // — that proxy silently became ~1,800 one-for-one lines an hour. `audit.jsonl` rotates at 2 MiB
+    // and keeps one backup, so it would evict every login, kill and password change to make room
+    // for a timer: exactly the failure the coalescer exists to prevent, arriving through the other
+    // tier.
+    if q.live.is_some() {
+        if let Some(frames) = state.live_audit.observe(std::time::Instant::now()) {
+            state.audit.record("live_view", json!({ "frames": frames }));
         }
+    } else {
+        state.audit.record("screenshot_taken", json!({}));
     }
 
-    Ok(([(header::CONTENT_TYPE, SHOT_MIME)], bytes).into_response())
+    // Name the tier actually served, so the client records what it *got* rather than what it
+    // asked for. `ShotTier::from_arg` maps unknown and absent alike to `Full`, so a typo in the
+    // query string returns a full frame on a two-second timer while the caller believes it is
+    // getting previews — the failure `as_arg`'s doc describes as "no error, no failing test, just
+    // the cost back". It is also what makes the overlay's "is the frame on screen already full?"
+    // check an answer instead of an assumption.
+    Ok((
+        [
+            (header::CONTENT_TYPE, SHOT_MIME),
+            (HeaderName::from_static("x-shot-tier"), tier.as_arg()),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// `GET /api/processes` → JSON array of running processes.

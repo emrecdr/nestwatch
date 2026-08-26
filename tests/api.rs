@@ -818,3 +818,97 @@ async fn parent_time_request_endpoints_require_auth() {
     assert_eq!(res.status(), StatusCode::OK);
     assert!(body_json(res).await.is_array());
 }
+
+/// The response must name the tier it actually served, rather than leaving the client to assume it
+/// got what it asked for.
+///
+/// [`ShotTier::from_arg`] maps unknown **and** absent to `Full`, so a typo in the client's query
+/// string — `?tier=preveiw` — silently returns a full frame on a two-second timer while the client
+/// records "preview". `as_arg`'s own doc names the failure: "no error, no failing test, just the
+/// cost back". A header is what turns that from an assumption into an answer, and it is also what
+/// lets the overlay's `shotTier !== "full"` check mean anything.
+#[tokio::test]
+async fn a_capture_names_the_tier_it_actually_served() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    for (query, expect) in [
+        ("?tier=preview", "preview"),
+        ("?tier=full", "full"),
+        ("", "full"),
+        ("?tier=preveiw", "full"),
+    ] {
+        let res = get(&app, &format!("/api/screenshot{query}"), Some(&cookie)).await;
+        assert_eq!(
+            res.headers()
+                .get("x-shot-tier")
+                .map(|v| v.to_str().unwrap().to_string()),
+            Some(expect.to_string()),
+            "`/api/screenshot{query}` served the {expect} tier and must say so on the wire"
+        );
+    }
+}
+
+/// A capture the **live timer** asked for must be coalesced, whatever tier it carries.
+///
+/// The audit used to key on tier as a proxy for "who asked": full meant a person had pressed a
+/// button, so one line each stayed bounded by human action, exactly as `SECURITY.md` describes.
+/// That proxy broke when live frames started following the visible surface — with the full-size
+/// view open the timer now requests `full` every two seconds. Audited one-for-one that is ~1,800
+/// rows an hour, and `audit.jsonl` rotates at 2 MiB keeping one backup, so it would evict the
+/// entire security history — every login, every kill, every password change — to make room for a
+/// timer. That is the precise failure the preview coalescer was built to prevent, arriving through
+/// the other tier. The audit now keys on **who asked**, which is what it always meant.
+#[tokio::test]
+async fn a_timer_driven_capture_is_coalesced_whatever_tier_it_carries() {
+    let dir = std::env::temp_dir().join(format!("nw-shotaudit-live-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("audit.jsonl");
+
+    let mut state = test_state();
+    state.audit = std::sync::Arc::new(nestwatch::audit::AuditLog::new(path.clone()));
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    for _ in 0..5 {
+        let res = get(&app, "/api/screenshot?tier=full&live=1", Some(&cookie)).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let log = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        log.matches("screenshot_taken").count(),
+        0,
+        "a frame nobody asked for by hand must never be audited one-for-one:\n{log}"
+    );
+}
+
+/// A capture a **person** asked for is still audited one line each — the property that makes the
+/// log worth reading. Bounded by a human action, so it cannot run away.
+#[tokio::test]
+async fn a_capture_a_person_asked_for_is_still_audited_one_for_one() {
+    let dir = std::env::temp_dir().join(format!("nw-shotaudit-human-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("audit.jsonl");
+
+    let mut state = test_state();
+    state.audit = std::sync::Arc::new(nestwatch::audit::AuditLog::new(path.clone()));
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    for _ in 0..3 {
+        let res = get(&app, "/api/screenshot?tier=full", Some(&cookie)).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let log = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        log.matches("screenshot_taken").count(),
+        3,
+        "each deliberate capture is one line:\n{log}"
+    );
+}

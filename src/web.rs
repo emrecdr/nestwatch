@@ -378,6 +378,36 @@ mod tests {
         out
     }
 
+    /// Every list of page titles must carry the game-portal label, not just the one on the Today
+    /// card.
+    ///
+    /// The same data is rendered twice — today's card and the per-day rows of the screen-time
+    /// report — and the label was added to only the first. A portal would then appear to stop being
+    /// one the moment a parent looked at a past day, which is worse than never labelling it: an
+    /// inconsistent signal teaches the reader to distrust the signal.
+    ///
+    /// Counted rather than merely present, because "at least one badge exists" is satisfied by the
+    /// state this test was written to catch. A JS test cannot see it either — `gamePortal` would
+    /// keep passing its own tests while nothing in the markup called it for the second list.
+    #[test]
+    fn every_page_title_list_carries_the_game_portal_label() {
+        let html = PAGES
+            .iter()
+            .find(|(name, _)| *name == "index.html")
+            .expect("index.html must be one of the served pages")
+            .1;
+        let lists =
+            html.matches("in today.pages").count() + html.matches("in stRows('pages')").count();
+        let labelled = html.matches("x-if=\"gamePortal(").count();
+        assert!(lists > 0, "the markup must render page titles somewhere");
+        assert_eq!(
+            labelled, lists,
+            "{lists} list(s) of page titles but {labelled} carrying a game-portal label — every \
+             list showing page titles must label portals the same way, or the same site reads as a \
+             portal on one card and not on another."
+        );
+    }
+
     /// The chart's key must be rendered from `stBarKey`, not written out in the markup.
     ///
     /// It *was* written out in the markup, and that is exactly how it broke: the three swatch

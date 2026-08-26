@@ -492,29 +492,6 @@ devices already trust. Run the two passes separately and expect them to fail dif
 
 **Trigger.** §D2 step 12, which already asks for this. It has simply never been done.
 
-### O24 · Game portals are identifiable from page titles at zero syscall cost
-
-The product goal named in [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) is separating "an evening of
-Roblox from an evening of homework". Native Roblox is already measured exactly by process name. Browser
-portals — now.gg, Poki, CrazyGames, coolmathgames — are not, and today they land as undifferentiated
-page titles in a list capped at `MAX_PAGES`.
-
-But those titles are highly regular ("Poki — Free Online Games"), and the watcher **already has the
-title**. Classifying it costs no additional Win32 call, no COM, no browser reconfiguration and no
-privacy escalation. This is the cheapest available answer to the question the feature exists to answer,
-and it is independent of O20 — worth doing whether or not domain capture ever happens.
-
-**Honest limits, which belong on the dashboard and not just here:** a renamed tab defeats it, and so
-does any portal not on the list. It is a *label* on data already collected, never a claim of coverage —
-so it must not be presented as "no game sites visited". Absence of a match means nothing was
-recognised, which is the same null-vs-zero rule as everywhere else.
-
-**Fix.** A small static title→category table, applied at render time in `screentime.rs`/the dashboard
-rather than at collection, so the stored data stays raw and the list can change without a re-collection
-or a migration.
-
-**Trigger.** Any time; it touches no Win32 and cannot regress measurement. Lowest-risk entry here.
-
 ### O28 · Live mode creates a whole process per frame
 
 Every tick runs, in the child's session:
@@ -655,53 +632,6 @@ config is by construction what is in the certificate.
 **Trigger.** Next change to the certificate path. Pre-existing; found during a cleanup review of the
 uninstall work and recorded rather than fixed, because it is not that change.
 
-### O47 · The full capture tier is unreachable in the mode a parent uses it from
-
-`openShotFull()` fetches a `full` frame when the overlay opens, and the overlay and the thumbnail
-bind the **same** `shotUrl`. While Live is running, the live timer keeps writing `preview` frames
-into that same slot — so the sharp frame survives at most `_refreshMs`, which is 2 s at the fastest
-cadence, and is then replaced by a 960×540 preview stretched across the whole window.
-
-The tier is decided by **who asked for the frame**, when the property that matters is **which
-surface is displaying it**. `shotFull` is a pure display flag that nothing in the capture path
-consults.
-
-Why it matters more than it sounds: the two-tier design traded 20 MB frames for 30 KB ones on the
-explicit promise that a parent who wants to *read* something can still get a full-resolution frame.
-That promise is kept when Live is off and broken when it is on — and Live being on is the state a
-parent is in when they click **Expand**. The modal's Refresh button is currently the only reliable
-way to hold a readable picture, which is not what any of the copy says.
-
-**Fix.** Make the tier follow the visible surface: either give the overlay its own buffer that only
-human-initiated captures write, or have the live timer request `full` while `shotFull` is set.
-
-**Not done here because it is a decision, not a tidy-up.** Both options change what live view costs
-while the overlay is open, and the plan that introduced the tiers explicitly chose "keep updating at
-preview, Refresh to sharpen". Re-deciding that needs the cost stated: at 2 s a full-tier stream is
-the most expensive thing this tool can be asked to do. The comment at the call site was corrected to
-describe what actually happens, since it previously claimed the opposite.
-
-### O48 · A parent's deliberate click is silently discarded while a live frame is in flight
-
-`takeScreenshot`'s `if (this._shotBusy) return;` guard is justified in its own comment as protection
-against the **live timer** stacking slow captures — the helper can take ~15 s and the timer fires
-every few seconds. But the guard sits on the shared function, so it also drops human-initiated
-captures: **Take screenshot**, **Expand**, and the modal's **Refresh** all return without doing
-anything if a silent preview happens to be in flight.
-
-`:disabled="loadingShot"` does not cover it, because `loadingShot` is only set when `!silent` — so
-during a live capture the buttons look enabled, accept the click, and do nothing. No toast, no
-spinner, no state change. With a 15 s worst case against a 2 s cadence, that is the common case
-rather than a race.
-
-**Fix.** Move the guard into the interval callback so the timer skips its own tick, or let a human
-capture supersede the in-flight preview — `_shotAbort` already exists for exactly that.
-
-**Not done here** because it needs a small concurrency design rather than a one-line move: two
-overlapping captures both assign `shotUrl` and both clear `_shotBusy`, so the naive fix trades a
-dropped click for a frame that arrives out of order. A capture-generation counter is probably the
-answer. Getting it wrong is worse than the current conservative behaviour.
-
 ### O49 · The one case the baseline cap was written for is the one case nothing records
 
 `first_seen_in` gives up and returns `None` when the baseline exceeds `MAX_BASELINE_APPS` (2,000
@@ -722,31 +652,6 @@ interesting case leaves a trace. Properly, it is a distinct state rather than a 
 
 **Trigger.** Whenever O52 is taken,
 since both are about the same `Option` losing information on its way to the reader.
-
-### O50 · `doctor` never asks whether the machine can capture at all
-
-`preflight::check_windows_build` compares the OS build against `MIN_CAPTURE_BUILD` (18362) and warns.
-It is reached only through `preflight::gather`, whose only two callers are in `install.rs`. `doctor`
-has its own `platform_checks` and does not consult preflight at all — verified independently by two
-sessions: `doctor.rs` contains the string "preflight" exactly once, in a doc comment referring to
-`preflight::apply`, not a call.
-
-So on Windows 10 below 1903 the position is: `install` mentions it once, as a caution among others,
-in a console the parent scrolls past — and then every screenshot fails forever while `doctor`, the
-tool the README points at for "anything wrong? this says what, and how to fix it", reports
-everything green.
-
-That is the bad kind of failure. A diagnostic that is merely silent leaves the parent no worse off;
-one that actively contradicts the symptom sends them looking somewhere else.
-
-**Fix.** One more `Check` in `doctor::platform_checks` calling the same `capture_build_ok(os_build())`,
-worded as "screenshots will not work on this build; everything else does". `capture_build_ok` is
-already `pub` and pure; `os_build` is private and would become `pub(crate)`.
-
-**Not done here** because it is a feature addition rather than a cleanup, and `doctor.rs` was outside
-the reviewed diff. Small, though — and it has now been declined by three sessions in a row purely on
-scope, which is exactly how a cheap fix falls through the gap between people who each correctly
-decided it was not theirs.
 
 ### O51 · The property the audit change exists for is proved for a type and never for the endpoint
 
@@ -792,23 +697,6 @@ Weigh it against the reason the panel is hidden on quiet days at all: a notice t
 stops being read. That argument is sound and may well win — in which case the honest move is to
 *delete* the third state rather than keep paying for it.
 
-### O53 · The client records which tier it asked for, not which tier it got
-
-`shotTier` is set from the argument passed to `takeScreenshot`, so it records the request. Nothing
-confirms what the server actually served, and `ShotTier::from_arg` turns any unrecognised spelling
-into `Full` **silently** — that is deliberate and right for the endpoint, but it means a drift
-between the JS literal `"preview"` and Rust's `as_arg` produces no error anywhere: the live stream
-simply runs at full resolution, which is the exact outcome the shared spelling exists to prevent.
-
-`as_arg`'s doc says it exists so "preview" has one spelling across two boundaries. There is a third,
-in a third language, that it does not cover. The Rust round-trip test asserts the enum against
-itself; the JS test asserts the literal it typed. Both stay green through a drift. `openShotFull()`
-then branches on that same unverified string (O47).
-
-**Fix.** The handler already knows the tier and already builds the response headers — stamp it
-(`X-Shot-Tier`) and set `shotTier` from `r.headers.get(...)`. "Which tier is on screen" becomes an
-answer rather than an assumption, and a drift shows up as a mismatch instead of a silent cost.
-
 ### O54 · Two source-text scanners and a standing exemption, for a property a shared list would make true
 
 `run_helper` reads `--tier` with a hand-rolled `args.iter().position(...)` scan, and its two usage
@@ -836,50 +724,6 @@ to tell the capture work from the refactor. Same reasoning as O2's revised trigg
 
 **Trigger.** After `docs/WINDOWS-TESTING.md` has been run on the device.
 
-### O55 · The build's comment-ratio guard is calibrated against a premise this codebase contradicts
-
-`web/scripts/strip-comments.mjs` fails the build when a file loses more than half its bytes to
-comment stripping, justified as: "Comments are a minority of any source here."
-
-Measured, they are not. `assets/app.js` is **49.4%** comment (re-measured 2026-08-26), and this
-codebase's house style is deliberately heavy explanatory prose. A single cleanup pass already pushed it
-past the line once and broke the build.
-
-**Headroom, measured rather than derived: ~1,070 bytes — 12 comment lines at indent 4, 11 at top
-level.** Do not take it from the guard's arithmetic. The tempting figure is `out − src × 0.5` =
-**448 bytes**, and it is wrong by about 2×: an added comment line grows `src` by the whole line but
-grows `out` by only its indent and its newline, so the threshold rises half a byte for every byte
-added. Two sessions reached 448 independently and both were wrong — the fourth time in this repo that
-this same number has been derived instead of measured (see O23). Settled by appending N lines to a
-sandboxed copy and running the real stripper: 12 pass, 13 fail.
-
-Two things make it worse than a tight threshold:
-
-- **The message is false when it fires.** "That is not comments — the scanner mis-parsed it" sends
-  the reader hunting a parser bug that does not exist. Confirmed by running `git show HEAD:assets/app.js`
-  through the same scanner and getting 47.9%.
-- **The case it was written for can no longer reach it.** `ours(name)` is `!name.endsWith(".min.js")`
-  and the loop skips on it *before reading the file*, so `alpine.min.js` — the 13,543-byte incident
-  the guard's comment memorialises — never reaches `stripJs`. Every file that can still trip the
-  ratio is first-party, hand-written and comment-heavy: exactly the population the premise is wrong
-  about.
-
-**The trip point is a range, not a number, and it moves the wrong way.** `stripJs` copies a comment's
-leading whitespace before it recognises the `//`, so an indented comment returns more bytes to the
-output than an unindented one. Swept: **11 added lines at indent 0, 12 at indent 4** (2026-08-26).
-**Outdenting a comment block moves the build closer to failing** — which nobody deduces, and which is
-why it is written down here. See O23
-for the three wrong answers produced by deriving this instead of measuring it.
-
-**Fix.** Keep the throw and swap the trigger: `stripJs` finishing with a non-null `quote` means it ran
-off the end of a string, which is a **definite** mis-parse rather than a correlate of one — and it
-would make the message's claim true whenever it appears. Re-base or drop the ratio separately.
-
-**Deliberately not done in the pass that hit it.** Re-basing a safety limit that your own change
-pushed against is not a call to make quietly; the prose was trimmed back instead, restoring headroom
-to >14 lines. Recorded here so the decision belongs to whoever reads this rather than to whoever was
-inconvenienced by it.
-
 ### O56 · The screen-time report pays for every day ever recorded, not the window asked for
 
 `build_report` parses the whole retained history, then does work on rows it will never render:
@@ -903,6 +747,33 @@ shape as the `usage.jsonl` waste already fixed one level up.
 **Why it is here and not done.** Measured at sub-millisecond to ~2 ms on a request a parent triggers
 by hand, and — the deciding fact — **it predates the reviewed diff**, so it falls outside "wasted work
 this change introduces". Mechanical and safe when someone is next in that file for another reason.
+
+### O63 · The comment stripper cannot parse a regex literal containing a quote
+
+`stripJs`'s doc comment says regex literals are safe "by construction — a `/` is only treated as
+opening a comment when the very next character is `/` or `*`". That is true, and it is only half the
+question. The scanner also tracks string delimiters, and it does not know it is inside a regex — so
+`/["']/` opens a string at the `"` and consumes everything after it looking for a close.
+
+Confirmed by running it: `stripJs('const re = /["\']/;\nconst a = 1;\n')` reports `unterminated`.
+
+**This is now loud rather than silent, which is the improvement, not the finding.** Before the guard
+swapped to an unterminated-string trigger, such a file was mis-stripped quietly and only failed the
+build if the damage happened to exceed a byte ratio. It now fails immediately, and the message names
+a regex literal as the likely cause. No file in `assets/` contains one today — the build passes —
+so nothing is broken.
+
+**What is left is that a legitimate expression cannot be written.** A first-party `assets/*.js` that
+needs to match a quote character has no way to do it, and the failure arrives as a build error about
+strings rather than about regexes.
+
+**Fix.** Track regex literals in the scanner, which means distinguishing a regex from division —
+the classic JavaScript lexing ambiguity, resolved by looking at the previous significant token. That
+is real work for a build script. The cheaper alternative is a character class escape (`/[\x22\x27]/`
+parses fine today) documented at the call site, which costs one comment and no scanner change.
+
+**Trigger.** The first time someone needs a quote inside a regex in `assets/*.js`. Not before —
+the workaround is a footnote and the proper fix is a lexer.
 
 ---
 

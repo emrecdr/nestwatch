@@ -1482,3 +1482,290 @@ test("the text cue that screen readers rely on is still there", () => {
   assert.match(a.stDayLabel({ minutes_used: 200, budget: 120, over_budget: true }), /over budget/);
   assert.doesNotMatch(a.stDayLabel({ minutes_used: 100, budget: 120, over_budget: false }), /over budget/);
 });
+
+// --- game portals recognised from the page title -------------------------
+//
+// The product question is "an evening of Roblox or an evening of homework". Native Roblox is already
+// exact, by process name. Browser portals were undifferentiated page titles until this.
+test("game portals are recognised from the page title alone", () => {
+  const a = loadApp();
+  assert.equal(a.gamePortal("Poki - Free Online Games"), "Poki");
+  assert.equal(a.gamePortal("CrazyGames - Free Online Games on CrazyGames"), "CrazyGames");
+  assert.equal(a.gamePortal("Coolmath Games - Free Online Math Games"), "Coolmath Games");
+  assert.equal(a.gamePortal("Roblox - now.gg"), "now.gg", "the cloud player, not the native game");
+  assert.equal(a.gamePortal("POKI - FREE ONLINE GAMES"), "Poki", "case-insensitive");
+});
+
+// The whole feature is a *label* on data already collected. A false positive is worse than a miss,
+// because the parent acts on it — so the table matches distinctive brand tokens, never the word
+// "games", which appears in news headlines and shop pages that are nobody's business.
+test("the portal table stays quiet on pages that merely mention games", () => {
+  const a = loadApp();
+  assert.equal(a.gamePortal("The 50 best games of 2026 | The Guardian"), "");
+  assert.equal(a.gamePortal("Khan Academy | Free Online Courses"), "");
+  assert.equal(a.gamePortal("Buy games - Microsoft Store"), "");
+});
+
+// Absence of a match means "nothing was recognised", never "no game sites were visited" — the same
+// null-vs-zero rule the rest of this product keeps. Empty input must not become "undefined".
+test("an unrecognised or absent title is not labelled anything", () => {
+  const a = loadApp();
+  assert.equal(a.gamePortal("Some Random Page"), "");
+  assert.equal(a.gamePortal(""), "");
+  assert.equal(a.gamePortal(null), "");
+  assert.equal(a.gamePortal(undefined), "");
+});
+
+// --- capture concurrency ----------------------------------------------------
+//
+// One guard, `if (this._shotBusy) return;`, was written to stop the LIVE TIMER stacking captures:
+// the helper can take ~15s while the timer fires every 2s. But it sits on the shared function, so
+// it also dropped human clicks — Take screenshot, Expand and the modal's Refresh — whenever a
+// silent preview happened to be in flight. `:disabled="loadingShot"` does not cover that, because
+// `loadingShot` is only set for non-silent captures, so the buttons looked enabled, accepted the
+// click and did nothing. With a 15s worst case against a 2s cadence that is the common case.
+//
+// The fix has to distinguish the two callers rather than delete the guard, and it has to survive
+// the response that was already in flight: aborting a fetch closes the connection but the helper
+// keeps capturing, so a superseded reply can still arrive and must not win.
+
+/** A capture-capable app whose fetches are resolved by hand. */
+function appCapturing() {
+  const calls = [];
+  const pending = [];
+  let blobs = 0;
+  const app = loadApp({
+    fetch: (url, opts) => {
+      const signal = opts && opts.signal;
+      calls.push({ url, signal });
+      return new Promise((resolve, reject) => {
+        pending.push({ url, resolve, reject });
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            const e = new Error("aborted");
+            e.name = "AbortError";
+            reject(e);
+          });
+        }
+      });
+    },
+    AbortController,
+    URL: { createObjectURL: () => "blob:" + ++blobs, revokeObjectURL: () => {} },
+    Date,
+    setInterval: () => 0,
+    clearInterval: () => {},
+    // Deliberately no `document`: `takeScreenshot` never touches it, and `applyTheme` guards on
+    // `typeof document === "undefined"` at load time — supplying a partial stub defeats that guard
+    // and fails the whole file before a single assertion runs.
+  });
+  app.toast = () => {};
+  app.startShotClock = () => {};
+  const settle = (i, body) => {
+    pending[i].resolve({ status: 200, ok: true, blob: async () => body || {}, headers: { get: () => null } });
+    return new Promise((r) => setImmediate(r));
+  };
+  return { app, calls, pending, settle };
+}
+
+test("a parent's click is not discarded while a live preview is in flight", async () => {
+  const { app, calls } = appCapturing();
+  app.takeScreenshot(true, "preview"); // the live timer, still in flight
+  app.takeScreenshot(); // the parent presses Take screenshot
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 2, "the human capture must reach the endpoint, not silently return");
+});
+
+test("the live timer still does not stack captures on itself", async () => {
+  const { app, calls } = appCapturing();
+  app.takeScreenshot(true, "preview");
+  app.takeScreenshot(true, "preview");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 1, "a silent tick must skip while one is in flight — this is why the guard exists");
+});
+
+test("a superseded capture cannot overwrite the frame that replaced it", async () => {
+  const { app, calls, settle } = appCapturing();
+  app.takeScreenshot(true, "preview");
+  app.takeScreenshot(false, "full");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 2);
+  await settle(1); // the human frame lands
+  const winner = app.shotUrl;
+  await settle(0); // the superseded preview arrives late
+  assert.equal(app.shotUrl, winner, "a late reply from a superseded capture must not replace a newer frame");
+  assert.equal(app.shotTier, "full", "nor downgrade the recorded tier");
+});
+
+test("a superseded capture does not clear the loading state of the one that replaced it", async () => {
+  const { app, settle } = appCapturing();
+  app.takeScreenshot(true, "preview");
+  app.takeScreenshot(false, "full");
+  await new Promise((r) => setImmediate(r));
+  await settle(0); // the superseded preview resolves first
+  assert.equal(app.loadingShot, true, "the human capture is still running, so its spinner must stay");
+  assert.equal(app._shotBusy, true, "and the busy flag must still belong to it");
+});
+
+// The abort covers the common path, but not the one the generation guard is actually for: a reply
+// whose body was already on the wire when abort() landed still resolves. The helper had finished
+// capturing either way — aborting cannot call it back. This harness ignores the signal on purpose,
+// which is the only way to prove the guard is not dead code that the abort path happens to hide.
+function appCapturingIgnoringAbort() {
+  const calls = [];
+  const pending = [];
+  let blobs = 0;
+  const app = loadApp({
+    fetch: (url) => {
+      calls.push(url);
+      return new Promise((resolve) => pending.push(resolve));
+    },
+    AbortController,
+    URL: { createObjectURL: () => "blob:" + ++blobs, revokeObjectURL: () => {} },
+    Date,
+    setInterval: () => 0,
+    clearInterval: () => {},
+  });
+  app.toast = () => {};
+  app.startShotClock = () => {};
+  const settle = (i) => {
+    pending[i]({ status: 200, ok: true, blob: async () => ({}), headers: { get: () => null } });
+    return new Promise((r) => setImmediate(r));
+  };
+  return { app, calls, settle };
+}
+
+test("a reply that outlives its abort still cannot win", async () => {
+  const { app, calls, settle } = appCapturingIgnoringAbort();
+  app.takeScreenshot(true, "preview");
+  app.takeScreenshot(false, "full");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 2);
+  await settle(1); // the newer, human capture lands
+  const winner = app.shotUrl;
+  await settle(0); // the superseded preview resolves anyway, ignoring its abort
+  assert.equal(app.shotUrl, winner, "the older frame must not replace the newer one");
+  assert.equal(app.shotTier, "full", "nor relabel it as a preview");
+  assert.equal(app._shotBusy, false, "and the current capture had already finished cleanly");
+});
+
+// --- which tier is actually on screen ---------------------------------------
+//
+// The client used to record the tier it *asked* for. `ShotTier::from_arg` maps unknown and absent
+// alike to full, so a typo in the query string returns a full frame on a two-second timer while the
+// client believes it is showing previews — and `openShotFull` skips its refetch when it thinks the
+// frame is already full, so the mislabel decides whether the parent gets a sharp picture.
+
+/** A capture app whose responses declare a tier via the X-Shot-Tier header. */
+function appWithServedTier(served) {
+  const pending = [];
+  let blobs = 0;
+  const app = loadApp({
+    fetch: () => new Promise((resolve) => pending.push(resolve)),
+    AbortController,
+    URL: { createObjectURL: () => "blob:" + ++blobs, revokeObjectURL: () => {} },
+    Date,
+    setInterval: () => 0,
+    clearInterval: () => {},
+  });
+  app.toast = () => {};
+  app.startShotClock = () => {};
+  const settle = () => {
+    pending[0]({
+      status: 200,
+      ok: true,
+      blob: async () => ({}),
+      headers: { get: (n) => (n.toLowerCase() === "x-shot-tier" ? served : null) },
+    });
+    return new Promise((r) => setImmediate(r));
+  };
+  return { app, settle };
+}
+
+test("the recorded tier is the one the server served, not the one requested", async () => {
+  const { app, settle } = appWithServedTier("full");
+  app.takeScreenshot(true, "preview"); // asked for preview...
+  await new Promise((r) => setImmediate(r));
+  await settle(); // ...but the server says it served full
+  assert.equal(app.shotTier, "full", "record what arrived, so a silent full-tier stream is visible");
+});
+
+test("a response that names no tier falls back to the one requested", async () => {
+  const { app, settle } = appWithServedTier(null);
+  app.takeScreenshot(true, "preview");
+  await new Promise((r) => setImmediate(r));
+  await settle();
+  assert.equal(app.shotTier, "preview", "an older service without the header must still work");
+});
+
+// --- which tier a live frame should be -------------------------------------
+//
+// The two tiers were introduced on an explicit promise: a parent who wants to READ something can
+// still get a full-resolution frame. That promise held only while Live was off. With it on, the
+// timer overwrote the overlay's sharp frame within one refresh interval — and Live being on is
+// precisely the state a parent is in when they press Expand, so the promise failed exactly where
+// it was needed. The tier was decided by who asked for the frame; it should follow which surface
+// is showing it.
+
+test("live frames follow the surface being viewed, not whoever asked for the first one", () => {
+  const a = loadApp();
+  a.shotFull = false;
+  assert.equal(a.liveTier(), "preview", "the thumbnail cannot show more than a preview holds");
+  a.shotFull = true;
+  assert.equal(a.liveTier(), "full", "the overlay exists so a parent can read what is on screen");
+});
+
+test("a live tick asks for the tier the visible surface needs", () => {
+  const asked = [];
+  const a = loadApp();
+  a.takeScreenshot = (silent, tier) => asked.push([silent, tier]);
+  a._liveUntil = Number.MAX_SAFE_INTEGER;
+
+  a.shotFull = false;
+  a._liveTick();
+  a.shotFull = true;
+  a._liveTick();
+
+  assert.deepEqual(asked, [[true, "preview"], [true, "full"]], "silent both times, sharp only when the overlay is up");
+});
+
+test("a live tick past its own deadline stops instead of capturing", () => {
+  const asked = [];
+  const a = loadApp();
+  a.takeScreenshot = (...x) => asked.push(x);
+  let stopped = false;
+  a.stopAutoRefresh = () => { stopped = true; };
+  a._liveUntil = 0;
+  a._liveTick();
+  assert.equal(stopped, true, "the unattended-tab cap must still fire");
+  assert.deepEqual(asked, [], "and it must not capture on the way out");
+});
+
+// The audit keys on who asked, so the request has to say. Tier cannot carry it any more: the timer
+// asks for `full` whenever the full-size view is open, and auditing those one-for-one would evict
+// the whole security history to make room for a timer.
+test("only the live timer marks its captures as timer-driven", async () => {
+  const urls = [];
+  const app = loadApp({
+    fetch: (u) => {
+      urls.push(u);
+      return new Promise(() => {});
+    },
+    AbortController,
+    URL: { createObjectURL: () => "blob:x", revokeObjectURL: () => {} },
+    Date,
+    setInterval: () => 0,
+    clearInterval: () => {},
+  });
+  app.toast = () => {};
+  app.startShotClock = () => {};
+  app._liveUntil = Number.MAX_SAFE_INTEGER;
+
+  app._liveTick();
+  await new Promise((r) => setImmediate(r));
+  app.takeScreenshot(); // a person, superseding the frame in flight
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(urls.length, 2);
+  assert.ok(urls[0].includes("live=1"), `timer frame must be marked: ${urls[0]}`);
+  assert.ok(!urls[1].includes("live=1"), `a person's capture must not be: ${urls[1]}`);
+});

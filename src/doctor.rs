@@ -151,6 +151,49 @@ fn fail(text: impl Into<String>, fix: impl Into<String>) -> Check {
 ///
 /// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
 /// than restated so there is one definition and one set of tests for it.
+/// What `doctor` should say about this machine's ability to capture the screen at all.
+///
+/// **Three states, never two.** A supported build reports as checked, an unreadable build says it
+/// could not be read, and an old build warns. Returning nothing on success would leave the report
+/// with no "Screen capture" section, and an absent section reads exactly like a check that never
+/// ran — the distinction this product spends real effort keeping everywhere else (`measured` on
+/// `DayRow`, `focus_missing`, `Stamp::Missing` against `Stamp::Corrupt`). A parent whose
+/// screenshots fail on a *modern* machine needs to see this was checked and was not the cause.
+///
+/// The unreadable case does **not** warn, matching [`crate::preflight::check_windows_build`]: a
+/// misbehaving syscall must not alarm a parent whose machine is almost certainly fine. But it does
+/// not claim support either, because that would report an unmeasured thing as measured.
+///
+/// Pure, and takes the build rather than reading it, for the same reason [`version_check`] does:
+/// the decision is then testable on the machine this is developed on, which is not the machine it
+/// runs on. The floor itself stays in [`crate::preflight::capture_build_ok`] — one definition.
+///
+/// Its only non-test caller is inside `#[cfg(windows)] platform_checks`, so off Windows it is dead
+/// by definition, and keeping it compiled here is the point: the decision stays testable where the
+/// tests run. Same shape as the helpers in `install.rs`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn capture_check(build: u32) -> Check {
+    if build == 0 {
+        return ok(
+            "could not read this Windows build number — assuming it is new enough for screen \
+             capture, which is what install assumes too",
+        );
+    }
+    if crate::preflight::capture_build_ok(build) {
+        return ok(format!("Windows build {build} supports screen capture"));
+    }
+    warn(
+        format!(
+            "Windows build {build} is older than {} (version 1903) — screenshots and the live \
+             view cannot work on this machine",
+            crate::preflight::MIN_CAPTURE_BUILD
+        ),
+        "Everything else works normally on this build: screen-time limits, curfew, blocked apps \
+         and the whole enforcement half are unaffected. Only the picture of the screen fails. \
+         Run Windows Update — any Windows 10 still receiving updates is well past 1903.",
+    )
+}
+
 fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool) -> Option<Check> {
     use crate::install::InstallKind;
 
@@ -559,6 +602,13 @@ fn platform_checks(report: &mut Report) {
 
     use crate::service::SERVICE_NAME;
 
+    // Whether this machine can capture at all, before anything about the service. A parent whose
+    // screenshots never work is looking for exactly this line, and it is the one fact here that no
+    // amount of reinstalling changes.
+    report
+        .section("Screen capture")
+        .push(capture_check(crate::preflight::os_build()));
+
     {
         let checks = report.section("Service");
         let status = ServiceManager::local_computer(None::<&OsStr>, ServiceManagerAccess::CONNECT)
@@ -639,6 +689,103 @@ fn platform_checks(report: &mut Report) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `doctor` is where the README sends a parent when something looks wrong, so a green report on
+    /// a build that can never capture sends them hunting in the wrong place. `install` mentions it
+    /// once, in a console they scroll past; this is the surface they come back to.
+    #[test]
+    fn doctor_reports_a_windows_build_too_old_to_capture() {
+        let c = capture_check(17_763);
+        assert_eq!(
+            c.level,
+            Level::Warn,
+            "a caution, not a failure: every other half of the product works on this build"
+        );
+        assert!(
+            c.text.contains("1903"),
+            "name the version a parent can check with winver: {}",
+            c.text
+        );
+        assert!(
+            c.fix.is_some(),
+            "a warn without a fix is just bad news; say what to do"
+        );
+    }
+
+    /// A supported build must say so, rather than say nothing.
+    ///
+    /// `doctor` is a checklist, and a section that is simply absent reads exactly like a check that
+    /// never ran — which is the distinction this whole product is built on keeping (`measured` on
+    /// `DayRow`, `focus_missing`, `Stamp::Missing` vs `Stamp::Corrupt`). A parent whose screenshots
+    /// fail on a modern machine needs to see that this was checked and was not the cause.
+    #[test]
+    fn a_supported_build_is_reported_as_checked_not_as_silence() {
+        let c = capture_check(19_045);
+        assert_eq!(c.level, Level::Ok);
+        assert!(
+            c.text.contains("19045"),
+            "name the build, so a parent reporting a problem can quote it: {}",
+            c.text
+        );
+    }
+
+    /// An unreadable build is the third state and must not be rendered as either of the other two.
+    ///
+    /// `capture_build_ok(0)` is `true`, so this does **not** warn — matching `install`, which
+    /// deliberately does not block on a syscall that misbehaved. But claiming the build "supports
+    /// screen capture" would report an unmeasured thing as measured, which is the exact error the
+    /// `Option`s and `measured` flags elsewhere exist to prevent.
+    #[test]
+    fn an_unreadable_build_says_so_rather_than_claiming_support() {
+        let c = capture_check(0);
+        assert_eq!(
+            c.level,
+            Level::Ok,
+            "must not alarm: install does not either"
+        );
+        let s = c.text.to_lowercase();
+        assert!(
+            s.contains("could not") || s.contains("unknown") || s.contains("unreadable"),
+            "say the number could not be read rather than asserting support: {}",
+            c.text
+        );
+        assert!(
+            !s.contains("supports screen capture"),
+            "an unmeasured build must not be reported as a measured pass: {}",
+            c.text
+        );
+    }
+
+    /// The call site, not the decision — `doctor_reports_a_windows_build_too_old_to_capture` proves
+    /// `capture_check` is right, and would stay green if nothing ever called it.
+    ///
+    /// A source scan because the property is the *existence of a call*, inside a `#[cfg(windows)]`
+    /// function this machine cannot execute. `capture_check` keeps its own tests, so deleting the
+    /// call would not even raise dead code. This is the same shape as
+    /// `rules::tests::standing_down_closes_an_open_session`. Scanners like this are a smell and
+    /// their number should not grow — but no unit test can watch a call site inside code this
+    /// machine cannot compile.
+    #[test]
+    fn the_capture_check_reaches_the_report() {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/doctor.rs"),
+        )
+        .expect("reading src/doctor.rs")
+        .replace("\r\n", "\n");
+        let windows_checks = src
+            .split_once("#[cfg(windows)]\nfn platform_checks(")
+            .expect("the Windows platform_checks must exist")
+            .1;
+        let body = windows_checks
+            .split_once("\n#[cfg(not(windows))]")
+            .expect("platform_checks must end")
+            .0;
+        assert!(
+            body.contains("capture_check(crate::preflight::os_build())"),
+            "doctor must ask whether this machine can capture; without this call the check is \
+             dead code and a pre-1903 machine reads as entirely healthy"
+        );
+    }
 
     #[test]
     fn the_report_header_names_the_build() {
