@@ -1884,3 +1884,27 @@ test("rejection falls back when the body is not ours", async () => {
     "Could not save rules",
   );
 });
+
+// --- budgetTone ------------------------------------------------------------
+//
+// Extracted when the sticky summary strip needed the same thresholds the Today card's progress bar
+// already had inline. The value of extracting it is that the two cannot drift: a strip showing
+// amber above a bar showing green is worse than either being wrong alone, because the parent has
+// to work out which one to believe.
+
+test("budgetTone escalates at the thresholds, not around them", () => {
+  const app = loadApp();
+  assert.equal(app.budgetTone(0), "error", "no time left is the urgent case");
+  assert.equal(app.budgetTone(1), "warning");
+  assert.equal(app.budgetTone(15), "warning", "15 is the boundary and must be inclusive");
+  assert.equal(app.budgetTone(16), "primary", "one past the boundary is not yet a warning");
+  assert.equal(app.budgetTone(600), "primary");
+});
+
+test("budgetTone treats an unknown remaining as ordinary, never as urgent", () => {
+  const app = loadApp();
+  // `today` is null before the first load and after a failed one. Painting the bar red there would
+  // tell a parent their child is out of time when nothing has been measured at all.
+  assert.equal(app.budgetTone(null), "primary");
+  assert.equal(app.budgetTone(undefined), "primary");
+});

@@ -5,6 +5,11 @@
 // one place and "all fine" in the other for the same age.
 const ENFORCER_STALE_SECS = 150;
 
+// Below this many minutes left, the remaining-time indicators turn amber. Matches the first
+// warning the child gets on their own desktop, so the parent's dashboard and the child's screen
+// change colour at the same moment rather than at two numbers nobody chose together.
+const BUDGET_LOW_MINS = 15;
+
 // --- Theme -------------------------------------------------------------------------------------
 //
 // Three states, not two, and "auto" is the default: the stylesheet ships `light` on `:root` and
@@ -1881,6 +1886,28 @@ function app() {
     // service it could not reach at all. The flash is now prevented by `todayAsked` below,
     // which says whether an answer has been *attempted*, rather than by reading "no answer" as
     // "a good answer".
+    // Which urgency the remaining-time indicators show, as a daisyUI suffix.
+    //
+    // Extracted because the summary strip and the Today card must never disagree about when time
+    // is "nearly gone" — a strip saying amber above a bar saying green is worse than either alone,
+    // and the inline ternary this replaces was already written out once and about to be twice.
+    // Pure, so the thresholds are testable without a browser.
+    budgetTone(remaining) {
+      if (remaining === null || remaining === undefined) return "primary";
+      if (remaining === 0) return "error";
+      if (remaining <= BUDGET_LOW_MINS) return "warning";
+      return "primary";
+    },
+
+    // Tone for a per-app or per-group limit bar. A different decision from `budgetTone`, and
+    // deliberately not folded into it: this one is binary — a limit is reached or it is not — with
+    // no amber band, because a per-app limit has no equivalent of the child's 15-minute warning.
+    // Named anyway, because the expression was written out byte-identically in two places, and the
+    // next per-limit bar would have made it three.
+    limitTone(used, limit) {
+      return used >= limit ? "error" : "primary";
+    },
+
     isEnforcerStale(age) {
       return age == null || age > ENFORCER_STALE_SECS;
     },

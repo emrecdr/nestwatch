@@ -219,6 +219,36 @@ mod tests {
         );
     }
 
+    /// Every progress bar derives its urgency colour from a named helper, never a literal.
+    ///
+    /// Three bars, two decisions: `budgetTone` (three states, keyed on minutes *remaining*, with an
+    /// amber band matching the child's own 15-minute warning) and `limitTone` (binary, keyed on
+    /// used-vs-limit, no amber because a per-app limit has no warning to match). Before this, the
+    /// budget decision was written inline once and about to be twice, and the limit decision was
+    /// written out byte-identically in two places.
+    ///
+    /// The drift this prevents is not cosmetic. The summary strip and the Today card show the same
+    /// budget; a strip in amber above a bar in green forces the parent to work out which to
+    /// believe, which is worse than either being wrong on its own.
+    #[test]
+    fn no_progress_bar_hard_codes_its_own_urgency_colour() {
+        let markup = strip_html_comments(include_str!("../assets/index.html"));
+        for tone in ["progress-error", "progress-warning"] {
+            assert!(
+                !markup.contains(tone),
+                "`{tone}` is written into the markup. Urgency is a decision, and it lives in \
+                 `budgetTone`/`limitTone` in app.js so two bars showing the same fact cannot \
+                 disagree — build the class from one of those instead."
+            );
+        }
+        // …and the helpers are actually reached, so the assertion above cannot be satisfied by a
+        // page that simply has no progress bars left.
+        assert!(
+            markup.contains("budgetTone(") && markup.contains("limitTone("),
+            "both tone helpers must still be used by the markup"
+        );
+    }
+
     /// The child's page keeps its accessible names and atomic live regions.
     ///
     /// # Why this one page and not both

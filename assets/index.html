@@ -62,6 +62,47 @@
     <!-- ── Dashboard ────────────────────────────────────────────────── -->
     <template x-if="authed === true">
       <div>
+        <!-- ── Sticky summary ───────────────────────────────────────────
+             Eleven cards on one continuous scroll, no tabs and no nav, so the thing a parent opens
+             this page for several times a day sat in the same vertical queue as the things they
+             touch once a quarter. (Two of those cards are even called "Screen time" and
+             "Screen-time & app limits" — on a phone, where one card fills the viewport, the name is
+             the only thing telling the report from the configuration.)
+
+             This carries the three facts that answer "what do I need to know right now", and it
+             stays put while the parent scrolls to whatever they came for. It computes nothing:
+             every value here is the same call the card below makes, so the two cannot disagree.
+
+             `aria-live` + `aria-atomic` for the reason spelled out on the Today card's own figures
+             — these numbers change under a 60s poll, and a delta announcement is a bare number
+             with no referent. Following the convention already argued for there rather than
+             inventing a second one. -->
+        <div class="sticky top-0 z-30 border-b border-base-300 bg-base-100 shadow-sm"
+             x-show="todayAsked">
+          <div class="mx-auto flex max-w-5xl flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 text-sm"
+               aria-live="polite" aria-atomic="true">
+            <template x-if="today && today.budget_mins > 0">
+              <div class="flex flex-1 items-center gap-2 min-w-40">
+                <progress class="progress w-24" :class="'progress-' + budgetTone(today.remaining_mins)"
+                          :value="today.used_mins" :max="today.budget_mins"
+                          :aria-label="todayBarLabel()"></progress>
+                <span><span class="font-semibold" x-text="today.remaining_mins"></span> min left</span>
+              </div>
+            </template>
+            <template x-if="today && !(today.budget_mins > 0)">
+              <span class="flex-1 opacity-70">No limit set today</span>
+            </template>
+            <template x-if="!today">
+              <span class="flex-1 opacity-70">Today's usage unavailable</span>
+            </template>
+
+            <span class="badge badge-warning badge-sm gap-1" x-show="showRequests()"
+                  x-text="requestBadge()"></span>
+            <span class="badge badge-error badge-sm" x-show="stEnforcementStale()">enforcement
+              may be stopped</span>
+          </div>
+        </div>
+
         <div class="navbar bg-base-100 shadow">
           <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
           <div class="flex-none items-center gap-2">
@@ -358,7 +399,7 @@
                   </div>
                   <progress class="progress w-full mt-1"
                             :aria-label="todayBarLabel()"
-                            :class="today.remaining_mins === 0 ? 'progress-error' : (today.remaining_mins <= 15 ? 'progress-warning' : 'progress-primary')"
+                            :class="'progress-' + budgetTone(today.remaining_mins)"
                             :value="today.used_mins" :max="today.budget_mins"></progress>
                 </div>
               </template>
@@ -404,7 +445,7 @@
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
                         <progress class="progress flex-1"
                                   :aria-label="limitLabel(a)"
-                                  :class="a.used_mins >= a.limit_mins ? 'progress-error' : 'progress-primary'"
+                                  :class="'progress-' + limitTone(a.used_mins, a.limit_mins)"
                                   :value="a.used_mins" :max="a.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="a.used_mins"></span>/<span
                           x-text="a.limit_mins"></span> min</span>
@@ -486,7 +527,7 @@
                         <span class="w-48 truncate" x-text="g.name"></span>
                         <progress class="progress flex-1"
                                   :aria-label="limitLabel(g)"
-                                  :class="g.used_mins >= g.limit_mins ? 'progress-error' : 'progress-primary'"
+                                  :class="'progress-' + limitTone(g.used_mins, g.limit_mins)"
                                   :value="g.used_mins" :max="g.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="g.used_mins"></span>/<span
                           x-text="g.limit_mins"></span> min</span>
