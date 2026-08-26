@@ -234,6 +234,19 @@ pub struct FirstSeen {
     /// UI must show it: "new, against 40 days of history" and "new, against 1 day" are different
     /// statements, and the second is nearly worthless.
     pub baseline_days: usize,
+    /// The check **stopped**: the baseline passed [`MAX_BASELINE_APPS`], so no answer was computed.
+    ///
+    /// A fourth state rather than a third spelling of `None`, because this is the one case the cap
+    /// was built for and it was the one case nothing recorded. Reaching 2,000 distinct executable
+    /// names takes deliberate renaming — a child cycling names to keep every day looking new — and
+    /// that produced exactly the dashboard and exactly the audit log of a fresh install where the
+    /// watcher had never run. Disabling the check silently and permanently was the reward for
+    /// attacking it.
+    ///
+    /// When this is set, `apps` is empty and `count` is zero on purpose: a truncated baseline would
+    /// report familiar programs as new, which is a false alarm aimed at the parent. `baseline_days`
+    /// is how far it got before giving up, not a claim of strength.
+    pub baseline_overflow: bool,
 }
 
 /// Compute [`FirstSeen`] for the newest day in `history` that carries focus evidence.
@@ -265,7 +278,15 @@ fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> 
         for app in &earlier.focused {
             baseline.insert(app.name.as_str());
             if baseline.len() > MAX_BASELINE_APPS {
-                return None;
+                // Say that it stopped, rather than returning the `None` a fresh install also
+                // returns. See `FirstSeen::baseline_overflow`.
+                return Some(FirstSeen {
+                    date: target.to_string(),
+                    apps: Vec::new(),
+                    count: 0,
+                    baseline_days,
+                    baseline_overflow: true,
+                });
             }
         }
     }
@@ -293,6 +314,7 @@ fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> 
         apps: fresh,
         count,
         baseline_days,
+        baseline_overflow: false,
     })
 }
 
@@ -730,9 +752,52 @@ mod tests {
             focus_row("2026-08-18", &refs),
             focus_row("2026-08-19", &[("brand-new.exe", 10)]),
         ];
+        let fs = report_of(&rows)
+            .first_seen
+            .expect("an abandoned check must say so rather than vanish");
         assert!(
-            report_of(&rows).first_seen.is_none(),
-            "a baseline that could not be held completely must not be used"
+            fs.baseline_overflow,
+            "the check stopped; the report has to carry that it stopped"
+        );
+        assert!(
+            fs.apps.is_empty(),
+            "a baseline that could not be held completely must not be used to name anything new"
+        );
+    }
+
+    /// The give-up state is the one the cap exists for, and it must not look like a quiet day.
+    ///
+    /// Reaching 2,000 distinct executable names takes deliberate renaming — the behaviour the cap's
+    /// own comment names as the reason it exists. Before this, that child produced `None`, which is
+    /// also what a fresh install produces, so the dashboard and the audit log were identical to a
+    /// machine where the watcher had never run. Silently and permanently disabling the check was
+    /// the reward for attacking it.
+    #[test]
+    fn an_abandoned_check_is_distinguishable_from_a_quiet_day() {
+        let quiet = report_of(&[
+            focus_row("2026-08-18", &[("chrome.exe", 30)]),
+            focus_row("2026-08-19", &[("chrome.exe", 20)]),
+        ])
+        .first_seen
+        .expect("a day that introduced nothing is still an answer");
+        assert!(!quiet.baseline_overflow);
+        assert!(quiet.apps.is_empty());
+
+        let many: Vec<(String, u64)> = (0..=MAX_BASELINE_APPS)
+            .map(|i| (format!("app{i}.exe"), 1))
+            .collect();
+        let refs: Vec<(&str, u64)> = many.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+        let overflowed = report_of(&[
+            focus_row("2026-08-18", &refs),
+            focus_row("2026-08-19", &[("brand-new.exe", 10)]),
+        ])
+        .first_seen
+        .expect("an abandoned check must say so");
+        assert!(overflowed.baseline_overflow);
+
+        assert_ne!(
+            quiet.baseline_overflow, overflowed.baseline_overflow,
+            "these two must not render as the same blank space"
         );
     }
 

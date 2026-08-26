@@ -262,6 +262,46 @@ mod tests {
         );
     }
 
+    /// Every `show…` getter the component defines is actually rendered by the markup.
+    ///
+    /// These exist for one purpose: to decide whether something appears. A getter nothing consults
+    /// is a decision computed and thrown away, and it fails silently in the worst direction — the
+    /// state it was written to distinguish reaches the reader as the same blank space as the state
+    /// it was distinguishing it *from*.
+    ///
+    /// That is not hypothetical here. `first_seen` carried three states from `screentime.rs`,
+    /// typed, serialized, argued for in a doc comment saying "the UI must distinguish that", and
+    /// pinned by tests in two languages — and the card rendered two of them, for as long as the
+    /// feature existed. `firstSeenNote()` computed a sentence for the quiet day that nothing ever
+    /// displayed. See `OPEN-FINDINGS.md` O52.
+    ///
+    /// Matched with the quotes around the name so `showFirstSeen` cannot be satisfied by
+    /// `showFirstSeenQuiet` happening to contain it.
+    #[test]
+    fn every_show_getter_reaches_the_markup() {
+        let script = include_str!("../assets/app.js");
+        let html = strip_html_comments(index_html());
+
+        let mut checked = 0;
+        for rest in script.split("get show").skip(1) {
+            let Some(name) = rest.split("()").next() else {
+                continue;
+            };
+            let name = format!("show{name}");
+            checked += 1;
+            assert!(
+                html.contains(&format!("\"{name}\"")),
+                "`{name}` decides whether something is shown and nothing in index.html asks it, so \
+                 whatever state it distinguishes renders as the same nothing as every other state"
+            );
+        }
+        assert!(
+            checked >= 3,
+            "expected the first-seen getters at least; found {checked}, so this scan has stopped \
+             matching how they are declared"
+        );
+    }
+
     /// The served `index.html`, by name.
     ///
     /// Two scanners want this one page rather than a loop over all of them, and both opened with

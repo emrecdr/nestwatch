@@ -1002,6 +1002,24 @@
                 </div>
               </template>
 
+              <!-- The quiet day, in words. Plain text and not the panel above: most days introduce
+                   nothing, and a warning that appears every day stops being read. What it must not
+                   be is the same blank space as "could not tell" — that distinction is carried all
+                   the way from `screentime.rs` and used to be dropped here, at the last hop. -->
+              <template x-if="showFirstSeenQuiet">
+                <p class="mt-3 text-sm opacity-70" x-text="firstSeenQuietNote()"></p>
+              </template>
+
+              <!-- The check gave up. Its own shape, because "stopped working" is not "nothing
+                   happened" — and reaching it takes thousands of distinct program names, which is
+                   deliberate renaming rather than ordinary use. It stays an alert: unlike the quiet
+                   day this is rare, and it means a feature the parent believes is on is off. -->
+              <template x-if="showFirstSeenStopped">
+                <div role="status" class="alert alert-warning mt-3 py-2 text-sm">
+                  <span x-text="firstSeenStoppedNote()"></span>
+                </div>
+              </template>
+
               <!-- Categories first, because "Games: 14 h" is a sentence and twenty executable
                    names is a puzzle. Only rendered once there is category history to show: a
                    parent who has defined no groups sees nothing here rather than an empty heading,

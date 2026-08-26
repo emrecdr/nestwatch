@@ -632,51 +632,6 @@ config is by construction what is in the certificate.
 **Trigger.** Next change to the certificate path. Pre-existing; found during a cleanup review of the
 uninstall work and recorded rather than fixed, because it is not that change.
 
-### O49 · The one case the baseline cap was written for is the one case nothing records
-
-`first_seen_in` gives up and returns `None` when the baseline exceeds `MAX_BASELINE_APPS` (2,000
-distinct names). `None` is also what it returns for "no focus history", "only one day of it" and
-"this is the first day" — so the UI, which renders `None` as no panel at all, cannot tell them
-apart, and neither can the logs.
-
-`foreground::MAX_APPS` is 200/day and `rollup_row` writes the map uncapped, so 2,000 distinct
-executable names is not something ordinary use produces. It is reachable essentially only by the
-deliberate renaming the cap's own comment names as the reason it exists — a child cycling executable
-names to keep every day looking new. That child silently and permanently disables the feature, and
-produces **exactly** the same dashboard and exactly the same audit log as a fresh install where the
-watcher has never run.
-
-**Fix.** At minimum record it (`audit.record("first_seen_baseline_overflow", …)`) so the one
-interesting case leaves a trace. Properly, it is a distinct state rather than a third spelling of
-`None`, and it should reach the parent as "this check has stopped working, and here is why".
-
-**Trigger.** Whenever O52 is taken,
-since both are about the same `Option` losing information on its way to the reader.
-
-### O52 · `first_seen`'s three states collapse to two at the last hop
-
-`Option<FirstSeen>` carries three states deliberately: `None` = the report could not tell,
-`Some` with an empty `apps` = it checked and nothing was new, `Some` non-empty = the notice. That
-distinction is typed in Rust, serialized, mirrored in `emptyScreentime()`, argued for in a doc
-comment that says "the UI must distinguish that", and pinned by four tests across two languages.
-
-The UI does not distinguish it. `x-if="showFirstSeen"` requires `apps.length > 0`, so `None` and
-`Some{apps:[]}` render identically — nothing at all. `firstSeenNote()` computes a sentence for the
-quiet day and throws it away.
-
-To a parent, "checked, nothing new" and "gave up" are the same blank space, which is the failure the
-`Option` was introduced to prevent, arriving one layer past where it is guarded. Meanwhile two JS
-tests maintain an internal difference with no observable consequence.
-
-**Fix, and it is genuinely a choice.** Either the quiet-day state reaches the reader — one line where
-the panel would be, and `firstSeenNote()` already renders it — or `first_seen_in` returns `None` for
-it and the doc, the type's contract and four tests drop to two states. What is not defensible is
-carrying three states everywhere and rendering two.
-
-Weigh it against the reason the panel is hidden on quiet days at all: a notice that appears every day
-stops being read. That argument is sound and may well win — in which case the honest move is to
-*delete* the third state rather than keep paying for it.
-
 ### O54 · Two source-text scanners and a standing exemption, for a property a shared list would make true
 
 `run_helper` reads `--tier` with a hand-rolled `args.iter().position(...)` scan, and its two usage

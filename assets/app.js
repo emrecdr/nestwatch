@@ -1480,6 +1480,46 @@ function app() {
       return !!fs && fs.apps && fs.apps.length > 0;
     },
 
+    // The report carries four states and the card used to render two of them.
+    //
+    // `null` is "could not tell" — no history, or the first day — and stays silent, because there
+    // is nothing to say. The other three each get their own shape: a **quiet day** says so in
+    // words, a **stopped check** says that, and only an actual find gets the warning panel. Two of
+    // those used to be the same blank space, which is exactly the confusion the `Option` was added
+    // to prevent, arriving one layer past where it was guarded.
+    //
+    // Plain text rather than a panel for the quiet day on purpose: a warning that appears every day
+    // stops being read, and most days are quiet ones.
+    get showFirstSeenQuiet() {
+      const fs = this.firstSeen;
+      return !!fs && !fs.baseline_overflow && !!fs.apps && fs.apps.length === 0;
+    },
+
+    get showFirstSeenStopped() {
+      const fs = this.firstSeen;
+      return !!fs && !!fs.baseline_overflow;
+    },
+
+    // Same strength-of-claim clause as `firstSeenNote`: "nothing new against 40 days" and "nothing
+    // new against 1 day" are different statements, and only the parent can weigh them.
+    firstSeenQuietNote() {
+      const fs = this.firstSeen;
+      if (!fs) return "";
+      const days = fs.baseline_days === 1 ? "1 earlier day" : fs.baseline_days + " earlier days";
+      return "Checked — nothing new today, against " + days + " of history";
+    },
+
+    // Says what stopped and what to do, not just that something is wrong. The cause is worth
+    // naming: reaching this takes thousands of distinct program names, which ordinary use does not
+    // produce.
+    firstSeenStoppedNote() {
+      return (
+        "New-app detection has stopped working: too many different program names to compare " +
+        "against. Ordinary use does not reach that, so it is worth looking at what has been " +
+        "running on this PC."
+      );
+    },
+
     // The claim's strength, stated rather than implied. "New, against 40 days" and "new, against
     // 1 day" are different statements and only the parent can weigh them.
     firstSeenNote() {

@@ -40,6 +40,17 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   so too, rather than staying silent: a check that says nothing looks exactly like a check that
   never ran.
 
+- **The screen-time card now tells you when it checked and found nothing.** A day that introduced
+  no new program used to look exactly like a day the check could not run — both were blank space.
+  It now says so in a line: "Checked — nothing new today, against 40 earlier days of history".
+  Plain text rather than the warning panel, because most days are quiet ones and a warning that
+  appears every day stops being read.
+  <br>**And it now says when the check has stopped.** If thousands of different program names have
+  been used, there is nothing dependable left to compare against and the check gives up rather than
+  calling familiar programs new. That used to be silent and permanent, and looked identical to a
+  freshly installed machine — so the one behaviour the limit exists to catch was the one that left
+  no trace. It now shows a warning naming the cause.
+
 ### Changed
 - **Time codes are now six characters instead of eight.** The code you leave for your child to type
   in — worth a set number of extra minutes — is shorter to read off a note and shorter to retype

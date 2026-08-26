@@ -1227,16 +1227,40 @@ function appWithFirstSeen(first_seen) {
   return a;
 }
 
-test("a report that cannot tell shows no notice", () => {
+test("a report that cannot tell shows nothing at all", () => {
   const a = appWithFirstSeen(null);
   assert.equal(a.firstSeen, null);
   assert.equal(a.showFirstSeen, false, "'could not tell' must not render as 'nothing new'");
+  assert.equal(a.showFirstSeenQuiet, false, "nor as a quiet day");
+  assert.equal(a.showFirstSeenStopped, false);
 });
 
-test("a quiet day shows no notice, but is not the same state as cannot-tell", () => {
-  const a = appWithFirstSeen({ date: "2026-08-19", apps: [], count: 0, baseline_days: 12 });
-  assert.equal(a.showFirstSeen, false, "an empty notice is not worth a panel");
-  assert.notEqual(a.firstSeen, null, "but the answer exists, unlike the null case");
+// Three states were carried all the way from `screentime.rs` and two of them rendered as the same
+// blank space, which is the failure the `Option` was introduced to prevent arriving one layer past
+// where it is guarded. The quiet day now reaches the reader as words — plainly, not as the warning
+// panel, since a warning that appears every day stops being read.
+test("a quiet day says so, rather than looking like a check that never ran", () => {
+  const a = appWithFirstSeen({
+    date: "2026-08-19", apps: [], count: 0, baseline_days: 12, baseline_overflow: false,
+  });
+  assert.equal(a.showFirstSeen, false, "an empty notice is not worth the warning panel");
+  assert.equal(a.showFirstSeenQuiet, true, "but it must reach the reader as words");
+  assert.match(a.firstSeenQuietNote(), /nothing new/i);
+  assert.match(a.firstSeenQuietNote(), /12 earlier days/, "carrying the strength of the claim");
+});
+
+// The one case the cap exists for. A child cycling executable names to keep every day looking new
+// pushes the baseline past its limit, and the check abandons the answer — correctly, since a
+// truncated baseline would name familiar programs as new. What was wrong is that giving up looked
+// exactly like a fresh install, on the dashboard and in the log both.
+test("a check that gave up says so, instead of looking like nothing happened", () => {
+  const a = appWithFirstSeen({
+    date: "2026-08-19", apps: [], count: 0, baseline_days: 3, baseline_overflow: true,
+  });
+  assert.equal(a.showFirstSeenStopped, true, "the parent has to learn the check stopped");
+  assert.equal(a.showFirstSeenQuiet, false, "a stopped check is not a quiet day");
+  assert.equal(a.showFirstSeen, false, "and it must name nothing, or it is a false alarm");
+  assert.match(a.firstSeenStoppedNote(), /stopped/i);
 });
 
 test("a new app is announced with the strength of the claim beside it", () => {
