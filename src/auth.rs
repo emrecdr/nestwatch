@@ -331,10 +331,22 @@ fn prune(map: &mut HashMap<IpAddr, Attempts>, now: Instant) {
     map.retain(|_, a| a.consecutive_failures > 0 || a.locked_until.is_some_and(|u| now < u));
 }
 
+/// Wrong tries before a device is locked out, and for how long.
+///
+/// Named rather than left as literals inside `default()`, because the lockout duration is also
+/// stated to the person it locks out — `app.js` tells them to "wait a minute" — and a number
+/// buried in a constructor call is not something a reader or a test can connect that sentence to.
+/// A sibling repository lost this exact pairing with no constant at all, where the only trace of
+/// the limit was the word "minute" inside a sentence: a literal at least announces itself as a
+/// number, prose does not manage even that.
+pub(crate) const LOGIN_MAX_FAILS: u32 = 5;
+/// See [`LOGIN_MAX_FAILS`]. Pinned against the message a parent reads by
+/// `web::tests::the_lockout_a_parent_is_told_to_wait_matches_the_one_enforced`.
+pub(crate) const LOGIN_LOCKOUT: Duration = Duration::from_secs(60);
+
 impl Default for LoginLimiter {
     fn default() -> Self {
-        // 5 wrong tries → locked out for 60 seconds.
-        Self::new(5, Duration::from_secs(60))
+        Self::new(LOGIN_MAX_FAILS, LOGIN_LOCKOUT)
     }
 }
 

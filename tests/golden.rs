@@ -36,7 +36,7 @@ use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use nestwatch::rules::{Rules, Usage, today_summary};
-use nestwatch::timecode::ActiveCode;
+use nestwatch::timecode::{ActiveCode, TimeCodes};
 use nestwatch::timereq::PendingRequest;
 
 mod common;
@@ -108,6 +108,34 @@ fn time_codes() {
         ts: "2026-08-26T17:02:11.004Z".into(),
         minutes: 45,
     }];
+
+    // The sample's LENGTH is derived, not typed — because a literal cannot fail when the constant
+    // moves, and this file proved it: it carried an eight-character code for a day after codes
+    // became six, regenerating unchanged the whole time because the length lives in the source
+    // above rather than in `CODE_LEN`.
+    //
+    // `timecode`'s own unit test pins `CODE_LEN` to a literal deliberately — asserting a constant
+    // against itself pins nothing — so a change there fails *there*. What it cannot notice is this
+    // file, and this is the one a client sizes an input box and a reveal mask against. A sample
+    // that disagrees with what the server issues is a contract that lies, so it is checked against
+    // a real issued code rather than trusted.
+    let dir = std::env::temp_dir().join(format!("nw-golden-code-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let issued = TimeCodes::new(dir.join("time_codes.jsonl"))
+        .issue(45)
+        .expect("a fresh store must be able to issue one code");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        codes[0].code.len(),
+        issued.len(),
+        "the sample code is {} characters but the server issues {} — the Android client sizes its \
+         input and its reveal mask against this file, so regenerate the sample to match rather \
+         than shipping a contract that disagrees with the server",
+        codes[0].code.len(),
+        issued.len()
+    );
+
     golden("time-codes", &serde_json::to_value(&codes).unwrap());
     golden(
         "time-codes-empty",

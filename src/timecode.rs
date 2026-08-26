@@ -29,7 +29,7 @@ use crate::jsonl::JsonlLog;
 /// Largest single code we mint.
 pub const MAX_CODE_MINUTES: u32 = 240;
 /// Cap on outstanding (unredeemed) codes, so the store can't grow without bound.
-const MAX_ACTIVE_CODES: usize = 50;
+pub(crate) const MAX_ACTIVE_CODES: usize = 50;
 /// Code length in characters. The alphabet and generator live in [`crate::token`], shared with
 /// pairing tokens so there's one audited source of randomness.
 const CODE_LEN: usize = 6;

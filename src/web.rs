@@ -139,6 +139,129 @@ mod tests {
         }
     }
 
+    /// Every minutes limit a person is shown matches the one its own endpoint enforces.
+    ///
+    /// There are **two** limits here and they are not the same fact. `timecode::MAX_CODE_MINUTES`
+    /// bounds the code a parent issues; `timereq::MAX_REQUEST_MINUTES` bounds the extra time a
+    /// child asks for and the bonus a parent grants. Both are 240 today, which is exactly why this
+    /// needs a table rather than one number: the first version of this test asserted every surface
+    /// against `MAX_CODE_MINUTES` and passed — including for the child's input, which that constant
+    /// does not govern. Raising one alone would have demanded the other move with it.
+    ///
+    /// Four surfaces restate these, none of them near the enforcement: two `max=` attributes and
+    /// two toast messages. Nothing connected any of them and nothing pinned any of them, so raising
+    /// a constant left the server accepting a value every box still refused and every message still
+    /// named wrongly — including on `/ask`, where the person told the wrong limit is the child, who
+    /// cannot ask why the number is wrong.
+    ///
+    /// A source scan because the property lives in markup and in strings, which no Rust type
+    /// reaches — the sanctioned case in `OPEN-FINDINGS.md` O54. `min="1"` selects these inputs
+    /// exactly: every other number input on either page uses `min="0"`. An unrecognised one is a
+    /// panic rather than a skip, so adding a third minutes box cannot pass unchecked.
+    #[test]
+    fn every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces() {
+        use crate::timecode::{MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
+        use crate::timereq::MAX_REQUEST_MINUTES;
+
+        let inputs = [
+            (
+                "index.html",
+                "x-model.number=\"newCodeMins\"",
+                MAX_CODE_MINUTES,
+                "the code a parent issues",
+            ),
+            (
+                "ask.html",
+                "id=\"minutes\"",
+                MAX_REQUEST_MINUTES,
+                "the extra time a child asks for",
+            ),
+        ];
+
+        let mut seen = 0;
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            for tag in html.split("<input").skip(1) {
+                let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+                if !tag.contains("min=\"1\"") {
+                    continue;
+                }
+                seen += 1;
+                let Some(&(_, _, limit, what)) = inputs
+                    .iter()
+                    .find(|(p, marker, _, _)| *p == name && tag.contains(marker))
+                else {
+                    panic!(
+                        "{name} carries a `min=\"1\"` minutes input this test does not recognise, \
+                         so nothing is checking it against a server limit. Add it to the table \
+                         with the constant its endpoint enforces:\n{tag}"
+                    );
+                };
+                assert!(
+                    tag.contains(&format!("max=\"{limit}\"")),
+                    "{name}'s input for {what} does not cap at {limit}, which is what its endpoint \
+                     enforces. A box that accepts more than the server does turns a valid-looking \
+                     entry into a 400 the person cannot explain:\n{tag}"
+                );
+            }
+        }
+        assert_eq!(
+            seen,
+            inputs.len(),
+            "expected {} minutes inputs across the served pages, found {seen}",
+            inputs.len()
+        );
+
+        // The same two limits reach a person as prose, in the toast shown when the server refuses.
+        let script = include_str!("../assets/app.js");
+        for (phrase, what) in [
+            (
+                format!(
+                    "Minutes 1–{MAX_CODE_MINUTES}, and at most {MAX_ACTIVE_CODES} active codes"
+                ),
+                "issuing a code",
+            ),
+            (
+                format!("Minutes out of range (1–{MAX_REQUEST_MINUTES})"),
+                "granting bonus time",
+            ),
+        ] {
+            assert!(
+                script.contains(&phrase),
+                "no message in app.js reads `{phrase}`, so a parent refused when {what} is quoted \
+                 a limit the server does not enforce"
+            );
+        }
+    }
+
+    /// The lockout a parent is told to wait out matches the one actually enforced.
+    ///
+    /// `app.js` says "wait a minute". That sentence cannot interpolate a constant — it is prose in
+    /// a static file — so what is pinned here is the *pairing*, and the value of this test is
+    /// entirely in its failure message: it names the sentence that has to move with the constant.
+    /// A bare `assert_eq!` of a constant against its own literal would pin nothing; this one exists
+    /// because the other side of the comparison is English.
+    ///
+    /// The consequence of the drift is small and nasty. Raise the lockout to five minutes and a
+    /// locked-out parent is told to wait one, comes back early, fails again — and they are doing
+    /// this while trying to look at their child's screen, which is when they are least willing to
+    /// believe the tool rather than their own retry.
+    #[test]
+    fn the_lockout_a_parent_is_told_to_wait_matches_the_one_enforced() {
+        const SENTENCE: &str = "wait a minute and try again";
+        assert_eq!(
+            crate::auth::LOGIN_LOCKOUT,
+            std::time::Duration::from_secs(60),
+            "the lockout is no longer a minute, but `assets/app.js` still tells a locked-out \
+             parent to \"{SENTENCE}\". Change that sentence and this assertion together."
+        );
+        assert!(
+            include_str!("../assets/app.js").contains(SENTENCE),
+            "the lockout message changed and this test pins it, because prose cannot carry a \
+             constant. If it now names a different wait, make `LOGIN_LOCKOUT` agree with it."
+        );
+    }
+
     /// The served `index.html`, by name.
     ///
     /// Two scanners want this one page rather than a loop over all of them, and both opened with
