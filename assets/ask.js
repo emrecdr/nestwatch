@@ -3,7 +3,40 @@
 // it's the first thing on the page. /status is deliberately narrow: totals only, never
 // the rules themselves.
 const todayEl = document.getElementById("today");
+const outcomeEl = document.getElementById("outcome");
 let limitedToday = null; // null = unknown (server unreachable)
+
+// What the last poll said about the child's newest request, so the outcome is only announced when
+// it CHANGES. Re-writing the same text into an aria-live region on every poll would make a screen
+// reader repeat "your request was approved" once a minute, forever.
+let lastRequestState = null;
+
+// Render the fate of the child's newest request.
+//
+// This is the half of the conversation that was missing: the page could ask, and could never
+// report back. A denial in particular reached the child through no channel at all — it looked
+// exactly like being ignored, which is worse than the answer.
+function showOutcome(request) {
+  const state = request ? request.state : null;
+  if (state === lastRequestState) return;
+  lastRequestState = state;
+
+  if (!request || state === "pending") {
+    // "Pending" is already covered by the submit handler's own message, and repeating it here
+    // would put two live sentences on screen saying the same thing.
+    outcomeEl.textContent = "";
+    outcomeEl.className = "mt-1 text-center text-sm";
+    return;
+  }
+  const approved = state === "approved";
+  outcomeEl.textContent = approved
+    ? `A parent said yes to ${request.minutes} more minutes.`
+    : "A parent said no this time.";
+  // Not styled as an error: a denial is a normal answer to a fair question, and colouring it red
+  // makes the page look like the child did something wrong by asking.
+  outcomeEl.className = `mt-1 text-center text-sm ${approved ? "text-success" : "opacity-70"}`;
+}
+
 
 async function loadStatus() {
   try {
@@ -11,6 +44,9 @@ async function loadStatus() {
     if (!r.ok) throw new Error("status " + r.status);
     const s = await r.json();
     limitedToday = !!s.limited;
+    // Rendered before the early return below: a pending request still has an answer worth
+    // showing on a day that has no minute limit at all.
+    showOutcome(s.request);
     todayEl.innerHTML = "";
 
     if (!s.limited) {
@@ -82,6 +118,10 @@ form.addEventListener("submit", async (e) => {
     if (r.ok) {
       setMsg(msg, "Sent — waiting for a parent to reply.", true);
       form.reset();
+      // Clear any previous answer straight away rather than at the next poll: leaving "a parent
+      // said no this time" on screen underneath "sent, waiting for a reply" reads as a refusal of
+      // the request just made.
+      loadStatus();
     } else if (r.status === 429) {
       setMsg(msg, "Too many requests — wait a bit and try again.");
     } else {

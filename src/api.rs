@@ -269,7 +269,12 @@ pub async fn extra_time(
     Json(body): Json<ExtraTimeBody>,
 ) -> Result<Json<Value>, AppError> {
     if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
-        return Err(AppError::BadRequest("minutes out of range".into()));
+        // Carry the bound, not just the verdict. `Rules::validate`'s five messages already do
+        // ("daily limit must be <= 10080 minutes"), and a parent who is told only that they broke
+        // a limit has to guess which number to try next.
+        return Err(AppError::BadRequest(format!(
+            "minutes must be between 1 and {MAX_REQUEST_MINUTES}"
+        )));
     }
     let today = crate::config::today();
     let minutes = body.minutes;
@@ -356,6 +361,17 @@ pub async fn child_status(
         "budget_mins": budget,
         "used_mins": used,
         "remaining_mins": remaining,
+        // What became of the child's newest request. `null` when they have never asked. This is
+        // the only channel by which a *denial* ever reaches them — before it existed, denied and
+        // ignored looked identical from this page.
+        // A request the child made is their own data, not a rule — which is why it may be here at
+        // all. Bedtime deliberately is NOT: `child_status_is_unauthenticated_and_leaks_no_rules`
+        // forbids `curfew` on this endpoint, because a schedule handed to the child is a map for
+        // planning around it. Showing "screen off at 21:00" here would be friendlier and was
+        // written and then reverted; it is a change to that stated principle, not an addition to
+        // it, so it needs deciding rather than slipping in beside an unrelated fix. The child is
+        // still warned — the enforcer puts a countdown on their desktop at 15, 5 and 1 minutes.
+        "request": state.time_requests.latest(),
     })))
 }
 
@@ -493,7 +509,12 @@ pub async fn time_request(
         .time_req_limiter
         .count_and_check(ip, std::time::Instant::now())?;
     if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
-        return Err(AppError::BadRequest("minutes out of range".into()));
+        // Carry the bound, not just the verdict. `Rules::validate`'s five messages already do
+        // ("daily limit must be <= 10080 minutes"), and a parent who is told only that they broke
+        // a limit has to guess which number to try next.
+        return Err(AppError::BadRequest(format!(
+            "minutes must be between 1 and {MAX_REQUEST_MINUTES}"
+        )));
     }
     let requests = state.time_requests.clone();
     let accepted = spawn(move || requests.submit(body.minutes, &body.reason)).await?;
@@ -573,13 +594,19 @@ pub async fn issue_time_code(
     Json(body): Json<IssueCodeBody>,
 ) -> Result<Json<Value>, AppError> {
     if body.minutes == 0 || body.minutes > crate::timecode::MAX_CODE_MINUTES {
-        return Err(AppError::BadRequest("minutes out of range".into()));
+        return Err(AppError::BadRequest(format!(
+            "minutes must be between 1 and {}",
+            crate::timecode::MAX_CODE_MINUTES
+        )));
     }
     let codes = state.time_codes.clone();
     let minutes = body.minutes;
     let code = spawn(move || codes.issue(minutes)).await?;
     let Some(code) = code else {
-        return Err(AppError::BadRequest("too many active codes".into()));
+        return Err(AppError::BadRequest(format!(
+            "at most {} codes can be active at once",
+            crate::timecode::MAX_ACTIVE_CODES
+        )));
     };
     // The code itself is a secret (it grants time), so it is NOT written to the audit log.
     state

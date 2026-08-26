@@ -929,3 +929,207 @@ async fn a_capture_a_person_asked_for_is_still_audited_one_for_one() {
         "each deliberate capture is one line:\n{log}"
     );
 }
+
+/// The child asks, the parent answers, and the child's own page is where the answer lands.
+///
+/// Before this, `/status` returned four numbers and none of them was the state of the request the
+/// page exists to make. A denial reached the child through no channel at all — it was
+/// indistinguishable from being ignored — and an approval showed up only as a number that changed
+/// by itself. Driven end to end through the real routes, because the value is in the round trip.
+///
+/// Builds its own queue rather than using `test_state`'s, which is `TimeRequests::disabled()` —
+/// a no-op store whose `latest()` is permanently `None`, so this test would pass against a
+/// completely broken implementation.
+#[tokio::test]
+async fn child_status_reports_what_happened_to_the_request() {
+    let dir = std::env::temp_dir().join(format!("nw-status-request-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut state = test_state();
+    state.time_requests =
+        std::sync::Arc::new(nestwatch::timereq::TimeRequests::new(dir.join("req.jsonl")));
+    let app = app_with(state);
+    let app = &app;
+
+    // Nothing asked for yet.
+    let body = body_json(get(app, "/status", None).await).await;
+    assert_eq!(
+        body["request"],
+        json!(null),
+        "no request, no answer to report"
+    );
+
+    // The child asks — no cookie; this endpoint is theirs.
+    let res = post_json(
+        app,
+        "/time-request",
+        None,
+        json!({ "minutes": 25, "reason": "maths" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let body = body_json(get(app, "/status", None).await).await;
+    assert_eq!(body["request"]["state"], json!("pending"));
+    assert_eq!(body["request"]["minutes"], json!(25));
+
+    // The parent denies it.
+    let cookie = login(app, PASSWORD).await.expect("login");
+    let queue = body_json(get(app, "/api/time-requests", Some(&cookie)).await).await;
+    let id = queue[0]["id"]
+        .as_str()
+        .expect("a pending request")
+        .to_string();
+    let res = post_json(
+        app,
+        &format!("/api/time-requests/{id}/deny"),
+        Some(&cookie),
+        json!({}),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // …and the child is told, which is the whole point.
+    let body = body_json(get(app, "/status", None).await).await;
+    assert_eq!(
+        body["request"]["state"],
+        json!("denied"),
+        "a denial must reach the child; silence used to be the only signal"
+    );
+
+    // Still no rules on this endpoint — the neighbouring guard stays true with the new field.
+    let raw = body.to_string();
+    for secret in ["blocklist", "app_limits", "curfew"] {
+        assert!(
+            !raw.contains(secret),
+            "child status must not reveal `{secret}`: {raw}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An error a person reads must carry the number they need, not only the verdict.
+///
+/// `Rules::validate`'s five messages already do this ("daily limit must be <= 10080 minutes"). These
+/// four did not: they named *which* limit was hit and never *what it is*, so a parent told "minutes
+/// out of range" has to guess what to try next. `assets/app.js` compensated by pinning the bound
+/// client-side, which is a second place for the constant to live and drift.
+///
+/// Covers all four sites, including `POST /api/extra-time` — which is bounded by the same constant
+/// as the child's request endpoint and is easy to miss when reading for "the time-code ones".
+#[tokio::test]
+async fn a_rejected_amount_is_told_what_the_limit_actually_is() {
+    let app = test_app();
+    let cookie = login(&app, PASSWORD).await.expect("login");
+
+    let over_request = nestwatch::timereq::MAX_REQUEST_MINUTES + 1;
+    let over_code = nestwatch::timecode::MAX_CODE_MINUTES + 1;
+
+    // (route, cookie, body, the number the message must contain)
+    let cases: Vec<(&str, Option<&str>, serde_json::Value, u32)> = vec![
+        (
+            "/api/extra-time",
+            Some(cookie.as_str()),
+            json!({ "minutes": over_request }),
+            nestwatch::timereq::MAX_REQUEST_MINUTES,
+        ),
+        (
+            "/time-request",
+            None,
+            json!({ "minutes": over_request, "reason": "" }),
+            nestwatch::timereq::MAX_REQUEST_MINUTES,
+        ),
+        (
+            "/api/time-codes",
+            Some(cookie.as_str()),
+            json!({ "minutes": over_code }),
+            nestwatch::timecode::MAX_CODE_MINUTES,
+        ),
+    ];
+
+    for (route, ck, body, bound) in cases {
+        let res = post_json(&app, route, ck, body).await;
+        assert_eq!(
+            res.status(),
+            StatusCode::BAD_REQUEST,
+            "{route} should reject"
+        );
+        let msg = body_json(res).await["error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            msg.contains(&bound.to_string()),
+            "{route} said {msg:?} — it must name the limit ({bound}), not just report one was hit"
+        );
+        // Zero is rejected too, so "<= N" would be a lie; the range is what the check enforces.
+        assert!(
+            msg.contains('1') && msg.contains("between"),
+            "{route} said {msg:?} — state the range, since 0 is rejected as well"
+        );
+    }
+}
+
+/// The child's endpoint is unauthenticated, so naming the bound there is worth a second look.
+/// It is safe: `MAX_REQUEST_MINUTES` is a compile-time constant identical on every install, not a
+/// household rule, and `ask.html` already ships it to the child as `max="240"` on the input.
+/// Confirmed here so a future change to that constant cannot quietly make the two disagree.
+#[tokio::test]
+async fn the_bound_the_child_is_told_is_the_one_their_own_form_already_shows() {
+    let markup = include_str!("../assets/ask.html");
+    let want = format!("max=\"{}\"", nestwatch::timereq::MAX_REQUEST_MINUTES);
+    assert!(
+        markup.contains(&want),
+        "ask.html must cap the minutes input at {} — the server rejects above it either way, and \
+         the page should not invite a number it will refuse",
+        nestwatch::timereq::MAX_REQUEST_MINUTES
+    );
+}
+
+/// The fourth site: the active-code cap. Needs a real `TimeCodes` store, because `test_state`
+/// installs a disabled one whose `issue` never fills up — so this would pass against any
+/// implementation if it used the shared helper.
+#[tokio::test]
+async fn a_full_code_queue_says_how_many_codes_are_allowed() {
+    let dir = std::env::temp_dir().join(format!("nw-code-cap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut state = test_state();
+    state.time_codes =
+        std::sync::Arc::new(nestwatch::timecode::TimeCodes::new(dir.join("codes.jsonl")));
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.expect("login");
+
+    for i in 0..nestwatch::timecode::MAX_ACTIVE_CODES {
+        let res = post_json(
+            &app,
+            "/api/time-codes",
+            Some(&cookie),
+            json!({ "minutes": 5 }),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK, "code {i} should mint");
+    }
+
+    let res = post_json(
+        &app,
+        "/api/time-codes",
+        Some(&cookie),
+        json!({ "minutes": 5 }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "the cap must bite");
+    let msg = body_json(res).await["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        msg.contains(&nestwatch::timecode::MAX_ACTIVE_CODES.to_string()),
+        "said {msg:?} — a parent who cannot mint a code needs the number, not just the refusal"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

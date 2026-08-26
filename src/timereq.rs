@@ -35,6 +35,19 @@ pub struct PendingRequest {
     pub reason: String,
 }
 
+/// The state of the child's newest request, as shown on their own page.
+///
+/// Deliberately thinner than [`PendingRequest`]: no id (the child has nothing to do with one) and
+/// no timestamp or reason (they wrote it, and it is their own page). Just the two facts that answer
+/// "what happened to what I asked for".
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct LatestRequest {
+    /// `pending` · `approved` · `denied`.
+    pub state: String,
+    /// How many minutes were asked for.
+    pub minutes: u32,
+}
+
 /// The persisted request queue.
 pub struct TimeRequests {
     log: JsonlLog,
@@ -122,6 +135,48 @@ impl TimeRequests {
             }
         }
         out
+    }
+
+    /// What became of the most recently submitted request — for the child's own page.
+    ///
+    /// [`pending`] answers the parent's question ("what is waiting for me?") and deliberately drops
+    /// anything already decided. That left the child with no answer at all: they pressed *Send
+    /// request*, read "waiting for a parent to reply", and the page never said another word. A
+    /// denial was indistinguishable from silence, and an approval showed up only as a number that
+    /// changed by itself up to a minute later. The likely outcome is the child walking off to ask
+    /// out loud — which is the exact interaction `/ask` exists to replace.
+    ///
+    /// Returns the *latest status* of the *newest submission*, which are two different lookups over
+    /// one newest-first pass: the first `requested` event encountered is the newest submission
+    /// (nothing submitted later can appear further down a newest-first list), and the first event
+    /// carrying that id is its current status.
+    pub fn latest(&self) -> Option<LatestRequest> {
+        let events = self.log.recent(usize::MAX);
+        let newest_submission = events.iter().find(|e| {
+            e.get("event").and_then(|v| v.as_str()) == Some("requested")
+                && e.get("id").and_then(|v| v.as_str()).is_some()
+        })?;
+        let id = newest_submission.get("id")?.as_str()?;
+        let minutes = newest_submission
+            .get("minutes")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+
+        let status = events
+            .iter()
+            .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id))?;
+        let state = match status.get("event").and_then(|v| v.as_str()) {
+            Some("approved") => "approved",
+            Some("denied") => "denied",
+            // Anything else is still waiting. Unknown event names resolve to "pending" rather than
+            // to an outcome, because telling a child their request was refused when it was not is
+            // the one wrong answer here.
+            _ => "pending",
+        };
+        Some(LatestRequest {
+            state: state.to_string(),
+            minutes,
+        })
     }
 
     /// Approve (`true`) or deny (`false`) a pending request. Returns the resolved request (so the
@@ -265,9 +320,76 @@ mod tests {
         let resolved = q.resolve(&id, true).unwrap();
         assert_eq!(resolved.minutes, 30);
         assert!(q.pending().is_empty(), "approved request no longer pending");
+
         assert!(q.resolve(&id, true).is_none(), "already resolved");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The child's page answers "what happened to what I asked for", so every state it can show
+    /// is pinned — including the one that used to be unreachable from that page at all.
+    #[test]
+    fn latest_reports_each_outcome_to_the_child() {
+        let (q, _dir) = scratch("latest-outcomes");
+        assert_eq!(q.latest(), None, "nothing asked for yet");
+
+        let id = q.submit(20, "homework done").expect("submit");
+        assert_eq!(
+            q.latest(),
+            Some(LatestRequest {
+                state: "pending".into(),
+                minutes: 20
+            })
+        );
+
+        q.resolve(&id, false).expect("deny");
+        assert_eq!(
+            q.latest(),
+            Some(LatestRequest {
+                state: "denied".into(),
+                minutes: 20
+            }),
+            "a denial must be visible; before this it reached the child through no channel at all"
+        );
+
+        let id2 = q.submit(15, "").expect("submit again");
+        assert_eq!(
+            q.latest(),
+            Some(LatestRequest {
+                state: "pending".into(),
+                minutes: 15
+            }),
+            "a new request supersedes the old outcome"
+        );
+
+        q.resolve(&id2, true).expect("approve");
+        assert_eq!(
+            q.latest(),
+            Some(LatestRequest {
+                state: "approved".into(),
+                minutes: 15
+            })
+        );
+    }
+
+    /// `latest` reports the newest *submission*, not the newest *event*. Deciding an older request
+    /// after a newer one arrived must not make the page describe the older one.
+    #[test]
+    fn latest_follows_the_newest_submission_not_the_newest_decision() {
+        let (q, _dir) = scratch("latest-ordering");
+        let older = q.submit(10, "first").expect("submit");
+        let _newer = q.submit(45, "second").expect("submit");
+
+        q.resolve(&older, true).expect("approve the older one");
+
+        assert_eq!(
+            q.latest(),
+            Some(LatestRequest {
+                state: "pending".into(),
+                minutes: 45
+            }),
+            "the child is still waiting on their newest request, whatever happened to the older"
+        );
     }
 
     #[test]
