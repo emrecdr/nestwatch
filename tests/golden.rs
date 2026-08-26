@@ -35,8 +35,9 @@ use axum::http::StatusCode;
 use chrono::NaiveDate;
 use serde_json::{Value, json};
 
+use nestwatch::auth::{LOGIN_LOCKOUT, LOGIN_MAX_FAILS};
 use nestwatch::rules::{Rules, Usage, today_summary};
-use nestwatch::timecode::{ActiveCode, TimeCodes};
+use nestwatch::timecode::{ActiveCode, CODE_LEN, MAX_ACTIVE_CODES, MAX_CODE_MINUTES, TimeCodes};
 use nestwatch::timereq::PendingRequest;
 
 mod common;
@@ -71,6 +72,36 @@ fn golden(name: &str, value: &Value) {
          is now broken — fix it there before regenerating here. If the change is deliberate and \
          the client is ready, run `UPDATE_GOLDEN=1 cargo test --test golden`.\n",
         path.display()
+    );
+}
+
+/// The limits a client shows a person **before** any request completes.
+///
+/// Not a response shape, and that is the point. A phone renders "1 to 240 minutes" on the
+/// time-codes screen and "5 tries, then a minute" on a lockout, both from numbers compiled into the
+/// client — so a client whose copy has drifted misinforms a parent without ever making a call that
+/// could correct it. These are as much of the contract as any field name here.
+///
+/// A runtime `/api/limits` endpoint would not fix it: the screen is drawn before a request could
+/// return, so a runtime answer arrives too late to be the source of truth.
+///
+/// This replaces the client checking by **grepping this repository's source** for the constants,
+/// which was the only channel available and a bad one: the failure mode is that the check stops
+/// running rather than that a number is wrong. It broke within hours of being written, when these
+/// constants were named instead of left inline — a change that improved this side. A vendored copy
+/// of this file runs inside the client's own suite instead, on every commit, on a machine that has
+/// only that repository.
+#[test]
+fn limits() {
+    golden(
+        "limits",
+        &json!({
+            "code_len": CODE_LEN,
+            "login_lockout_secs": LOGIN_LOCKOUT.as_secs(),
+            "login_max_fails": LOGIN_MAX_FAILS,
+            "max_active_codes": MAX_ACTIVE_CODES,
+            "max_code_minutes": MAX_CODE_MINUTES,
+        }),
     );
 }
 

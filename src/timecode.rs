@@ -29,10 +29,14 @@ use crate::jsonl::JsonlLog;
 /// Largest single code we mint.
 pub const MAX_CODE_MINUTES: u32 = 240;
 /// Cap on outstanding (unredeemed) codes, so the store can't grow without bound.
-pub(crate) const MAX_ACTIVE_CODES: usize = 50;
+pub const MAX_ACTIVE_CODES: usize = 50;
 /// Code length in characters. The alphabet and generator live in [`crate::token`], shared with
 /// pairing tokens so there's one audited source of randomness.
-const CODE_LEN: usize = 6;
+///
+/// `pub` so `tests/golden.rs` can publish it as part of the client contract. It is not an
+/// implementation detail: a phone sizes an input box and a reveal mask against it, and this crate
+/// is `publish = false`, so there is no external API surface to keep narrow.
+pub const CODE_LEN: usize = 6;
 
 /// An active (issued, not-yet-redeemed) code as surfaced to the parent UI.
 #[derive(Debug, Serialize)]

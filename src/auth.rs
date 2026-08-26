@@ -339,10 +339,10 @@ fn prune(map: &mut HashMap<IpAddr, Attempts>, now: Instant) {
 /// A sibling repository lost this exact pairing with no constant at all, where the only trace of
 /// the limit was the word "minute" inside a sentence: a literal at least announces itself as a
 /// number, prose does not manage even that.
-pub(crate) const LOGIN_MAX_FAILS: u32 = 5;
+pub const LOGIN_MAX_FAILS: u32 = 5;
 /// See [`LOGIN_MAX_FAILS`]. Pinned against the message a parent reads by
 /// `web::tests::the_lockout_a_parent_is_told_to_wait_matches_the_one_enforced`.
-pub(crate) const LOGIN_LOCKOUT: Duration = Duration::from_secs(60);
+pub const LOGIN_LOCKOUT: Duration = Duration::from_secs(60);
 
 impl Default for LoginLimiter {
     fn default() -> Self {

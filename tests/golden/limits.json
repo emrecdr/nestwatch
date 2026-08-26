@@ -1,0 +1,7 @@
+{
+  "code_len": 6,
+  "login_lockout_secs": 60,
+  "login_max_fails": 5,
+  "max_active_codes": 50,
+  "max_code_minutes": 240
+}
