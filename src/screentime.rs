@@ -977,7 +977,7 @@ mod tests {
         );
     }
 
-    /// Category time now survives into history, which is the whole of O13.
+    /// Category time now survives into history, which is the whole point of this test.
     #[test]
     fn group_minutes_are_recorded_and_summed_across_the_window() {
         let rows = vec![

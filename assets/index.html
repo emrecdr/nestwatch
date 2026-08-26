@@ -131,7 +131,13 @@
                        would be one more thing to read on a card that already has three buttons.
                        `btn-active` rather than `btn-primary` for the chosen one: primary is
                        reserved for actions that DO something (Save, Take screenshot), and using it
-                       for a settled choice made a selection look like a pending action. -->
+                       for a settled choice made a selection look like a pending action.
+                       The `: 'btn-ghost'` half is load-bearing and must not become `: ''`.
+                       `btn-active` is a subtle fill in this theme; it reads as selected only
+                       because its neighbours have no button chrome, which is what `btn-ghost`
+                       removes. Against plain `btn` neighbours it measured 1.04:1 — invisible.
+                       Nothing automated catches that: `aria-pressed` is still correct, and
+                       `btn-active` still has a CSS rule, so every gate passes. -->
                   <div x-show="autoRefresh" x-cloak class="join" role="group"
                        aria-label="How often the live view refreshes">
                     <template x-for="o in refreshOptions" :key="o.ms">

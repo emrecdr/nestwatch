@@ -1,48 +1,41 @@
 # Open findings
 
-Known design problems that are **not** bugs and **not** scheduled. Each one was found by a review
-pass, judged real, and deliberately left alone — with the reasoning, so it doesn't have to be
-re-derived, and so nobody re-raises something already weighed.
+**Open work only.** Every entry here describes something that is still true of the tree right now —
+found by a review pass, judged real, and deliberately left unfixed, with the reasoning recorded so it
+does not have to be re-derived and so nobody re-raises what was already weighed.
 
-`CHANGELOG.md` records what shipped. This records what didn't, and why: what is still **open**,
-what proved worth **fixing** after all, and what was **considered and declined**.
+## How to keep this file honest
 
-**Provenance.** Several independent review passes over this codebase (2026-08, twelve reviewers in
-total), plus a security analysis and a verification round — across four angles: reuse, simplification, efficiency,
-altitude. Every claim below was verified against the tree before being written down; the measured
-ones say so.
+This file is a **task list, not a history**. It answers exactly one question: *what is still wrong?*
 
-A later pass (2026-08-25) added O11-O15 and six more *Considered and declined* rows, including five
-suspicions about the install and enforcement paths that were checked and found false. That pass also
-recorded one of its own recommendations as wrong — see O10's entry below, where a proposed fix would
-have been a no-op because it misread the flag it proposed to reuse.
+- **When a finding is fixed, delete its entry.** Do not strike it through, do not move it to a
+  "Fixed" section, do not leave it in place with a note saying it was done. `CHANGELOG.md` records
+  what shipped and why, and `git log` holds the rest — this file does not need to say it twice. A
+  closed entry left here is not harmless: a reader budgets attention against the length of the list,
+  and every dead entry spends some of it.
+- **When a finding is partly fixed, rewrite it so it describes only the part that is still true.**
+  A half-stale entry is worse than a missing one, because it gets checked, found wrong, and then the
+  whole file is trusted less.
+- **When a finding is withdrawn, refuted, or declined, move it to
+  [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md).** Stopping an idea from being re-proposed is a real
+  job, but it is a different job from tracking open work, and mixing the two is what made this file
+  2,045 lines long.
+- **Cite symbols, not line numbers.** `foreground.rs::BROWSERS` survives an edit; `foreground.rs:307`
+  was wrong within a week, and nothing in CI will ever tell you. Where a line number is genuinely the
+  only handle, expect to re-check it.
+- **Verify before writing, and say how.** Mark the measured claims as measured, with the number and
+  the date. On this codebase a confident claim has repeatedly survived review and died on contact
+  with the code.
 
-That second pass is also why several entries in *Considered and declined* record findings that were
-**refuted**: on this codebase a confident claim has repeatedly survived review and died on contact
-with the code, so what was checked and found false is worth as much shelf space as what was found
-true.
+**Provenance.** Findings come from several independent review passes over this codebase (2026-08),
+across four angles — reuse, simplification, efficiency, altitude — plus a security analysis and a
+research review of per-app and web-page tracking against primary sources. Entries are not all equally
+solid, and each says which it is: some are read directly off the tree and are facts about code that
+exists; others rest on a primary source plus a mechanism, and name the one on-device observation that
+would confirm or kill them.
 
-Two cleanup passes (2026-08-25), each four independent reviewers over the same four angles, added
-**O47-O62** plus five *Considered and declined* rows. They are the first passes here to run against a
-diff that had **already been reviewed** — the second was given the first's decisions up front and told
-that re-raising them was worthless, which is why its findings are sharper and fewer. Both are recorded
-with their measurements, and three of the entries record a reviewer's claim that was checked and
-turned out to be wrong or not general: the thumbnail trade, the strip-comments trip point, and a
-mutation that proved nothing because it could not fail.
-
-One class escaped **all eight reviewers** and is worth the warning: twelve comments describing a wire
-format the code no longer used (O62). Every reviewer had been told "never flag comment volume", which
-is right, and each generalised it into not reading comments at all.
-
-A third pass (2026-08-25) added **O16-O24**, from a research review of per-app and web-page tracking
-against primary sources — Win32 documentation, Chromium's `ax_mode.h`, and Microsoft's own XInput
-guidance. Each entry states how it was established, because they are not equally solid: O18, O19, O21
-and O22 are read directly off the tree and are facts about code that exists; O16, O17 and O20 rest on
-primary sources plus a mechanism, and each names the one on-device observation that would confirm or
-kill it. **None of them has been seen happen**, which is the same tier the watcher itself sits in and
-the reason O23 exists at all. One finding from this pass was dropped before it reached the file: a
-suspected doc-to-code drift on Roblox's Store-build naming turned out to be implemented after all, in
-`appLabel` — the drift is O16's, and it is the opposite of what it first looked like.
+Last audited against the tree on **2026-08-26**. Entries that did not survive that audit were removed
+or rewritten rather than annotated, per the rules above.
 
 ---
 
@@ -50,9 +43,9 @@ suspected doc-to-code drift on Roblox's Store-build naming turned out to be impl
 
 ### O2 · `rules.rs` has a real seam between the pure machine and the loop
 
-The file is ~1,950 lines holding config types, the tally and its persistence, `Targets`,
-`today_summary`, the pure enforcer, the async loop, shutdown-abort coordination, notification
-helpers, and the tests.
+The file is 2,707 lines (measured 2026-08-26) holding config types, the tally and its
+persistence, `Targets`, `today_summary`, the pure enforcer, the async loop, shutdown-abort
+coordination, notification helpers, and the tests.
 
 Size is not the finding. The finding is that **the loop could not be moved out**, because it read
 the enforcer's private `budget_deadline`, and same-file privacy was what made that legal. Removing
@@ -85,8 +78,12 @@ before the feature.
 
 `heartbeat.rs` calls a silently dead enforcer "the worst failure this product can have", and then
 only *displays* the staleness — `api::usage_today` (which feeds the dashboard's Today card) and
-`doctor` are its only two consumers. It was `rules::today_summary` until O3 moved the read out to
-the edge; the mechanism is unchanged, only where it is called from. There is no `abort`, `exit`, or restart anywhere in `src/`. The signal is pull-based:
+`doctor` are its only two consumers. It was `rules::today_summary` until the read moved out to
+the edge; the mechanism is unchanged, only where it is called from.
+
+There is no `process::abort` anywhere in `src/`, and nothing restarts the loop.
+(`std::process::exit` *does* appear — argument errors in `lib.rs`, a failing `doctor` — but those
+are exits on the way out, not recovery.) The signal is pull-based:
 it helps only if the parent happens to look.
 
 **What is and isn't already covered.** A *panic* is handled: `panic = "abort"` kills the process and
@@ -113,11 +110,11 @@ One correction to the original sketch: it said "a supervisor **task**", i.e. a `
 The established pattern for this — a heartbeat recorded on the runtime and *checked from a plain
 `std::thread` outside it* — exists precisely because a supervisor living on the runtime cannot
 detect the failure mode where the runtime itself is starved. That is not hypothetical here: this
-service builds a multi-threaded runtime (`Runtime::new()`, `lib.rs:185`) and the tick loop has
+service builds a multi-threaded runtime (`Runtime::new()` in `lib.rs`) and the tick loop has
 five await points, two of them `spawn_blocking`. If blocking work ever saturated the pool, an
 on-runtime supervisor would be queued behind exactly the stall it was meant to report.
 
-The codebase already has this shape and can be followed rather than invented: `session.rs:314`
+The codebase already has this shape and can be followed rather than invented: `session.rs`
 spawns a `std::thread` watchdog that kills the screenshot helper if it outruns its timeout. The
 enforcer supervisor is the same idea applied to the tick loops.
 
@@ -145,7 +142,6 @@ managed PC. It lives in
 `docs/private/OPERATIONAL-FINDINGS.md`, which is git-ignored, alongside the fix and the
 condition for applying it.
 
-
 ### O6 · Screen-time figures are machine-wide and count running, not focused, time
 
 The report added in the screen-time work counts any account at the console, and counts an app while
@@ -153,7 +149,7 @@ its process runs rather than while it has focus. Both are conservative for enfor
 misleading for a report; both are labelled on the card rather than silently accepted.
 
 **Per-account attribution is cheaper than foreground tracking, but it is not "free" — corrected
-2026-08-19.** The username genuinely is already fetched and discarded: `session.rs:144` reads
+2026-08-19.** The username genuinely is already fetched and discarded: `session.rs`'s `session_state` reads
 `level1.UserName[0]` purely to detect the sign-in screen, from a `WTSINFOEXW` buffer it has
 already validated. No new FFI call, no new `unsafe`, no extra syscall — that part holds.
 
@@ -209,14 +205,14 @@ Three things learned while designing it are worth not re-deriving:
 ### O16 · UWP windows resolve to `ApplicationFrameHost.exe`, not to the app
 
 The watcher identifies an app by taking `GetForegroundWindow`, asking it for a pid, and reading that
-process's image name (`watcher.rs:297-334`). For a **packaged UWP app** that chain returns
+process's image name (`watcher.rs::process_name`). For a **packaged UWP app** that chain returns
 `applicationframehost.exe`. The OS hosts UWP windows in a frame process; the app's own
 `Windows.UI.Core.CoreWindow` is a *child* window owned by a different process.
 
 Why this one matters more than it looks: [WINDOWS-TESTING.md](WINDOWS-TESTING.md) §237 asks the
 tester to confirm Roblox is attributed under **both** the direct download (`RobloxPlayerBeta.exe`)
 and the Microsoft Store build (`Windows10Universal.exe`), calling switching between them "the obvious
-dodge". [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) repeats the claim, and `assets/app.js:1056`
+dodge". [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md) repeats the claim, and `assets/app.js`'s `appLabel`
 maps `windows10universal.exe` to the label "Roblox". If the Store build is a CoreWindow UWP then
 **that key can never arrive** — the watcher reports `applicationframehost.exe` — the label mapping is
 dead code, and the dodge the checklist names is the dodge that works. Every Store app would also pile
@@ -238,8 +234,8 @@ child — irrelevant here, because a minimised window is never the foreground wi
 
 ### O17 · Gamepad play reads as idle, so console-style sessions stop accruing
 
-Idle is decided solely by `GetLastInputInfo` (`watcher.rs:234-252`), and `Tracker::bank` credits
-**zero** while idle (`foreground.rs:417`). `GetLastInputInfo` reports keyboard and mouse only. A
+Idle is decided solely by `GetLastInputInfo` (`watcher.rs`, via `foreground::idle_state`), and `Tracker::bank` credits
+**zero** while idle (`foreground.rs::Tracker::bank`). `GetLastInputInfo` reports keyboard and mouse only. A
 Valve engineer states that Steam Input and gamepad-emulating overlays "don't generate events that
 `GetLastInputInfo` would read".
 
@@ -307,7 +303,7 @@ should be read against that.
 
 ### O19 · An unrecognised browser silently yields no page data
 
-`BROWSERS` (`foreground.rs:307`) lists four executables: `chrome.exe`, `msedge.exe`, `firefox.exe`,
+`BROWSERS` (`foreground.rs`) lists four executables: `chrome.exe`, `msedge.exe`, `firefox.exe`,
 `brave.exe`. `is_browser` gates the title read, so anything else — Opera, **Opera GX**, Vivaldi, Arc,
 any Chromium fork — produces no page attribution at all.
 
@@ -360,7 +356,7 @@ wrong order.
 
 ### O22 · Page attribution is sampled at 5 s, so short tab visits round away
 
-`POLL` is 5 seconds (`watcher.rs:62`) and the page title is re-read on each resolve. Focus *time* is
+`POLL` is 5 seconds (`watcher.rs::POLL`) and the page title is re-read on each resolve. Focus *time* is
 computed from timestamp deltas so totals do not drift — but the **title** attached to those seconds is
 whatever the last sample saw, so a tab visited for less than a poll interval may be credited to the
 neighbouring page or missed entirely.
@@ -519,55 +515,9 @@ or a migration.
 
 **Trigger.** Any time; it touches no Win32 and cannot regress measurement. Lowest-risk entry here.
 
-### O45 · A selection control is only as visible as its *unselected* neighbours
+### O28 · Live mode creates a whole process per frame
 
-Found while verifying the new live-view cadence selector in a browser, and worth writing down
-because every automated gate passed it and the defect is invisible in source review.
-
-The cadence buttons shipped as `:class="o.ms === _refreshMs ? 'btn-active' : ''"`. The established
-pattern on this page — the theme switch and the 7/30/90 report range — is
-`? 'btn-active' : 'btn-ghost'`. The difference is one word in the *else* branch and it decides
-whether the control works: measured in Chrome, selected `rgb(33,38,47)` against unselected
-`rgb(36,41,51)` is a **1.04:1 contrast ratio**, with the selected button marginally *darker*. A
-parent could not see which cadence was chosen.
-
-**What makes it a finding rather than a typo** is that nothing caught it.
-`every_form_control_can_be_named_by_a_screen_reader` passes, because `aria-pressed` is present and
-correct. `every_class_in_the_markup_has_a_rule_in_the_shipped_css` passes, because `btn-active` has
-a rule. The JS test asserting the cadence buttons exist and carry the right `aria-pressed` passes.
-The control is correct to a screen reader and invisible to everyone else — the same shape as the
-curfew toggle that had `aria-label` and no visible text.
-
-**The mechanism is worth understanding, because it is not about the selected element.** `btn-active`
-in this dark theme is a *subtle* fill. It reads as selected only when its neighbours have no button
-chrome at all, which is what `btn-ghost` removes. Against default `btn` neighbours it disappears.
-So the affordance lives in the contrast between states, not in either state — which is why
-reviewing the selected branch alone finds nothing wrong with it.
-
-**A measurement caveat, recorded because it nearly produced the wrong conclusion.** A first pass
-computed luminance by regex-extracting digits from `getComputedStyle`, which returns `oklch()` here,
-not `rgb()` — yielding values in the millions and a meaningless "221:1 contrast". A second pass
-resolved the colours through a canvas and got the real figures. A third reading was contaminated by
-the mouse resting on one button, reporting a `:hover` background as that button's resting state.
-And the final fill-luminance figure (1.15:1 after the fix) still *understates* the fixed control,
-because the real cue is that ghost buttons have no chrome — a shape difference a luminance metric
-cannot see. Three different measurement errors in one small check; the screenshot settled it.
-
-**Not fixed here:** the residual weak fill contrast is a property of the shared `btn-active` /
-`btn-ghost` pattern and applies equally to the theme switch and the report range selector, both of
-which the parent has already reviewed and accepted. Restyling three unrelated controls during a
-capture-path change is the wrong moment. If it is ever revisited, note that `btn-primary` is
-**not** the answer — that was tried, and it made a settled choice look like a pending action, which
-is why the colour is reserved for *Save* and *Take screenshot*.
-
-### O28, O33, O35, O36, O39 · The rest of the screen-cast and tracking pass
-
-Found in the same pass as the O25 group above and deliberately **not** taken with it. Each is real;
-none is a correctness bug; and the group that shipped already changes the capture path, the helper
-protocol, the audit log and the dashboard on a release nobody has watched run on Windows.
-**O37 has since been implemented** and moved to *Fixed*.
-
-**O28 · Live mode creates a whole process per frame.** Every tick runs, in the child's session:
+Every tick runs, in the child's session:
 `WTSQueryUserToken`, `DuplicateTokenEx`, `CreateEnvironmentBlock` (which reads their profile
 environment), `CreatePipe`, `CreateProcessAsUserW` of the whole 3.79 MiB binary cold, xcap init, a
 watchdog thread. All fixed cost, paid to deliver one image. `session::spawn_piped` already exists
@@ -579,157 +529,41 @@ existing `--watch` helper**: that one runs as the child, is killable from Task M
 supervisor backs off to 30 s between respawns — making it the screenshot source would hand the child
 a one-click way to blind the parent, with a delay that grows the more they use it.
 
-**O33 · Nothing detects that the frame has not changed.** A child reading or away from the desk
+### O33 · Nothing detects that the frame has not changed
+
+A child reading or away from the desk
 produces a stream of near-identical frames, each captured, encoded and sent in full. An `ETag` over
 a hash of the raw frame would let an unchanged screen return `304` with no body. Much cheaper after
 the WGC move *if* its frame pool turns out to deliver only on change — **that property is
 unverified**; it could not be sourced from the documentation and should be measured rather than
 assumed.
 
-**O35 · 94% of every tally write is data the enforcer never reads — and it does not matter.**
-**Measured and withdrawn, 2026-08-25.** The premise holds and the conclusion does not.
+### O36 · The usage timeline is bounded to the last few days by `recent(200)`
 
-The premise, re-verified: `decide` reads none of `foreground_secs` or `page_secs`. Every reference in
-`rules.rs` is a struct definition, a rollover `clear()`, `today_summary`, the `PreRollover` snapshot,
-`record_foreground`'s writes, `rollup_row`, or a test — none in the decision path, which is what
-`foreground_time_cannot_trigger_a_per_app_limit` already pins. So the byte split is real: 195 B of
-enforcement data against 3,451 B modelled with a watcher running.
+The 24-hour strip — *"When the PC was in use today"* — is **built and shipped**, and the data
+blocker it waited on is fixed: the pause path used to discard `prev_active` without writing a
+`session_stop`, so pause→resume produced *start, start* with nothing between. Starts and stops now
+pair by construction.
 
-**What is wrong is the significance, and the error is instructive: I costed logical bytes when the
-hardware charges physical pages.** `write_atomic` does `File::create` → `write_all` → `sync_all()` →
-`rename`. The payload is one component of four, and it is the free one — 338 B (measured on this
-machine, no watcher) and 3,451 B (modelled, watcher running) both round to a **single 4 KiB page**.
-The cost of a save is the fsync and the two directory updates, none of which scale with the payload.
+What is left is its **reach**. `recent(200)` caps the events the timeline can see at roughly the
+last few days. A longer view wants `recent_matching_including_rotated`, which already exists and is
+what the screen-time report uses; the events are already on disk, so only a *per-app-per-hour*
+breakdown would cost storage.
 
-Worked through at the modelled size — 1,920 fsync'd saves over a 16-hour day:
+**The constraint any extension must keep.** Two orphan sources cannot be fixed by a running
+process — chiefly that a service restart cannot write a stop for the session that died with it. So
+a start with no preceding stop means *"previous span ended, time unknown"* and must never be paired
+across: pairing would shade a bar from an afternoon crash through to bedtime and label it use,
+which is the original defect one layer up. The shipped strip draws an unpaired start with **no
+width** for exactly this reason, and that is mutation-checked — stretching it to the next start
+fails the suite. Anything that widens the window inherits this rule.
 
-| | |
-|---|---|
-| Logical | 6.63 MB/day, 2.42 GB/year |
-| Physical, at 4 KiB granularity | 7.9 MB/day, 2.87 GB/year |
-| Against a conservative 10 TB endurance budget | **0.03% per year** |
-| `sync_all()` latency against the tick that awaits it | 50 ms worst case against 30,000 ms — **0.17% of one tick** |
+**Trigger.** When a longer timeline is actually wanted, not speculatively. The current strip
+answers "was he on at two in the morning?" for today, which is the question it was built for.
 
-Splitting the file would therefore save **nothing measurable**, and would *add* a second
-create/fsync/rename whenever the report half is written. The one figure that sounded alarming —
-2.42 GB/year — is a true byte count with no consequence attached, and quoting it without the
-endurance denominator is how it came to head a recommendation.
+### O39 · The executable's full path is fetched, used for one character class, and discarded
 
-**The adversarial case does not rescue it either.** `page_secs` is capped at
-`foreground::MAX_PAGES` = 40 entries, but a key is a window title of up to 512 UTF-16 units, so a
-child deliberately generating long titles could reach ~40 KiB — ten pages a tick rather than one.
-That is still 0.1–0.3% of an endurance budget per year, bought with effort, to achieve nothing they
-would notice.
-
-**Disposition: do not implement for performance.** The only remaining argument is architectural —
-one file conflates enforcement-critical state with report-only state — and that is not a reason to
-restructure the persistence of the tally that locks a child's PC on a release nobody has watched run
-on Windows. It is the same stacking O2 and O4 decline, and the same reasoning that kept O42's job
-object out of the spawn path. Revisit only alongside O2, and only after the on-device pass.
-
-**The general lesson is worth more than the finding.** The declined row on lengthening the 30-second
-interval was right for a reason this entry missed: **the cost is the save, not the size.** Only
-saving less often would change anything, and that is exactly what must not change, because a reboot
-is the child's tool. There was never a cheap win here to find.
-
-**O36 · There is no time-of-day resolution anywhere.** Every figure answers *how much*; nothing
-answers *when*. "Was he on Roblox at two in the morning?" is currently unanswerable, and for many
-parents it matters more than the total. Every mainstream competitor leads with this — Microsoft
-Family Safety opens its day view with an hourly bar chart.
-<br>**The data blocker is now FIXED (2026-08-25); the timeline itself is still open.** The pause path
-records a `session_stop` before it discards `prev_active`, so starts and stops pair. Driven against
-a live enforcer rather than reasoned about: a configured instance wrote `session_start`, a live
-pause through `POST /api/rules` wrote `session_stop {"minutes_used": 0, "reason": "paused"}`, and a
-resume wrote a fresh `session_start` — strictly alternating, where the same sequence previously
-produced two starts and nothing between them.
-
-Two decisions inside that fix are worth keeping:
-
-- **`session_stop` rather than a new event name**, so *every start has a matching stop by
-  construction*. A distinct name would leave a future consumer to learn about it, and forgetting
-  would reproduce exactly the orphaning being fixed. A `reason` field carries the nuance — and it
-  is honest about what ended, since enforcement stopped observing while the child may well still
-  be sitting there.
-- **`paused` and `no_rules` are different labels.** `any_configured()` is
-  `enabled && has_targets()`, so a parent's pause toggle and a household that configured nothing
-  both reach that branch. The existing shutdown-abort line on the same path called both "paused",
-  which told a parent reading their own history that they had switched something off when they had
-  simply never switched it on. Both now share one computed reason.
-
-`rules::tests::standing_down_closes_an_open_session` is a **source scan**, because the property is
-the existence of a call site: no unit test can see one deleted — `inactive_reason` stays green
-whether or not anything calls it, and the emission lives inside the async loop. Mutation-checked
-three ways: deleting the close, making it unconditional, and collapsing the two reasons.
-
-**The timeline itself is now built** — *"When the PC was in use today"*, a 24-hour axis above the
-report totals, derived entirely from events `loadUsage()` already fetches. No endpoint, no extra
-request, no new storage; the claim that part was cheap survived, it was only the *data* that wasn't.
-
-Three things in it are worth not re-deriving:
-
-- **An unpaired start is drawn with no width, never as a duration.** A start with no stop before the
-  next start means the enforcer died in between and that span's end is unknowable. Giving it a
-  duration would shade a bar from an afternoon crash through to bedtime and call it use — the
-  original bug, one layer up. Mutation-checked: stretching it to the next start fails the suite.
-- **Colour is reinforcement, never the carrier.** Measured in Chrome on the dark theme,
-  `bg-primary` (159,232,141) against `bg-success` (98,239,189) is a contrast ratio of **1.01** —
-  identical luminance differing only in hue, and green-against-teal is the textbook deuteranopia
-  pair; `bg-warning` is 1.04 against primary, no better. A reader who cannot separate those hues
-  would have had nothing to go on. Each kind is therefore distinguishable by **shape** first: the
-  unknown-end marker is a hairline, the live span carries a ring (the device the screen-time chart
-  already uses for a pinned day), the ordinary case is a plain bar. This is the same defect class
-  as O45 and was found the same way — by measuring a screenshot that merely looked fine.
-- **A future-dated start clamps to zero width** rather than producing a negative one. Only reachable
-  through clock skew, but it costs one `Math.max`.
-
-**What remains open is the two orphan sources a running process cannot fix:**
-a service restart cannot write a stop for the session that died with it, so a consumer must treat a
-start with no preceding stop as *"previous span ended, time unknown"* rather than pairing across it.
-
----
-
-**The "free half" was claimed and is REFUTED — corrected 2026-08-25.** The earlier version of this
-entry said a session timeline was "a pure rendering change" because `session_start` and
-`session_stop` are already timestamped in `usage.jsonl`, already returned by `GET /api/usage`, and
-already fetched by `loadUsage()` on every sign-in. All of that is true and **the conclusion does not
-follow**, because the stops are not reliable enough to pair into spans. Checked against real data:
-33 rollups and **6 `session_start` against 0 `session_stop`**.
-
-Three ways a start is orphaned, and only the first is a dev artefact:
-
-1. `FakeControl::session_state` always returns `Active`, so off Windows `active` never falls and no
-   stop is ever written. Dev-only.
-2. **The paused path writes no stop.** `rules.rs` sets `prev_active = None` and `continue`s when the
-   parent pauses, so pause→resume yields *start, start* with nothing between. Production behaviour.
-3. **A restart writes no stop.** `prev_active` begins `None`, so the first active tick after any
-   service restart emits a fresh start.
-
-**Nothing reads these events today, which is what makes the shape of this finding unusual.** Every
-mention outside `rules.rs` is a test fixture (`screentime.rs:1221`, `screentime.rs:1298`,
-`jsonl.rs:202`) or a doc comment (`usage.rs:32`). The dashboard *displays* the rows — `/api/usage`
-returns them and the history table renders each one's timestamp and raw event name — but no code
-pairs them, derives a span, or draws anything from them. An orphaned `session_start` therefore
-renders as an accurate unpaired row and misleads nobody.
-
-So the data is **fine unread and wrong the first time it is read**. That is the framing that matters:
-this is not "we have bad data on disk", it is a latent defect that arms itself the moment someone
-builds the timeline — and the person building the timeline is exactly the person who will have read
-the old version of this entry and concluded it was a rendering change.
-
-Pairing each start with the next stop would shade a bar from a 14:00 pause straight
-through to bedtime and call it use — a confident figure that is a different fact, which is the
-failure this codebase keeps catching. So the timeline is **not free**: it needs `session_stop`
-emitted on the pause path (a logging-only change, but in the enforcement loop) before spans can be
-drawn honestly. Until then only *start markers* are derivable, which answers "the PC was picked up
-at 02:14" but not "for how long".
-
-One further bound, unchanged: `recent(200)` caps the reachable history at roughly the last few days;
-a longer timeline wants `recent_matching_including_rotated`, which already exists for the
-screen-time report. Only per-app-per-hour costs storage, and that is where the "SQLite becomes
-defensible" note applies.
-
-**O39 · The executable's full path is fetched, used for one character class, and discarded.**
-`watcher.rs::process_name` calls `QueryFullProcessImageNameW`, then
+`watcher.rs::process_name` gets the full image path from `install::process_image_path`, then
 `path.rsplit(['\\', '/']).next()` throws everything but the basename away — at the only point in
 the system where the path is already in hand and costs nothing to keep. Where a program lives is a
 real signal, distinct from what it is called: `C:\Program Files\` means somebody installed it,
@@ -751,7 +585,7 @@ are configured by name, so enforcement must keep keying on the name.
 
 `session.rs`'s `spawn_piped` calls `CreateProcessAsUserW` with `CREATE_UNICODE_ENVIRONMENT |
 CREATE_NO_WINDOW` and **no job object**, so the service creates a child and immediately forgets it is
-the parent. O21's fix then re-derives "which processes are mine" from the process table at install
+the parent. The orphaned-helper fix then re-derives "which processes are mine" from the process table at install
 and uninstall time.
 
 That fix is correct and stays. This entry is about its *depth*. The cost of answering the question
@@ -796,7 +630,7 @@ O2 and O4 both decline — when something misbehaves on the device there would b
 feature from the refactor.
 
 **Related and deliberately not treated as the fix:** `run_watcher_supervisor` is a detached
-`std::thread::spawn` (`server.rs`) with no shutdown signal, which is a genuine root cause but a
+`std::thread::spawn` (`session.rs`) with no shutdown signal, which is a genuine root cause but a
 *shallower* one — it covers `sc stop` and OS shutdown only, not a crash, not `panic = "abort"`, not
 the `nestwatch run` CLI path. Worth doing for hygiene; not a substitute. If done, the seam is the
 `axum_server::Handle` already held in `server.rs`, not the `mpsc` in `service.rs`, which is
@@ -1007,9 +841,17 @@ to tell the capture work from the refactor. Same reasoning as O2's revised trigg
 `web/scripts/strip-comments.mjs` fails the build when a file loses more than half its bytes to
 comment stripping, justified as: "Comments are a minority of any source here."
 
-Measured, they are not. `assets/app.js` at `849dc05` is **47.9%** comment — 2.1 points from failing —
-and this codebase's house style is deliberately heavy explanatory prose. A single cleanup pass pushed
-it to 50.4% and broke the build.
+Measured, they are not. `assets/app.js` is **49.4%** comment (re-measured 2026-08-26), and this
+codebase's house style is deliberately heavy explanatory prose. A single cleanup pass already pushed it
+past the line once and broke the build.
+
+**Headroom, measured rather than derived: ~1,070 bytes — 12 comment lines at indent 4, 11 at top
+level.** Do not take it from the guard's arithmetic. The tempting figure is `out − src × 0.5` =
+**448 bytes**, and it is wrong by about 2×: an added comment line grows `src` by the whole line but
+grows `out` by only its indent and its newline, so the threshold rises half a byte for every byte
+added. Two sessions reached 448 independently and both were wrong — the fourth time in this repo that
+this same number has been derived instead of measured (see O23). Settled by appending N lines to a
+sandboxed copy and running the real stripper: 12 pass, 13 fail.
 
 Two things make it worse than a tight threshold:
 
@@ -1024,7 +866,7 @@ Two things make it worse than a tight threshold:
 
 **The trip point is a range, not a number, and it moves the wrong way.** `stripJs` copies a comment's
 leading whitespace before it recognises the `//`, so an indented comment returns more bytes to the
-output than an unindented one. Swept: roughly **7 added lines at indent 0, 8 at indent 8**.
+output than an unindented one. Swept: **11 added lines at indent 0, 12 at indent 4** (2026-08-26).
 **Outdenting a comment block moves the build closer to failing** — which nobody deduces, and which is
 why it is written down here. See O23
 for the three wrong answers produced by deriving this instead of measuring it.
@@ -1061,978 +903,6 @@ shape as the `usage.jsonl` waste already fixed one level up.
 **Why it is here and not done.** Measured at sub-millisecond to ~2 ms on a request a parent triggers
 by hand, and — the deciding fact — **it predates the reviewed diff**, so it falls outside "wasted work
 this change introduces". Mechanical and safe when someone is next in that file for another reason.
-
-## Fixed
-
-### ~~O57 · The chart's key disagreed with its bars, in the channel the texture was added for~~ — **fixed**
-
-O46 added `.st-over`, a
-texture, because `bg-error` against `bg-primary` measures **1.22** contrast and a red-green confusion
-pair carries no information for the reader it matters to. The bars were fixed. The **legend was not**,
-because it spelled its three swatch classes out by hand in the markup instead of asking `stBarClass`.
-
-Result: "over budget" rendered as a flat `bg-error` chip beside striped bars, and "not measured"
-rendered as `bg-base-200` beside `.st-nodata` ones. Two of three swatches wrong — and wrong in
-precisely the way O46 existed to fix, so the colour-blind parent was handed a key encoded in the one
-pair they cannot read, explaining bars that had already been corrected.
-
-**Fixed** by a `stBarKey` getter returning representative day rows, rendered through `stBarClass` —
-the same method the bars use, so a swatch cannot drift from them again. Same shape as `timelineKey`/
-`spanClass` next door. Swatches were enlarged to 20×12 px because `.st-nodata`'s stripes repeat every
-5 px and a 12 px chip shows barely two of them; verified by rendering the compiled stylesheet in a
-browser rather than by reasoning about it.
-
-Two guards, because one was not enough: a JS test pins every `stBarKey` entry against `stBarClass`
-and requires the three to be mutually distinct, and a Rust source scan (`web.rs`) asserts the markup
-carries `x-for="k in stBarKey"` and `:class="stBarClass(k)"` and no hand-written swatch label. The JS
-test alone cannot see the markup reverting to literals — the getter would go on agreeing with itself.
-
-### ~~O58 · The live view's age line froze into a confident wrong answer when it stopped itself~~ — **fixed**
-
-The "updated 4 s ago" line exists because a live view that has stopped and a child sitting still look
-identical. The fifteen-minute auto-stop added in the same change routed through `stopAutoRefresh`,
-which stopped the clock **without** setting `shotStale` — so the line kept rendering, in normal
-styling, frozen at whatever it last said, over a picture that was by then hours old.
-
-That is worse than having no line: it converts "I don't know how old this is" into a confident wrong
-answer, and it arrived through the one stop path that is not an error, so nothing else flagged it.
-
-**Fixed** by binding the clock to `shotAt` — the thing it describes — instead of to the Live toggle.
-The age now counts up for as long as a frame is on screen, so every way of stopping tells the truth
-for free, including the deliberate one. `resetSessionData` stops it, because that is the one place a
-frame stops existing.
-
-### ~~O59 · Every test travelled a capture path that production never takes~~ — **fixed**
-
-`FakeControl::screenshot` produced `Rgb8`. The shipping Windows controller produces `Rgba8`, and
-`encode_shot` matches on the variant — so every test in the suite went down the arm production never
-reaches, and the shipping arm was covered by a single bespoke unit test written specifically because
-of the gap.
-
-Worse than a coverage number: the arm the tests *did* exercise carries a full-frame `into_rgb8()`
-copy, the exact cost the same change had just removed from production. The tier size assertions were
-therefore measured on a path with different cost characteristics from the one that ships.
-
-`fake.rs` states the rule 80 lines below the defect — "a test that passed against a fake where they
-disagreed would be testing a world neither real implementation can produce" — and the same change had
-already moved the fake from 320×180 to 1280×720 for exactly this reason, then stopped one field short.
-
-**Fixed** by producing `Rgba8` with a constant 255 alpha. Coverage was then *measured* rather than
-assumed, by making the production arm hard-fail: **1 test before, 4 after** (three integration, one
-unit). A first attempt used a colour-transform mutation instead and showed nothing, because the size
-assertions compare tiers against each other and a transform applied to both preserves the ratio —
-recorded because picking a mutation that cannot fail is its own way of proving nothing.
-
-Byte output is unchanged: JPEG carries no alpha, verified by encoding one frame both ways with a
-deliberately varying alpha channel and diffing — byte-identical at q70 and q90. `WINDOWS-TESTING.md`'s
-recorded figures (21,985 B preview / 62,795 B full) were re-measured through the real code path after
-the change and still hold exactly.
-
-### ~~O60 · `FirstSeen` derived `Default`, manufacturing the state its `Option` exists to exclude~~ — **fixed**
-
-`FirstSeen::default()` is `{date: "", apps: [], count: 0, baseline_days: 0}` — and `baseline_days == 0`
-is precisely the condition `first_seen_in` returns `None` for. The derive handed back the one state
-the whole three-state design exists to keep out; anything reaching for it would render "First seen ,
-against 0 earlier days of history".
-
-**Fixed** by deleting `Default` from the derive — nothing called it. Recorded because the same pass
-*declined* `Report::default()` a few hundred lines away on the grounds that a struct literal is
-compiler-enforced complete and that property is wanted. The two decisions look contradictory and are
-not: adding `Default` to `Report` would have removed a compile error at the moment a new field needs a
-decision, while `FirstSeen`'s derive was already giving that property away on the type where an
-invalid value is meaningful rather than merely empty.
-
-### ~~O61 · A dimensional rule was asserted with a byte count~~ — **fixed**
-
-`a_small_frame_is_never_scaled_up` guards a rule about *pixels* — a 640×360 frame must not be
-stretched to the 960×540 preview box — and asserted it by comparing JPEG sizes across two tiers. That
-held largely because q70 < q90 on an all-black fixture, not because of the property it names. A future
-fixture that is textured or larger could upscale and still satisfy it.
-
-**Fixed** by decoding the preview and asserting `(width, height) == (640, 360)`. Noted because the
-neighbouring test argues bytes-over-dimensions correctly for *itself* — the tier genuinely is about
-bytes — and that reasoning does not transfer to this one.
-
-### ~~O62 · Twelve comments described a wire format the code had stopped using~~ — **fixed**
-
-Moving captures from PNG to JPEG left **nine** comments in `src/session.rs`, `src/lib.rs` and
-`src/control/fake.rs` still describing the live behaviour as PNG — the pipe contract, the
-stdout-purity rule, the helper's output, the fake's placeholder. Two more sat in the documents that
-get read most: `README.md`'s architecture diagram still ended `xcap ─→ PNG`, and
-`docs/FOREGROUND-TRACKING.md` said the helper "writes one PNG and exits". A twelfth claimed a live
-cadence of 3 s, which the same change had deleted in favour of a 2/5/15 s choice, and a rate derived
-from it was stated in the present tense.
-
-In a codebase where the comments *are* the documentation and a `SHOT_MIME` constant asserts the
-format, a comment naming the wrong wire format is a defect of the same kind as a wrong constant —
-someone debugging the pipe would be told to expect PNG magic bytes.
-
-**Fixed**, leaving the four genuinely historical mentions alone ("native PNG was 20,641 KiB", "the old
-PNG path"), which are measurements rather than claims about today.
-
-**Why four independent reviewers missed all twelve, which is the part worth keeping.** Every reviewer
-was instructed "never flag comment volume" — correct, since long comments are the house style — and
-each generalised it to *don't look at comments at all*. The instruction protecting the style also
-shielded the content. Two of the twelve were then found by a reviewer only after it was told the class
-existed, and the two in the most-read files were found by a reviewer rather than by the sweep of
-`src/` that preceded it. See O23
-on staleness and completeness being separate audits.
-
-### ~~O46 · The 30-day chart signals over-budget by colour alone, at 1.22 contrast~~ — **fixed**
-
-`stBarClass` returns `bg-error` for an over-budget day and `bg-primary` otherwise
-(`app.js:1522`), and that class is the bar's **only** over/under distinction
-(`index.html:876` — the `ring-2` there encodes the *pinned* day, not the budget). The table
-beneath repeats the pattern with `text-error` (`index.html:904`).
-
-**Measured, not assumed.** Converting the `dim` theme's tokens oklch → linear sRGB → WCAG relative
-luminance gives **error vs primary = 1.22**. WCAG asks 3:1 for non-text UI. The same computation
-reproduces a peer session's independently measured `primary`/`success` = 1.01 and
-`primary`/`warning` = 1.04 exactly, which is what validates the method rather than the number.
-
-Whether a day went over budget is the single most important thing this chart says, and red-against-
-green is the textbook deuteranopia pair — roughly 8% of men. It also degrades for everyone on a
-phone in daylight, which is the device the setup QR hands the parent.
-
-**Scope it honestly: screen readers are fine.** `stDayLabel` appends `" (over budget)"` and reaches
-the bar through `stBarLabel`/`stBarTitle`, so assistive tech announces the state. The affected group
-is precisely the **sighted colour-blind parent**, who gets neither channel. That is narrower than
-"inaccessible" and is the accurate claim.
-
-**This is a palette property, not three unlucky choices.** In `dim`, `primary`, `success` and
-`warning` all sit at ~86.1% oklch lightness, so *any* pair of daisyUI semantic colours read as one.
-Anything built on this theme that encodes state by colour has this defect by default.
-
-**Fix.** Add a non-colour channel, as the timeline strip already did by making shape primary. The
-in-repo precedent is `.st-nodata` in `web/src/app.css`, which encodes "not measured" as a
-repeating-linear-gradient rather than a colour — deliberately, and for this reason. An over-budget
-bar wants the same treatment: a pattern, a cap, or a marker that survives being photocopied.
-
-**Trigger.** Next change to the screen-time chart. Found while verifying a peer's timeline fix;
-their fix is correct and does not cover this, because the chart predates it.
-
-**Fixed 2026-08-25, the same day it was filed.** `stBarClass` now returns `bg-error st-over`, and
-`.st-over` stripes the bar at **135deg** — deliberately the mirror of `.st-nodata`'s 45deg, so the
-two encoded states are distinguishable from each other and not merely from the ordinary case.
-
-**The measurement was reproduced independently before acting on it.** The filing computed contrast
-by converting the theme's oklch values to linear sRGB; this pass re-measured by rendering each class
-in Chrome and reading the pixel back. Two unrelated methods, identical results — primary/error
-**1.22**, primary/success 1.01, primary/warning 1.04, success/error 1.24, warning/error 1.17. That
-agreement is what justified the change, given how often in this work a correct number has meant the
-wrong thing.
-
-**Verified painting, not merely classed.** In the live DOM with a seeded month: 30 bars, the 10
-over-budget ones all carrying `repeating-linear-gradient(135deg, …)` and the 20 ordinary ones with
-`background-image: none`. A CSS rule that never paints is exactly the silent failure this project
-keeps meeting.
-
-Three things kept from the filing, unchanged because they were right:
-
-- **The scope is the sighted colour-blind parent**, not "inaccessible". `stBarTitle` and
-  `stDayLabel` both say "over budget", so a screen reader was always told. Claiming more would have
-  been overreach, and a test now pins that channel so fixing the visual one cannot regress it.
-- **The fix follows an in-repo precedent rather than inventing one.** `.st-nodata` already encodes
-  "not measured" as a gradient precisely so it does not depend on colour, and is written as plain
-  CSS — not `@utility` — because the class is produced by a method rather than written in markup.
-  `.st-over` is the same on both counts.
-- **The palette is the underlying cause.** daisyUI's semantic colours in this theme are
-  luminance-flat: *every* pair measured lands between 1.01 and 1.24, against WCAG's 3:1 for a
-  non-text component. Any future state encoded by picking another semantic colour will have the
-  same defect. Encode by shape or texture first; let colour reinforce.
-
-One pre-existing test had pinned the exact string `"bg-error"` and was updated rather than deleted —
-the exact-string assertion and the property assertions now sit either side of the same contract.
-
-
-
-### ~~O44 · `build.rs` reports a successful CSS build as stale~~ — **fixed**
-
-`build.rs` warns when any source is newer than `assets/app.css`, comparing mtimes with a strict
-`newer(src, css)`. Tailwind **does not rewrite the output file when the generated CSS is
-byte-identical**, which is the common case: most edits to `index.html` change markup without adding
-or removing a single utility class.
-
-So the sequence is — edit a source, run `npm run build`, it succeeds, and the warning stays. Nothing
-the developer can do makes it go away except `touch assets/app.css`.
-
-Measured rather than assumed, because the whole entry turns on it. Touching `assets/index.html` and
-running `npm run build` to success left `app.css`'s mtime **unchanged** at `1787663119` while the
-source moved to `1787665066`.
-
-**Why this is worth fixing rather than living with.** The warning is load-bearing — it exists
-because a developer keeping a stale local `app.css` never learns the two disagree, and this project
-has already shipped a stylesheet defect that no test caught. A warning that fires after a correct
-build teaches the reader to ignore it, and it will still be firing on the day it is telling the
-truth. It is the same failure the capture-floor check deliberately avoided by treating an unreadable
-build as new enough: **a check that cries wolf is worse than no check**, because it spends the
-credibility of every other warning in the build output.
-
-It also already cost real time — a peer session briefly believed a build had succeeded when it had
-not, because the signal it was reading said "stale" either way.
-
-**Fix.** Compare *content*, not mtime: hash the sources into a stamp file next to `app.css` and warn
-when the hash differs. Failing that, have the build script compare against the `.scan/` copies
-`npm run build` does rewrite, so success is observable. `touch`ing the output is a workaround, not a
-fix — it silences the check on exactly the machine that most needs it.
-
-**Trigger.** Next change to `build.rs` or the web build. Cheap, and it touches nothing that runs on
-the child's PC.
-
----
-
-**Fixed 2026-08-25 by making the build declare its own completion.** `web/scripts/stamp-build.mjs`
-advances `assets/app.css`'s mtime after Tailwind succeeds, so the value `build.rs` reads means "when
-was this last built" — which is what it was already being read as.
-
-**The root cause, measured rather than inferred.** Tailwind does not write the file when the output
-is byte-identical. Touching `index.html` in a way that changes no class names left `app.css` at
-mtime `1787666447` / 89,906 bytes across a full successful build; adding one new class moved it to
-`1787667523` / 89,930. So Tailwind's mtime answers *"did the output change"* while `build.rs` asks
-*"did you rebuild"*, and the two diverge on every edit that does not affect the CSS — prose, a
-directive using only existing classes, Rust beside the markup. Verified after the fix on both sides:
-the byte-identical case now emits **0** warnings, and editing a source without rebuilding still
-emits **1**.
-
-**Why not the content hash originally recommended.** A stamp holding a hash of the inputs would also
-cover the residual case below, and costs a second generated artifact plus a format shared between
-the script and `build.rs` — a third thing to keep in step, for a warning whose real safety net is a
-test. `web::tests::every_class_in_the_markup_has_a_rule_in_the_shipped_css` compares the markup
-against the *compiled* stylesheet and fails naming the class; it runs in CI on Ubuntu and Windows
-and has no false positives. The warning is early feedback layered on that, which is why repairing it
-is worth a small script and not a large one.
-
-**Why a script rather than `touch`.** `npm run build` runs on `windows-latest` in both `ci.yml` and
-`release.yml`, where `touch` is not a command — a shell one-liner would have broken the release build
-on the only platform that ships.
-
-**The order of the build chain turned out to be load-bearing, and is now pinned by a test.** Raised
-by the peer session after the fix landed: the stamp only helps because `strip-comments.mjs`
-regenerates `web/.scan/` *before* Tailwind compiles it, and because the stamp runs *after* a
-successful compile. Reorder either and the warning inverts from a false alarm into a false
-**silence** — no complaint about a stylesheet that really is behind, which is strictly worse than
-the bug being fixed here. `web::tests::the_css_build_chain_stamps_only_after_a_successful_compile`
-reads `web/package.json` as text and pins all three steps plus the `&&` between the last two (with
-`;` a failed compile would still stamp). Mutation-checked three ways — stamp moved before Tailwind,
-`&&` weakened to `;`, and `strip-comments` dropped — each caught by the assertion written for it.
-
-**Residual, and left open deliberately:** anything that rewrites a source's mtime without changing
-its content still makes the sources look newer than a correct stylesheet.
-
-Called "rare" when first written, and **that was wrong — it has two systematic triggers**, both hit
-twice while finishing this work:
-
-* **`git checkout` or a rebase** landing a byte-identical file.
-* **Mutation testing**, which this project does constantly. Reverting a mutant by copying the
-  original back always bumps mtime, so every mutation round on a scanned asset ends with a
-  false-positive warning.
-
-Still left as-is. It clears on the next build, it cannot reach CI (a fresh checkout generates
-`app.css` after the sources, so the output is always newest there), and the alternative remains the
-stamp file rejected above. But a developer running mutation rounds will meet it often enough that
-calling it rare would have sent them looking for a fault that is not there.
-
-
-### ~~O37 · Nothing tells a parent an app is *new*~~ — **fixed**
-
-The most actionable thing a usage report can say is not a total but a **change**: something turned
-up that never had before. A parent previously had to spot it themselves in a list sorted by minutes,
-where a program used for twelve minutes sits near the bottom.
-
-`GET /api/screentime` now returns `first_seen`: the apps that had focus on the most recent day with
-focus evidence and on **no earlier day in the retained history**, with a `baseline_days` count
-saying how much history backs the claim. The dashboard renders it above the report totals.
-
-**Detection is by use, not installation — and that is the right design, not a fallback.** Qustodio,
-the market leader in this category, surfaces a new app once it has been *used* at least once rather
-than when it lands on disk; the norm exists because an app installed and never opened is not a fact
-about a child's day. It happens to also be the only signal available here, since this product
-watches no registry and reads no install log by design — but the ordering matters: the constraint
-and the correct answer coincide, and the entry should not read as though the constraint chose it.
-
-Four properties, each pinned by a test that was mutation-checked:
-
-- **One day of history proves nothing.** With no baseline, every app is trivially new; reporting
-  that would greet a parent with a list of everything their child uses, labelled new, on the first
-  day the watcher ran. `first_seen` is `None` instead.
-- **A day with no `focused` map is unknown focus, never zero focus** — the same rule
-  `DayRow::focused` already documents. Counting such a day as a baseline would make everything used
-  the next day look new.
-- **The baseline is all history, not the report window.** Otherwise narrowing the range to 7 days
-  would invent new apps, and the same app would be new or not depending on which button the parent
-  last pressed.
-- **An oversized baseline abandons the answer.** App names come from the watcher, a process running
-  as the child, and `foreground::MAX_APPS` bounds only *one day* at 200. A truncated baseline would
-  report familiar apps as new — a false alarm aimed at the parent — so passing `MAX_BASELINE_APPS`
-  returns `None` rather than a degraded answer.
-
-`None` and an empty list are deliberately different states end to end: the first means the report
-could not tell, the second that it checked and nothing was new. The dashboard shows a panel only for
-a non-empty list, because a notice that appears every quiet day stops being read.
-
-**Verified in a browser**, seeded with 33 days of history whose newest day introduced two apps: the
-API returned exactly those two, heaviest first, with `baseline_days: 32`, and the panel rendered as
-*"2 new apps — First seen 2026-08-24, against 32 earlier days of history"* with friendly names from
-`appLabel`. Zero console errors, which matters because the CSP build fails silently.
-
-### ~~O25, O26, O27, O29, O30, O31, O32, O34, O38 · The screen-cast path, which no review had ever looked at~~ — **fixed**
-
-Thirteen prior review passes produced twenty-four numbered findings and a page of declined rows, and
-**not one of them touched the capture path**. It is the most expensive thing this tool does, it is
-the feature a parent opens at the tensest moment, and it had never been measured. A pass that only
-looked there found nine things, of which three were correctness rather than cost.
-
-Numbered O25–O40 by a session that was report-only; the ones fixed here are recorded together
-because they had to ship as one change. O28, O33, O35, O36 and O39 remain open and are listed under
-*Open* above. **O37 was subsequently implemented** and has its own entry under *Fixed*; it was listed
-here as open for a while after it had shipped, which is the ordinary failure of a group entry that
-outlives the group. O40 was split: its idle half is recorded under O18, whose general form it belongs
-to, and its other half is in *Considered and declined* below.
-
-**O25 — the capture backend was chosen by a default that does not exist.** `xcap` declares **no
-`default` feature list**, so `xcap = "0.9"` compiled the `#[cfg(not(feature = "wgc"))]` arm: GDI
-`BitBlt` against the DWM-composited desktop. That is correct for ordinary windows and returns
-**black** for anything bypassing composition — a game in exclusive fullscreen, DRM video. Not an
-edge case: exclusive fullscreen is a radio button in the game's own settings, so it was an evasion
-a child could select with no prompt and no admin right, and the result is indistinguishable from a
-monitor that is off. Fixed by naming the backend, at the cost of Windows drawing a yellow border
-while the parent watches — which is O15's decision ("the child should know") enforced by the OS
-rather than by a sentence on a page. See O41 for the version floor that follows.
-
-**Binary cost, measured because the plan asked and nobody had:** turning on `wgc` enables nine
-`windows`-crate features, and the release profile is size-tuned (`opt-level = "s"`, `lto`,
-`strip`). Cross-built for `x86_64-pc-windows-gnu` both ways: **4,333,568 bytes with, 4,299,776
-without — +33,792 bytes, +0.79%**. Negligible. Worth recording so the question is not re-asked,
-and worth noting *how* it was nearly got wrong: the first attempt read a stale `nestwatch.exe`
-after a failed build and reported a +0 delta. The measurement now deletes the binary first and
-reports the run void if none reappears.
-
-**O27 — the capture helper was DPI-unaware, and the consequence is not blurriness.** `xcap`'s
-non-WGC path takes its rectangle from `EnumDisplaySettingsW` (`dmPelsWidth`/`dmPelsHeight` —
-*physical* pixels, DPI-independent by definition) and `BitBlt`s it against a **virtualised** desktop
-DC whose space is *logical* pixels. The code asks for a rectangle larger than the surface it reads
-from: 36% of the frame outside it at 125% scaling, **55.6% at 150%** — the scaling Windows itself
-picks for a 4K laptop panel. Fixed with `SetProcessDpiAwarenessContext` behind a `Once` in the
-capture path. **Still unverified**: this is reasoned from two APIs' documented coordinate spaces and
-has never run. §D1a of WINDOWS-TESTING settles it with one capture.
-
-**O26 — "the primary monitor" was whichever enumerated first.** The trait doc promised the primary;
-the code took `Monitor::all()?.into_iter().next()`, and `EnumDisplayMonitors` returns
-display-settings order. On two screens it could watch the wrong one indefinitely with nothing in the
-UI saying so. `is_primary()` existed in the same crate version, unused.
-
-**O29 — one frame was 20,641 KiB.** Measured through the exact encoder that shipped, on 4K game
-content. Fired every three seconds, that is **56.4 Mbit/s** sustained over TLS from the child's
-laptop, to fill a card 384 px tall. Two things made it that bad and only one is the codec: PNG's
-cost varies **132×** on content nobody controls, so it was never a predictable bill. Fixed with two
-tiers — 960×540 JPEG q70 for the timer, native q90 for a human — sized **in the helper**, because
-that is where the pipe is: the same frame is 32,400 KiB raw, 20,641 as PNG, and **47 KiB** resized
-and encoded first. Preview cost is now flat at 23–32 KiB across every content type and resolution
-tried, which is what makes it a tier rather than a gamble.
-
-**O30 — the live view evicted the security audit log.** One `screenshot_taken` line per frame, 61
-bytes, into a 2 MiB file with one rotated backup: **~57 hours of live viewing pushed out every login
-record**. Of fourteen `audit.record` call sites, thirteen are each bounded by a discrete human
-action — which is why the *Considered and declined* table correctly refuted the `/time-request`
-case. This was the only one a **clock** could drive. Fixed by coalescing preview frames into one
-`live_view` line per five minutes while full captures keep a line each, which also makes the log
-read better: five detailed looks plus forty minutes of ambient view, rather than 1,200 identical
-rows.
-
-**O31 — no `Cache-Control` on anything.** Five security headers were stamped on every response and
-no caching directive was among them. Now `no-store`, applied blanket rather than scoped to
-`/api/*`: every page is embedded and served over a LAN, so there is no round trip worth saving and
-scoping it would create a second rule to keep in step.
-
-**O32 — the cadence was hard-coded and unreachable.** `_refreshMs: 3000` was declared once, used
-once, and bound to no control, so the parent's only options were *off* and *the most expensive
-setting the tool has*. Now 2/5/15s beside the toggle, defaulting to 5, with a fifteen-minute
-auto-stop — `document.hidden` already covered a backgrounded tab, but a tab left *visible* on a
-second monitor cast all day.
-
-**O34 — a broken live view looked exactly like a child sitting still.** `takeScreenshot(silent =
-true)`'s `catch` arm did nothing at all, so a stopped service, a signed-out child or a wedged helper
-each left the last good frame up with the toggle still lit, indefinitely. For a feature used at
-moments of concern that is the worst available failure, and it is the same defect class as O10.
-Fixed with a capture timestamp rendered as "updated 4s ago", turning red and naming the last frame's
-time when one is missed.
-
-**O38 — every frame carried an alpha channel that was always 255.** A desktop capture is opaque by
-construction. Subsumed by the JPEG change, which has no alpha to carry.
-
-**Two things this pass got wrong about itself, recorded because the pattern repeats here.** The
-crate-count claim was backwards: dropping `image`'s `png` feature was predicted to remove seven
-crates, and removes none — **`xcap` pins that feature itself**, so feature unification keeps the
-whole PNG stack regardless. Verified with `cargo tree -i png` only after writing the opposite into
-a comment. And the first mutation run against the new tier test **passed**, which was read as the
-test being vacuous; the mutation had simply not applied. The lesson is the one O23 already records
-for benchmarks and it generalises: *verify the mutation landed before believing what the test
-result means*. The tier test was genuinely vacuous for a different reason — all three of its cases
-had `silent` and `tier` agree, so collapsing the two passed. It now asserts the two combinations no
-call site uses.
-
-### ~~O41 · The screen-capture path has a Windows floor the README does not admit to~~ — **fixed**
-
-Any move from GDI `BitBlt` to Windows.Graphics.Capture needs `GraphicsCaptureItem::CreateForMonitor`,
-which is **Windows 10 1903 (build 18362)**. The README promises "Windows 10 or 11" with no floor, so
-an unconditional switch would silently stop working on 1809 — a build that is still out there on
-hand-me-down family PCs, which is most of this product's market.
-
-**The trap is the number.** This codebase already cites **1803** twice, correctly, for the removal of
-Interactive Service Detection. 1803 is therefore the version in everyone's head here, and it is the
-wrong one for this API. Anyone reasoning from memory rather than checking will be off by one release
-in the direction that ships a broken build.
-
-**There is no fallback to fall back to, and that is the sharp part.** The obvious fix — runtime
-`GraphicsCaptureSession::IsSupported()` with a GDI fallback — **cannot be built on `xcap`**, which is
-the crate in use. Its two capture paths are mutually exclusive *at compile time*
-(`xcap-0.9.8/src/windows/mod.rs:5` is `#[cfg(not(feature = "wgc"))] mod gdi;` against `mod.rs:8`
-`#[cfg(feature = "wgc")] mod wgc;`), and `IsSupported` appears nowhere in the crate. Enabling `wgc`
-therefore **deletes** the GDI path rather than sitting in front of it. Keeping both would need a
-second capture crate or hand-written WinRT/D3D11 FFI.
-
-That inverts the finding: with no fallback available, the version floor stops being a graceful
-degradation and becomes a **hard requirement**, which is what makes the 1803-vs-1903 confusion above
-worth writing down.
-
-**Also checked and disqualified:** DXGI Desktop Duplication, the one alternative that would give
-correct capture without WGC's yellow border. It fails `DXGI_ERROR_UNSUPPORTED` against the discrete
-GPU on a hybrid-GPU system — which describes every gaming laptop, i.e. precisely the machine this
-product cares about.
-
-**Fix.** WGC only, failing loudly, with the OS build checked in `preflight` — never an unconditional
-switch, and never a fallback, which cannot exist. Either state the floor in the README or keep the
-README's promise true.
-
-Found by a peer session's validation pass and recorded here because that pass was report-only. The
-fix line above is its **second** version: the first said "runtime `IsSupported()` with a GDI
-fallback", which reads as obviously correct and does not compile. Verified against the vendored
-source before rewriting, which is the only reason it was caught.
-
-**Fixed as described, and the floor is now stated in three places rather than implied in none.**
-`Cargo.toml` declares `xcap = { version = "0.9", features = ["wgc"] }` with the reasoning above
-inline; `preflight::check_windows_build` reports a **caution** (never a blocker — screen-time,
-curfew and blocklists all work fine on an older build, and refusing to install would take a working
-parental control away to protect one feature of it); and the README now says
-"Windows 10 version 1903 (build 18362) or newer".
-
-Two things worth keeping from the implementation:
-
-- **The build number has to come from `RtlGetVersion`, not `GetVersionEx`.** The latter is shimmed
-  for binaries without an application-manifest compatibility declaration, and reports Windows 8's
-  6.2 forever. This binary deliberately has no manifest — it sets DPI awareness through an API call
-  precisely so it does not need one — so `GetVersionEx` would have reported a version below the
-  floor on *every* machine and warned every parent. That failure would have looked exactly like the
-  check working.
-- **An unreadable build number is treated as new enough.** Warning whenever one syscall misbehaved
-  would train a parent to ignore the warning, which costs more than the case it catches; a genuinely
-  too-old machine still reports the failure the moment a capture is attempted.
-
-`preflight::tests::the_capture_floor_is_1903_not_1809` pins the boundary as literal numbers rather
-than as `MIN_CAPTURE_BUILD ± 1`, so changing the constant fails there and has to be argued for.
-
-### ~~O21 · An orphaned watcher never exits, so service restarts leak helpers~~ — **fixed**
-
-`emit` wrote a sample and **discarded the write error**: `if writeln!(...).is_ok()` with no `else`.
-Nothing else in `run()` could end the process — the pump exits only on `WM_QUIT`, which nothing
-posts — so when the service went away (crash, upgrade, `sc stop`) the helper kept running forever,
-holding a `SetWinEventHook` and waking every 5 seconds to write into a pipe nobody was reading.
-`spawn_piped` uses no job object, so nothing bound its lifetime to the service's. One orphan per
-service restart, accumulating until sign-out.
-
-**The consequence was larger than the leak, and is why this was fixed rather than filed.** The
-helper's image *is* the installed binary, and Windows holds a running executable open. So a leftover
-helper made `std::fs::copy` fail on upgrade and `remove_dir_all` fail on uninstall — meaning an
-update silently never applied, and an uninstall left the binary behind while reporting success. The
-codebase already half-knew: `deploy` named "a lingering helper process" as a likely cause of a failed
-copy and did nothing about it.
-
-**Fixed on both ends**, because either alone leaves a window open:
-- The sample write moved to `foreground::write_sample`, which **returns** its error; `watcher::emit`
-  exits the process when it fails. Extracted rather than fixed in place so the broken-pipe path is
-  unit-tested on a machine with no Windows — it was otherwise the one path only the target could
-  exercise. Mutation-checked: restoring the original swallow fails two tests.
-- `install` terminates any resident helper still running the installed binary **before** overwriting
-  it (`deploy`) and before deleting it (`remove_service`), and waits for each to actually die —
-  `TerminateProcess` only initiates termination, so returning early would reintroduce the same
-  sharing violation intermittently.
-
-Selection is on the **full image path**, never the file name: a child can put a file called
-`host-health.exe` anywhere they can write, and matching by name would let them choose what an
-elevated installer terminates. `helpers_to_terminate` is pure and tested on every platform for
-exactly that reason, including that it never selects the installer's own pid.
-
-**Still unverified on Windows**, like everything else in this tier. §D2 gained steps for it.
-
-Raised here, then resolved. Kept rather than deleted, so nobody re-derives a question already
-answered — and because *how* a finding was proved fixed is worth more than the fact that it was.
-Each was confirmed by mutation: break the fix, watch the named test fail, restore.
-
-### ~~O8 · The dashboard's logic is the least-verified code that ships~~ — **fixed**
-
-**Two of three steps are done.** The scripts are now `assets/app.js` (744 lines) and
-`assets/ask.js` (136), out of the markup, and `script-src` no longer admits `'unsafe-inline'` as a
-result — an inline `<script>` can no longer run on either page, which is the directive that
-matters most where injected content would land. `no_inline_script_on_any_served_page` holds that
-shape, since the failure mode is silent.
-
-**The JavaScript now has tests** — 81 of them, on `node:test` — no framework
-installed, so the addition
-costs the project nothing it was not already carrying. They cover the pure decision and formatting
-methods: `compareVersions`, `isEnforcerStale`, `stBarPct`, `stDayLabel`, `stBarClass`,
-`anyRulesSet`, `fmtBytes`, `stRecentDayWith` and its three wrappers, and the approve/deny decision.
-Every mutation tried against them fails at least one test.
-
-The DOM-facing note below is now narrower than it was. `loadList` and `loadToday` **are** covered —
-the harness already injected `fetch`, so the network-shaped methods were reachable all along without
-a DOM, and nobody had looked. That found two more silent failures of O10's exact class: an HTTP
-error status never reached the `catch`, so the error messages three callers passed could only ever
-fire for a dropped network; and the Today card read its placeholder zeroes out as measurement before
-anything had loaded. What genuinely still needs a DOM is narrower — the polling loop, the screenshot
-lifecycle, and Alpine's own rendering.
-
-Writing them found O10 on the first run — the staleness indicator reporting healthy enforcement
-for a service the page could not reach. That is the argument for this entry, made concrete: the
-first tests ever run against this file found a safety-relevant bug in it.
-
-**What remains.** No linter over the two files, and the DOM-facing half is still untested — the
-polling loop, the screenshot lifecycle, the error paths. Testing those needs a DOM (jsdom or a
-headless browser), which is a materially larger dependency decision than `node:test` was, and is
-the kind of thing to decide deliberately rather than adopt in passing. Note it would *not* have
-caught O9 either: that was a namespace bug in the markup, which is why the guard for it is a
-source scan.
-
-**The point here is that it is the same fix twice.** Moving the script to `assets/app.js` is what
-makes it both lintable/testable *and* CSP-tightenable; neither is clearly worth the migration alone,
-and together they are.
-
-**The cost, measured — and the first estimate in this entry was wrong.** It claimed
-`@alpinejs/csp` "forbids inline expressions, so every `x-text`/`x-show` in 1,650 lines has to move
-into the component object", sourced from a GitHub discussion rather than the documentation. The
-documentation says otherwise, and counting the markup settles it. Of **264** Alpine directive
-attributes in `index.html`, **14** are incompatible:
-
-| | count | verdict |
-|---|---|---|
-| Template literals | 10 | must become string concatenation or a getter |
-| Spread (`[...days].reverse()`) | 1 | must become a getter |
-| `Math.round` (inside one of the 10) | 1 | globals are unreachable; move into the component |
-| `??` / `?.` | 3 | **undocumented either way** — verify before relying on it |
-| `x-model` | 23 | **works** — the discussion claiming otherwise is stale |
-| Dotted paths (`today.used_mins`) | 20 | works |
-| Comparisons, ternaries, arithmetic, `+` concatenation, method calls | — | all work |
-
-So this is roughly 5% of the directives, not all of them (it was 17 of 268 before O9's fix
-retired four template literals along with the SVG chart). That changes the conclusion: the blocker
-was never the markup, it is that until this entry's second step there were **233 Rust tests and no
-JavaScript tests at all**, so a runtime
-swap under the parent's only interface has nothing to catch a regression.
-
-**What is left, in order.** The relocation and the unit tests are done. Next is `@alpinejs/csp`,
-which is what `'unsafe-eval'` was still paying for. It looked, at the time this was written, like a bounded job — 14 of 264 directives
-— and the tests above cover the methods those directives call, so a swap that broke the component
-object would be caught. What would *not* be caught is a directive that stops evaluating, since
-nothing tests the rendered DOM; a headless smoke test of both pages is the honest prerequisite,
-and it is the same tooling decision the paragraph above defers.
-
-**Fixed, 2026-08-25.** `script-src` is now `'self'` — no `'unsafe-inline'`, no `'unsafe-eval'`.
-The page ships Alpine's CSP build (3.16.3, 69,625 bytes against the standard build's 46,346), which
-parses attribute expressions with its own parser rather than `new Function` and reaches no globals.
-`x-data="app()"` became `Alpine.data("app", app)` plus `x-data="app"`, since a global is exactly
-what the build cannot see.
-
-**The cost was 26 directives of 351, not 14 of 264 — and the page had grown in between.** Eleven
-template literals, one spread, and fourteen uses of `?.`/`??`, each moved into a getter or method.
-Nothing else changed: property paths, ternaries, comparisons, method calls with arguments,
-assignment, `x-model` and array literals all still work in an attribute.
-
-**The two undocumented categories were settled by probing the build, not by reading.** A throwaway
-page against the real CSP build reported, in its own words: `?.` → *Unexpected token: PUNCTUATION
-"."*; `??` → *Unexpected token: PUNCTUATION "?"*; a backtick → *Unexpected token: OPERATOR*. That
-matters because this entry already records one confident claim — that `x-model` does not work,
-sourced from a GitHub discussion — which the documentation and now the build both contradict.
-Reading about this build has been wrong twice; running it has been right twice.
-
-**The spread is the dangerous one and it is why there is a guard rather than a console check.** It
-produces *no error at all* — the loop simply renders nothing, which is precisely how O9 shipped a
-chart with thirty days of data and no bars.
-`no_alpine_expression_needs_more_than_the_csp_build_can_parse` fails the build on any of the four,
-confirmed by injecting each in turn.
-
-**Verified by running it under the tightened policy**, which is the only check that means anything
-here: with `script-src 'self'` actually served, the dashboard renders with **zero console errors**,
-and the range selector, day pinning, theme switch and collapsible cards all still work — each of
-which exercises expressions that were migrated.
-
-**What remains open from this entry** is narrower than it was: there is still no linter over the two
-scripts, and Alpine's own rendering is still only checked by a person driving a browser rather than
-by anything automatic. Both are smaller questions than the one this entry was really about.
-
-### ~~O1 · Curfew's per-tick state has two owners~~ — **fixed**
-
-`curfew::Enforcer` owns `deadline`; a loose local in `run_enforcer` owns the `Countdown`. So no
-single function answers "what should curfew do this tick" — the two machines are joined only in the
-loop body.
-
-**Cost, concretely.** Any rule coupling them has nowhere to live and no way to be tested: *don't
-warn while a shutdown is already pending*, *re-arm the countdown when a shutdown is aborted*,
-*suppress the warning on an abort tick*. Each would land in the loop as an ad-hoc `if`, invisible to
-the test helpers. The rules enforcer has a test pinning exactly this kind of interaction
-(`countdown_is_silent_once_the_budget_is_spent`) because both outcomes come out of one call; curfew
-**structurally cannot** have the equivalent. A symptom you can see today: `active` is derived three
-times per tick from the same `now` (`curfew.rs` — the loop, `bedtime_warning`, `mins_until_active`).
-
-**Fix.** Move `Countdown` into `curfew::Enforcer` as a field and fold the warning into `tick()`,
-taking the next-window state as an input so the enforcer stays config-free and clock-free, and
-returning the warning alongside the `Action`. Tests then drive the real enforcer. This does *not*
-require matching the rules enforcer's `Vec<RuleAction>` shape — a tuple is enough.
-
-**Fixed, 2026-08-25.** `Countdown` is a field of `curfew::Enforcer`, and `tick` returns
-`(Action, Option<u32>)` — both answers from one call. The next-window state arrives as an argument
-(`Upcoming`), so the enforcer stays free of the config and the clock, which is what lets the tests
-drive the real one instead of a free helper. `bedtime_warning` is gone; the `evening` test helper
-now runs the actual enforcer over a simulated evening, computing exactly what `run_enforcer`
-computes.
-
-**Two of the three coupling rules this entry named are now enforced rather than merely true.**
-*Don't warn while a shutdown is pending* and *suppress the warning on an abort tick* live in `tick`,
-which returns `None` for the warning in both states regardless of what the caller observed. The loop
-happens to pass `Upcoming::Nothing` in both cases today, so **no behaviour changed** — what changed
-is that the guarantee moved from "the caller is careful" to "the enforcer cannot do otherwise". The
-third rule, *re-arm the countdown when a shutdown is aborted*, is now explicit in the same place.
-
-**One distinction worth not losing.** `Upcoming::Nothing` and `Upcoming::In(None)` look
-interchangeable and are not. `Nothing` re-primes the countdown, so the reading after it announces
-nothing; `In(None)` records a real observation of "further off than we can see", from which the next
-reading *can* cross a threshold. Collapsing them would announce bedtime to a household that had just
-switched curfew off — `nothing_to_count_down_to_is_not_the_same_as_a_distant_window` fails on
-exactly that, confirmed by mutation.
-
-Four new tests, and both mutations checked: forcing the suppression off fails one, collapsing the
-two `Upcoming` cases fails two.
-
-### ~~O11 · The dashboard is shaped for a desktop and arrived at from a phone~~ — **fixed**
-
-**Shipped: the at-a-glance strip.** Three answers — is enforcement running, how much time is left today, is anything waiting — in one full-width row above every card, each with an explicit *unknown* state distinct from its good and bad ones. Nine tests.
-
-**Also shipped, and all three were found by a person looking rather than by any gate.** The switch
-beside "Curfew" carried only an `aria-label` — named for a screen reader, blank to everyone else, on
-the control that decides whether a child's PC powers off at night. `every_form_control_can_be_named_by_a_screen_reader`
-passed the whole time, and this entry was marked fixed on the strength of it. The bedtime time
-fields were clipping their picker icon behind the digits, with `scrollWidth == clientWidth` so
-nothing measured it as overflow. And the selected item in both button groups was painted
-`btn-primary` — the colour reserved for *Save* and *Take screenshot* — so a settled choice looked
-like a pending action.
-
-The lesson is narrower than "test the UI": **an automated check answers exactly the question it
-asks.** A name check cannot see an invisible label, an overflow check cannot see an overlap the
-browser considers legal, and nothing has an opinion about whether a colour means the right thing.
-Each of those passed while the defect stood.
-
-**The collapse shipped too — with a browser open, which is what it was waiting for.** Five
-`<details>`: Routines, Time codes, Recent access, Usage history, Change password. The page now
-presents five headings where it presented five full panels. Plain `<details>` and no JavaScript —
-the browser handles the toggle, Enter, Space, and announcing expanded state, none of which is worth
-reimplementing badly.
-
-Verified by driving it rather than reading it: all five collapsed at 56px, opening one expands it,
-the chevron rotates, the summary takes keyboard focus, and **pressing Refresh inside an open panel
-does not collapse it**. That last one is the trap this shape sets. A control inside a `<summary>`
-is activated *and* toggles the panel, so it reads as a button that does not work. Both arrangements
-parse, render and screenshot identically; only clicking one tells them apart.
-`no_summary_swallows_a_control` now fails the build on it — confirmed by putting a button back in.
-
-
-The whole first-run story is phone-first — `install` prints a QR *because* "typing an IP plus a
-passphrase on a phone keyboard is the single biggest piece of friction in first-time setup", which
-is the code's own comment. The parent scans it and lands on a single page of twelve stacked cards
-with no navigation, no anchors and no search.
-
-**Measured:** twelve cards, and **zero** `sm:` breakpoints in the whole document. Below the medium
-breakpoint the grid collapses to one column and the parent scrolls twelve cards in source order.
-
-**Cost, concretely.** Source order is not priority order. The three questions a parent opens this
-page with — *is enforcement running, how much time is left today, is anything waiting for me* — are
-answered in three non-adjacent cards, one of them below the fold on any phone.
-
-**Fix, smallest first.** A status strip at the top answering those three, before any card. Then
-collapse the rarely-touched cards (Routines, Time codes, Recent access, Usage history, Change
-password) behind `<details>`, which costs no JavaScript and stays keyboard- and screen-reader
-reachable. Tabs are the conventional answer and are worse here: they hide state a parent is scanning
-for.
-
-**Worth knowing:** `ask.html`, the child's page, is 63 lines, single-purpose, and carries
-`inputmode`, `autocapitalize`, `aria-live` and `role="alert"`. The page built for the child is
-better made for a phone than the page built for the parent.
-
-**Trigger.** Before the next card is added, or the collapse work grows with it.
-
-### ~~O12 · Nothing tells the parent a request is waiting~~ — **fixed**
-
-**Shipped: the tab title carries the pending count.** `(2) Nestwatch`, and `Nestwatch` — never `(0)` — when the count is unknown. Cleared on sign-out so a login page cannot advertise the previous session's child.
-
-The research that settled the mechanism is worth keeping: Web Push needs an external push service, which the privacy promise forbids. The **Badging API** (`navigator.setAppBadge`) badges an *installed* app's icon, and `MOBILE-APP.md` already establishes an installable page cannot work here — a home-screen app does not inherit the certificate exception. The **Notifications API** needs a secure context, and whether an accepted self-signed certificate on a private IP qualifies is **unverified** — localhost is the documented exception, not private addresses generally. The title needs no permission, no service worker, and no external anything. Its limitation stands: a tab must be open somewhere.
-
-
-A child submits from `/ask`. It is queued durably, capped at five, folded to latest status, and
-rendered on a card the dashboard polls every sixty seconds. Then nothing happens: no sound, no
-notification, no unread count, no change to the page title. **Zero** hits for `Notification`,
-`document.title` or any badge mechanism in `app.js`. The one concession is an `aria-live` on the
-heading, so a screen-reader user is told and a sighted user is not.
-
-For a feature whose whole value is a fast answer to "can I have twenty more minutes", that is the
-feature not working. The card's *visibility* half was fixed (see the changelog); being told is not.
-
-**What survives the privacy promise.** Web Push is out — it needs an external push service, and
-nothing leaves the house. But push is not the only mechanism:
-
-- **Title badging** (`document.title = "(1) Nestwatch"`) needs no permission, no API surface and no
-  uncertainty. This is the recommendation.
-- **The Notifications API** works without a service worker or any push service, but requires a
-  secure context. An accepted self-signed certificate *should* qualify and this is **unverified** —
-  five minutes in a browser settles it; do not build on it until someone has.
-
-**Honest limitation.** Every option needs a dashboard tab open somewhere. Nothing reaches a phone in
-a pocket without an external service, and that is an accepted cost of the privacy promise rather
-than an oversight to engineer around. Say so in the README rather than leave a silence.
-
-**Trigger.** Do the title badge with the next dashboard change; treat notifications as gated on that
-one browser check.
-
-### ~~O13 · Category time exists for today and vanishes tomorrow~~ — **fixed**
-
-**Shipped end to end.** `PreRollover` carries `per_group_secs`, `rollup_row` writes a `groups` map, `DayRow`/`ParsedRow` carry it, `Report` gains `group_totals`, and the card renders categories *above* the executable-name lists because "Games: 14 h" is a sentence and twenty file names is a puzzle.
-
-**`ParsedRow::detail()` extended to `(knows_groups, knows_focus, count)`** — generations ahead of the count, newest first. Ranking on the count alone once let a wide legacy row outrank a narrow modern one and silently discard the richer data; groups are a third generation and had to lead.
-
-**The deferral in the first draft of this entry was wrong and is withdrawn.** It said the change should wait for on-device verification "because it changes the stored format". `focused` and `pages` were added to the rollup row in exactly this shape, and `parse_row` reads an absent key as *not recorded* rather than as zero. Same additive shape, same safety.
-
-
-`AppGroup { name, apps, limit_mins }` already exists with a shared pool, and `today_summary` already
-reports per-group minutes against the limit. `rollup_row` records `apps`, `focused` and `pages` —
-and **no group data at all**, so category history does not exist. A parent can see "Games: 40 min"
-this afternoon and never "Games: 14 h this month".
-
-Categories are the primary view in every comparable product; Apple's taxonomy is public and stable
-(Social, Games, Entertainment, Creativity, Education, Health & Fitness, Information & Reading,
-Productivity & Finance, Shopping & Food, Travel, Utilities, Other) and iOS 27 adds per-category
-limits. It is the view that turns thirty rows of executable names into a sentence.
-
-**Fix.** Add a group map to the rollup row, and ship a starter set drawn from that taxonomy that a
-parent can edit. Keep an explicit uncategorised bucket rather than a catch-all, so a group covering
-nothing is visible as a gap. Both additive; neither changes what enforces.
-
-**Trigger.** After the current build has been verified on-device — this writes a new key into the
-daily history, and a format change is a bad thing to stack on a release nobody has watched run.
-
-### ~~O14 · Prose in the served files compiles into the stylesheet~~ — **fixed, and the real cost was 15%**
-
-**Shipped:** `web/scripts/strip-comments.mjs` writes comment-free copies into a git-ignored `web/.scan/`, and `@source` points there. A hand-written scanner rather than a regex, tracking string and template state so `"https://x"` survives; string contents are deliberately preserved because `stBarClass` names utilities appearing nowhere else.
-
-**The prose was a rounding error beside what was actually wrong.** `@source` does not *replace* Tailwind v4's automatic source detection — it adds to it, and automatic detection was scanning the whole `web/` directory: `package.json`, `app.css`'s own comments, the test files. `@import "tailwindcss" source(none);` turns it off. **102,181 → 86,736 bytes, 15,445 saved.** That was true before any of this work; two careful comment rewordings were optimising the wrong thing by two orders of magnitude.
-
-**Two things learned the hard way, both by measuring rather than reading:**
-
-- The first build after repointing `@source` made the stylesheet *grow*, and `.steps` reappeared — the component removed earlier. It was `strip-comments.mjs` itself, whose documentation necessarily lists `step`, `list`, `tab` and `mask` to explain the hazard, being picked up by automatic detection. **A file explaining the trap was springing it.**
-- Pointed at `alpine.min.js`, the scanner removed **13,543 bytes from a file with no comments** — minified code is full of regex literals and divisions, and a `/` there is not a comment marker. Vendored files are now excluded, and the script throws if any file loses more than half its bytes, because that is not comments, that is a mis-parse deleting code.
-
-
-Tailwind finds class names by scanning `assets/**/*.{html,js}` as raw text, so it cannot distinguish
-a class from English. daisyUI's components are named with ordinary words — `list`, `tab`, `step`,
-`range`, `join`, `mask`, `collapse`, `tooltip` — so an explanatory comment ships whatever component
-it happens to name.
-
-**This is structural, not carelessness.** It has now happened twice in one day, to two different
-authors: a comment reading "Width **steps** up with the screen" shipped 2,408 bytes of a widget the
-product does not have, and a later pass added `tab`, `list` and `step` for another 1,544. Both were
-found by measuring, not by review. No amount of care makes English avoid a vocabulary that includes
-"list".
-
-**Fix.** A prebuild step that writes comment-stripped copies of the served files into a scratch
-directory and points `@source` at those. About twenty lines. It composes safely with the guard that
-already exists: if the stripper ever removed something real, `every_class_in_the_markup_has_a_rule_in_the_shipped_css`
-goes red rather than the UI going quietly unstyled.
-
-**Why it is open rather than done.** It changes the shared `web/` build while two sessions are
-working in this repository, and the current cost is ~1.5% of a stylesheet. Worth doing, not worth
-doing unilaterally.
-
-**Trigger.** The next time anyone touches the build, or the third occurrence — whichever comes
-first.
-
-### ~~O15 · The child is never told the screen can be watched~~ — **decided and fixed**
-
-**Shipped: one quiet sentence on the child's page** — *"A parent set this up and can see this screen, which apps you use, and how long for."* Not a legal notice and not a warning.
-
-The reasoning, so it is not re-litigated: this product takes the opposite view everywhere else it had the choice. It records page titles and not addresses specifically so it cannot rebuild a browsing history, and declines to read browser history at all as disproportionate. A tool that careful about what it should not know is a strange one to have a silent camera in. Reverting is one line if a household disagrees.
-
-
-Not a vulnerability — a product question, recorded because the answer should be deliberate rather
-than default.
-
-`GET /api/screenshot` captures the primary monitor on demand. It is audited, so the *parent* has a
-record, and `SECURITY.md` describes it plainly — for the parent. The child's page, the only surface
-they ever see, mentions screen capture **zero** times.
-
-Competitors mostly do not disclose either, so this is not out of step. But this product made the
-opposite choice everywhere else: it records page *titles* and not URLs specifically so it cannot
-reconstruct browsing history, and `FOREGROUND-TRACKING.md` declines browser-history reading as
-disproportionate. A tool that reasons that carefully about what it should not know is a strange one
-to have a silent camera in.
-
-**Three options, none of them obviously right.** Leave it silent; add one line to the child's page;
-or show a brief on-screen indicator when a capture happens. The middle costs a sentence and makes
-the tool's honesty consistent with itself.
-
-**Trigger.** None. Decide it, write down why, and move it to *Considered and declined* if the answer
-is no.
-
-### ~~O3 · `today_summary` is documented pure but reads process globals~~ — **fixed**
-
-Its doc said "Pure (no I/O) so it's unit-tested" while calling `crate::heartbeat::worst_age_secs()`,
-which reads two process-global atomics **and** `SystemTime::now()`.
-
-The cost was visible in the tests: four of them passed only because *none* asserted on
-`enforcer_age_secs`. The impure field was precisely the untested one, because pinning it would have
-coupled the test to whatever else in the binary had called `beat()`.
-
-`today_summary` now takes `enforcer_age_secs: Option<i64>`, and `api::usage_today` reads the
-heartbeat at the edge alongside its other I/O. The function is pure for real, and
-`today_summary_passes_the_enforcer_heartbeat_through` asserts all three cases — fresh, stale, and
-`None` (never reported, which after one tick's uptime means the loops never started). Confirmed by
-mutation: hardcoding the field to `None` fails that test while the other four stay green.
-
-### ~~O10 · The dashboard reported healthy enforcement for a service it could not reach~~ — **fixed**
-
-Found by the first JavaScript test ever run against `app.js`, on the first run.
-
-`isEnforcerStale(age)` returned `age === null || age > ENFORCER_STALE_SECS`. The strict `===` was
-deliberate and documented: the initial `today` literal carries no `enforcer_age_secs` key, so a
-loose check would read `undefined` as stale and flash the warning on every page load until
-`loadToday()` resolved. The comment said exactly that.
-
-**The cost of that trade was not written down.** `loadToday()` routes through `loadList`, which
-catches a failed fetch and — with no `errMsg` passed — does nothing with it. So a load that never
-succeeds leaves `today` at its initial value permanently, `enforcer_age_secs` stays `undefined`,
-and `undefined === null` is false while `undefined > 150` is also false. The function answered
-**"enforcement is fine"** for a dashboard that could not reach the service at all. `heartbeat.rs`
-calls a silently dead enforcer "the worst failure this product can have"; this is the browser
-under-reporting exactly that, and the failing case is the one where the service is down — which
-is when the warning is the whole point.
-
-**Fix.** Split the two questions the `===` was conflating. `isEnforcerStale` now uses `== null`,
-so an absent age counts as stale like an explicit one — matching how the rest of the file already
-tests for absence. The flash is prevented instead by `todayAsked`, set once the first attempt
-finishes whether it succeeded or not, and `stEnforcementStale()` stays quiet until then. The
-"Today" banner was calling `isEnforcerStale` directly, bypassing the gate; both banners now go
-through `stEnforcementStale()`, which is what the shared helper's own comment said it was for.
-
-**Verified by mutation**: restoring `=== null` fails two tests, and removing the `todayAsked` gate
-fails a third. Both properties — no flash before the first load, honest reporting after it — are
-asserted, so neither can be traded away for the other again without a test going red.
-
-
-**A later pass found the same class twice more, and got the fix wrong the first time.** The
-`loadList` helper read `if (r.ok) { … }` with no `else`, so an HTTP error status never threw and
-never reached the `catch` — meaning the error messages three callers passed were dead code for the
-failure that actually happens; only a dropped network ever produced one. And the Today card read its
-placeholder zeroes out as measurement before anything had loaded.
-
-The instructive part is the proposed remedy for the second. It was "gate the figures on
-`todayAsked` — the flag exists and already means exactly this". It does not:
-`todayAsked` is set **whether the fetch succeeded or failed**, deliberately, because keeping the
-staleness warning reachable when the service is unreachable is this entry's whole point. Gating the
-numbers on it would have revealed them the moment the first attempt finished, including the failure
-it was meant to suppress. The reviewer had quoted the flag's semantics correctly two sections
-earlier in their own notes and still read the name for the meaning.
-
-`day` cannot stand in either: `today_summary` emits `"day": usage.day.map(…)`, so a *successful*
-response carries `day: null` on a machine whose enforcer has not yet written a tally — "nothing
-recorded", not "nothing received". What shipped is `today` starting as `null`, so the data's own
-presence answers the question and there is no second flag to keep in step.
-
-### ~~O9 · The screen-time chart rendered no bars at all~~ — **fixed**
-
-Not raised by a review — found by running the dashboard in a browser, which nothing else here had
-done. The chart repeated its bars with `<template x-for>` **inside the `<svg>`**. A `<template>`
-parsed inside `<svg>` belongs to the SVG namespace, is not an `HTMLTemplateElement`, and has no
-`.content`; Alpine's `x-for` reads `template.content.children`, threw, and rendered nothing. It
-shipped in 0.2.3.
-
-**Why every existing gate missed it.** It is not a Rust bug, not a type error, and not a
-formatting or lint issue: it is a DOM namespace rule that only exists once a browser parses the
-file. 233 tests, clippy on two targets, and a cross-compile all passed over it. The failure was
-silent in the UI too — the summary figures above the chart and the day-by-day table below it both
-read from the same data and were correct, so the page looked sparse rather than broken, and the
-only evidence was eight console errors nobody was looking at.
-
-**Fix, as shipped.** The bars are HTML `<div>`s in a flex row, so no `<template>` sits inside an
-`<svg>` anywhere. Per-bar hover text became a `title` attribute, which is more reliably surfaced
-than SVG's `<title>` element; the hatch for unmeasured days moved from an SVG `<pattern>` to a
-`.st-nodata` rule in `web/src/app.css`, written in theme variables so it still follows both themes.
-`stBarClass`/`stBarStyle` keep the three states named in one place and keep the markup to method
-calls — which also removes four template literals from the O8 migration's tally.
-
-**Verified by running**, since that is the only thing that could have caught it: 30 bars where
-there were 0, all three states present (10 hatched, 16 within budget, 4 over), the deliberate 3%
-floor keeping a measured-zero day visible and hoverable at 3px, and the console going from 20
-error lines to none. `web::tests::no_alpine_template_inside_svg` fails if the shape returns —
-confirmed by putting it back.
-
-### ~~O7 · The binary could not tell you which version it is~~ — **fixed**
-
-Nothing in `src/` referenced `CARGO_PKG_VERSION`, and the release profile sets `strip = true`, so
-the shipped `.exe` carried no version string at all — found by checking a published artifact, which
-contained its own version number nowhere. There was no `--version` flag, and `doctor` did not print
-one either.
-
-**Why it mattered.** This is a tool installed by hand, from a downloaded file, onto a machine
-visited rarely. The question you could not answer while standing at that PC was *which build is
-actually running*, which is the first thing worth knowing when something behaves unexpectedly, and
-the one that decides whether a given security fix reached the machine rather than just the
-repository.
-
-**Fix, as shipped.** `env!("CARGO_PKG_VERSION")` behind `crate::VERSION`, surfaced by a `version`
-command (`--version` / `-V`), in `doctor`'s report header, and in the usage text. `strip = true`
-does not affect `env!` — it is baked in at compile time as an ordinary string constant. Verified
-where it counts: a **stripped release build** reports its version from both surfaces, and a test
-pins the doctor header so it cannot silently drop out of the one report you read when something is
-wrong. Confirmed by mutation: dropping `v{}` from the header format string fails
-`the_report_header_names_the_build` and nothing else.
-
----
-
-## Considered and declined
-
-Weighed in review and deliberately not done. Re-raise only with new evidence.
-
-| | Why not |
-|---|---|
-| A general `control::call` wrapper over all seven `SystemControl` methods | Two reviewers disagreed. The failure messages are call-site-specific by design (`"budget lock FAILED — screen time is not being enforced right now"`), so wrapping all seven means seven wrappers each taking a message parameter — strictly worse. The one concrete cost, two dropped `JoinError` arms, was fixed directly. `control::notify` stays because it is a *policy* wrapper (failure is a debug-level non-event; delivery is a boolean both callers branch on), not merely an async shim. |
-| Splitting `RulesEnforcer::decide` into app-rules and budget halves | The seam is genuine — the two halves share nothing but the accrual that already runs first. Declined as a restructure of the security-critical pure function during a cleanup pass, not because the analysis was wrong. Revisit alongside O2. |
-| Hoisting `parse_hm` out of curfew's lookahead probe | **Measured**: worst realistic config (7 windows) is 7.2µs per 30s tick, 0.000024% duty cycle. Hoisting is 4.7–7.6× faster and buys 2.5–20ms *per day*. |
-| Trimming `sysinfo`'s per-tick process refresh | **Measured** at 8% of a 4.9ms call already on the blocking pool. Caveat: measured on macOS; the Windows syscalls it would skip have a different cost profile and are unverified on target. |
-| Lengthening the 30s tally-save interval | The child is the adversary and a reboot is their tool. At 30s a reboot forfeits ≤30s of tally and costs more than that in boot time; at five minutes it becomes "reboot, gain five minutes, repeat". Write-on-change was taken instead — it removes most writes with the guarantee fully intact. |
-| Renaming `rules::Usage` → `Tally`, and `RuleAction::Warn` → `LimitReached` | Both would read better. Rename churn across `api.rs`, `doctor.rs` and the tests isn't worth it on its own; fold into O2 if that lands. |
-| Sharing one `CHECK_INTERVAL` between the two enforcers | They are independent loops and nothing breaks if they diverge; the comment is descriptive, not a constraint. The real constraint — that a loop must tick faster than the smallest warning threshold — is now documented on `WARN_AT_MINS` instead. |
-| **Separating the child's `/time-request` audit line, to stop log eviction** | Raised as a live hole; **refuted by reading the code**. The concern was that an unauthenticated child could append audit lines at 5/min until the 2 MB log and its single `.jsonl.1` backup rolled every login and kill off disk. `api.rs` already audits **only submissions that joined the queue**, and the queue caps at `MAX_PENDING` — so further growth requires a *parent* action to resolve one. The comment there records it as the fourth site of that defect class, after `login`, `pair` and `logout`. Nothing to do. |
-| **Moving `heartbeat::beat()` to the end of the enforcer loops** | The doc said it was called at the end "so it proves the tick finished"; the code calls it at the top. The tempting fix is to move the code. **Don't** — `run_rules_enforcer` has two early `continue` paths, and one of them is the parent pressing **Pause**, so beating at the end would report enforcement as dead every time the feature is used. The doc was corrected instead; see `heartbeat.rs`. |
-| **Widening `is_lan` to admit CGNAT (`100.64.0.0/10`)** | Confirmed by running: `Ipv4Addr::is_private()` excludes that range, so a parent tunnelling in over Tailscale is rejected by the app-layer gate. Declined anyway — the tool is LAN-only by design, and admitting a range no home network uses would extend the trust boundary for every install to fix an explicitly unsupported setup. Documented in the README instead, so it reads as a boundary rather than a bug. |
-| Adopting `clippy::unused_qualifications` | Clean everywhere except 9 sites, all of them in `curfew.rs` and `rules.rs` — the enforcement path, including the pure function a previous pass already declined to restructure during cleanup. A style lint is not a reason to touch it. The other lints adopted in `Cargo.toml`'s `[lints]` were each verified to produce zero warnings first, so none of them opened a cleanup. Same for `missing_docs` (84) and `clippy::str_to_string` (36). |
-| Widening `is_lan` — **second look, still no** | The original row below stands, and the case for widening got weaker, not stronger: Tailscale run as a *subnet router* on another machine already reaches this service from `192.168.x.x`, because subnet routers masquerade routed traffic to their own LAN address by default. So a working Tailscale arrangement exists without touching the allowlist — and it is the better one anyway, since it keeps the tunnel daemon off the monitored PC. README corrected, which had claimed Tailscale simply does not work. |
-| **Back-dating the return from idle**, so the reconciliation poll could back off while nobody is there | Raised as an accuracy fix and **withdrawn after the counter-argument**. `GetLastInputInfo` reports when input last *happened*, not when the user *returned* — on resume those are the same instant, so any correction guesses in the over-credit direction. Understating is the direction this codebase chooses deliberately elsewhere (`countdown`'s floor division, `clamp`'s scaling). The drop is real: up to one poll interval of genuine use per idle episode. Revisit only if an idle-poll back-off is actually wanted, and then measure first. |
-| **Replacing the enforcement process scan with `WTSEnumerateProcessesW`** | One call, one buffer, zero per-process handles, and it carries `SessionId` — which is the key O6's per-account half needs. The `Win32_System_RemoteDesktop` feature is already enabled, so it costs no new dependency. **Killed by the documentation:** a caller outside the Administrators group does not get an error, it gets a *partial list*. On the enforcement path a partial process list is a silent fail-open — apps that should have been killed are simply absent. Running as LocalSystem satisfies the requirement today, but that is a property of the install rather than of the code, and the failure is invisible when it breaks. |
-| **Reusing one long-lived `sysinfo::System` across ticks** | Strictly the largest remaining win without new FFI — sysinfo would skip `ProcessInner::new` for processes it already knows. **Declined:** it holds a `PROCESS_QUERY_INFORMATION \| PROCESS_VM_READ` handle open for every live process for as long as the `System` lives. A SYSTEM service permanently holding a few hundred read handles to everything on the machine is a textbook EDR heuristic, and being quarantined by antivirus costs a family more than the syscalls do. Revisit only if a real measurement shows the narrowed refresh is insufficient. |
-| **An embedded database — DuckDB, as used in a sibling project** | The precedent is real and defeats the obvious objection: that project builds `x86_64-pc-windows-msvc` natively on `windows-latest`, exactly as this one does. **What does not transfer is the shape.** A realistic rollup row measures 763 bytes typical / 1,891 worst case, so ten years is 3,650 rows and under 7 MiB — a `Vec` holds the entire history. The shipped binary is 3.79 MiB and DuckDB's bundled amalgamation alone sits at crates.io's 10 MB *source* ceiling. And `bundled` cross-compilation is best-effort and needs a C++ cross-compiler for the target, which would cost the `x86_64-pc-windows-gnu` check that is the only way to lint eight `#[cfg(windows)]` `unsafe` blocks from a Mac. **SQLite becomes defensible** if the model ever changes from one blob per day to a row per `(day, app)` — that is ~11,000 rows a year and makes aggregation a query rather than a fold. Not yet earned. |
-| **Shortening the 30-second enforcement tick to improve resolution** | The reflex when someone asks for better tracking, and it buys nothing: focus changes are caught within 250 ms by the watcher's hook, and the tick only decides how often that is folded into the day's tally. Resolution is already an order of magnitude finer than the tick, and every cost in the loop would multiply. |
-| **Five suspicions about the install and enforcement paths, all refuted by reading** | Recorded because each is plausible enough that someone will suspect it again. **Localised group names** — `doctor` queries the Administrators group by SID (`S-1-5-32-544`) precisely *because* the name is localised; "Administratoren"/"Beheerders" appear only in the comment saying why. **Secrets written before the lockdown** — `prepare_data_dir` runs `create_dir_all` then `harden_acl` *before* the config is constructed, under a comment stating the ordering is deliberate. **ACL hardening** — `icacls /inheritance:r` strips inherited entries first, grants are by SID, and a failure bails the install rather than continuing. **An arbitrary 825-day certificate** — it is Apple's hard limit, and both bounds are set because Apple measures `not_after − not_before`. **Curfew defeatable by `shutdown /a`** — still on past `deadline + slack` re-issues as the *uncancellable* `ShutdownNow`, so cancelling buys one interval, not an evening. |
-| **`thumbnail()` instead of `Triangle` for the preview downscale** | Raised on strong numbers: `imageops::resize` runs `vertical_sample` first, which returns `Rgba32FImage` — always 4×f32 whatever the source — so a 4K preview allocates a **33.2 MiB** intermediate every frame, and `thumbnail()` is 16.8 ms → 9.1 ms and 35.4 MB → 2.2 MB allocated. **Declined on a re-measurement.** The reviewer's quality figure (4.2/255) came from a deliberately aliasing-heavy frame; on a desktop-like fixture the visual difference is ≤1/255 and the argument had to be made on bytes instead — where `thumbnail` produces **5–15% larger JPEGs** (4K +10.1%, 1080p +15.4%, 1440p +4.8%). Wire bytes are the one thing the preview tier exists to minimise, and the 33 MiB is transient in a ~50 ms helper process. Also measured so nobody re-proposes them: two-stage is *slower* (18.2 ms), `CatmullRom` 28.2 ms. |
-| **`Vec::with_capacity` for the JPEG encode buffer, and for the helper pipe read** | The encoder buffer starts at `Vec::new()` and doubles ~20 times on a full-tier frame; the pipe read gets no size hint because `GetFileInformationByHandle` fails on an anonymous pipe, so it doubles from 32 B (~11 reallocations for a 23 KiB preview). Both declined for the same reason: a capacity large enough to help the **rare** full tier taxes every **preview** frame, which is the one on a timer, and the cumulative memcpy is microseconds against a ~50 ms capture. |
-| **Memoizing `FakeControl`'s gradient, and `stBarPct`'s chart peak** | Both real: the fake rebuilds a 1280×720 image per call, and `stBarPct` recomputes the peak once per bar (8,100 element reads at a 90-day window, 0.177 ms). Declined — the first is dev/test-only and a cache adds global mutable state to a deliberately simple fake; the second predates the reviewed diff and is sub-millisecond once per report load. |
-| **Collapsing `takeScreenshot(silent, tier)` to one parameter** | The two agree at every production call site, and a reviewer correctly showed the comment defending their independence described the *shipped* behaviour as the failure it prevents. Declined anyway: they answer different questions — how loudly a failure is reported, versus how many pixels are asked for — and the plan that introduced tiers chose the split deliberately and mutation-tested it. **The stale justification was corrected rather than the signature**, which is the part that was actually wrong. |
-| **Deriving "today" in the timeline from `this.today.day` rather than the browser clock** | A genuine second definition of "today" on a page where every other today-figure comes from the server. Declined **from a cleanup pass**: it changes timezone semantics, needs a fallback for the pre-load `null`, and belongs in a correctness review rather than a tidy-up. |
-| **O40's other half — labelling the live frame with the app that has focus** | Proposed as the best available mitigation for a black frame: show *which game* rather than a blank rectangle meaning either "monitor off" or "capture defeated". **Declined because the premise was false**, and it was written before that was checked. The watcher's foreground data reaches the dashboard only as `focus_totals` — a per-day *aggregate* in the screen-time report. There is no "what has focus right now" anywhere on the wire, so the label would have named whatever the child used **most today**, pinned under a live picture of something else. Delivering it properly means a new field on `/api/usage/today` or the capture response, which is a feature, not a label. Recorded here because the idea is obviously attractive and will be proposed again. Its idle sibling — skipping capture while `GetLastInputInfo` reports idle — is refuted under O18. |
-| An `Enforcer` trait unifying the two background loops | The genuinely shared skeleton is ~6 lines. The blocks that *look* duplicated aren't: curfew calls `disarm()` when a shutdown fails so it retries with a fresh countdown; the rules enforcer deliberately doesn't, and returns as the uncancellable `ShutdownNow`. A shared helper would extract the boilerplate and leave the divergent part behind. |
 
 ---
 

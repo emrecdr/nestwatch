@@ -502,7 +502,7 @@ mod tests {
     /// evaluating.
     ///
     /// The four constructs below were established by probing the build, not by reading about it —
-    /// the documentation is silent on two of them, and the entry that tracked this work (O8)
+    /// the documentation is silent on two of them, and the review pass that tracked this work
     /// records an earlier confident claim about `x-model` that turned out to be false. What the
     /// parser reports:
     ///

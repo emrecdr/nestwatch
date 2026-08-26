@@ -386,7 +386,7 @@ test("stBarClass distinguishes the three states the legend promises", () => {
   const app = loadApp();
   assert.equal(app.stBarClass({ minutes_used: null }), "st-nodata");
   // `bg-error st-over`, not `bg-error`: the colour alone measured 1.22 against `bg-primary` in this
-  // theme, so over budget carries a texture too. See O46 and the accessibility tests at the end of
+  // theme, so over budget carries a texture too. See the accessibility tests at the end of
   // this file — this assertion is the exact-string half, those are the property half.
   assert.equal(app.stBarClass({ minutes_used: 90, over_budget: true }), "bg-error st-over");
   assert.equal(app.stBarClass({ minutes_used: 30, over_budget: false }), "bg-primary");
@@ -776,7 +776,7 @@ test("syncTitle is a no-op without a document rather than a crash", () => {
 //
 // Three answers, each with an *unknown* state distinct from its good and bad ones. That third state
 // is what every earlier version of this page got wrong: an unreachable service rendered as a healthy
-// enforcer (O10), as zero minutes used, and as nothing waiting.
+// enforcer, as zero minutes used, and as nothing waiting.
 
 test("enforcement reads as unknown before the first check, not as healthy", () => {
   const a = loadApp();
@@ -1413,7 +1413,7 @@ test("the axis is labelled every four hours across the whole day", () => {
   assert.ok(t[t.length - 1].pct < 100, "the last tick must sit inside the axis");
 });
 
-// --- the over-budget bar (OPEN-FINDINGS O46) --------------------------------
+// --- the over-budget bar ----------------------------------------------------
 //
 // `bg-error` against `bg-primary` measures 1.22 in this theme — near-identical luminance differing
 // mostly in hue, and green-against-salmon is a red-green confusion pair. It was the only over/under
