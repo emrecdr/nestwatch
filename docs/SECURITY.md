@@ -292,9 +292,17 @@ on every axis:
 A time code *does* grant screen time without a live parent action — that's the point (leave a
 code for when you're away). It's safe because:
 
-- **The code is the capability, and it's unguessable.** Codes are 8 Crockford-base32 characters
-  (~1.1 trillion combinations) from the OS CSPRNG. At the 5/min rate limit, brute-forcing one is
-  infeasible (millennia), and the limiter throttles rapid guessing regardless.
+- **The code is the capability, and it's unguessable.** Codes are 6 Crockford-base32 characters —
+  1,073,741,824 combinations — from the OS CSPRNG. **The throttle is what makes this safe, not the
+  length.** At the 5/min per-IP rate limit, guessing one takes on the order of 400 years with a
+  single code outstanding, and about 8 years even at the 50-code cap. The alphabet omits `I`, `L`,
+  `O` and `U`, so there is no character a child can mistype into a different valid code.
+  <br>Shortened from eight on 2026-08-26, which is a factor of 1,024 in combinations and no
+  meaningful change in feasibility — a code has to be read off a note and retyped by a child, and
+  the rate limit was always the binding constraint. Two consequences worth stating plainly: the
+  redeem throttle and this length are now **one decision**, so loosening the limiter means
+  revisiting the length with it; and the margin is thinnest in the corner where a household leaves
+  many codes outstanding at once, since guessing scales with how many are live.
 - **The parent hands the code over deliberately** — there's no interception threat; the parent
   chooses when and to whom to give it.
 - **Single-use and bounded**: each code is worth 1–240 minutes, is consumed on first redemption

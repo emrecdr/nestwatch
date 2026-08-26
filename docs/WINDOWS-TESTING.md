@@ -435,10 +435,14 @@ this PC**, which is the half that matters and the half only you can do.
 - [ ] From his browser, open `https://<his-pc-ip>:<port>/ask`, request e.g. 15 minutes →
       you see it under **More-time requests** in the dashboard → **Approve** → the granted
       minutes are added to today's budget (and appear in **Usage history**).
-- [ ] **Time codes:** in the dashboard **Time codes** card, generate a 20-min code → on `/ask`,
-      enter it under **Have a code?** → "Added 20 minutes!" and today's budget rises; the code
-      disappears from the active list, and re-entering it says "not valid" (single-use). A random
-      wrong code is rejected. (As HIM, `type C:\ProgramData\HostHealth\time_codes.jsonl` →
+- [ ] **Time codes:** in the dashboard **Time codes** card, generate a 20-min code. It must be
+      **six characters** — check it is comfortable to read off the screen and retype, since that is
+      the whole reason it is six rather than eight, and note that `I`, `L`, `O` and `U` never appear
+      so nothing can be mistyped into a different working code. Then on `/ask`, enter it under
+      **Have a code?** → "Added 20 minutes!" and today's budget rises; the code disappears from the
+      active list, and re-entering it says "not valid" (single-use). A random wrong code is
+      rejected. Enter six wrong codes quickly: the sixth must be refused by the rate limiter rather
+      than merely rejected — that throttle is what makes a six-character code safe. (As HIM, `type C:\ProgramData\HostHealth\time_codes.jsonl` →
       Access denied — he can't read the code list.)
 - [ ] **Today's screen time** card shows minutes used/remaining and a progress bar that grows as
       he uses the PC; a **+30** bonus button raises the remaining figure immediately.

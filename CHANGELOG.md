@@ -24,6 +24,17 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   certificate file cannot be read for any reason, the QR is printed exactly as it was before rather
   than the install failing over a decoration.
 
+### Changed
+- **Time codes are now six characters instead of eight.** The code you leave for your child to type
+  in — worth a set number of extra minutes — is shorter to read off a note and shorter to retype
+  without a mistake. The alphabet already leaves out `I`, `L`, `O` and `U` so there is no character
+  that can be mistyped into a different working code.
+  <br>**This does not meaningfully weaken it.** Six characters is still over a billion
+  combinations, and what makes a code unguessable here was never its length: redemption is limited
+  to five attempts a minute from any one device, which puts guessing one at roughly four hundred
+  years. Codes remain single-use, worth 1–240 minutes, capped at fifty outstanding, and are never
+  written to the audit log.
+
 ## [0.3.0] — 2026-08-26
 
 ### Before you update

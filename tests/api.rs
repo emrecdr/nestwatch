@@ -467,7 +467,11 @@ async fn time_codes_parent_endpoints_require_auth_and_issue() {
     assert_eq!(res.status(), StatusCode::OK);
     let body = body_json(res).await;
     assert_eq!(body["minutes"], 30);
-    assert_eq!(body["code"].as_str().unwrap().len(), 8);
+    // Six characters, on the wire as well as in the type — this is the string a child reads off
+    // a note and retypes, so its length is part of the endpoint's contract, not an internal
+    // detail. See `timecode`'s module doc for why six is safe: the redeem throttle is what
+    // makes guessing infeasible, not the length.
+    assert_eq!(body["code"].as_str().unwrap().len(), 6);
 
     // Out-of-range minutes → 400.
     let res = app

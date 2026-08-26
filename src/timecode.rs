@@ -7,9 +7,16 @@
 //! (`issued` / `redeemed` lines), folded by `code` to the latest status, so codes survive the
 //! auto-restarting service and each code is single-use.
 //!
-//! Security: codes are 8 Crockford-base32 characters (~1.1 trillion combinations), so brute-force
-//! guessing through the rate-limited redeem endpoint is infeasible; the plaintext codes live only
-//! in the SYSTEM+Administrators-only data dir, unreadable to the child.
+//! Security: codes are 6 Crockford-base32 characters — 1,073,741,824 combinations — drawn from the
+//! OS CSPRNG. Brute-force guessing through the redeem endpoint is infeasible because of the
+//! **throttle**, not the length: at its 5-per-minute per-IP limit that is roughly 408 years of
+//! guessing with one code outstanding, and about 8 years at [`MAX_ACTIVE_CODES`]. The plaintext
+//! codes live only in the SYSTEM+Administrators-only data dir, unreadable to the child.
+//!
+//! Six rather than eight is a deliberate trade (2026-08-26): eight was 1,024x more combinations and
+//! correspondingly more to read off a note and retype without error, and the length was never what
+//! made this safe. The alphabet already omits `I`, `L`, `O` and `U` for the same reason. If the
+//! throttle is ever loosened, this length has to be revisited with it — they are one decision.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -25,7 +32,7 @@ pub const MAX_CODE_MINUTES: u32 = 240;
 const MAX_ACTIVE_CODES: usize = 50;
 /// Code length in characters. The alphabet and generator live in [`crate::token`], shared with
 /// pairing tokens so there's one audited source of randomness.
-const CODE_LEN: usize = 8;
+const CODE_LEN: usize = 6;
 
 /// An active (issued, not-yet-redeemed) code as surfaced to the parent UI.
 #[derive(Debug, Serialize)]
@@ -133,6 +140,27 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         (TimeCodes::new(dir.join("time_codes.jsonl")), dir)
+    }
+
+    /// The code a child has to read off a note and type is **six** characters.
+    ///
+    /// A literal rather than `CODE_LEN`, because asserting a constant against itself pins nothing:
+    /// this is a product decision about what a person can retype without error, and it is also a
+    /// security parameter, so a change to it should have to be made here as well as at the constant.
+    ///
+    /// Six characters of this 32-symbol alphabet is 1,073,741,824 combinations. Against the redeem
+    /// endpoint's 5-per-minute per-IP limit that is ~408 years of guessing with one code
+    /// outstanding, and ~8 years at `MAX_ACTIVE_CODES`. Eight characters was 1,024x more and
+    /// correspondingly harder to type; the throttle, not the length, is what makes this infeasible.
+    #[test]
+    fn a_code_is_six_characters_long() {
+        let (codes, _dir) = store();
+        let code = codes.issue(30).unwrap();
+        assert_eq!(
+            code.len(),
+            6,
+            "a six-character code is short enough to read off a note and retype: got {code}"
+        );
     }
 
     #[test]

@@ -572,9 +572,15 @@ pub struct RedeemBody {
 }
 
 /// `POST /redeem-code` — the child cashes in a time code. **Unauthenticated** (the child isn't
-/// logged in) but LAN-gated (outer router → `require_lan_peer`) and per-IP rate-limited (which
-/// also blunts brute-forcing). On a valid code the minutes are added to today's budget; the
-/// response reveals only whether it worked (and how many minutes), never anything else.
+/// logged in) but LAN-gated (outer router → `require_lan_peer`) and per-IP rate-limited.
+///
+/// **That rate limit is the primary defence, not a secondary one.** A code is six characters, so
+/// the guessable space is about 1.07 billion; five attempts a minute is what turns that into
+/// centuries. Loosening or removing the limiter therefore changes the security of time codes
+/// directly, and `timecode::CODE_LEN` would have to be revisited with it — see that module's doc.
+///
+/// On a valid code the minutes are added to today's budget; the response reveals only whether it
+/// worked (and how many minutes), never anything else.
 pub async fn redeem_code(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
