@@ -160,6 +160,10 @@ pub fn install() -> Result<()> {
         // or the curfew window. Re-recorded on every install, so a genuine relocation is handled
         // by reinstalling.
         tz_offset_mins: Some(crate::clock::current_offset_mins()),
+        // …and record *which zone* that offset came from. The offset alone cannot tell a
+        // substituted zone from an honest one — Amsterdam in winter and London in summer are both
+        // +60 — so the identity is what actually detects the change. `None` off Windows.
+        tz_zone: crate::clock::current_zone_identity(),
         // Preserve existing settings (curfew, rules, granted extra) across reinstalls.
         ..existing.unwrap_or_default()
     };

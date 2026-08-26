@@ -264,10 +264,16 @@ nestwatch.exe remote-setup # print a script that enables remote admin (--off to 
   running. Your settings, certificate and history stay unless you add `--purge`, which is
   irreversible: it deletes the whole data directory, including every day of recorded screen
   time, the pending time requests and the certificate your devices already trust.
-- **Upgrading from a build older than this one: re-run `install` once.** The clock anchor that stops a time-zone
+- **Upgrading from a build older than this one: re-run `install` once.** What stops a time-zone
   change from resetting the day's screen time (or moving the curfew window) is recorded *at install
-  time*, so an install upgraded in place doesn't have one and falls back to plain local time.
-  Re-running `install` records it. Do the same if the PC genuinely moves to another time zone.
+  time* — both the UTC offset and, since this version, **which time zone the machine is in**. An
+  install upgraded in place has neither, and falls back to plain local time; one upgraded from a
+  version before the zone was recorded keeps the older, weaker offset-only check. Re-running
+  `install` records both. Do the same if the PC genuinely moves to another time zone.
+  <br>Worth doing rather than skipping: the offset-only check could be walked an hour in winter and
+  **two hours in summer** by picking a different time zone, which is enough to push a 21:00 curfew
+  to 23:00 every night. Comparing the zone itself closes that. See
+  [`docs/SECURITY.md`](docs/SECURITY.md#resisting-the-childs-own-privileges).
 - Silent install: set `NESTWATCH_PASSWORD` to skip the interactive prompt.
 - **Updating without going to the PC:** [`docs/REMOTE-UPDATE.md`](docs/REMOTE-UPDATE.md) — how to
   do it over the network safely, why the usual advice for home networks is unsafe here, and why

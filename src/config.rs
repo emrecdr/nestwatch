@@ -97,6 +97,18 @@ pub struct Config {
     /// legitimately moved.
     #[serde(default)]
     pub tz_offset_mins: Option<i32>,
+    /// The machine's time-zone *identity* at install — the zone it is set to, not the offset that
+    /// implies. [`crate::clock`] compares this each tick, and a mismatch is tampering.
+    ///
+    /// This is the load-bearing half: an offset is ambiguous (Amsterdam in winter and London in
+    /// summer are both +60), so an offset check cannot tell a substituted zone from an honest one.
+    /// The value is opaque — nothing parses it, everything compares it — and it folds in the
+    /// "adjust for DST automatically" flag, which moves the offset without moving the zone name.
+    ///
+    /// `None` on configs written before this existed, and on non-Windows, which degrades to the
+    /// offset tolerance alone (the old behaviour) rather than guessing.
+    #[serde(default)]
+    pub tz_zone: Option<String>,
     /// The addresses baked into the current certificate as SANs. Lets `install` tell "the cert
     /// still covers this machine" (reuse it, keeping the fingerprint stable) from "the LAN address
     /// changed" (reissue, because otherwise the browser adds a name-mismatch error on top of the

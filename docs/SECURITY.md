@@ -527,10 +527,32 @@ README. One case needed its own defense, because Windows grants the privilege by
   makes the enforcer *cancel* a pending shutdown.
 - Time is now anchored to **UTC** — which that privilege cannot move; changing the clock itself
   needs `SeSystemtimePrivilege`, which standard users don't hold — plus an offset recorded at
-  install (`tz_offset_mins`). The OS offset is still followed while it stays within an hour of the
-  anchor, so genuine DST transitions work; larger jumps are ignored and logged. The comparison is
-  always against the stored anchor, never the previous reading, so induced drift is bounded at one
-  hour and can't be walked forward.
+  install (`tz_offset_mins`).
+- **The offset check alone was not enough, and this bullet used to say it was.** It read: "induced
+  drift is bounded at one hour and can't be walked forward." Both halves are true and the
+  conclusion drawn from them was not. The window is measured from the *anchor*, but true local time
+  also leaves the anchor by an hour every summer, so the two add. An install anchored in winter
+  could be pushed **two hours** in summer by selecting UTC — moving a 21:00 curfew to 23:00, every
+  night, from a settings page that raises no prompt. Nor could the window simply be narrowed: an
+  hour of slack is exactly what a real DST transition needs.
+- **What closed it: comparing the zone, not the offset** (`tz_zone`). An offset is the *output* of
+  a zone plus a date, and two zones share an output for half the year — Amsterdam in winter and
+  London in summer are both `+60` — which is the ambiguity the substitution lived in. The zone
+  identity is the *input*, and it is what the child actually changes. It is recorded at install and
+  compared each tick: **matching** means the OS clock is believed outright (so DST is now exact
+  rather than tolerated); **differing** means the zone was changed under us, and the service falls
+  back to UTC plus the highest offset seen while the identity still matched — which follows the
+  real DST excursion instead of freezing at the install-time offset. The identity includes the
+  *adjust for DST automatically* flag, because unticking it moves the offset while leaving the zone
+  name alone.
+- **Where the old rule still applies:** a config written before `tz_zone` existed, and any
+  non-Windows build, have no identity to compare and fall back to the offset tolerance exactly as
+  before. Re-run `install` to record one.
+- **Not yet verified on hardware.** The comparison logic is unit-tested on every platform, and the
+  two-hour bypass has a regression test that reproduces it. The one Win32 call that reads the zone
+  identity (`GetDynamicTimeZoneInformation`) is compile- and lint-verified for the Windows target
+  but **has never executed** — see §E3 of `WINDOWS-TESTING.md`. If it fails at runtime it returns
+  "cannot tell", which selects the old behaviour rather than a worse one.
 - Independently, the enforcer refuses more than one day rollover per 12 monotonic hours, so the
   tally survives even if the clock is wrong for some other reason.
 - **The anchor is recorded at install time.** An install upgraded in place from before this existed

@@ -140,6 +140,9 @@ pub async fn serve_with_handle(
         if let Some(mins) = cfg.tz_offset_mins {
             crate::clock::set_anchor(mins);
         }
+        // Order matters only in that both must be in place before the first tick; the zone is the
+        // half that actually detects a substituted timezone, the offset the half that answers it.
+        crate::clock::set_anchor_zone(cfg.tz_zone.clone());
     }
 
     let port = crate::state::recover_read(&state.config).port;

@@ -487,6 +487,31 @@ this PC**, which is the half that matters and the half only you can do.
 - [ ] **Time-zone change can't dodge curfew.** With a curfew window covering *now*, shift the time
       zone so local time falls outside it. Within ~30s the shutdown must still be issued.
       (Cancel with `shutdown /a` as admin once you've seen it, then restore the zone.)
+- [ ] **A *one-hour* time-zone change can't dodge curfew either — this is the one that used to
+      work.** The check above uses a large jump, which the old offset comparison already caught.
+      The reachable attack was a small one. With a curfew window that has just opened, as HIM set
+      the zone to **one hour west** of your own (from Amsterdam: *(UTC+00:00) Dublin, Edinburgh,
+      Lisbon, London*). Local time now reads an hour earlier — outside the window. **The shutdown
+      must still be issued within ~30s.** Before the `tz_zone` identity check this bought a free
+      hour every night, and two hours in summer.
+- [ ] **Selecting plain UTC in summer can't dodge curfew.** The worst case, and only reproducible
+      between March and October. Same setup, but choose *(UTC) Coordinated Universal Time*. That is
+      two hours behind Amsterdam summer time, and the old check tolerated it because it compared
+      against a winter-recorded anchor. The shutdown must still be issued.
+- [ ] **Unticking "adjust for daylight saving time automatically" can't dodge curfew.** Same
+      settings page, one checkbox down; it moves the clock an hour without changing the zone name.
+      The shutdown must still be issued. (Re-tick it afterwards.)
+- [ ] **A real machine reads its own zone identity at all.** The three checks above all pass
+      trivially if `GetDynamicTimeZoneInformation` returns nothing, because the service then falls
+      back to the old offset rule — so confirm the mechanism is live rather than merely
+      unexercised. As admin, `type C:\ProgramData\HostHealth\config.json` and confirm **`tz_zone`
+      is present and names your zone** (e.g. `"W. Europe Standard Time"`). If it is `null` after a
+      fresh `install`, the Win32 call is failing and none of the above is actually being tested.
+- [ ] **An honest DST transition is still followed.** The identity check means the OS clock is now
+      believed outright while the zone matches, so this must keep working. Easiest proof without
+      waiting for October: set the zone to one that transitions on a different date, leave it as the
+      *recorded* zone by re-running `install`, and confirm the dashboard's day boundary and curfew
+      still track local time. Otherwise, check it on the last Sunday in October.
 - [ ] **Win+L doesn't earn more time.** Set a tiny daily limit with action **Lock**. When the
       warning appears, press **Win+L** before it locks, wait ~40s, then log back in. It must lock
       again **immediately** — not give another warning countdown. Repeat twice; it must lock every
