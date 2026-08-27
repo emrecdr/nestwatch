@@ -819,6 +819,20 @@ doc never sits above the victim. It stays attached to whatever item displaced it
 and on a different item, in `run_cli`'s case. Checking directly above an undocumented function is
 looking exactly where the displaced doc cannot be.
 
+**It has a deletion form, and that one is harder to see.** Removing part of what a doc describes
+leaves prose that is well-formed, attached to the correct item, and quietly false. On 2026-08-27 a
+`/simplify` pass removed the toast-pinning half of a loop in `src/web.rs` and left the enclosing
+test's doc still reading *"Four surfaces restate these, none of them near the enforcement: two
+`max=` attributes and two toast messages"* — two of the four no longer pinned there. It was caught
+in the same pass by re-reading the doc after the deletion, and repaired in the same change.
+
+The insertion form at least produces an absence: some item ends up visibly undocumented, and a list
+of undocumented items can surface it. The deletion form produces no absence at all — every item
+still has a doc, every doc still sits on its own item, and only the *content* has gone stale. So the
+mitigation below does not reach it, and neither does any of the three scanners above, which all key
+on a name appearing or failing to appear. Recorded as one observed instance, separate from the five
+insertions counted above.
+
 **Fix.** None proposed, and a low-precision scanner would be worse than none — a check people learn
 to ignore is its own failure. The nearest useful thing is not a detector: keep the undocumented
 module-level `pub fn` list at zero (it is two entries away) so that anything appearing on it is
