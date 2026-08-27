@@ -122,7 +122,7 @@ impl JsonlLog {
         std::fs::read_to_string(path).is_ok_and(|c| c.contains(needle))
     }
 
-    /// Like [`recent`], but also reads the single rotated `.1` backup.
+    /// Like [`Self::recent`], but also reads the single rotated `.1` backup.
     ///
     /// `recent` deliberately does not: after a rotation up to 2 MiB of history is still on disk
     /// but unreachable, which is fine for the audit table (which wants the latest events) and not

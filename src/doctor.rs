@@ -205,7 +205,7 @@ fn fail(text: impl Into<String>, fix: impl Into<String>) -> Check {
 /// `DayRow`, `focus_missing`, `Stamp::Missing` against `Stamp::Corrupt`). A parent whose
 /// screenshots fail on a *modern* machine needs to see this was checked and was not the cause.
 ///
-/// The unreadable case does **not** warn, matching [`crate::preflight::check_windows_build`]: a
+/// The unreadable case does **not** warn, matching `preflight::check_windows_build`: a
 /// misbehaving syscall must not alarm a parent whose machine is almost certainly fine. But it does
 /// not claim support either, because that would report an unmeasured thing as measured.
 ///

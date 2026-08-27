@@ -263,7 +263,7 @@ fn spawn_lock(exe: &str) -> Result<(), ControlError> {
 /// and a cross-session `CreateProcessAsUserW`. Child-triggerable, and it would not have shown up
 /// as anything but idle CPU.
 ///
-/// So a run only counts as healthy if it lasted [`HEALTHY_RUN`]. Anything shorter doubles the
+/// So a run only counts as healthy if it lasted `HEALTHY_RUN` below. Anything shorter doubles the
 /// delay, whichever way it ended.
 ///
 /// Note what is deliberately *not* done here: a failure is never fatal and never blocks. If no

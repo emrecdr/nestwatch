@@ -518,7 +518,8 @@ pub enum RuleAction {
     /// this exact transition — which meant the loop couldn't move out of this file, and a fourth
     /// `budget_action` that armed a deadline would have silently inherited the notification.
     LockWarning,
-    /// Advance heads-up: this many minutes of budget remain (one of [`countdown::WARN_AT_MINS`]).
+    /// Advance heads-up: this many minutes of budget remain (one of
+    /// [`crate::countdown::WARN_AT_MINS`]).
     /// Fires *before* the budget is spent, independent of `budget_action` — a Shutdown-mode day
     /// gets the same countdown as a Lock-mode one, since Windows' own dialog only appears at zero.
     TimeWarning(u32),
@@ -559,7 +560,7 @@ pub struct RulesEnforcer {
     /// only when they go back *under* budget — crucially not when they go inactive, which is what
     /// made Win+L a bypass. See the `Lock` arm of [`RulesEnforcer::decide`].
     episode_warned: bool,
-    /// Advance warnings ("15 minutes left"), announced on the way down. See [`countdown`].
+    /// Advance warnings ("15 minutes left"), announced on the way down. See [`crate::countdown`].
     countdown: Countdown,
 }
 

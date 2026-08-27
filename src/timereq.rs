@@ -139,9 +139,9 @@ impl TimeRequests {
 
     /// What became of the most recently submitted request — for the child's own page.
     ///
-    /// [`pending`] answers the parent's question ("what is waiting for me?") and deliberately drops
-    /// anything already decided. That left the child with no answer at all: they pressed *Send
-    /// request*, read "waiting for a parent to reply", and the page never said another word. A
+    /// [`Self::pending`] answers the parent's question ("what is waiting for me?") and deliberately
+    /// drops anything already decided. That left the child with no answer at all: they pressed
+    /// *Send request*, read "waiting for a parent to reply", and the page never said another word. A
     /// denial was indistinguishable from silence, and an approval showed up only as a number that
     /// changed by itself up to a minute later. The likely outcome is the child walking off to ask
     /// out loud — which is the exact interaction `/ask` exists to replace.

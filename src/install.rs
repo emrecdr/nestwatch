@@ -1125,7 +1125,7 @@ fn configure_recovery() {
 /// against a process running at a different integrity level, and a helper we cannot name is one we
 /// would leave running — which is the whole failure being fixed.
 ///
-/// Shared with [`crate::watcher::process_name`], which wants the same pid→path chain and then only
+/// Shared with `watcher::process_name`, which wants the same pid→path chain and then only
 /// the file name. It lives here rather than there because `install` is compiled on every platform
 /// while `watcher` is `#[cfg(windows)]`, so this direction is the only one that links.
 #[cfg(windows)]

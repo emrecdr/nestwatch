@@ -134,7 +134,7 @@ impl Curfew {
     }
 
     /// Minutes until the next closed window opens, or `None` if that's further out than
-    /// [`countdown::LOOKAHEAD_MINS`] — or if curfew is off, or the window is already open (where
+    /// [`crate::countdown::LOOKAHEAD_MINS`] — or if curfew is off, or the window is already open (where
     /// Windows' own shutdown countdown has taken over and a "bedtime soon" popup would be a lie).
     ///
     /// Deliberately **probes** [`Curfew::is_active_at`] minute by minute instead of deriving the
