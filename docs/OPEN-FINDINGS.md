@@ -766,6 +766,65 @@ parses fine today) documented at the call site, which costs one comment and no s
 **Trigger.** The first time someone needs a quote inside a regex in `assets/*.js`. Not before —
 the workaround is a footnote and the proper fix is a lexer.
 
+### O69 · Nothing detects a doc comment that has drifted onto the wrong item
+
+Inserting an item directly above an existing one silently transfers the doc comment: the new item
+adopts the block, and the item that owned it is left undocumented. Neither `cargo test` nor
+`clippy -D warnings` nor the cross-compile has ever failed on it. It has happened **five times** in
+this codebase.
+
+All five are fixed. `screentime::totals_across` and two others went in `0eb0bc4`; `api::notify` was
+caused and fixed the same day; `lib::run_cli` went in `1c6fe7a` — that one had been stranded since
+the root commit `e760aa4`, so the CLI entry point carried no doc in **any** revision of this repo
+until 2026-08-27.
+
+**No live instance is known.** Scanned against `bef3a59` on 2026-08-27: two undocumented
+module-level `pub fn` (`config::data_paths`, `install::install`) and thirty across all visibilities.
+Each of the two was read and neither is a victim — `install` is described in `install.rs`'s own `//!`
+header, and `data_paths` sits below `DataPaths`'s own doc. So this entry is not a live defect; it is
+the absence of anything that would catch the sixth.
+
+**The one time a gate did catch it, it was an accident of formatting.** `api::notify`'s stolen block
+happened to end in a `*` list, which tripped `doc_lazy_continuation`. A block ending in prose splices
+in total silence. Four of the five were found by a person reading.
+
+**Three detector designs were tried on 2026-08-27 and all three failed.** Recorded because each is
+the obvious next proposal:
+
+- *Flag any doc block naming an item defined later in the file.* Far too noisy at every setting:
+  **between 7% and 24% of blocks flagged**, depending on three choices the rule as stated does not
+  specify — whether nested items (methods, `#[test]` fns) count as "defined later", whether the name
+  must be backticked or matches as bare text, and whether indented doc blocks are in the denominator.
+  Two independently written scanners in the same pass each quoted a precise figure and neither
+  reproduced, until the variants were pinned down; they then agreed exactly. One reproducible point,
+  measured 2026-08-27 at `6e75a85` over `src/*.rs`, counting module-level doc blocks and module-level
+  item names only: **46 of 368 (12%)** matching on a word boundary, **66 of 368 (18%)** matching as a
+  bare substring. The cause is not a tuning problem: this codebase cross-references forward on
+  purpose — `rules.rs` alone accounts for around 17, mostly docs pointing at `decide` — so a forward
+  reference is the norm rather than the signal, and no threshold separates them.
+- *Flag any undocumented `fn` whose own name appears in a doc block above it.* Exactly one hit,
+  `lib.rs::accepts`, and it is a false positive: `struct Accepts`'s doc legitimately contains the
+  word "accepts". It does **not** flag `run_cli`, the instance it was written to catch.
+- *Restrict either scan to `pub fn`.* Adoptable — two doc comments — but inert on the motivating
+  cases, because `api::notify` and `screentime::totals_across` are both private.
+
+**Why no lexical rule reaches it.** The stranded sentence never names its subject. "Parse `argv` and
+dispatch the requested subcommand" contains no `run_cli`, backticked or plain. The defect is that a
+doc's *content* describes a different item — a semantic property, not a token one. Adding a
+backtick requirement to the second design makes it strictly worse: it takes the one hit to zero,
+deleting the pointer that led to the find.
+
+**A structural trap, recorded because it cost two review sessions a wrong conclusion.** The orphaned
+doc never sits above the victim. It stays attached to whatever item displaced it — 68 lines earlier
+and on a different item, in `run_cli`'s case. Checking directly above an undocumented function is
+looking exactly where the displaced doc cannot be.
+
+**Fix.** None proposed, and a low-precision scanner would be worse than none — a check people learn
+to ignore is its own failure. The nearest useful thing is not a detector: keep the undocumented
+module-level `pub fn` list at zero (it is two entries away) so that anything appearing on it is
+short enough to be read, since reading is what found every instance. That is a guard on list length,
+not on the defect.
+
 ---
 
 ## Not covered by any of this
