@@ -825,6 +825,65 @@ module-level `pub fn` list at zero (it is two entries away) so that anything app
 short enough to be read, since reading is what found every instance. That is a guard on list length,
 not on the defect.
 
+### O70 · The enforcement loops themselves are never executed by any test
+
+The first coverage run this project has had (`cargo llvm-cov`, 2026-08-27 at `7091c84`, host
+target) puts the crate at **84.03%** of lines. The number is not the finding. Where the misses
+sit is:
+
+| file | lines uncovered | what they are |
+|---|---|---|
+| `rules.rs` | 251 of 1,471 | almost all of `run_rules_enforcer` (L923+) |
+| `curfew.rs` | 72 of 579 | almost all of `run_enforcer` (L324-411) |
+| `helper.rs` | 29 of 32 (**0%**) | the whole file — capture/lock/watch, all Windows shell-outs |
+| `clock.rs` | 6 of 224 | effectively none |
+
+**This is the architecture working, and also the gap it leaves.** `lib.rs` argues for a pure
+decision layer that can be tested cheaply beside an I/O layer that cannot, and the measurement
+confirms both halves of that claim exactly: `is_within`, `decide`, `Enforcer::decide` and the
+whole of `clock::decide` are covered, while the `async` drivers that *call* them are not. The
+enforcement decisions are tested. The code that wires those decisions to the machine is not.
+
+**Why that is worth an entry rather than a shrug.** Two of this project's real defects — the
+dropped `enabled` guard and the Win+L bypass — were wiring, not arithmetic. Nothing currently
+executes the paths where a decision is turned into a `SystemControl` call, an audit line and a
+tally write, in the order and under the timing the real loop uses.
+
+**Not a coverage gate** — see the row in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md). The useful
+shape is a driver test: `FakeControl` plus `tokio::time` pause/advance, asserting the sequence of
+control calls a scripted config produces over a simulated day. `control::fake` already exists and
+is at 86%, so the harness is most of the way there.
+
+**Already banked from this run.** Three child-facing strings were reachable only from these loops
+and so had never been asserted at all — `lock_warning_message`, `limit_reached_message` and
+`bedtime_title`, each with a Dutch translation that nothing checked. Fixed, with `Language::ALL`
+added so the tests cannot go stale when a third language lands.
+
+### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
+
+`assets/app.js` is **2,056 lines** registering a single `Alpine.data("app", app)` with ~97
+methods, consumed by two `x-data="app"` roots across 1,450 lines of markup. By comparison `src/`
+is 39 modules with a stated responsibility each.
+
+**The premise most reviews attach to this is false, and it was false when they wrote it.** The
+argument arrives as "a component this size cannot be tested without a browser, so split it to
+make it testable". `web/test/harness.js` has evaluated `app.js` in a `vm` context since
+`4434447`, and `web/test/app.test.js` is **1,910 lines** exercising its pure methods. Reachability
+was never the problem and splitting would not improve it. Anyone re-raising this should check the
+harness before repeating the testability argument.
+
+**What is actually left.** One scope holding capture, process list, curfew editing, rules editing,
+routines, time codes, the audit feed, the screen-time report, theming, toasts and the update
+check. The cost is coupling, not reach: two rows in `DECLINED-OPTIONS.md` correctly refused
+front-end duplication fixes as churn, and they are churn *because* any local fix in a shared scope
+looks disproportionate. The genuinely untested half is the DOM half, which a split does not reach
+either.
+
+**If it is ever done**, the mechanism is available and cheap: the CSP build already requires
+`Alpine.data()` registration — that is why `x-data="app"` works at all — so additional
+registrations need no change in CSP posture. Seams follow the cards: *screen*, *report*, *rules*,
+*access*. Extract one, prove it, and leave the rest until a change lands there anyway.
+
 ---
 
 ## Not covered by any of this

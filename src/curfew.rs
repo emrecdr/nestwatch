@@ -789,12 +789,35 @@ mod tests {
         );
     }
 
+    /// The notification *title* beside the bedtime message.
+    ///
+    /// Its only caller is `run_enforcer`, which no test drives, so the first coverage run this
+    /// project has had showed both arms — including the Dutch "Bedtijd" — as never executed. The
+    /// message beside it was pinned from the start; the title was not, purely because it is one
+    /// line long. A title is the larger text in a Windows toast.
+    #[test]
+    fn every_language_has_its_own_bedtime_title() {
+        let titles: Vec<&str> = Language::ALL.iter().map(|&l| bedtime_title(l)).collect();
+        for (lang, title) in Language::ALL.iter().zip(&titles) {
+            assert!(!title.trim().is_empty(), "{lang:?} has no bedtime title");
+        }
+        for (i, a) in titles.iter().enumerate() {
+            for b in &titles[i + 1..] {
+                assert_ne!(
+                    a, b,
+                    "two languages share a bedtime title — one was never translated"
+                );
+            }
+        }
+    }
+
     #[test]
     fn bedtime_messages_read_naturally_at_every_threshold() {
         for &m in &crate::countdown::WARN_AT_MINS {
             // Both languages, because a translation that pluralises "1 minuten" is exactly the
             // trap the singular arms exist to avoid, and English passing says nothing about Dutch.
-            for lang in [Language::En, Language::Nl] {
+            // Derived from `Language::ALL` so a third language cannot be added past this test.
+            for lang in Language::ALL {
                 let msg = bedtime_message(m, lang);
                 assert!(
                     msg.contains(&m.to_string()),

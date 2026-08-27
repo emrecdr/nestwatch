@@ -149,6 +149,15 @@ pub enum Language {
 }
 
 impl Language {
+    /// Every variant, for tests that must cover all of them.
+    ///
+    /// Exists because the alternative is each test hand-writing `[Language::En, Language::Nl]`,
+    /// which keeps passing when a third language is added and quietly stops testing it — the
+    /// tautological-fixture trap `tests/spawn_paths.rs` was written to close. Adding a variant
+    /// without extending this list fails `all_lists_every_language_variant` below, which counts
+    /// the variants in this file's own source rather than trusting the list.
+    pub const ALL: [Language; 2] = [Language::En, Language::Nl];
+
     /// The BCP-47 tag, for `<html lang>` and for the client's string table.
     pub fn tag(self) -> &'static str {
         match self {
@@ -301,6 +310,47 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`Language::ALL`] really does list every variant.
+    ///
+    /// Derived from this file's own source rather than from a second hand-written list, for the
+    /// reason `tests/spawn_paths.rs` gives: a fixture that mirrors a list in the code passes
+    /// forever once the two drift, and the drift is silent. Adding `De` to the enum and not to
+    /// `ALL` fails here, which is what stops every message test in `rules.rs` and `curfew.rs`
+    /// from quietly skipping the new language.
+    #[test]
+    fn all_lists_every_language_variant() {
+        let src = include_str!("config.rs");
+        let body = src
+            .split_once("pub enum Language {")
+            .expect("the enum must still be named `Language`")
+            .1
+            .split_once("\n}")
+            .expect("unterminated enum body")
+            .0;
+        let variants: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|l| {
+                !l.is_empty()
+                    && !l.starts_with("//")
+                    && !l.starts_with("#[")
+                    && l.ends_with(',')
+                    && !l.contains(' ')
+            })
+            .collect();
+        // A broken extractor must not make this vacuous — the same guard `spawn_paths` carries.
+        assert!(
+            variants.len() >= 2,
+            "extracted {variants:?} from the enum body; the parser is broken, not the code"
+        );
+        assert_eq!(
+            variants.len(),
+            Language::ALL.len(),
+            "the enum declares {variants:?} but `Language::ALL` has {} entries",
+            Language::ALL.len()
+        );
+    }
 
     #[test]
     fn config_round_trips_through_json() {

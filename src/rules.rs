@@ -2273,6 +2273,58 @@ mod tests {
         assert_eq!(normal.remaining_mins(0), None, "no budget today");
     }
 
+    /// The two child-facing strings that only the enforcement loop ever builds.
+    ///
+    /// Found by the first coverage run this project has had: `budget_countdown_message` below was
+    /// pinned, but its two neighbours were reachable *only* from `run_rules_enforcer`, which no
+    /// test drives — so both Dutch translations shipped with nothing asserting them. A wrong or
+    /// empty `Nl` arm would have reached a child's screen with every gate green.
+    ///
+    /// Pins the property that survives rewording: each language says something, says something
+    /// *different* from the others (a copy-pasted English arm is the likely mistake), and names
+    /// the number it was given.
+    #[test]
+    fn every_language_has_its_own_lock_and_limit_wording() {
+        let locks: Vec<String> = Language::ALL
+            .iter()
+            .map(|&l| lock_warning_message(30, l))
+            .collect();
+        for (lang, msg) in Language::ALL.iter().zip(&locks) {
+            assert!(!msg.trim().is_empty(), "{lang:?} has no lock warning");
+            assert!(
+                msg.contains("30"),
+                "{lang:?} lock warning drops the seconds: {msg}"
+            );
+        }
+        for (i, a) in locks.iter().enumerate() {
+            for b in &locks[i + 1..] {
+                assert_ne!(
+                    a, b,
+                    "two languages share a lock warning — one was never translated"
+                );
+            }
+        }
+
+        let limits: Vec<&str> = Language::ALL
+            .iter()
+            .map(|&l| limit_reached_message(l))
+            .collect();
+        for (lang, msg) in Language::ALL.iter().zip(&limits) {
+            assert!(
+                !msg.trim().is_empty(),
+                "{lang:?} has no limit-reached message"
+            );
+        }
+        for (i, a) in limits.iter().enumerate() {
+            for b in &limits[i + 1..] {
+                assert_ne!(
+                    a, b,
+                    "two languages share a limit message — one was never translated"
+                );
+            }
+        }
+    }
+
     /// Mirror of curfew's `bedtime_messages_read_naturally_at_every_threshold`. Both message
     /// tables hand-write the singular case, so both need pinning — otherwise adding a threshold
     /// breaks one of them and only the other reaches CI.
@@ -2281,7 +2333,8 @@ mod tests {
         for m in crate::countdown::WARN_AT_MINS {
             // Both languages, because a translation that pluralises "1 minuten" is exactly the
             // trap the singular arms exist to avoid, and English passing says nothing about Dutch.
-            for lang in [Language::En, Language::Nl] {
+            // Derived from `Language::ALL` so a third language cannot be added past this test.
+            for lang in Language::ALL {
                 let msg = budget_countdown_message(m, lang);
                 assert!(
                     msg.contains(&m.to_string()),
