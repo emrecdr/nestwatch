@@ -346,11 +346,47 @@ pub fn print_access_block(port: u16) {
     }
 
     println!("  https://{primary}:{port}");
+    let machine_name = crate::cert::hostname();
     for host in rest {
-        println!("  https://{host}:{port}   (also works)");
+        println!(
+            "  https://{host}:{port}   {}",
+            alternate_note(host, machine_name.as_deref())
+        );
     }
     println!("\nYour child asks for more time at:");
     println!("  https://{primary}:{port}/ask");
+}
+
+/// What to say after an address that isn't the headline one.
+///
+/// Both are printed, both are covered by the certificate, and until now both read as equally
+/// disposable — `(also works)` on each. They are not equal. The headline address is the LAN IP
+/// DHCP handed out at install time, and it stops resolving the moment the lease changes; the
+/// machine name does not. That difference is invisible until the day it matters, and on that day
+/// the parent is looking at a browser that will not load and has no reason to think the line
+/// underneath is the fix. It cost one real evening of exactly that, on a PC that had simply been
+/// rebooted onto a new lease.
+///
+/// **The audience is named on purpose, and the wording is the substance of this function.** The
+/// parent reading this line is very often holding the phone they have just scanned the QR with,
+/// and the machine name is the address least likely to work *there*: Windows names resolve over
+/// NetBIOS and LLMNR, which neither Android nor iOS implements. An unqualified "this one keeps
+/// working" would therefore be false on the device in their hand — a label that misleads on first
+/// contact is worse than `(also works)` being merely uninformative. So it promises durability only
+/// to the reader it holds for: someone on another PC on the same Wi-Fi.
+///
+/// Matched on the name rather than the position deliberately. `reachable_hosts` happens to push
+/// the IP first and the hostname second, so `rest[0]` would be correct today and would go quietly
+/// wrong the day that order changes — the defect shape this codebase keeps finding, where nothing
+/// is empty and nothing errors and the prose is simply no longer true. Taking the name as a
+/// parameter also keeps this pure: no environment read, so no `set_var` in the tests, which is
+/// `unsafe` in 2024 and process-global under the test threadpool.
+fn alternate_note(host: &str, machine_name: Option<&str>) -> &'static str {
+    if machine_name == Some(host) {
+        "(from another PC — survives an IP change)"
+    } else {
+        "(also works)"
+    }
 }
 
 /// Parse an optional `--port <N>` from argv.
@@ -2039,5 +2075,45 @@ mod tests {
                 && UPDATE_ACCESS.contains(ServiceAccess::START),
             "both paths start the service"
         );
+    }
+
+    /// The machine name is the address that survives a DHCP lease change, and the printed block
+    /// has to say which line that is.
+    ///
+    /// Pinned because the failure it prevents is silent and remote: a parent looking at a browser
+    /// that will not load, with the working address one line below and nothing marking it.
+    #[test]
+    fn only_the_machine_name_is_advertised_as_surviving_an_ip_change() {
+        let survives = alternate_note("HIS-PC", Some("HIS-PC"));
+        assert!(
+            survives.contains("survives an IP change"),
+            "the machine name must be marked as the durable address, got {survives:?}"
+        );
+        // The promise is scoped to a reader on another PC, because the parent is often holding
+        // the phone they just scanned with, where a Windows machine name will not resolve.
+        // Dropping that qualifier would make the line false on the device in their hand.
+        assert!(
+            survives.contains("another PC"),
+            "durability must be scoped to where it actually holds, got {survives:?}"
+        );
+
+        // An address that is not the machine name must NOT carry the promise -- a second IP
+        // would be exactly as fragile as the first.
+        let plain = alternate_note("192.168.1.50", Some("HIS-PC"));
+        assert_eq!(
+            plain, "(also works)",
+            "only the machine name survives a lease change; nothing else may claim to"
+        );
+    }
+
+    /// `hostname()` is best-effort and returns `None` on a machine that will not say.
+    ///
+    /// The note must degrade to the honest form rather than promising durability it cannot check.
+    #[test]
+    fn an_unknown_machine_name_promises_nothing() {
+        assert_eq!(alternate_note("192.168.1.50", None), "(also works)");
+        // The pathological case: a host string exists but there is no name to compare it against.
+        // `Some(host) == None` is false, so this must not accidentally match.
+        assert_eq!(alternate_note("HIS-PC", None), "(also works)");
     }
 }

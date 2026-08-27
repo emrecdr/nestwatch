@@ -145,6 +145,22 @@ fn fingerprint(der: &[u8]) -> String {
 /// Single source of truth for both the certificate SANs and the URL `install` prints, so the
 /// address we tell the parent to visit is always one the cert actually covers — otherwise they'd
 /// get a name-mismatch error stacked on top of the expected trust warning. Empty when offline.
+///
+/// **The order is load-bearing in three places, and reordering it is not the small change it
+/// looks like.** Anyone arriving here to promote the hostname — because it survives a DHCP lease
+/// change and the IP does not — should read all three first:
+///
+/// 1. `install::print_access_block` takes the first entry as the headline address and puts it in
+///    the pairing QR. That QR exists for a phone, and Windows machine names resolve over NetBIOS
+///    and LLMNR, which neither Android nor iOS implements. Promoting the hostname can break
+///    pairing on the one device the QR is for.
+/// 2. `install.rs`'s `covered` check is `cfg.cert_sans == hosts` — whole-`Vec` equality, so it is
+///    order-sensitive. Reordering makes it `false` on every machine already installed, which
+///    reissues the certificate, which changes the fingerprint, which re-pairs every device *and*
+///    brings back the trust warning that the comment above that check exists to avoid.
+/// 3. The order already flips on its own: [`primary_lan_ip`] returns `None` when the route lookup
+///    fails (a LAN with no default route — not exotic on a filtered machine), leaving `[hostname]`
+///    and making the hostname the headline address anyway, by a different door.
 pub fn reachable_hosts() -> Vec<String> {
     let mut hosts = Vec::new();
     if let Some(ip) = primary_lan_ip() {
@@ -157,7 +173,14 @@ pub fn reachable_hosts() -> Vec<String> {
 }
 
 /// Best-effort machine hostname, added as a SAN for convenience.
-fn hostname() -> Option<String> {
+///
+/// Visible beyond this module because it is the *stable* half of [`reachable_hosts`]: the LAN IP
+/// is whatever DHCP handed out at install time and stops resolving the moment the lease changes,
+/// while this survives it. `install::print_access_block` needs to tell the two apart to say so,
+/// and matching on the returned name is the only way to do that which cannot drift — keying it on
+/// position would couple that caller to the order `reachable_hosts` happens to push them in, with
+/// nothing to catch the day it changes.
+pub(crate) fn hostname() -> Option<String> {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .ok()
