@@ -444,11 +444,17 @@ mod tests {
     /// against `MAX_CODE_MINUTES` and passed — including for the child's input, which that constant
     /// does not govern. Raising one alone would have demanded the other move with it.
     ///
-    /// Four surfaces restate these, none of them near the enforcement: two `max=` attributes and
-    /// two toast messages. Nothing connected any of them and nothing pinned any of them, so raising
-    /// a constant left the server accepting a value every box still refused and every message still
-    /// named wrongly — including on `/ask`, where the person told the wrong limit is the child, who
-    /// cannot ask why the number is wrong.
+    /// The surfaces that restate these are `max=` attributes, none of them near the enforcement.
+    /// Nothing connected any of them and nothing pinned any of them, so raising a constant left the
+    /// server accepting a value every box still refused — including on `/ask`, where the person
+    /// told the wrong limit is the child, who cannot ask why the number is wrong.
+    ///
+    /// It guarded two toast messages as well until `api::require_minutes` and the active-code cap
+    /// learned to send their bound with the refusal. `app.js` now prints what the server said
+    /// rather than a number copied from it, so there is no second spelling left to pin. That is
+    /// the better shape of the same fix: the limit travels *with* the error instead of being held
+    /// against it from outside, and a pinning loop is only ever the second-best way to stop two
+    /// copies drifting.
     ///
     /// A source scan because the property lives in markup and in strings, which no Rust type
     /// reaches — the sanctioned case in `OPEN-FINDINGS.md` O54. **Every `type="number"` input on
@@ -467,7 +473,7 @@ mod tests {
     fn every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces() {
         use crate::curfew::MAX_WARN_SECS;
         use crate::rules::MAX_BUDGET_MINS;
-        use crate::timecode::{MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
+        use crate::timecode::MAX_CODE_MINUTES;
         use crate::timereq::MAX_REQUEST_MINUTES;
 
         // Marker → the constant whose value that box is restating. Keyed on `x-model` rather than
@@ -557,27 +563,6 @@ mod tests {
             "expected {} minutes inputs across the served pages, found {seen}",
             inputs.len()
         );
-
-        // The same two limits reach a person as prose, in the toast shown when the server refuses.
-        let script = APP_JS;
-        for (phrase, what) in [
-            (
-                format!(
-                    "Minutes 1–{MAX_CODE_MINUTES}, and at most {MAX_ACTIVE_CODES} active codes"
-                ),
-                "issuing a code",
-            ),
-            (
-                format!("Minutes out of range (1–{MAX_REQUEST_MINUTES})"),
-                "granting bonus time",
-            ),
-        ] {
-            assert!(
-                script.contains(&phrase),
-                "no message in app.js reads `{phrase}`, so a parent refused when {what} is quoted \
-                 a limit the server does not enforce"
-            );
-        }
     }
 
     /// The lockout a parent is told to wait out matches the one actually enforced.

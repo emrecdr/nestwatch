@@ -125,6 +125,12 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 - **A rejected setting now tells you what the limit actually is.** "Minutes out of range" became
   "minutes must be between 1 and 240". Four places did this, including the one that let your child
   ask for more time.
+  <br>The dashboard now shows you those sentences. It had been throwing them away and printing its
+  own copy of the number instead — so the two could disagree, and raising a limit meant editing it
+  in two places or being told the old one. Granting bonus time, issuing a code and applying a
+  routine all now repeat what the server actually said. Refusing a code is the clearest gain: it
+  used to say "Minutes 1–240, and at most 50 active codes" because the page could not tell which of
+  the two had stopped it, and now it tells you which.
 - **Your child is told what happened to their request.** They could ask, and the page could never
   answer: a denial reached them through no channel at all — it looked exactly like being ignored —
   and an approval showed up only as a number that changed by itself. It now says which, as soon as

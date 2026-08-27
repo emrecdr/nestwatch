@@ -618,7 +618,7 @@ function app() {
           this.loadRules();
           this.loadToday();
         } else {
-          this.toast("Could not apply routine", "error");
+          this.toast(await this.rejection(r, "Could not apply routine"), "error");
         }
       } catch {
         this.toast("Request failed", "error");
@@ -1159,20 +1159,27 @@ function app() {
     // and required character totals. Dropping what the server said to make the result tidier
     // is the failure this whole method exists to undo, so it is not reintroduced here.
     //
-    // Three of the six `400` handlers deliberately do NOT use this, and converting them would
-    // be a regression rather than a tidy-up:
+    // One `400` handler deliberately does NOT use this. `changePassword` keeps its own inline
+    // copy: its 400 body is multi-line by design and its 401 means something entirely different,
+    // so it reads better beside those two branches.
     //
-    // `changePassword` keeps its own inline copy. Its 400 body is multi-line by design and its
-    // 401 means something entirely different, so it reads better beside those two branches.
+    // `grantExtra` and `issueCode` were exceptions too until the server learned to send the
+    // number. They spelled out fixed strings -- "Minutes out of range (1-240)" and "Minutes
+    // 1-240, and at most 50 active codes" -- because `AppError` named the verdict and not the
+    // bound. `api::require_minutes` and the active-code cap now carry their own limits, so both
+    // route through here and the `web.rs` loop that pinned their literal wording is gone with
+    // them. `issueCode`'s was the worse of the two and its removal is a correctness gain, not
+    // just less duplication: it read "and at most 50 active codes" because the client could not
+    // tell which of two causes had fired, and the server can now say which.
     //
-    // `grantExtra` and `createCode` keep their fixed strings because those name a *number* the
-    // server enforces but does not send: `AppError` says "minutes out of range", not what the
-    // range is. `web::tests::every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces`
-    // pins both strings against `MAX_REQUEST_MINUTES` and `MAX_CODE_MINUTES`, and it caught this
-    // exact substitution when it was attempted. Routing them through here would trade a limit a
-    // parent can act on for a sentence that only says they broke one. The real fix is server-side
-    // -- have those messages carry their own bounds, as the five in `Rules::validate` do -- after
-    // which these two can join the rest.
+    // The note that used to sit here is worth remembering as a mistake. It stated the
+    // precondition -- "the real fix is server-side... after which these two can join the rest" --
+    // meaning to leave a trigger for a future reader. A precondition is only a trigger if it is
+    // findable FROM the thing that satisfies it, and nothing in `require_minutes` points back
+    // here. So once the condition was met the paragraph went on instructing the next person to
+    // preserve a workaround whose reason had expired, and it read *more* authoritative than an
+    // ordinary stale comment because it explained itself. The durable form is a test that fails
+    // when the condition is met, not prose asking to be re-read.
     async rejection(response, fallback) {
       let message = "";
       try {
@@ -1796,7 +1803,7 @@ function app() {
           this.loadToday();
           this.loadUsage();
         } else if (r.status === 400) {
-          this.toast("Minutes out of range (1–240)", "error");
+          this.toast(await this.rejection(r, "Could not grant time"), "error");
         } else {
           this.toast("Could not grant time", "error");
         }
@@ -1833,7 +1840,7 @@ function app() {
           this.toast(`Code ${j.code} = ${j.minutes} min`, "success");
           this.loadCodes();
         } else if (r.status === 400) {
-          this.toast("Minutes 1–240, and at most 50 active codes", "error");
+          this.toast(await this.rejection(r, "Could not generate a code"), "error");
         } else {
           this.toast("Could not generate a code", "error");
         }

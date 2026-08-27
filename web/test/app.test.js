@@ -1885,6 +1885,91 @@ test("rejection falls back when the body is not ours", async () => {
   );
 });
 
+// --- the three handlers that stopped restating the server's limits ----------
+//
+// `grantExtra`, `issueCode` and `applyRoutine` each printed a sentence of their own on a 400. Two
+// of them named a *number* -- "Minutes out of range (1-240)" -- copied from a constant living on
+// the other side of the wire, and `src/web.rs` carried a loop asserting the copies still matched
+// `MAX_REQUEST_MINUTES` and `MAX_CODE_MINUTES`. `api::require_minutes` and the active-code cap now
+// send their bound with the refusal, so the copies are gone and the loop went with them.
+//
+// These tests are what replaced that loop, and they pin a strictly stronger property. The loop
+// could only show that two literals still matched two constants; it could not show that either
+// literal ever reached a parent, and it would have gone on passing if the toast had been deleted
+// outright. What is asserted here is that whatever the server said is what gets shown -- so a
+// limit raised server-side arrives at the toast with no client edit at all, which is the whole
+// reason for the change.
+
+/** An app whose fetch refuses with `error`, recording every toast instead of rendering it. */
+function appRefusedWith(error) {
+  const toasts = [];
+  const app = loadApp({
+    fetch: async () => ({ ok: false, status: 400, json: async () => ({ error }) }),
+  });
+  app.toast = (msg, tone) => toasts.push([msg, tone]);
+  // The success paths refetch; none of them should run here, but stub them so a regression that
+  // takes the wrong branch fails on the assertion rather than on a missing method.
+  for (const reload of ["loadToday", "loadUsage", "loadCodes", "loadRules", "loadRoutines"]) {
+    app[reload] = () => {};
+  }
+  return { app, toasts };
+}
+
+test("a refused grant shows the bound the server sent, not one copied from it", async () => {
+  const { app, toasts } = appRefusedWith("minutes must be between 1 and 240");
+  await app.grantExtra(9999);
+  assert.deepEqual(toasts, [["Minutes must be between 1 and 240", "error"]]);
+});
+
+test("a refused code says which of its two limits fired", async () => {
+  // The old string named both at once -- "Minutes 1-240, and at most 50 active codes" -- because
+  // the client had no way to tell which had. That was a workaround, not duplication, so removing
+  // it makes the message more accurate rather than merely shorter. Each cause now arrives named.
+  for (const [sent, shown] of [
+    ["minutes must be between 1 and 240", "Minutes must be between 1 and 240"],
+    ["at most 50 codes can be active at once", "At most 50 codes can be active at once"],
+  ]) {
+    const { app, toasts } = appRefusedWith(sent);
+    app.newCodeMins = 9999;
+    await app.issueCode();
+    assert.deepEqual(toasts, [[shown, "error"]], `server sent: ${sent}`);
+  }
+});
+
+test("a routine that is gone says so, instead of that something could not be done", async () => {
+  const { app, toasts } = appRefusedWith("no such routine");
+  await app.applyRoutine("Homework");
+  assert.deepEqual(toasts, [["No such routine", "error"]]);
+});
+
+test("a refusal carrying no message still falls back to the handler's own sentence", async () => {
+  // The fallback is the half that matters most here: axum's `Json` extractor rejects a malformed
+  // body in plain text *before* any handler runs, so a 400 with no `error` field is reachable and
+  // "invalid type: string, expected u32 at line 1 column 42" must never reach a toast.
+  for (const [method, arg, fallback] of [
+    ["grantExtra", 30, "Could not grant time"],
+    ["issueCode", undefined, "Could not generate a code"],
+    ["applyRoutine", "Homework", "Could not apply routine"],
+  ]) {
+    const toasts = [];
+    const app = loadApp({
+      fetch: async () => ({
+        ok: false,
+        status: 400,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      }),
+    });
+    app.toast = (msg, tone) => toasts.push([msg, tone]);
+    for (const reload of ["loadToday", "loadUsage", "loadCodes", "loadRules", "loadRoutines"]) {
+      app[reload] = () => {};
+    }
+    await app[method](arg);
+    assert.deepEqual(toasts, [[fallback, "error"]], `${method} lost its fallback`);
+  }
+});
+
 // --- budgetTone ------------------------------------------------------------
 //
 // Extracted when the sticky summary strip needed the same thresholds the Today card's progress bar
