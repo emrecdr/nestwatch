@@ -4,7 +4,62 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ## [Unreleased]
 
+### Security
+- **A time-zone change could push bedtime back by up to two hours, every night.** Changing the time
+  zone needs no administrator rights and raises no prompt, so it was already defended against — but
+  the defence compared the *offset* the machine reported, and allowed an hour of slack so that real
+  daylight-saving changes still worked. That slack was measured from the install-time offset, and
+  true local time also drifts an hour from it every summer, so the two added up: an install set up
+  in winter could be moved **two hours** in summer by selecting UTC. A 21:00 curfew became 23:00.
+  <br>The fix is to compare the time zone *itself* rather than the offset it produces. Two different
+  zones share an offset for half the year — Amsterdam in winter and London in summer are both the
+  same number — which is exactly the ambiguity that was being exploited. Daylight saving now works
+  precisely rather than by tolerance, because the machine's own zone is believed outright.
+  <br>**Re-run `install` once to get this**, or use the new re-anchor button. An install upgraded in
+  place keeps the older, weaker check, and `doctor` now says so plainly rather than reporting the
+  clock as fine.
+- **The release build can no longer be tampered with by a third-party action.** Three of the actions
+  used to build the released `.exe` were referenced by a name that their authors can move at any
+  time, and they run *before* the compiler in the same job that signs the result. Anyone able to
+  move one of those names could have changed the source between checkout and build, and the
+  signature would then have vouched for the altered binary perfectly truthfully — `gh attestation
+  verify` would have passed on your machine. All of them are now pinned to exact, unchangeable
+  versions. The rule is no longer "pin the ones that hold a key" but "pin anything that runs in the
+  job that builds or signs".
+
 ### Added
+- **Take your own history off the machine.** A **Download** button on the screen-time report saves
+  every day this install still holds as a single file. Until now the history lived in a folder
+  locked to Administrators — which is what stops your child reading it, and also stopped you — and
+  `uninstall --purge` deleted all of it with no way to keep a copy first.
+  <br>The file is the rows exactly as stored: nothing merged, nothing filtered, so you can check it
+  against what the dashboard shows rather than take the dashboard's word for it. If the same day
+  appears twice, that is what is on disk and the file says so.
+  <br>**Worth knowing while you are looking at it:** the history has a ceiling. Each log keeps two
+  generations and the older is deleted when it rolls over, so the oldest days do eventually fall
+  off, and nothing warns you when they do. How long that takes depends on your child rather than on
+  this program — it is set by how many apps and pages they use in a day. For light use it is
+  decades; for a child hitting the 40-page cap every day it is closer to two or three years.
+- **Your child's page can be in Dutch.** Their own page and the countdown warnings that appear on
+  their screen; this dashboard stays in English. Choose it under **The child's language**.
+  <br>Set by you rather than picked up from their browser, and that is deliberate: the most
+  important sentence on their page is the one telling them what this tool can see, and the person
+  being watched should not be the one choosing the language it is written in.
+- **Re-anchor the clock without reinstalling.** If the PC genuinely moves to another time zone, the
+  curfew used to stay on the old one until you re-ran `install` from an elevated console, standing
+  at the machine. There is now a button. It asks first, because doing it straight after your child
+  has changed the zone would accept their change as correct — you are the only one who knows which
+  happened.
+- **`doctor` now reports the clock.** It says which time zone the enforcement is anchored to, and
+  **fails loudly** when the machine is set to a different one — which means either the PC moved, or
+  somebody changed it and the limits held.
+- **A request reaches you the moment it is made.** The dashboard used to notice a new request
+  within a minute; now it is a second or two. It still checks every minute as well, so a phone that
+  slept through the notification is never left showing a stale page.
+- **Today's answer sits at the top of the dashboard** and stays there while you scroll: minutes
+  left, requests waiting, and whether enforcement looks stopped. Eleven cards on one page meant the
+  thing you open it for several times a day was in the same queue as the things you set once.
+
 - **The pairing QR now carries the certificate's fingerprint, so an app can check it instead of
   asking you to.** Groundwork rather than a feature you can see today: nothing in the browser flow
   changes, because the fingerprint rides in the part of a web address that is never sent to a
@@ -52,6 +107,20 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   no trace. It now shows a warning naming the cause.
 
 ### Changed
+- **The dashboard is about four times smaller to load, and a repeat visit sends almost nothing.**
+  It was re-downloading all 324 KB of itself on every single visit, because it told your browser
+  not to keep any of it. It now sends roughly 85 KB the first time and, on later visits, only asks
+  whether anything changed — which on a phone at the far end of the house is the difference between
+  a wait and no wait. Nothing is ever served stale: the browser still checks every time, it just
+  stops re-sending what has not moved.
+- **A rejected setting now tells you what the limit actually is.** "Minutes out of range" became
+  "minutes must be between 1 and 240". Four places did this, including the one that let your child
+  ask for more time.
+- **Your child is told what happened to their request.** They could ask, and the page could never
+  answer: a denial reached them through no channel at all — it looked exactly like being ignored —
+  and an approval showed up only as a number that changed by itself. It now says which, as soon as
+  you decide.
+
 - **Time codes are now six characters instead of eight.** The code you leave for your child to type
   in — worth a set number of extra minutes — is shorter to read off a note and shorter to retype
   without a mistake. The alphabet already leaves out `I`, `L`, `O` and `U` so there is no character

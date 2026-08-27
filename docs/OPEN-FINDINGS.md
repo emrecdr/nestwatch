@@ -659,6 +659,62 @@ to tell the capture work from the refactor. Same reasoning as O2's revised trigg
 
 **Trigger.** After `docs/WINDOWS-TESTING.md` has been run on the device.
 
+### O67 · There is no retention policy — only rotation, and rotation deletes
+
+`jsonl.rs::append_line` renames the live file to `.jsonl.1` once it passes `MAX_BYTES` (2 MiB) and
+**clobbers any existing `.1`**. Each log therefore keeps two generations and nothing else. There is
+no prune, no configurable retention, and no notice: the oldest days are deleted at rotation time,
+silently, long before anyone runs `--purge`.
+
+This is a design decision rather than a defect, which is why it is recorded rather than fixed — how
+much of a child's history a parental tool should keep is a question for a household, and erring
+toward keeping less is defensible on its own terms. What makes it worth tracking is that **nobody is
+told**. A parent reading a 90-day report has no way to know the tool will never show them a year.
+
+**The 4 MiB across two generations is the fact; the horizon is a model.** A daily row's size is set
+by how many apps, pages and groups were used, so it is a property of the household, not the product.
+Two independent estimates, differing only in assumed name lengths, agreed on shape and differed by
+~40%: decades of light use, and roughly **two to three years** for a child at `foreground::MAX_PAGES`
+every day. Quote it as a range or not at all — "7.5 years" reads as a guarantee.
+
+`screentime.rs`'s log holds nothing but rollups, so it is the slow one. `usage.jsonl` carries them
+among session starts, stops, locks, warnings and grants, so it rotates far sooner and its copy of a
+given day dies first — but that only affects installs predating `screentime.jsonl`, and
+`screentime::history_rows` reads both for exactly that reason.
+
+**Options, none costed.** A rollup-only prune that keeps N days regardless of bytes; a larger
+`MAX_BYTES` for the rollup log specifically, since it is the one whose rows are irreplaceable; or
+simply telling the parent, in the report, the date of the oldest day still held. The third is the
+cheapest and is the one that turns a silent loss into a visible limit.
+
+**Trigger.** Any decision to advertise a retention period, or the first time someone asks why the
+report will not go back further.
+
+### O68 · The dashboard's own accessibility is behind the child's page
+
+`assets/index.html` has **three `<form>` elements with no accessible name** and **five `aria-live`
+regions of which three are `aria-atomic`**. `assets/ask.html` — one tenth the size — has two forms,
+both named, and every live region atomic, pinned by
+`web::tests::the_childs_page_keeps_its_accessible_names_and_atomic_live_regions`.
+
+That guard is deliberately scoped to the child's page, and **the scope is this finding**: a
+page-agnostic version could only exist today with a standing exemption for `index.html`, which is
+the shape O54 objects to. So the property is enforced where it holds and recorded here where it
+does not, rather than being written as a rule with an exception nobody re-reads.
+
+The `aria-atomic` half is not cosmetic. Those regions are rewritten whole — "12 of 60 min used"
+becomes "13 of 60 min used" — and without it a screen reader may announce only the changed
+fragment, which is a number stripped of what it counts. The Today card's own markup argues this
+case in a comment; two regions simply do not follow it.
+
+**Fix.** Name the three forms with `aria-labelledby` against headings they already have, add
+`aria-atomic` to the two regions missing it, then widen the guard to iterate `PAGES` and delete the
+per-page version.
+
+**Trigger.** The next change that touches `index.html`'s forms or its live regions — the work is
+small enough that doing it alongside is cheaper than scheduling it, and doing it alone means
+touching a 1,300-line file for four attributes.
+
 ### O56 · The screen-time report pays for every day ever recorded, not the window asked for
 
 `build_report` parses the whole retained history, then does work on rows it will never render:
