@@ -2,7 +2,7 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
-## [Unreleased]
+## [0.4.0] — 2026-08-27
 
 ### Security
 - **A time-zone change could push bedtime back by up to two hours, every night.** Changing the time
