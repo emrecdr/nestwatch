@@ -1,6 +1,11 @@
 //! Test-only helpers for the library's own unit tests.
 //!
-//! **This is a deliberate twin of `ScratchDir` in `tests/common/mod.rs`, not an oversight.** The
+//! Two unrelated things live here, for one shared reason: both must be reachable from every
+//! `#[cfg(test)]` module in the crate and from nothing else. [`ScratchDir`], used by nine modules,
+//! and [`assert_all_lists_every_variant`], shared by `Language::ALL` in `config.rs` and
+//! `ShotTier::ALL` in `control/mod.rs`.
+//!
+//! **`ScratchDir` is a deliberate twin of the one in `tests/common/mod.rs`, not an oversight.** The
 //! two cannot be one: `tests/common/mod.rs` is compiled into each integration-test binary, and
 //! this module is `#[cfg(test)]` inside the library, so neither can see the other. Sharing one
 //! copy would mean shipping test code in the release binary behind a feature flag, which costs
@@ -74,6 +79,52 @@ impl Drop for ScratchDir {
             live.remove(&self.path);
         }
     }
+}
+
+/// Assert that a hand-written `ALL` array really does list every variant of its enum.
+///
+/// `src` is the module's own source via `include_str!`, `decl` the enum's declaration line up to
+/// and including the brace — `"pub enum Language {"`. The variants are counted out of that source
+/// rather than compared against a second hand-written list, for the reason `tests/spawn_paths.rs`
+/// gives: a fixture that mirrors a list in the code passes forever once the two drift, and the
+/// drift is silent.
+///
+/// Two enums need this and their exposure is *not* the same, which is why the check lives here
+/// rather than beside either of them. `Language` is caught by the compiler at every `match`, so
+/// `ALL` is the only place a new variant can slip past. `ShotTier` is the worse case: `as_arg` is
+/// `match self` and does fail to compile, but `from_arg` matches on the wire *string* with a `_`
+/// arm, so a third tier would parse as `Full` with no error raised anywhere. Its round-trip test
+/// is named `every_tier_survives_the_wire_spelling`; this assertion is the only thing that keeps
+/// that name true.
+pub(crate) fn assert_all_lists_every_variant(src: &str, decl: &str, all_len: usize) {
+    let body = src
+        .split_once(decl)
+        .unwrap_or_else(|| panic!("no enum declared as `{decl}` in this source"))
+        .1
+        .split_once("\n}")
+        .expect("unterminated enum body")
+        .0;
+    let variants: Vec<&str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !l.starts_with("//")
+                && !l.starts_with("#[")
+                && l.ends_with(',')
+                && !l.contains(' ')
+        })
+        .collect();
+    // A broken extractor must not make this vacuous — the same guard `spawn_paths` carries.
+    assert!(
+        variants.len() >= 2,
+        "extracted {variants:?} from the body of `{decl}`; the parser is broken, not the code"
+    );
+    assert_eq!(
+        variants.len(),
+        all_len,
+        "`{decl}` declares {variants:?} but its `ALL` has {all_len} entries"
+    );
 }
 
 #[cfg(test)]

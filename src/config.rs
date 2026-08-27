@@ -318,37 +318,16 @@ mod tests {
     /// forever once the two drift, and the drift is silent. Adding `De` to the enum and not to
     /// `ALL` fails here, which is what stops every message test in `rules.rs` and `curfew.rs`
     /// from quietly skipping the new language.
+    ///
+    /// The check itself is in `testutil` because `ShotTier` needs the same one — copying it would
+    /// have been the exact duplication both guards exist to forbid. It has two callers, so read
+    /// `all_lists_every_shot_tier` before changing it.
     #[test]
     fn all_lists_every_language_variant() {
-        let src = include_str!("config.rs");
-        let body = src
-            .split_once("pub enum Language {")
-            .expect("the enum must still be named `Language`")
-            .1
-            .split_once("\n}")
-            .expect("unterminated enum body")
-            .0;
-        let variants: Vec<&str> = body
-            .lines()
-            .map(str::trim)
-            .filter(|l| {
-                !l.is_empty()
-                    && !l.starts_with("//")
-                    && !l.starts_with("#[")
-                    && l.ends_with(',')
-                    && !l.contains(' ')
-            })
-            .collect();
-        // A broken extractor must not make this vacuous — the same guard `spawn_paths` carries.
-        assert!(
-            variants.len() >= 2,
-            "extracted {variants:?} from the enum body; the parser is broken, not the code"
-        );
-        assert_eq!(
-            variants.len(),
+        crate::testutil::assert_all_lists_every_variant(
+            include_str!("config.rs"),
+            "pub enum Language {",
             Language::ALL.len(),
-            "the enum declares {variants:?} but `Language::ALL` has {} entries",
-            Language::ALL.len()
         );
     }
 

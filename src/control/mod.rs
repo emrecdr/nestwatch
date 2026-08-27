@@ -92,6 +92,17 @@ pub enum ShotTier {
 }
 
 impl ShotTier {
+    /// Every variant, for tests that must cover all of them.
+    ///
+    /// The same reason [`Language::ALL`](crate::config::Language::ALL) exists, and a sharper case
+    /// for it. A test hand-writing `[ShotTier::Preview, ShotTier::Full]` keeps passing when a
+    /// third tier is added and quietly stops covering it — and here the compiler only catches
+    /// *half* of that: `as_arg` is `match self` and would fail to build, but `from_arg` matches on
+    /// the wire string with a `_` arm, so a new tier parses as `Full` with nothing raised at all.
+    /// `all_lists_every_shot_tier` is what keeps `every_tier_survives_the_wire_spelling` honest
+    /// about the word "every".
+    pub const ALL: [ShotTier; 2] = [ShotTier::Preview, ShotTier::Full];
+
     /// The tier's name on the wire — the `?tier=` query the dashboard sends and the `--tier`
     /// argument the service passes to the helper.
     ///
@@ -387,7 +398,7 @@ mod tests {
             image::Rgba([r, g, b, 255])
         }));
 
-        for tier in [ShotTier::Preview, ShotTier::Full] {
+        for tier in ShotTier::ALL {
             let from_rgb = encode_shot(rgb.clone(), tier).expect("rgb encodes");
             let from_rgba = encode_shot(rgba.clone(), tier).expect("rgba encodes");
             assert_eq!(
@@ -424,11 +435,25 @@ mod tests {
         );
     }
 
+    /// [`ShotTier::ALL`] really does list every variant.
+    ///
+    /// Shares its implementation with `all_lists_every_language_variant`: the property is the
+    /// same one, and a second hand-written copy of the extractor would be the very thing both
+    /// tests exist to forbid.
+    #[test]
+    fn all_lists_every_shot_tier() {
+        crate::testutil::assert_all_lists_every_variant(
+            include_str!("mod.rs"),
+            "pub enum ShotTier {",
+            ShotTier::ALL.len(),
+        );
+    }
+
     /// Round-trip every tier through the wire spelling. A mismatch here would show up as a live
     /// stream silently running at full resolution — no error, no failing route, just the cost back.
     #[test]
     fn every_tier_survives_the_wire_spelling() {
-        for tier in [ShotTier::Preview, ShotTier::Full] {
+        for tier in ShotTier::ALL {
             assert_eq!(ShotTier::from_arg(Some(tier.as_arg())), tier);
         }
     }
