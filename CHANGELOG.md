@@ -112,6 +112,10 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   no trace. It now shows a warning naming the cause.
 
 ### Changed
+- **The settings card is now called "Limits & rules".** It sat directly above a card called
+  "Screen time" while itself being called "Screen-time & app limits" — one sets the limits, the
+  other reports what was used, and on a phone, where you see one card at a time, the name was all
+  you had to tell them apart.
 - **The dashboard is about four times smaller to load, and a repeat visit sends almost nothing.**
   It was re-downloading all 324 KB of itself on every single visit, because it told your browser
   not to keep any of it. It now sends roughly 85 KB the first time and, on later visits, only asks
