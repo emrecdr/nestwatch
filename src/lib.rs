@@ -80,7 +80,6 @@ use anyhow::{Context, Result};
 /// something misbehaves or when checking whether a security fix is present.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Parse `argv` and dispatch the requested subcommand.
 /// Which options each subcommand accepts, and which of them take a value.
 ///
 /// Every flag in this crate is read where it matters, with `args.iter().any(|a| a == "--x")`.
@@ -149,6 +148,7 @@ fn check_flags(cmd: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse `argv` and dispatch the requested subcommand.
 pub fn run_cli() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("run");

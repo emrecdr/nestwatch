@@ -121,6 +121,7 @@ pub struct AuditFileApp {
     _dir: ScratchDir,
 }
 
+/// `tag` names the scratch directory; see [`ScratchDir::new`] for how tests are kept apart.
 pub fn app_with_audit_file(tag: &str) -> AuditFileApp {
     let dir = ScratchDir::new(tag);
     let path = dir.join("audit.jsonl");
