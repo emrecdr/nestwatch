@@ -618,16 +618,10 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
 mod tests {
     use super::*;
 
-    /// A scratch path under the OS temp dir, unique per process and test.
-    fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("nw-screentime-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join(format!("{name}.jsonl"))
-    }
-
     #[test]
     fn a_recorded_day_round_trips() {
-        let path = tmp("round_trip");
+        let dir = crate::testutil::ScratchDir::new("screentime-round-trip");
+        let path = dir.join("round_trip.jsonl");
         let _ = std::fs::remove_file(&path);
         let log = ScreentimeLog::new(path.clone());
 
@@ -1336,8 +1330,9 @@ mod tests {
 
     #[test]
     fn history_merges_legacy_usage_rows_with_the_dedicated_store() {
-        let st_path = tmp("merge_st");
-        let us_path = tmp("merge_us");
+        let dir = crate::testutil::ScratchDir::new("screentime-merge");
+        let st_path = dir.join("merge_st.jsonl");
+        let us_path = dir.join("merge_us.jsonl");
         let _ = std::fs::remove_file(&st_path);
         let _ = std::fs::remove_file(&us_path);
 
@@ -1378,8 +1373,9 @@ mod tests {
         // usage.jsonl, and a moderately-used install is plausibly already past that log's own
         // 2 MiB rotation by the time it upgrades. The older half of its legacy screentime_daily
         // rows then lives only in usage.jsonl.1 — history_rows must still find it.
-        let st_path = tmp("legacy_rot_st");
-        let us_path = tmp("legacy_rot_us");
+        let dir = crate::testutil::ScratchDir::new("screentime-legacy-rot");
+        let st_path = dir.join("legacy_rot_st.jsonl");
+        let us_path = dir.join("legacy_rot_us.jsonl");
         let us_backup = us_path.with_extension("jsonl.1");
         for p in [&st_path, &us_path, &us_backup] {
             let _ = std::fs::remove_file(p);
@@ -1418,8 +1414,9 @@ mod tests {
 
     #[test]
     fn rotating_the_usage_log_does_not_evict_rollup_history() {
-        let st_path = tmp("evict_st");
-        let us_path = tmp("evict_us");
+        let dir = crate::testutil::ScratchDir::new("screentime-evict");
+        let st_path = dir.join("evict_st.jsonl");
+        let us_path = dir.join("evict_us.jsonl");
         let us_backup = us_path.with_extension("jsonl.1");
         for p in [&st_path, &us_path, &us_backup] {
             let _ = std::fs::remove_file(p);

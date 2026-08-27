@@ -192,10 +192,11 @@ pub fn pair_url(host: &str, port: u16, token: &str, fingerprint: Option<&str>) -
 mod tests {
     use super::*;
 
-    fn tmp(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("nw-pair-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("pairing.json")
+    /// Returns the guard alongside the path: dropping it deletes the directory, so a caller that
+    /// kept only the `PathBuf` would be handed a path into a directory that no longer exists.
+    fn tmp(name: &str) -> (std::path::PathBuf, crate::testutil::ScratchDir) {
+        let dir = crate::testutil::ScratchDir::new(&format!("pair-{name}"));
+        (dir.join("pairing.json"), dir)
     }
 
     /// A realistic fingerprint, in the exact shape `cert::read_fingerprint` returns.
@@ -228,7 +229,7 @@ mod tests {
     /// it would simply stop matching, and pairing would quietly never work again.
     #[test]
     fn the_fragment_is_not_part_of_the_token() {
-        let path = tmp("fragment");
+        let (path, _dir) = tmp("fragment");
         let t = mint(&path).unwrap();
         let url = pair_url("192.168.1.42", 8443, &t, Some(FP));
 
@@ -266,7 +267,7 @@ mod tests {
 
     #[test]
     fn mint_then_redeem_once() {
-        let path = tmp("once");
+        let (path, _dir) = tmp("once");
         let t = mint(&path).unwrap();
         assert_eq!(t.chars().count(), TOKEN_LEN);
         assert!(redeem(&path, &t), "the freshly minted token must pair");
@@ -276,7 +277,7 @@ mod tests {
 
     #[test]
     fn the_plaintext_token_is_never_written_to_disk() {
-        let path = tmp("nostore");
+        let (path, _dir) = tmp("nostore");
         let t = mint(&path).unwrap();
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert!(
@@ -288,7 +289,7 @@ mod tests {
 
     #[test]
     fn wrong_and_empty_tokens_are_refused_without_consuming() {
-        let path = tmp("wrong");
+        let (path, _dir) = tmp("wrong");
         let t = mint(&path).unwrap();
         assert!(!redeem(&path, "WRONGWRONGWRONG1"));
         assert!(!redeem(&path, ""));
@@ -299,7 +300,7 @@ mod tests {
 
     #[test]
     fn typed_form_is_normalized() {
-        let path = tmp("normalize");
+        let (path, _dir) = tmp("normalize");
         let t = mint(&path).unwrap();
         let typed = format!("{}-{}", &t[..8], &t[8..]).to_lowercase();
         assert!(
@@ -311,7 +312,7 @@ mod tests {
 
     #[test]
     fn expired_tokens_are_refused_and_cleaned_up() {
-        let path = tmp("expired");
+        let (path, _dir) = tmp("expired");
         let t = mint(&path).unwrap();
         // Rewrite the stored record with an expiry in the past.
         let raw = std::fs::read_to_string(&path).unwrap();
@@ -335,7 +336,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let path = tmp("race");
+        let (path, _dir) = tmp("race");
         for round in 0..50 {
             let token = mint(&path).unwrap();
             let wins = Arc::new(AtomicUsize::new(0));
@@ -363,7 +364,7 @@ mod tests {
 
     #[test]
     fn redeem_with_no_pending_token_is_false() {
-        let path = tmp("missing");
+        let (path, _dir) = tmp("missing");
         let _ = std::fs::remove_file(&path);
         assert!(!redeem(&path, "ANYTHINGATALL123"));
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

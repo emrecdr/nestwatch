@@ -240,10 +240,8 @@ impl Default for SubmitLimiter {
 mod tests {
     use super::*;
 
-    fn scratch(tag: &str) -> (TimeRequests, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("nw-timereq-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn scratch(tag: &str) -> (TimeRequests, crate::testutil::ScratchDir) {
+        let dir = crate::testutil::ScratchDir::new(&format!("timereq-{tag}"));
         (TimeRequests::new(dir.join("time_requests.jsonl")), dir)
     }
 
@@ -257,7 +255,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        let (q, dir) = scratch("approve");
+        let (q, _dir) = scratch("approve");
         let q = Arc::new(q);
         for round in 0..30 {
             let id = q.submit(30, "homework").unwrap();
@@ -281,7 +279,6 @@ mod tests {
                 "round {round}: one request granted minutes more than once"
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Regression: the pending cap must hold under concurrent submits (it admitted 20 of 20).
@@ -289,7 +286,7 @@ mod tests {
     fn concurrent_submits_respect_the_pending_cap() {
         use std::sync::Arc;
 
-        let (q, dir) = scratch("cap");
+        let (q, _dir) = scratch("cap");
         let q = Arc::new(q);
         let start = Arc::new(std::sync::Barrier::new(20));
         std::thread::scope(|s| {
@@ -302,13 +299,11 @@ mod tests {
             }
         });
         assert_eq!(q.pending().len(), MAX_PENDING, "pending cap bypassed");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn submit_pending_resolve_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("nw-timereq-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("timereq-roundtrip");
         let q = TimeRequests::new(dir.join("time_requests.jsonl"));
 
         let id = q.submit(30, "homework done").unwrap();
@@ -322,8 +317,6 @@ mod tests {
         assert!(q.pending().is_empty(), "approved request no longer pending");
 
         assert!(q.resolve(&id, true).is_none(), "already resolved");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The child's page answers "what happened to what I asked for", so every state it can show
@@ -394,14 +387,12 @@ mod tests {
 
     #[test]
     fn pending_cap_is_enforced() {
-        let dir = std::env::temp_dir().join(format!("nw-timereq-cap-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("timereq-cap-enforced");
         let q = TimeRequests::new(dir.join("time_requests.jsonl"));
         for _ in 0..MAX_PENDING {
             assert!(q.submit(10, "").is_some());
         }
         assert!(q.submit(10, "").is_none(), "over the pending cap");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

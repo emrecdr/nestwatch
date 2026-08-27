@@ -210,8 +210,7 @@ mod tests {
 
     #[test]
     fn read_fingerprint_matches_generate() {
-        let dir = std::env::temp_dir().join(format!("nw-cert-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("cert");
         let cert = dir.join("cert.pem");
         let key = dir.join("key.pem");
 
@@ -227,7 +226,5 @@ mod tests {
         let cert_pem = std::fs::read_to_string(&cert).unwrap();
         std::fs::write(&combined, format!("{key_pem}\n{cert_pem}")).unwrap();
         assert_eq!(read_fingerprint(&combined).unwrap(), at_install);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

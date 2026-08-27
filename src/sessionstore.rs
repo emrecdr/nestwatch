@@ -181,15 +181,16 @@ mod tests {
         }
     }
 
-    fn tmp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("nw-sess-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("sessions.json")
+    /// Returns the guard alongside the path: dropping it deletes the directory, so a caller that
+    /// kept only the `PathBuf` would be handed a path into a directory that no longer exists.
+    fn tmp(name: &str) -> (PathBuf, crate::testutil::ScratchDir) {
+        let dir = crate::testutil::ScratchDir::new(&format!("sess-{name}"));
+        (dir.join("sessions.json"), dir)
     }
 
     #[tokio::test]
     async fn sessions_survive_a_restart() {
-        let path = tmp("restart");
+        let (path, _dir) = tmp("restart");
         let rec = record(Duration::days(30));
 
         let store = FileSessionStore::new(path.clone());
@@ -211,7 +212,7 @@ mod tests {
     /// has to be planted on disk directly.
     #[tokio::test]
     async fn expired_sessions_on_disk_are_not_restored() {
-        let path = tmp("expired");
+        let (path, _dir) = tmp("expired");
         let live = record(Duration::days(30));
         let dead = record(Duration::seconds(-1));
         std::fs::write(&path, serde_json::to_vec(&vec![&live, &dead]).unwrap()).unwrap();
@@ -234,7 +235,7 @@ mod tests {
     /// per request while holding the lock every authenticated request needs.
     #[tokio::test]
     async fn deleting_an_unknown_session_writes_nothing() {
-        let path = tmp("nowrite");
+        let (path, _dir) = tmp("nowrite");
         let store = FileSessionStore::new(path.clone());
         store.delete(&Id::default()).await.unwrap();
         assert!(
@@ -256,7 +257,7 @@ mod tests {
     /// Password change relies on this to revoke a possibly-leaked cookie.
     #[tokio::test]
     async fn clear_all_revokes_every_session_including_on_disk() {
-        let path = tmp("clearall");
+        let (path, _dir) = tmp("clearall");
         let store = FileSessionStore::new(path.clone());
         let a = record(Duration::days(30));
         let b = record(Duration::days(30));
@@ -278,7 +279,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_signs_out_everywhere_including_on_disk() {
-        let path = tmp("delete");
+        let (path, _dir) = tmp("delete");
         let rec = record(Duration::days(30));
 
         let store = FileSessionStore::new(path.clone());
@@ -295,7 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_assigns_a_free_id_and_persists() {
-        let path = tmp("create");
+        let (path, _dir) = tmp("create");
         let store = FileSessionStore::new(path.clone());
         let mut rec = record(Duration::days(30));
         store.create(&mut rec).await.unwrap();
@@ -310,7 +311,7 @@ mod tests {
     /// never reaches disk in the first place.)
     #[tokio::test]
     async fn a_write_prunes_records_that_have_since_expired() {
-        let path = tmp("prune");
+        let (path, _dir) = tmp("prune");
         let store = FileSessionStore::new(path.clone());
 
         let soon = record(Duration::milliseconds(150));

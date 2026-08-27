@@ -164,14 +164,8 @@ mod tests {
         NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn store() -> (TimeCodes, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "nw-timecode-{}-{}",
-            std::process::id(),
-            next_suffix()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn store() -> (TimeCodes, crate::testutil::ScratchDir) {
+        let dir = crate::testutil::ScratchDir::new(&format!("timecode-{}", next_suffix()));
         (TimeCodes::new(dir.join("time_codes.jsonl")), dir)
     }
 
@@ -199,7 +193,7 @@ mod tests {
 
     #[test]
     fn issue_active_redeem_roundtrip() {
-        let (codes, dir) = store();
+        let (codes, _dir) = store();
         let code = codes.issue(30).unwrap();
         assert_eq!(code.len(), CODE_LEN);
 
@@ -214,13 +208,11 @@ mod tests {
         // Single-use: gone from active, and a second redeem fails.
         assert!(codes.active().is_empty());
         assert_eq!(codes.redeem(&code), None);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn redeem_unknown_code_is_none() {
-        let (codes, dir) = store();
+        let (codes, _dir) = store();
         codes.issue(15).unwrap();
         assert_eq!(codes.redeem("NOTACODE"), None);
         assert_eq!(codes.redeem(""), None);
@@ -229,12 +221,11 @@ mod tests {
             1,
             "a bad guess doesn't consume a code"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn codes_are_unique_and_from_the_alphabet() {
-        let (codes, dir) = store();
+        let (codes, _dir) = store();
         let a = codes.issue(10).unwrap();
         let b = codes.issue(10).unwrap();
         assert_ne!(a, b, "two mints differ");
@@ -242,7 +233,6 @@ mod tests {
             a.bytes().all(|c| crate::token::ALPHABET.contains(&c)),
             "only alphabet chars"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -252,7 +242,7 @@ mod tests {
         use std::sync::Arc;
         // `store()` rather than a second copy of its body: the `next_suffix()` fix that made these
         // directories unique had to be applied to both copies, which is what a duplicate costs.
-        let (codes, dir) = store();
+        let (codes, _dir) = store();
         let codes = Arc::new(codes);
         let code = codes.issue(30).unwrap();
 
@@ -268,8 +258,6 @@ mod tests {
             .count();
         assert_eq!(wins, 1, "a single-use code must redeem exactly once");
         assert!(codes.active().is_empty());
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

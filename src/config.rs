@@ -317,8 +317,7 @@ mod tests {
 
     #[test]
     fn write_atomic_replaces_and_leaves_no_temp() {
-        let dir = std::env::temp_dir().join(format!("nw-atomic-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("atomic");
         let path = dir.join("data.json");
 
         write_atomic(&path, b"first").unwrap();
@@ -329,7 +328,7 @@ mod tests {
         // …and never leaves a scratch file behind. Checked by listing the directory rather
         // than probing one name: temp names now carry a pid and counter, so asserting that
         // `data.tmp` is absent would pass without testing anything.
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
             .filter(|n| n != "data.json")
@@ -338,8 +337,6 @@ mod tests {
             leftovers.is_empty(),
             "temp files left behind: {leftovers:?}"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The test above proves atomicity against a *crash*: one writer, interrupted. It says
@@ -358,9 +355,7 @@ mod tests {
     /// which locks the parent out until reinstall.
     #[test]
     fn concurrent_writers_never_interleave_into_one_file() {
-        let dir = std::env::temp_dir().join(format!("nw-atomic-conc-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("atomic-conc");
         let path = dir.join("config.json");
 
         // Different lengths, so a torn write cannot accidentally look intact: if the shorter
@@ -392,7 +387,7 @@ mod tests {
         }
 
         // Every writer's scratch file must be cleaned up, not just the winner's.
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
             .filter(|n| n != "config.json")
@@ -401,8 +396,6 @@ mod tests {
             leftovers.is_empty(),
             "temp files left behind: {leftovers:?}"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -204,8 +204,7 @@ mod tests {
 
     #[test]
     fn records_and_reads_back_newest_first() {
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl");
         let log = JsonlLog::new(dir.join("log.jsonl"));
 
         log.record("first", json!({ "n": 1 }));
@@ -216,15 +215,12 @@ mod tests {
         assert_eq!(recent[0]["event"], "second", "newest first");
         assert_eq!(recent[1]["event"], "first");
         assert!(recent[0]["ts"].is_string(), "timestamp present");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The filter keeps what it should and drops what it shouldn't.
     #[test]
     fn a_filtered_read_returns_only_the_named_event() {
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-filter-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl-filter");
         let path = dir.join("mixed.jsonl");
         let _ = std::fs::remove_file(&path);
         let log = JsonlLog::new(path);
@@ -238,8 +234,6 @@ mod tests {
         assert_eq!(hits.len(), 2, "only the two `wanted` rows: {hits:?}");
         assert_eq!(hits[0]["n"], 2, "newest first");
         assert_eq!(hits[1]["n"], 1);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The pre-filter is a reject step, not the verdict.
@@ -251,8 +245,7 @@ mod tests {
     /// screen-time rollup would be very hard to notice.
     #[test]
     fn a_line_merely_mentioning_the_event_name_is_not_matched() {
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-decoy-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl-decoy");
         let path = dir.join("decoy.jsonl");
         let _ = std::fs::remove_file(&path);
         let log = JsonlLog::new(path);
@@ -264,15 +257,12 @@ mod tests {
         let hits = log.recent_matching_including_rotated("wanted", 10);
         assert_eq!(hits.len(), 1, "the decoy must not match: {hits:?}");
         assert_eq!(hits[0]["real"], true);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A filtered read reaches into the rotated backup, like its unfiltered sibling.
     #[test]
     fn a_filtered_read_reaches_past_the_backup_boundary() {
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-frot-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl-frot");
         let path = dir.join("frot.jsonl");
         let backup = path.with_extension("jsonl.1");
         let _ = std::fs::remove_file(&path);
@@ -290,16 +280,13 @@ mod tests {
         assert_eq!(hits.len(), 2, "both sides of the rotation: {hits:?}");
         assert_eq!(hits[0]["n"], 2, "live file is the newer");
         assert_eq!(hits[1]["n"], 1);
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A truncated or corrupt line is skipped, not fatal — the same tolerance the unfiltered
     /// reader has, since the filtered one is now the report's only route to this file.
     #[test]
     fn a_corrupt_line_does_not_break_a_filtered_read() {
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-corrupt-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl-corrupt");
         let path = dir.join("corrupt.jsonl");
         let _ = std::fs::remove_file(&path);
 
@@ -313,8 +300,6 @@ mod tests {
         let log = JsonlLog::new(path);
         let hits = log.recent_matching_including_rotated("keep", 10);
         assert_eq!(hits.len(), 2, "the two intact rows survive: {hits:?}");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -326,8 +311,7 @@ mod tests {
 
     #[test]
     fn rotates_when_over_size() {
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-rot-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl-rot");
         let path = dir.join("log.jsonl");
 
         // Pre-fill past the rotation threshold, then a single record triggers rotation.
@@ -344,8 +328,6 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 1);
         assert!(content.contains("after_rotate"));
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -353,8 +335,7 @@ mod tests {
         // A distinct directory from `rotates_when_over_size`, which removes its own
         // `nw-jsonl-rot-{pid}` dir at the end — the two tests sharing one name only survived on
         // timing, and a slow/reordered run could delete files this test was still using.
-        let dir = std::env::temp_dir().join(format!("nw-jsonl-rot2-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::testutil::ScratchDir::new("jsonl-rot2");
         let path = dir.join("rot.jsonl");
         let backup = path.with_extension("jsonl.1");
         let _ = std::fs::remove_file(&path);
