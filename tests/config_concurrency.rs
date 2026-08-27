@@ -20,17 +20,16 @@ use tower::ServiceExt;
 use nestwatch::config::{Config, data_paths};
 
 mod common;
-use common::{PASSWORD, app_with, login, state_with, test_config};
+use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
 
 /// Fire many `/api/rules` and `/api/extra-time` writes concurrently, then require that the file
 /// on disk is exactly the config the service is running on. Any lost update shows up as a
 /// mismatch between the two, which is precisely the bug: memory right, disk stale.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_config_writes_all_reach_disk() {
-    let tmp = std::env::temp_dir().join(format!("nw-conc-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
+    let tmp = ScratchDir::new("conc");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
-    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", &tmp) };
+    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
 
     let state = state_with(test_config());
     let config_handle = state.config.clone();
@@ -95,7 +94,7 @@ async fn concurrent_config_writes_all_reach_disk() {
     );
 
     // No writer may leave its scratch file behind.
-    let leftovers: Vec<_> = std::fs::read_dir(&tmp)
+    let leftovers: Vec<_> = std::fs::read_dir(tmp.path())
         .unwrap()
         .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
         .filter(|n| n.contains(".tmp"))
@@ -104,6 +103,4 @@ async fn concurrent_config_writes_all_reach_disk() {
         leftovers.is_empty(),
         "temp files left behind: {leftovers:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }

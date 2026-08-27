@@ -10,14 +10,14 @@ use tower::ServiceExt;
 use nestwatch::config::data_paths;
 
 mod common;
-use common::{PASSWORD, app_with, login, state_with, test_config};
+use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
 
 #[tokio::test]
 async fn valid_curfew_persists_and_updates_state() {
     // Redirect the data dir to a temp location so we never touch the real config.
-    let tmp = std::env::temp_dir().join(format!("nw-curfew-{}", std::process::id()));
+    let tmp = ScratchDir::new("curfew");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
-    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", &tmp) };
+    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
 
     let state = state_with(test_config());
     let config_handle = state.config.clone();
@@ -57,6 +57,4 @@ async fn valid_curfew_persists_and_updates_state() {
     // ...and persisted to disk.
     let saved = std::fs::read_to_string(data_paths().config).unwrap();
     assert!(saved.contains("21:00"), "curfew persisted to config.json");
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }

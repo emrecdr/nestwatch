@@ -6,15 +6,14 @@ use axum::http::StatusCode;
 use serde_json::json;
 
 mod common;
-use common::{PASSWORD, app_with, get, login, post_json, state_with, test_config};
+use common::{PASSWORD, ScratchDir, app_with, get, login, post_json, state_with, test_config};
 
 /// Point the data dir at a scratch path for this binary. Safe here and nowhere else: this is a
 /// dedicated test binary, so the process-global override can't race another test.
-fn scratch_data_dir(name: &str) -> std::path::PathBuf {
-    let tmp = std::env::temp_dir().join(format!("nw-pw-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&tmp);
+fn scratch_data_dir(name: &str) -> ScratchDir {
+    let tmp = ScratchDir::new(&format!("pw-{name}"));
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
-    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", &tmp) };
+    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
     tmp
 }
 
@@ -31,7 +30,7 @@ async fn change_password(app: &Router, cookie: &str, new: &str) -> StatusCode {
 
 #[tokio::test]
 async fn password_change_end_to_end() {
-    let tmp = scratch_data_dir("e2e");
+    let _tmp = scratch_data_dir("e2e");
     let app = app_with(state_with(test_config()));
 
     let cookie = login(&app, PASSWORD).await.unwrap();
@@ -43,8 +42,6 @@ async fn password_change_end_to_end() {
     // The new password now works; the old one does not.
     assert!(login(&app, "a-fresh-passphrase").await.is_some());
     assert!(login(&app, PASSWORD).await.is_none());
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 /// Changing the password must sign other devices out.
@@ -54,7 +51,7 @@ async fn password_change_end_to_end() {
 /// Previously the implicit remedy was a service restart, which the persistent store removed.
 #[tokio::test]
 async fn changing_the_password_revokes_other_sessions() {
-    let tmp = scratch_data_dir("revoke");
+    let _tmp = scratch_data_dir("revoke");
     let app = app_with(state_with(test_config()));
 
     let phone = login(&app, PASSWORD).await.expect("first device signs in");
@@ -78,6 +75,4 @@ async fn changing_the_password_revokes_other_sessions() {
         StatusCode::UNAUTHORIZED,
         "a password change must revoke sessions on other devices"
     );
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }

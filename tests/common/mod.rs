@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::Router;
@@ -100,6 +100,12 @@ impl ScratchDir {
     /// A path inside the directory. The file need not exist.
     pub fn join(&self, name: &str) -> PathBuf {
         self.path.join(name)
+    }
+
+    /// The directory itself, for tests that hand the whole path to something else -- the four
+    /// that point `NESTWATCH_DATA_DIR` here rather than writing a named file inside it.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 }
 

@@ -10,13 +10,13 @@ use tower::ServiceExt;
 use nestwatch::config::data_paths;
 
 mod common;
-use common::{PASSWORD, app_with, login, state_with, test_config};
+use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
 
 #[tokio::test]
 async fn valid_rules_persist_and_update_state() {
-    let tmp = std::env::temp_dir().join(format!("nw-rules-{}", std::process::id()));
+    let tmp = ScratchDir::new("rules");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
-    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", &tmp) };
+    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
 
     let state = state_with(test_config());
     let config_handle = state.config.clone();
@@ -159,6 +159,4 @@ async fn valid_rules_persist_and_update_state() {
             "but applies routine content"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&tmp);
 }
