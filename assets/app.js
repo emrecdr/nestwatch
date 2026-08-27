@@ -389,11 +389,7 @@ function app() {
     async setChildLanguage(tag) {
       if (tag === this.childLanguage) return;
       try {
-        const r = await fetch("/api/language", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ language: tag }),
-        });
+        const r = await this.postJSON("/api/language", { language: tag });
         if (r.ok) {
           this.childLanguage = (await r.json()).language;
           this.toast("The child's page is now " + this.languageLabel(tag) + ".", "success");

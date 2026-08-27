@@ -67,35 +67,62 @@ pub fn test_app() -> Router {
     app_with(test_state())
 }
 
+/// A temporary directory that removes itself however the test ends.
+///
+/// Manual cleanup on the last line of a test body only runs when the test *reaches* that line. An
+/// assertion failure is a panic, so the run that most wants its scratch data kept is also the only
+/// one that leaks it, and the next run starts against a directory it believes it created fresh.
+///
+/// This was the argument already written above `AuditFileApp`, which grew a `Drop` for exactly
+/// this reason — but the reasoning stayed welded to the audit log, so the same hand-rolled
+/// `temp_dir().join(...)` / `remove_dir_all` / `create_dir_all` dance was written out again for
+/// the screen-time log, the time-request log and the time-code queue, each ending in the manual
+/// cleanup line the guard exists to make unnecessary. The directory is the thing that needs the
+/// guard; which log happens to be written inside it is not part of the problem.
+///
+/// **Bind it to a name, never to `_`.** `let _ = ScratchDir::new(..)` drops the value immediately
+/// and deletes the directory before the test uses it; `let _dir = ..` keeps it to end of scope,
+/// which is the whole point.
+pub struct ScratchDir {
+    path: PathBuf,
+}
+
+impl ScratchDir {
+    /// `tag` separates tests running concurrently inside one binary; the process id already
+    /// separates the binaries from each other.
+    pub fn new(tag: &str) -> Self {
+        let path = std::env::temp_dir().join(format!("nw-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        Self { path }
+    }
+
+    /// A path inside the directory. The file need not exist.
+    pub fn join(&self, name: &str) -> PathBuf {
+        self.path.join(name)
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
 /// A router whose audit log writes to a real file, with the path to read it back.
 ///
 /// Every other helper here disables the on-disk logs; a handful of tests need the opposite,
 /// because the property under test is what actually lands in `audit.jsonl`.
-///
-/// The self-cleaning directory is why this is shared rather than left as three copies. Each copy
-/// deleted its directory on the last line of the test body, so any of them that later grew an
-/// early return — or simply tripped an assertion, which is a panic — would leak one silently, and
-/// the next run would start against a directory it thought it had created fresh. Dropping the
-/// guard cleans up on every path.
 pub struct AuditFileApp {
     pub app: Router,
     /// The `audit.jsonl` this router appends to.
     pub path: PathBuf,
-    dir: PathBuf,
+    /// Held, not read: this is what deletes the directory when the test ends.
+    _dir: ScratchDir,
 }
 
-impl Drop for AuditFileApp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-/// `tag` separates tests running concurrently inside one binary; the process id already separates
-/// the binaries from each other.
 pub fn app_with_audit_file(tag: &str) -> AuditFileApp {
-    let dir = std::env::temp_dir().join(format!("nw-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new(tag);
     let path = dir.join("audit.jsonl");
 
     let mut state = test_state();
@@ -103,7 +130,7 @@ pub fn app_with_audit_file(tag: &str) -> AuditFileApp {
     AuditFileApp {
         app: app_with(state),
         path,
-        dir,
+        _dir: dir,
     }
 }
 

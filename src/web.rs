@@ -623,6 +623,57 @@ mod tests {
         );
     }
 
+    /// The minutes at which the dashboard turns the budget amber match the first warning the child
+    /// gets on their own desktop.
+    ///
+    /// `assets/app.js` declares `BUDGET_LOW_MINS = 15` with a comment saying it "matches the first
+    /// warning the child gets" — and nothing made that true. It is a hand-copied second statement
+    /// of `countdown::WARN_AT_MINS[0]`, in another language, in another file, with no mechanical
+    /// link; the Rust side already derives `LOOKAHEAD_MINS` from that same element rather than
+    /// repeating it.
+    ///
+    /// Built FROM the constant, for the reason spelled out in
+    /// [`the_lockout_a_parent_is_told_to_wait_matches_the_one_enforced`] above: an `assert_eq!` of
+    /// 15 against 15 pins nothing, because the natural repair when it fails is to edit whichever
+    /// literal the failure named. Deriving the source line leaves one way to satisfy this — write
+    /// the number the constant actually holds.
+    ///
+    /// The drift is quiet and it points the wrong way. Move the child's first warning to 30 and the
+    /// child is told time is running out while the parent's dashboard still reads calm green; move
+    /// it to 5 and the dashboard cries amber for ten minutes during which nothing is happening on
+    /// the child's screen. Either way the two people looking at the same budget are shown different
+    /// urgency, and the one who can act on it is the one being misinformed.
+    #[test]
+    fn the_budget_the_dashboard_calls_low_is_the_childs_first_warning() {
+        let declaration = format!(
+            "const BUDGET_LOW_MINS = {};",
+            crate::countdown::WARN_AT_MINS[0]
+        );
+        assert!(
+            APP_JS.contains(&declaration),
+            "the child's first countdown warning fires at {} minutes, so `assets/app.js` must \
+             declare `{declaration}` and it does not. The dashboard's amber threshold and the \
+             child's first warning have drifted, so a parent and their child are being shown \
+             different urgency about the same remaining budget.",
+            crate::countdown::WARN_AT_MINS[0]
+        );
+
+        // And that the declaration is what the colour actually reads.
+        //
+        // Pinning only the `const` line leaves the same hole this test was written to close: the
+        // threshold could be spelled as a literal at the use site, or the amber branch deleted
+        // outright, and the assertion above stays green over a constant nothing consults. A
+        // declaration guarded in isolation is a decoy — it reads as pinned precisely because
+        // someone took the trouble to pin it.
+        assert!(
+            APP_JS.contains("remaining <= BUDGET_LOW_MINS"),
+            "`BUDGET_LOW_MINS` is declared in `assets/app.js` but the budget tone no longer \
+             compares against it, so the constant this test pins is not the number the dashboard \
+             uses. Either restore the comparison or delete the constant — do not leave a guarded \
+             declaration that nothing reads."
+        );
+    }
+
     /// Every member that exists only to be displayed is actually displayed.
     ///
     /// Two families, because the component has two: a `get show…()` decides whether something

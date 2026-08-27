@@ -71,6 +71,30 @@ pub struct AppMinutes {
     pub minutes: u64,
 }
 
+/// Order apps heaviest first, ties broken by name.
+///
+/// Three call sites spelled this comparator out identically. It is one function now because the
+/// tie-break is both the part worth protecting and the part easiest to lose: a cleanup pass that
+/// rewrites it as `sort_by_key(|a| Reverse(a.minutes))` reads as the idiomatic tidy-up and drops
+/// the name comparison silently.
+///
+/// That substitution is harmless *today*, which is what makes it dangerous. Every caller happens
+/// to pass a vec already in name order -- from the `BTreeMap` built in `totals_across`, or from a
+/// BTreeMap-backed `serde_json::Map` in `app_minutes`, whose output the first-seen path then
+/// consumes -- and `sort_by` is stable, so stability alone would reproduce the same answer. But
+/// that equivalence is an accident of two upstream container choices, it is invisible from here,
+/// and it stops holding the day either one changes, with nothing failing to say so. Keeping the
+/// comparator explicit makes the order a property of this function rather than of its callers.
+///
+/// Why the order matters at all: this feeds a card a parent reads to spot what changed since they
+/// last looked. Two apps on equal minutes swapping places between refreshes read as activity.
+///
+/// Guarded by `apps_on_equal_minutes_come_back_in_name_order`, which feeds input in *descending*
+/// name order -- the one shape where stability and the tie-break disagree.
+fn sort_heaviest_first(apps: &mut [AppMinutes]) {
+    apps.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
+}
+
 /// One day in the report window.
 ///
 /// `measured` distinguishes the two things an absent number can mean. A day with no row is one the
@@ -305,7 +329,7 @@ fn first_seen_in(history: &BTreeMap<NaiveDate, ParsedRow>) -> Option<FirstSeen> 
     // step is the compiler's job rather than a reader's: the struct deliberately does not derive
     // `Default`, so a field added to one literal and not the other fails to build instead of
     // defaulting quietly. (This comment previously asserted the opposite.)
-    fresh.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
+    sort_heaviest_first(&mut fresh);
     let count = fresh.len();
     fresh.truncate(TOP_FIRST_SEEN);
     Some(FirstSeen {
@@ -346,7 +370,7 @@ where
         })
         .collect();
     // Heaviest first, ties by name so the order is stable across refreshes.
-    rows.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
+    sort_heaviest_first(&mut rows);
     rows.truncate(TOP_OVER_WINDOW);
     rows
 }
@@ -433,7 +457,7 @@ fn app_minutes(v: &Value, key: &str) -> Vec<AppMinutes> {
         })
         .unwrap_or_default();
     // Heaviest first, then by name so the order is stable for equal minutes.
-    apps.sort_by(|a, b| b.minutes.cmp(&a.minutes).then_with(|| a.name.cmp(&b.name)));
+    sort_heaviest_first(&mut apps);
     apps
 }
 
@@ -1123,6 +1147,51 @@ mod tests {
         assert_eq!(names, vec!["roblox.exe", "chrome.exe", "notepad.exe"]);
         assert_eq!(r.app_totals[0].minutes, 70, "40 + 30 across two days");
         assert_eq!(r.app_totals[1].minutes, 20);
+    }
+
+    /// Equal minutes come back in name order, so the card does not reshuffle between refreshes.
+    ///
+    /// **This is not the tie covered by `a_tie_on_apps_is_broken_by_whichever_row_has_focus_data`.**
+    /// That one is about *row merging* -- which of two rows for the same date wins when one carries
+    /// focus data. This one is about the *sort*. They share a word and nothing else; neither is a
+    /// duplicate of the other, and deleting either leaves a real property unobserved.
+    ///
+    /// The test above pins the primary sort but cannot see this one: its three apps sit at 70 / 20
+    /// / 5, all distinct, so no tie is ever exercised. Stripping the tie-break from all three
+    /// comparators left the entire suite green -- 452 passed -- which is why this exists.
+    ///
+    /// The input is deliberately in **descending** name order. `sort_by` is stable, and every real
+    /// caller feeds a vec that already arrives name-ordered, so plausible-looking input would pass
+    /// under a comparator that ignores names entirely -- including `sort_by_key(|a| Reverse(a.minutes))`,
+    /// the exact edit a future cleanup pass proposes. Reversed input is the one shape where
+    /// stability and the tie-break disagree, so it is the only shape that observes the property
+    /// rather than the caller's ordering.
+    #[test]
+    fn apps_on_equal_minutes_come_back_in_name_order() {
+        let mut apps = vec![
+            AppMinutes {
+                name: "zulu.exe".to_string(),
+                minutes: 10,
+            },
+            AppMinutes {
+                name: "mike.exe".to_string(),
+                minutes: 99,
+            },
+            AppMinutes {
+                name: "alpha.exe".to_string(),
+                minutes: 10,
+            },
+        ];
+
+        sort_heaviest_first(&mut apps);
+
+        let names: Vec<&str> = apps.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["mike.exe", "alpha.exe", "zulu.exe"],
+            "minutes must dominate (mike.exe first at 99), and the 10-minute tie must break by \
+             name -- alpha before zulu, though zulu was passed in first"
+        );
     }
 
     /// Focus and page totals are summed independently of the running-app totals.

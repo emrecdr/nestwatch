@@ -261,6 +261,24 @@ pub struct LanguageBody {
     language: String,
 }
 
+/// Reject a minutes value outside `1..=max`, naming the bound in the message.
+///
+/// Three handlers spelled this out, two of them character-for-character including the comment
+/// below, differing only in which constant bounds them.
+///
+/// Carry the bound, not just the verdict. `Rules::validate`'s five messages already do ("daily
+/// limit must be <= 10080 minutes"), and a parent told only that they broke a limit has to guess
+/// which number to try next. That wording is the reason this exists, so it lives in one place
+/// rather than three that can drift apart.
+fn require_minutes(minutes: u32, max: u32) -> Result<(), AppError> {
+    if minutes == 0 || minutes > max {
+        return Err(AppError::BadRequest(format!(
+            "minutes must be between 1 and {max}"
+        )));
+    }
+    Ok(())
+}
+
 /// Tell any open dashboard that `tag` went stale, so it can refetch that endpoint now rather than
 /// at its next minute boundary.
 ///
@@ -538,14 +556,7 @@ pub async fn extra_time(
     State(state): State<AppState>,
     Json(body): Json<ExtraTimeBody>,
 ) -> Result<Json<Value>, AppError> {
-    if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
-        // Carry the bound, not just the verdict. `Rules::validate`'s five messages already do
-        // ("daily limit must be <= 10080 minutes"), and a parent who is told only that they broke
-        // a limit has to guess which number to try next.
-        return Err(AppError::BadRequest(format!(
-            "minutes must be between 1 and {MAX_REQUEST_MINUTES}"
-        )));
-    }
+    require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
     let today = crate::config::today();
     let minutes = body.minutes;
     update_config(&state, |c| c.extra.add(today, minutes)).await?;
@@ -622,6 +633,13 @@ pub async fn child_status(
         )
     };
     let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
+    // Onto the blocking pool for the same reason `usage` above is, and the same reason
+    // `list_time_requests` spawns its `pending()`: `latest()` reads and parses the whole
+    // time-request JSONL synchronously. This handler is the child's page polling once a minute
+    // with no session, so leaving it inline parks a tokio worker on file I/O on the one route
+    // anybody on the LAN can call without authenticating.
+    let requests = state.time_requests.clone();
+    let request = spawn(move || requests.latest()).await?;
 
     // Clamped, via the shared helper — `as u32` here used to wrap a corrupt tally to a small
     // number, telling the child they had plenty of time left.
@@ -644,7 +662,7 @@ pub async fn child_status(
         // written and then reverted; it is a change to that stated principle, not an addition to
         // it, so it needs deciding rather than slipping in beside an unrelated fix. The child is
         // still warned — the enforcer puts a countdown on their desktop at 15, 5 and 1 minutes.
-        "request": state.time_requests.latest(),
+        "request": request,
         // Which strings this page should render. Not negotiated from `Accept-Language`: that is set
         // in the child's own browser, and the child does not get to choose the language of the
         // notice telling them what is being watched.
@@ -785,14 +803,7 @@ pub async fn time_request(
     state
         .time_req_limiter
         .count_and_check(ip, std::time::Instant::now())?;
-    if body.minutes == 0 || body.minutes > MAX_REQUEST_MINUTES {
-        // Carry the bound, not just the verdict. `Rules::validate`'s five messages already do
-        // ("daily limit must be <= 10080 minutes"), and a parent who is told only that they broke
-        // a limit has to guess which number to try next.
-        return Err(AppError::BadRequest(format!(
-            "minutes must be between 1 and {MAX_REQUEST_MINUTES}"
-        )));
-    }
+    require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
     let requests = state.time_requests.clone();
     let accepted = spawn(move || requests.submit(body.minutes, &body.reason)).await?;
     // Only audit a submission that actually joined the queue. Recording rejections too made
@@ -877,12 +888,7 @@ pub async fn issue_time_code(
     State(state): State<AppState>,
     Json(body): Json<IssueCodeBody>,
 ) -> Result<Json<Value>, AppError> {
-    if body.minutes == 0 || body.minutes > crate::timecode::MAX_CODE_MINUTES {
-        return Err(AppError::BadRequest(format!(
-            "minutes must be between 1 and {}",
-            crate::timecode::MAX_CODE_MINUTES
-        )));
-    }
+    require_minutes(body.minutes, crate::timecode::MAX_CODE_MINUTES)?;
     let codes = state.time_codes.clone();
     let minutes = body.minutes;
     let code = spawn(move || codes.issue(minutes)).await?;

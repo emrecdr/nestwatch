@@ -11,17 +11,15 @@
 use axum::http::{StatusCode, header};
 
 mod common;
-use common::{PASSWORD, app_with, body_json, get, login, test_state};
+use common::{PASSWORD, ScratchDir, app_with, body_json, get, login, test_state};
 use serde_json::json;
 
 /// A router whose screen-time log is a real file, seeded with `rows`.
 ///
 /// `test_state` installs `ScreentimeLog::disabled()`, whose reads are permanently empty — an export
 /// test built on it would pass against a handler that returned nothing at all.
-fn app_with_history(tag: &str, rows: &[serde_json::Value]) -> (axum::Router, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("nw-export-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn app_with_history(tag: &str, rows: &[serde_json::Value]) -> (axum::Router, ScratchDir) {
+    let dir = ScratchDir::new(&format!("export-{tag}"));
 
     let log = nestwatch::screentime::ScreentimeLog::new(dir.join("screentime.jsonl"));
     for r in rows {
@@ -39,14 +37,13 @@ fn day(date: &str, used: u64) -> serde_json::Value {
 
 #[tokio::test]
 async fn export_needs_a_session_like_every_other_api_route() {
-    let (app, dir) = app_with_history("auth", &[day("2026-08-01", 30)]);
+    let (app, _dir) = app_with_history("auth", &[day("2026-08-01", 30)]);
     let res = get(&app, "/api/export", None).await;
     assert_eq!(
         res.status(),
         StatusCode::UNAUTHORIZED,
         "the whole history is the most complete record this tool holds"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
@@ -56,7 +53,7 @@ async fn export_returns_every_stored_rollup_and_offers_it_as_a_file() {
         day("2026-08-02", 45),
         day("2026-08-03", 60),
     ];
-    let (app, dir) = app_with_history("rows", &rows);
+    let (app, _dir) = app_with_history("rows", &rows);
     let cookie = login(&app, PASSWORD).await.expect("login");
 
     let res = get(&app, "/api/export", Some(&cookie)).await;
@@ -101,8 +98,6 @@ async fn export_returns_every_stored_rollup_and_offers_it_as_a_file() {
         vec!["2026-08-03", "2026-08-02", "2026-08-01"],
         "every stored day, newest first"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The export is a dump, not a second implementation of the report.
@@ -117,7 +112,7 @@ async fn a_duplicate_date_is_preserved_rather_than_reconciled() {
         json!({ "day": "2026-08-01", "used_mins": 30, "budget_mins": 120, "enabled": true,
                 "per_app": [{ "name": "minecraft", "used_mins": 30 }] }),
     ];
-    let (app, dir) = app_with_history("dupe", &rows);
+    let (app, _dir) = app_with_history("dupe", &rows);
     let cookie = login(&app, PASSWORD).await.expect("login");
 
     let body = body_json(get(&app, "/api/export", Some(&cookie)).await).await;
@@ -126,16 +121,13 @@ async fn a_duplicate_date_is_preserved_rather_than_reconciled() {
         json!(2),
         "both rows for the date must survive; reconciling is the report's job, not the export's"
     );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Rotation renames the live file to `.1`, so half the history can live in the backup. An export
 /// that read only the live file would silently return the newer half — and look complete.
 #[tokio::test]
 async fn the_rotated_backup_is_exported_too() {
-    let dir = std::env::temp_dir().join(format!("nw-export-rot-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("export-rot");
     let path = dir.join("screentime.jsonl");
 
     // Older events, then rotate them aside exactly as `append_line` does.
@@ -162,8 +154,6 @@ async fn the_rotated_backup_is_exported_too() {
         days.contains(&"2026-07-01") && days.contains(&"2026-08-01"),
         "the backup holds the OLDER events; dropping it loses the oldest history silently: {days:?}"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A deliberate parent action against the fullest record the tool holds, and one that leaves the
@@ -366,9 +356,7 @@ async fn the_event_stream_is_a_stream_and_is_never_cached() {
 /// layer up. Driving the HTTP stream instead would mean reading a body that by design never ends.
 #[tokio::test]
 async fn a_child_s_request_notifies_an_open_dashboard_at_once() {
-    let dir = std::env::temp_dir().join(format!("nw-events-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("events");
 
     let mut state = common::test_state();
     state.time_requests =
@@ -390,8 +378,6 @@ async fn a_child_s_request_notifies_an_open_dashboard_at_once() {
         .expect("a request must notify within two seconds, not at the next 60s poll")
         .expect("the channel must stay open");
     assert_eq!(tag, "requests");
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Granting time moves two panels, and a parent watching on a second device should see both.

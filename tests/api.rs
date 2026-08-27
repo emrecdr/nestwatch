@@ -15,8 +15,8 @@ use nestwatch::server::build_router;
 
 mod common;
 use common::{
-    PASSWORD, app_with, app_with_audit_file, body_json, get, login, post_json, state_with,
-    test_app, test_config, test_state,
+    PASSWORD, ScratchDir, app_with, app_with_audit_file, body_json, get, login, post_json,
+    state_with, test_app, test_config, test_state,
 };
 
 #[tokio::test]
@@ -942,9 +942,7 @@ async fn a_capture_a_person_asked_for_is_still_audited_one_for_one() {
 /// completely broken implementation.
 #[tokio::test]
 async fn child_status_reports_what_happened_to_the_request() {
-    let dir = std::env::temp_dir().join(format!("nw-status-request-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("status-request");
 
     let mut state = test_state();
     state.time_requests =
@@ -1006,8 +1004,6 @@ async fn child_status_reports_what_happened_to_the_request() {
             "child status must not reveal `{secret}`: {raw}"
         );
     }
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An error a person reads must carry the number they need, not only the verdict.
@@ -1093,9 +1089,7 @@ async fn the_bound_the_child_is_told_is_the_one_their_own_form_already_shows() {
 /// implementation if it used the shared helper.
 #[tokio::test]
 async fn a_full_code_queue_says_how_many_codes_are_allowed() {
-    let dir = std::env::temp_dir().join(format!("nw-code-cap-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = ScratchDir::new("code-cap");
 
     let mut state = test_state();
     state.time_codes =
@@ -1130,6 +1124,4 @@ async fn a_full_code_queue_says_how_many_codes_are_allowed() {
         msg.contains(&nestwatch::timecode::MAX_ACTIVE_CODES.to_string()),
         "said {msg:?} — a parent who cannot mint a code needs the number, not just the refusal"
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
