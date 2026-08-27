@@ -72,15 +72,25 @@ jobs:
         # release build, which already uses it.
         run: cargo test --all-targets --locked
 
-  release:
+  # The DATA plane: turns source into an .exe, and holds no signing identity while doing it.
+  #
+  # Split from `publish` on purpose, and the split is the security control — not tidiness.
+  # An attestation proves *which workflow produced this file*; it cannot prove the workflow's
+  # earlier steps left the tree alone. While build and signing shared one job, anyone who could
+  # move a tag on one of the three third-party actions below — or land a build script in a
+  # dependency — had arbitrary code execution in a job holding `id-token: write`, *before*
+  # `cargo build` ran. They patch a file, the build proceeds, and the attestation signs the
+  # result truthfully. `gh attestation verify` then passes, and the README tells the parent that
+  # check is the strong one. The artifact installs as a SYSTEM service on a child's PC.
+  #
+  # Separating the user-defined build steps from the provenance generation is what SLSA calls
+  # Build L3: the data plane cannot reach the control plane's identity, because this job is
+  # never issued one. Note `permissions` here is `contents: read` and nothing else.
+  build:
     needs: [verify]
     runs-on: windows-latest
-    # `contents` publishes the release; `id-token` + `attestations` sign and store the build
-    # provenance below. Scoped to this job so `verify` cannot publish.
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
@@ -99,13 +109,51 @@ jobs:
           npm run build
       - name: Build release binary
         run: cargo build --release --locked
+      # Stage both files under one directory so the artifact has a flat root: `upload-artifact`
+      # roots an artifact at the common ancestor of its paths, and `target/release/nestwatch.exe`
+      # plus a workspace-root `.sha256` would root it at the workspace — arriving in the next job
+      # as `dist/target/release/...`, which the publish steps would then have to know about.
+      #
       # Emit "<hash>  nestwatch.exe" so the file is consumable by `sha256sum -c` / `shasum -c`.
       # A bare hash with no filename can't be checked by either.
-      - name: Checksum
+      - name: Stage the artifact and its checksum
         shell: pwsh
         run: |
-          $hash = (Get-FileHash target/release/nestwatch.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  nestwatch.exe" | Out-File -Encoding ascii -NoNewline nestwatch.exe.sha256
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/nestwatch.exe dist/
+          $hash = (Get-FileHash dist/nestwatch.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  nestwatch.exe" | Out-File -Encoding ascii -NoNewline dist/nestwatch.exe.sha256
+      - name: Hand the artifact to the signing job
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dist
+          path: dist/
+          # A silent empty upload here would surface as a confusing failure in `publish`, one job
+          # away from the cause.
+          if-no-files-found: error
+          retention-days: 1
+
+  # The CONTROL plane: signs and publishes. Runs no build step, no third-party action, and no
+  # code from this repository other than the release-notes script below.
+  publish:
+    needs: [build]
+    runs-on: windows-latest
+    # `contents` publishes the release; `id-token` + `attestations` sign and store the build
+    # provenance. Scoped to this job so neither `verify` nor `build` can publish or sign.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      # Needed only for CHANGELOG.md and .github/release-footer.md, which the notes step reads.
+      # The binary is NOT rebuilt here — it arrives from `build` as an artifact.
+      - uses: actions/checkout@v7
+      # v8, not v7: this pair is not released in lockstep — `upload-artifact` is on v7 while
+      # `download-artifact` is on v8. Checked rather than assumed.
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-dist
+          path: dist
       # Sign a SLSA build-provenance statement binding this exact .exe to this repo, workflow
       # and commit. The .sha256 above only proves the download wasn't corrupted — it is produced
       # by this same workflow, so anyone able to publish a release could publish a matching hash.
@@ -118,7 +166,7 @@ jobs:
       # as the publish action below — this one holds a signing identity.
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: target/release/nestwatch.exe
+          subject-path: dist/nestwatch.exe
       # Build the release notes from CHANGELOG.md plus a fixed verification footer.
       #
       # With no body, `action-gh-release` publishes an empty release -- a tag and two files, and
@@ -160,5 +208,5 @@ jobs:
         with:
           body_path: RELEASE_NOTES.md
           files: |
-            target/release/nestwatch.exe
-            nestwatch.exe.sha256
+            dist/nestwatch.exe
+            dist/nestwatch.exe.sha256

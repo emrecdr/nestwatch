@@ -521,14 +521,26 @@ assumption is the one thing no runtime control can check, so it is established a
   pin the ones that *hold* something: the one that executes downloaded binaries, the one that can
   publish releases, the one that holds the signing identity. That reading missed the release job.
   `dtolnay/rust-toolchain`, `Swatinem/rust-cache` and `ilammy/setup-nasm` hold nothing, but they
-  run **before `cargo build`** in the job that carries `id-token: write` and `attestations: write`.
-  Whoever can move one of those tags can edit the source tree between checkout and build, and
-  `actions/attest` then signs the result — truthfully, because it really was produced by this
-  workflow from this commit. **Provenance attests to the build, not to the integrity of the build's
-  inputs**, so `gh attestation verify` would have passed on the parent's machine. The rule is now
-  positional rather than by role: anything third-party running in a job that builds or signs the
-  artifact is pinned to a full commit SHA. `actions/*` stay on tags — GitHub controls the tag and
-  the runner alike, so trusting a tag there is not a separate decision from using Actions at all.
+  used to run **before `cargo build`** in the job that carried `id-token: write` and
+  `attestations: write`. Whoever could move one of those tags could edit the source tree between
+  checkout and build, and `actions/attest` would then sign the result — truthfully, because it
+  really was produced by this workflow from this commit. **Provenance attests to the build, not to
+  the integrity of the build's inputs**, so `gh attestation verify` would have passed on the
+  parent's machine. The rule is now positional rather than by role: anything third-party running in
+  a job that builds or signs the artifact is pinned to a full commit SHA. `actions/*` stay on tags —
+  GitHub controls the tag and the runner alike, so trusting a tag there is not a separate decision
+  from using Actions at all. Enforced by `tests/workflow_pins.rs`, because a workflow is not
+  compiled, not linted, and otherwise only exercised by cutting a release.
+- **Building and signing are separate jobs, and that is the control the pinning backs up.** Pinning
+  narrows *who* can inject a build step; separation removes what an injected build step can reach.
+  `release.yml` runs `build` with `permissions: contents: read` and nothing else — no signing
+  identity exists in that job to steal — and hands the artifact to `publish`, which holds
+  `id-token: write`, runs no compiler, and executes no third-party action other than the two
+  SHA-pinned ones that attest and upload. This is what SLSA calls Build L3: the user-defined build
+  steps (the data plane) are isolated from provenance generation (the control plane), so a
+  compromised dependency or build script cannot forge provenance even if it fully controls the
+  build. The second half is enforced too — `the_signing_job_runs_no_build_step` fails if a compile
+  step reappears beside the signing identity.
 - **Pinning is paired with Dependabot**, because a pinned commit never moves on its own,
   including past an advisory. The pin removes the moved-tag risk; the updates stop it becoming
   a frozen one. Dependabot **alerts** and **automated security fixes** are both enabled on the

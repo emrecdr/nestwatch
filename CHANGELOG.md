@@ -26,6 +26,11 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   verify` would have passed on your machine. All of them are now pinned to exact, unchangeable
   versions. The rule is no longer "pin the ones that hold a key" but "pin anything that runs in the
   job that builds or signs".
+  <br>Building and signing have also been separated into two stages, so the stage that compiles the
+  program no longer holds the signing key at all. Pinning stops a name being moved; this stops it
+  mattering. Nothing about the released file changes — the same `gh attestation verify` command
+  works exactly as before — but the signature now vouches for something built where nothing had the
+  means to sign.
 
 ### Added
 - **Take your own history off the machine.** A **Download** button on the screen-time report saves
