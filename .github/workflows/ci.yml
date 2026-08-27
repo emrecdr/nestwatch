@@ -85,6 +85,33 @@ jobs:
         working-directory: web
         run: npm test
 
+      # Doc cross-references, which nothing else here reaches.
+      #
+      # Eight `///` links resolved to nothing when this was first measured — five wrong paths
+      # (`countdown::WARN_AT_MINS` where `countdown` is a crate-root module; `[`recent`]` needing
+      # `Self::`) and three pointing at items private to another module or declared inside a
+      # function body, which rustdoc cannot resolve at all. None was a regression anyone let
+      # through: no gate had ever run rustdoc, so the count only ever went up.
+      #
+      # **Windows only, and that is the whole design.** Half the crate is `#[cfg(windows)]`, so on
+      # Linux a link to `crate::watcher` or `terminate_resident_helpers` is unresolvable because
+      # the item is not compiled — not because the link is wrong. Running this on both legs would
+      # fail permanently on two correct links, which is how a gate gets marked advisory and then
+      # ignored. Measured both ways before choosing: 0 unresolved against a Windows target, 2
+      # against the host.
+      #
+      # `-D rustdoc::broken_intra_doc_links` rather than `-D warnings`, deliberately. The other 20
+      # warnings are `pub` docs linking to private items, which is cosmetic for a crate that sets
+      # `publish = false` and whose rustdoc nobody reads. Denying all of them would mean 20 edits
+      # up front to buy nothing, and the useful half — a link that points at nothing — would arrive
+      # bundled with noise. `--document-private-items` is still passed so private items are
+      # *reachable*; it is what makes the majority of these links resolve at all.
+      - name: Doc links
+        if: runner.os == 'Windows'
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+        run: cargo doc --no-deps --document-private-items
+
   # Supply-chain gate. BLOCKING, with no ignore list.
   #
   # This used to be `continue-on-error: true` plus two `--ignore` flags, because `cargo audit`
