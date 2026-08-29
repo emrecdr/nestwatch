@@ -1408,9 +1408,25 @@ mod tests {
                             .map(|e| found + e)
                             .unwrap_or(html.len());
                         let element = &html[found..end];
+                        // A control removed from the accessibility tree needs no name, because
+                        // nothing will ever announce it. `type="hidden"` is the obvious form of
+                        // that. The sign-in form's user-name field is the other: it exists only so
+                        // a password manager can key the credential, it carries no information a
+                        // person needs, and it has to be *rendered* (`sr-only`, not `display:
+                        // none`) because some managers skip fields that are not.
+                        //
+                        // Both attributes are required together and that is the whole point of
+                        // writing it this way. `aria-hidden` on a control a keyboard can still
+                        // reach is a textbook defect — focus lands on something the screen reader
+                        // has been told does not exist — and `tabindex="-1"` alone leaves the
+                        // control in the tree, still announced and still nameless. Neither half
+                        // opens this exemption on its own.
+                        let removed_from_a11y_tree = element.contains("aria-hidden=\"true\"")
+                            && element.contains("tabindex=\"-1\"");
                         let named = element.contains("aria-label")
                             || element.contains(" id=")
-                            || element.contains("type=\"hidden\"");
+                            || element.contains("type=\"hidden\"")
+                            || removed_from_a11y_tree;
                         // Inside a <label>, the label's own text is the name.
                         if depth == 0 && !named {
                             unnamed.push(format!("{page}: {}", element.trim()));

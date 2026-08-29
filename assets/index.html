@@ -33,6 +33,22 @@
             <h1 class="card-title justify-center text-2xl">🩺 Host Health</h1>
             <p class="text-center text-sm opacity-70">Sign in to continue</p>
 
+            <!-- There is one password and no user name, so this field carries no information and
+                 exists entirely for the password manager. Without it the form is a lone password
+                 input, which managers key unreliably and which Chrome complains about out loud
+                 ("Password forms should have (optionally hidden) username fields"). The change
+                 password form below already argues that this page should be legible to a manager,
+                 because the guidance is to use one rather than a memorable password; this is the
+                 same argument applied to the form people actually sign in with — on a phone,
+                 behind a certificate warning, with a passphrase the README tells them to make long.
+                 `sr-only` rather than `hidden`: a `display: none` field is skipped by some
+                 managers, so it must be rendered and merely invisible. `readonly` and
+                 `tabindex="-1"` keep it out of the tab order and uneditable, which is what makes
+                 `aria-hidden` legitimate here rather than a focusable element hidden from a
+                 screen reader. -->
+            <input type="text" value="parent" autocomplete="username" readonly tabindex="-1"
+                   aria-hidden="true" class="sr-only" />
+
             <label class="flex flex-col w-full mt-2">
               <span class="text-sm mb-1">Password</span>
               <input
