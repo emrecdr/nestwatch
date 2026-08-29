@@ -165,7 +165,23 @@ both,\nand preserves your port, curfew and rules.";
         (Some(recorded), None) if anchored => ok(format!(
             "clock anchored (zone {recorded} recorded; this platform cannot read the current one)"
         )),
-        (None, _) if anchored => warn(
+        // Nothing recorded, and this machine cannot report a zone either — so the absence says
+        // nothing about when the install happened, and the arm below must not claim it does.
+        // Splitting the two is not a nicety: the old single arm fired on a dev host for an
+        // install made seconds earlier by the current binary, told the reader it "predates the
+        // zone check", and prescribed a re-install that cannot record what cannot be read. A
+        // warning that is wrong every time it appears on the machine a developer runs is a
+        // warning they learn to skip, and it is real on Windows.
+        (None, None) if anchored => warn(
+            "clock anchored by offset only — this platform reports no time zone",
+            // Bare `\n`: the printer already indents every line of a fix by eleven spaces
+            // (see `Report::render`), so padding here lands on top of that.
+            "Expected off Windows, where there is no zone identity to record: the service\n\
+             falls back to the offset check, which is what it always used. On Windows this\n\
+             instead means the system call is failing, and is worth a look."
+                .to_string(),
+        ),
+        (None, Some(_)) if anchored => warn(
             "clock anchored by offset only — no time zone recorded",
             format!(
                 "This install predates the zone check, so it uses the weaker one: an offset \
@@ -815,6 +831,26 @@ mod tests {
             assert!(
                 c.fix.unwrap_or_default().contains("two hours"),
                 "say what the weaker check actually costs"
+            );
+        }
+
+        /// The other half of the arm above, and the reason it was split. When the machine cannot
+        /// report a zone, "nothing recorded" carries no information about the install's age — so
+        /// the report must not name a cause it has not checked, nor prescribe a re-install that
+        /// cannot record what cannot be read. This fires on every `doctor` run off Windows.
+        #[test]
+        fn an_unreadable_zone_is_not_reported_as_an_aged_install() {
+            let c = clock_check(None, None, true);
+            assert_eq!(c.level, Level::Warn);
+            let fix = c.fix.unwrap_or_default();
+            assert!(
+                !c.text.contains("no time zone recorded") && !fix.contains("predates"),
+                "must not blame the install's age when the zone is simply unreadable: {} / {fix}",
+                c.text
+            );
+            assert!(
+                !fix.contains("Re-run `nestwatch install`"),
+                "re-installing cannot record a zone this platform never reports: {fix}"
             );
         }
 
