@@ -104,7 +104,10 @@ pub struct Rules {
     #[serde(default)]
     pub budget_by_weekday: Option<Vec<u32>>,
     /// Process names killed on sight (case-insensitive, e.g. `"game.exe"`).
-    #[serde(default)]
+    ///
+    /// Blank rows are dropped on the way in ([`de_blocklist`]), so this vector only ever holds
+    /// strings that could name a process.
+    #[serde(default, deserialize_with = "de_blocklist")]
     pub blocklist: Vec<String>,
     /// Per-app daily minute limits, keyed by process name.
     #[serde(default)]
@@ -120,6 +123,25 @@ pub struct Rules {
     /// What to do when the daily budget is spent.
     #[serde(default)]
     pub budget_action: EnforceAction,
+}
+
+/// Drop blocklist rows that cannot name a process.
+///
+/// An empty row is what a text input yields before anyone types in it, and it is not nothing: it
+/// normalises to the empty string, and `norm` is `trim` + `to_lowercase`, so it would match any
+/// process whose name trims away — a kill-on-sight rule nobody wrote. `decide` filters at the
+/// point of use, which is the guard that actually protects (a `Rules` built in code never passes
+/// through serde); this keeps such a row from being *stored* at all.
+///
+/// Deliberately lenient rather than an error. A parent who adds a row and saves before filling it
+/// in has made no mistake worth a red banner, and `validate` rejecting the payload would lose the
+/// rest of their edit along with it.
+fn de_blocklist<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<String>::deserialize(deserializer)?;
+    Ok(raw.into_iter().filter(|b| !b.trim().is_empty()).collect())
 }
 
 impl Default for Rules {
@@ -196,7 +218,9 @@ impl Rules {
     /// `app_limits` counted here even when every value was `0`, while `Targets` filters those
     /// out — so the enforcer woke up and scanned the process table every 30s with nothing to
     /// enforce, and `doctor` reported "rules active" for rules that could never fire. Same for a
-    /// blocklist holding only blank strings, which `norm()` can never match.
+    /// blocklist holding only blank strings. (The parenthetical this doc used to carry — that
+    /// `norm()` "can never match" a blank entry — was false, and `decide` now filters them for
+    /// real; see `a_blank_blocklist_entry_matches_nothing`.)
     pub fn has_targets(&self) -> bool {
         self.has_any_budget()
             || self.blocklist.iter().any(|b| !b.trim().is_empty())
@@ -750,7 +774,19 @@ impl RulesEnforcer {
         }
 
         // Blocklist (kill on sight) + per-app over-limit + over-pool group members → kill.
-        let blocked: BTreeSet<String> = rules.blocklist.iter().map(|b| norm(b)).collect();
+        // Blank entries dropped, so this set matches exactly what `has_targets` counts. Its doc
+        // asserted these were harmless because "`norm()` can never match" them; that was wrong.
+        // `norm` is `trim` + `to_lowercase`, so `""` and `"   "` both become the empty string,
+        // which matches any process whose name trims to nothing — a kill-on-sight rule nobody
+        // wrote, from an empty row in a text input, on the path that actually terminates
+        // processes. Filtered here rather than at validation because a hand-edited `config.json`
+        // reaches `decide` without passing `validate` at all.
+        let blocked: BTreeSet<String> = rules
+            .blocklist
+            .iter()
+            .map(|b| norm(b))
+            .filter(|b| !b.is_empty())
+            .collect();
         for p in procs {
             let n = norm(&p.name);
             if blocked.contains(&n) {
@@ -2164,14 +2200,41 @@ mod tests {
     /// Why `Measure` may skip the process scan: with nothing configured, the list changes nothing.
     ///
     /// `has_targets` was introduced because scanning the process table every 30 seconds with
-    /// nothing to match was pure waste. That reasoning still holds and is the reason the scan is
-    /// gated on `Enforce` — but it is only *safe* while an empty list and the real one produce the
-    /// same tally. Pinned rather than argued, because the day someone adds a rule that reads
-    /// `procs` unconditionally, this is what fails.
+    /// nothing to match was pure waste. That reasoning still holds and is why the scan is gated on
+    /// `Enforce` — but it is only *safe* while an empty list and the real one produce the same
+    /// tally. Pinned rather than argued, because the day someone adds a rule that reads `procs`
+    /// unconditionally, this is what fails.
+    ///
+    /// Deliberately not `Rules::default()`. `has_targets` is false for three *non-empty*
+    /// collections as well as for absent ones — a blocklist of blank strings, app limits that are
+    /// all zero, groups with no pool — so `Measure` is reachable with all three populated, and
+    /// those are the shapes where an empty `procs` could plausibly diverge from a real one. The
+    /// equivalence rests on three separate filters agreeing (`Targets::from_rules` for limits and
+    /// groups, and `decide`'s own filter for the blocklist), which is worth a test rather than a
+    /// reading. It was not a reading that held: the blocklist filter did not exist until
+    /// `a_blank_blocklist_entry_matches_nothing` was written.
     #[test]
     fn the_skipped_process_scan_cannot_change_what_is_measured() {
-        let rules = Rules::default();
-        let procs = [proc(1, "roblox.exe"), proc(2, "chrome.exe")];
+        let rules = Rules {
+            // Every collection non-empty, and every entry one `has_targets` discounts.
+            blocklist: vec!["".into(), "   ".into()],
+            app_limits: [("roblox.exe".to_string(), 0u32)].into_iter().collect(),
+            app_groups: vec![AppGroup {
+                name: "Games".into(),
+                apps: vec!["roblox.exe".into()],
+                limit_mins: 0,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            rules.tick_mode(),
+            TickMode::Measure,
+            "three populated collections that still amount to nothing to enforce"
+        );
+
+        // Ordinary names, plus one that normalises to the empty string — the case that made the
+        // blocklist filter necessary.
+        let procs = [proc(1, "roblox.exe"), proc(2, "chrome.exe"), proc(3, "   ")];
         let now = Instant::now();
 
         let mut scanned = RulesEnforcer::new(Usage::default());
@@ -2179,7 +2242,10 @@ mod tests {
         let acted = scanned.decide(&rules, &procs, tk(now, 0));
         skipped.decide(&rules, &[], tk(now, 0));
 
-        assert!(acted.is_empty(), "still nothing to enforce: {acted:?}");
+        assert!(
+            acted.is_empty(),
+            "nothing here is a target, so nothing may be acted on: {acted:?}"
+        );
         assert_eq!(
             scanned.usage.to_json(),
             skipped.usage.to_json(),
@@ -2352,6 +2418,75 @@ mod tests {
         e.decide(&rules, &[proc(1, "a.exe")], tk(now, 0)); // 30s on a
         let a = e.decide(&rules, &[proc(2, "b.exe")], tk(now, 0)); // 30s on b → pool spent
         assert_eq!(a, vec![RuleAction::Kill(2)]);
+    }
+
+    /// A blank row never reaches memory in the first place.
+    ///
+    /// `decide` filters blanks at the point of use and that is the guard that matters — a `Rules`
+    /// built in code never passes through serde. This is the other half: dropping them on the way
+    /// in keeps them out of `config.json`, off the dashboard as a phantom empty row, and out of
+    /// `MAX_RULE_ENTRIES`, where a hundred blank rows would otherwise crowd out real ones.
+    ///
+    /// Done in `Deserialize` rather than in the POST handler deliberately. Two endpoints accept a
+    /// `Rules` — `set_rules` and `save_routine`, the latter storing a preset applied later — and a
+    /// third path loads one from disk. A `sanitize()` call would have to be remembered at each,
+    /// and the one that forgot would be the one that reintroduced the row.
+    #[test]
+    fn blank_blocklist_rows_never_survive_deserialization() {
+        let r: Rules = serde_json::from_str(r#"{"blocklist":["","   ","\t","game.exe"]}"#)
+            .expect("rules with blank rows must still parse, not fail");
+        assert_eq!(
+            r.blocklist,
+            vec!["game.exe".to_string()],
+            "only rows that could name a process may survive"
+        );
+
+        // The same door a hand-edited config comes through, and the reason `has_targets` must
+        // agree: an all-blank list is not a configured blocklist.
+        let all_blank: Rules = serde_json::from_str(r#"{"blocklist":["",""]}"#).expect("parses");
+        assert!(all_blank.blocklist.is_empty());
+        assert_eq!(all_blank.tick_mode(), TickMode::Measure);
+    }
+
+    /// A blank blocklist entry must match nothing — including a process whose name is blank.
+    ///
+    /// `has_targets` skips blank entries and says so: "a blocklist holding only blank strings,
+    /// which `norm()` can never match". That justification was wrong. `norm` is `trim` plus
+    /// `to_lowercase`, so `""` and `"   "` both normalise to the empty string, and the empty
+    /// string is a perfectly good key — it matches any process whose name trims to nothing.
+    ///
+    /// Found while proving that `TickMode::Measure` may skip the process scan. It is reachable on
+    /// the enforcing path too, which is the one that kills: a parent needs only a real limit (so
+    /// `has_targets` is true) plus one stray empty row in the blocklist, which an empty text input
+    /// produces without ceremony. `validate` bounds the list's length and not its contents, and
+    /// this codebase already assumes a hand-edited config can walk past validation entirely.
+    ///
+    /// Whether Windows ever reports a blank process name is unproven — `sysinfo` takes it from the
+    /// toolhelp snapshot — so this is a latent defect, not an observed one. It is worth closing
+    /// anyway, because the fix is to make `decide` agree with the predicate that already claims to
+    /// describe it: `has_targets`'s own doc requires these predicates to match `Targets::from_rules`
+    /// exactly, and the blocklist is the one collection that never passes through `Targets`.
+    #[test]
+    fn a_blank_blocklist_entry_matches_nothing() {
+        let rules = Rules {
+            daily_budget_mins: 60, // a real target, so this is the enforcing path
+            blocklist: vec!["".into(), "   ".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            rules.tick_mode(),
+            TickMode::Enforce,
+            "a budget makes this the live killing path, blank entries and all"
+        );
+
+        let mut e = RulesEnforcer::new(Usage::default());
+        let actions = e.decide(&rules, &[proc(9, "   ")], tk(Instant::now(), 0));
+
+        assert!(
+            actions.is_empty(),
+            "a blank blocklist row must not become a kill-on-sight rule for blank-named \
+             processes: {actions:?}"
+        );
     }
 
     #[test]
