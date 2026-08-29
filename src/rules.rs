@@ -81,7 +81,10 @@ impl AppGroup {
     /// [`Targets::from_rules`], and `today_summary`) and a comment used to be the only thing
     /// keeping them equal. It wasn't enough once already: see the note on [`Rules::has_targets`].
     pub fn has_pool(&self) -> bool {
-        self.limit_mins > 0 && !self.apps.is_empty()
+        // `any(non-blank)`, not `!is_empty()`. A group holding only blank rows has members in the
+        // `Vec` sense and none in the sense that matters, and the difference was a live kill: the
+        // blank normalises to the empty string, which matches any process whose name trims away.
+        self.limit_mins > 0 && self.apps.iter().any(|a| !a.trim().is_empty())
     }
 }
 
@@ -129,9 +132,9 @@ pub struct Rules {
 ///
 /// An empty row is what a text input yields before anyone types in it, and it is not nothing: it
 /// normalises to the empty string, and `norm` is `trim` + `to_lowercase`, so it would match any
-/// process whose name trims away — a kill-on-sight rule nobody wrote. `decide` filters at the
-/// point of use, which is the guard that actually protects (a `Rules` built in code never passes
-/// through serde); this keeps such a row from being *stored* at all.
+/// process whose name trims away — a kill-on-sight rule nobody wrote. [`Targets::from_rules`]
+/// filters at the point of use, which is the guard that actually protects (a `Rules` built in code
+/// never passes through serde); this keeps such a row from being *stored* at all.
 ///
 /// Deliberately lenient rather than an error. A parent who adds a row and saves before filling it
 /// in has made no mistake worth a red banner, and `validate` rejecting the payload would lose the
@@ -214,18 +217,23 @@ impl Rules {
 
     /// Whether anything is configured that could *actually* enforce, ignoring the pause toggle.
     ///
-    /// The predicates must match [`Targets::from_rules`] exactly. They didn't: a non-empty
-    /// `app_limits` counted here even when every value was `0`, while `Targets` filters those
-    /// out — so the enforcer woke up and scanned the process table every 30s with nothing to
-    /// enforce, and `doctor` reported "rules active" for rules that could never fire. Same for a
-    /// blocklist holding only blank strings. (The parenthetical this doc used to carry — that
-    /// `norm()` "can never match" a blank entry — was false, and `decide` now filters them for
-    /// real; see `a_blank_blocklist_entry_matches_nothing`.)
+    /// **Derived from [`Targets::from_rules`] rather than restated.** This used to be four hand-
+    /// written predicates that had to agree with it, and a comment saying they "must match
+    /// exactly". They did not, twice, and neither drift was visible from either side:
+    ///
+    /// * A non-empty `app_limits` counted here whatever the values were, while `Targets` dropped
+    ///   the zeroes — so the enforcer woke and scanned the process table every 30s with nothing to
+    ///   enforce, and `doctor` reported "rules active" for rules that could never fire. Fixed by
+    ///   adding a fourth predicate, which is the shape of fix that invites the next drift.
+    /// * The reverse, later: a blank-named per-app limit and a group whose only member was blank
+    ///   were discounted by neither side, so both reached the enforcing path and were *measured*
+    ///   killing a process whose name trimmed to nothing. A blocklist of blank rows was discounted
+    ///   here and not by `decide`, which is the same bug in the other direction.
+    ///
+    /// Asking `Targets` costs a few small allocations once per tick, against a process-table scan
+    /// it decides whether to perform. That is not a trade worth a second source of truth.
     pub fn has_targets(&self) -> bool {
-        self.has_any_budget()
-            || self.blocklist.iter().any(|b| !b.trim().is_empty())
-            || self.app_limits.values().any(|&m| m > 0)
-            || self.app_groups.iter().any(|g| g.has_pool())
+        self.has_any_budget() || !Targets::from_rules(self).is_empty()
     }
 
     /// What this tick should do about these rules.
@@ -339,34 +347,56 @@ pub struct Usage {
 /// by accrual and the kill checks so the two can't disagree on what's tracked.
 #[derive(Default)]
 pub(crate) struct Targets {
-    /// Per-app limits (minutes), keyed by normalized process name (zero-limit apps dropped).
+    /// Process names killed on sight, normalized (blank rows dropped).
+    blocked: BTreeSet<String>,
+    /// Per-app limits (minutes), keyed by normalized process name (zero-limit and blank-named
+    /// apps dropped).
     app_limits: BTreeMap<String, u32>,
     /// App groups with a shared pool: (name, normalized member set, limit minutes). Only groups
-    /// with a positive limit and at least one member are included.
+    /// with a positive limit and at least one member that could name a process are included.
     groups: Vec<(String, BTreeSet<String>, u32)>,
+}
+
+/// Normalize process names and drop the ones that cannot name a process.
+///
+/// `norm` is `trim` + `to_lowercase`, so a blank row becomes the empty string — and the empty
+/// string is a perfectly good key, matching any process whose own name trims away. Every
+/// collection that is matched against a process list goes through here, so the rule is stated
+/// once instead of being remembered three times.
+fn matchable(names: impl IntoIterator<Item = impl AsRef<str>>) -> BTreeSet<String> {
+    names
+        .into_iter()
+        .map(|n| norm(n.as_ref()))
+        .filter(|n| !n.is_empty())
+        .collect()
 }
 
 impl Targets {
     fn from_rules(rules: &Rules) -> Self {
+        let blocked = matchable(&rules.blocklist);
         let app_limits = rules
             .app_limits
             .iter()
-            .filter(|(_, v)| **v > 0)
+            .filter(|(k, v)| **v > 0 && !k.trim().is_empty())
             .map(|(k, &v)| (norm(k), v))
             .collect();
         let groups = rules
             .app_groups
             .iter()
             .filter(|g| g.has_pool())
-            .map(|g| {
-                (
-                    g.name.clone(),
-                    g.apps.iter().map(|a| norm(a)).collect(),
-                    g.limit_mins,
-                )
-            })
+            .map(|g| (g.name.clone(), matchable(&g.apps), g.limit_mins))
             .collect();
-        Self { app_limits, groups }
+        Self {
+            blocked,
+            app_limits,
+            groups,
+        }
+    }
+
+    /// Whether anything here could match a running process. The single definition of "is this
+    /// household configured", so [`Rules::has_targets`] cannot drift from what `decide` acts on.
+    fn is_empty(&self) -> bool {
+        self.blocked.is_empty() && self.app_limits.is_empty() && self.groups.is_empty()
     }
 }
 
@@ -483,9 +513,14 @@ pub fn today_summary(
     let used_mins = usage.total_secs / 60;
     let remaining_mins = usage.remaining_mins(budget);
     let per_app: Vec<serde_json::Value> = rules
+        // The same two conditions `Targets::from_rules` applies, because this card is a claim
+        // about what is being enforced. A zero limit is off; a blank-named one can never match a
+        // process, so listing either would show a parent a limit that does nothing. The group
+        // filter below needs no equivalent — `has_pool` is shared with `Targets` and already
+        // answers this.
         .app_limits
         .iter()
-        .filter(|(_, v)| **v > 0)
+        .filter(|(name, v)| **v > 0 && !name.trim().is_empty())
         .map(|(name, &lim)| {
             let used = usage.per_app_secs.get(&norm(name)).copied().unwrap_or(0) / 60;
             serde_json::json!({ "name": name, "used_mins": used, "limit_mins": lim })
@@ -723,14 +758,25 @@ impl RulesEnforcer {
         // done it. `norm` is the one definition of how a process name is keyed, and the dashboard
         // renders `apps` and `focused` side by side on it — if the two disagree, one app silently
         // becomes two rows. Colliding keys merge rather than overwrite.
-        let apps = bounded.apps.into_iter().fold(
-            BTreeMap::<String, u64>::new(),
-            |mut acc, (name, secs)| {
-                let slot = acc.entry(norm(&name)).or_insert(0);
+        // Blank names dropped, for the reason `Targets::from_rules` drops them: `norm` is `trim` +
+        // `to_lowercase`, so a name that is only whitespace becomes the empty string, and the
+        // empty string is a key like any other. It cannot kill anything here — nothing in
+        // `decide` reads these maps — but it would take a row in the report, and
+        // `top_by_minutes` ranks by time, so a forged blank with hours against it heads the list
+        // of "what has he actually been doing" while naming nothing. The seconds are discarded
+        // rather than merged elsewhere: we do not know what app they belonged to.
+        let apps = bounded
+            .apps
+            .into_iter()
+            .filter_map(|(name, secs)| {
+                let key = norm(&name);
+                (!key.is_empty()).then_some((key, secs))
+            })
+            .fold(BTreeMap::<String, u64>::new(), |mut acc, (key, secs)| {
+                let slot = acc.entry(key).or_insert(0);
                 *slot = slot.saturating_add(secs);
                 acc
-            },
-        );
+            });
         // Capped as it accrues, not afterwards — `accrue_capped` is the only way in, so the count
         // bound cannot be left off here the way it originally was. These maps are persisted every
         // tick and folded into the daily rollup, so a fresh set of names each tick is growth on
@@ -774,19 +820,13 @@ impl RulesEnforcer {
         }
 
         // Blocklist (kill on sight) + per-app over-limit + over-pool group members → kill.
-        // Blank entries dropped, so this set matches exactly what `has_targets` counts. Its doc
-        // asserted these were harmless because "`norm()` can never match" them; that was wrong.
-        // `norm` is `trim` + `to_lowercase`, so `""` and `"   "` both become the empty string,
-        // which matches any process whose name trims to nothing — a kill-on-sight rule nobody
-        // wrote, from an empty row in a text input, on the path that actually terminates
-        // processes. Filtered here rather than at validation because a hand-edited `config.json`
-        // reaches `decide` without passing `validate` at all.
-        let blocked: BTreeSet<String> = rules
-            .blocklist
-            .iter()
-            .map(|b| norm(b))
-            .filter(|b| !b.is_empty())
-            .collect();
+        // From `Targets`, not from `rules`, so the blocklist passes the same filter the limits and
+        // groups do. Computing it here was how it came to miss one: `norm` is `trim` +
+        // `to_lowercase`, so a blank row became the empty string, which matches any process whose
+        // name trims to nothing — a kill-on-sight rule nobody wrote, on the path that terminates
+        // processes. Filtered in `Targets` rather than at validation because a hand-edited
+        // `config.json` reaches `decide` without passing `validate` at all.
+        let blocked = &targets.blocked;
         for p in procs {
             let n = norm(&p.name);
             if blocked.contains(&n) {
@@ -1708,6 +1748,32 @@ mod tests {
         );
     }
 
+    /// A blank app name from the watcher must not become a row in the parent's report.
+    ///
+    /// Report-only, so unlike the blocklist and per-app cases this one cannot kill anything — but
+    /// it arrives over the same pipe from the same process running as the child, and it is the
+    /// last place in the crate that turns a name into a key without asking whether the name is
+    /// one. `top_by_minutes` shows the heaviest entries, so a blank key with hours against it
+    /// takes the top row of "what has he actually been doing" and says nothing.
+    ///
+    /// `pages` deliberately gets no equivalent filter: titles are display text rather than keys,
+    /// a window genuinely may have no title, and `MAX_PAGES` already bounds them.
+    #[test]
+    fn a_blank_app_name_from_the_watcher_is_not_a_row() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let mut sample = crate::foreground::Sample::default();
+        sample.apps.insert("   ".into(), 10);
+        sample.apps.insert("Roblox.exe".into(), 10);
+
+        e.record_foreground(sample, Duration::from_secs(30));
+
+        assert_eq!(
+            e.usage.foreground_secs.keys().collect::<Vec<_>>(),
+            vec!["roblox.exe"],
+            "only names that name something belong in the report"
+        );
+    }
+
     /// Page titles are display text, not match keys — lowercasing them would render "Roblox" as
     /// "roblox" for no benefit.
     #[test]
@@ -2420,12 +2486,98 @@ mod tests {
         assert_eq!(a, vec![RuleAction::Kill(2)]);
     }
 
+    /// Everything `has_targets` calls "nothing configured" must also be unable to act.
+    ///
+    /// The class, not an instance of it. `has_targets` discounts five different shapes, and each
+    /// one is a promise that nothing in it can match a process — a promise kept by a *different*
+    /// filter in a different place. The blocklist's filter was missing entirely, and fixing only
+    /// the blocklist left the same hole in `app_limits` (which filters on the value and never
+    /// looks at the key) and in `has_pool` (which asks whether `apps` is non-empty, not whether
+    /// any entry could name anything). Both were measured killing a blank-named process while
+    /// `has_targets` called them unconfigured.
+    ///
+    /// Written as a table over shapes rather than one test per shape, because the next collection
+    /// added to `Rules` should fail here by omission if its author forgets the same filter.
+    #[test]
+    fn nothing_has_targets_discounts_can_ever_act() {
+        let group = |apps: Vec<&str>, limit: u32| AppGroup {
+            name: "Games".into(),
+            apps: apps.into_iter().map(String::from).collect(),
+            limit_mins: limit,
+        };
+        let shapes: Vec<(&str, Rules)> = vec![
+            (
+                "a blocklist of blank rows",
+                Rules {
+                    blocklist: vec!["".into(), "   ".into()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "per-app limits that are all zero",
+                Rules {
+                    app_limits: [("game.exe".to_string(), 0u32)].into_iter().collect(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "a per-app limit under a blank name",
+                Rules {
+                    app_limits: [("   ".to_string(), 60u32)].into_iter().collect(),
+                    ..Default::default()
+                },
+            ),
+            (
+                "a group with no pool",
+                Rules {
+                    app_groups: vec![group(vec!["game.exe"], 0)],
+                    ..Default::default()
+                },
+            ),
+            (
+                "a group whose only member is blank",
+                Rules {
+                    app_groups: vec![group(vec!["", "  "], 60)],
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        // Ordinary names plus the two that normalise away — the ones a missing filter matches.
+        let procs = [
+            proc(1, "game.exe"),
+            proc(2, "roblox.exe"),
+            proc(3, ""),
+            proc(4, "   "),
+        ];
+
+        for (label, rules) in shapes {
+            assert_eq!(
+                rules.tick_mode(),
+                TickMode::Measure,
+                "{label}: has_targets must discount this, or the enforcer scans the process \
+                 table every 30s for a rule that can never fire"
+            );
+
+            // Two ticks, so anything that accrues has time to cross a one-minute limit.
+            let mut e = RulesEnforcer::new(Usage::default());
+            let now = Instant::now();
+            e.decide(&rules, &procs, tk(now, 0));
+            let actions = e.decide(&rules, &procs, tk(now, 0));
+            assert!(
+                actions.is_empty(),
+                "{label}: discounted by `has_targets` and yet able to act — {actions:?}"
+            );
+        }
+    }
+
     /// A blank row never reaches memory in the first place.
     ///
-    /// `decide` filters blanks at the point of use and that is the guard that matters — a `Rules`
-    /// built in code never passes through serde. This is the other half: dropping them on the way
-    /// in keeps them out of `config.json`, off the dashboard as a phantom empty row, and out of
-    /// `MAX_RULE_ENTRIES`, where a hundred blank rows would otherwise crowd out real ones.
+    /// `Targets::from_rules` filters blanks at the point of use and that is the guard that
+    /// matters — a `Rules` built in code never passes through serde. This is the other half:
+    /// dropping them on the way in keeps them out of `config.json`, off the dashboard as a
+    /// phantom empty row, and out of `MAX_RULE_ENTRIES`, where a hundred blank rows would
+    /// otherwise crowd out real ones.
     ///
     /// Done in `Deserialize` rather than in the POST handler deliberately. Two endpoints accept a
     /// `Rules` — `set_rules` and `save_routine`, the latter storing a preset applied later — and a
@@ -2450,10 +2602,10 @@ mod tests {
 
     /// A blank blocklist entry must match nothing — including a process whose name is blank.
     ///
-    /// `has_targets` skips blank entries and says so: "a blocklist holding only blank strings,
-    /// which `norm()` can never match". That justification was wrong. `norm` is `trim` plus
-    /// `to_lowercase`, so `""` and `"   "` both normalise to the empty string, and the empty
-    /// string is a perfectly good key — it matches any process whose name trims to nothing.
+    /// `has_targets` discounts blank entries, and its doc once justified that by claiming
+    /// `norm()` "can never match" them. It was wrong. `norm` is `trim` plus `to_lowercase`, so
+    /// `""` and `"   "` both normalise to the empty string, and the empty string is a perfectly
+    /// good key — it matches any process whose name trims to nothing.
     ///
     /// Found while proving that `TickMode::Measure` may skip the process scan. It is reachable on
     /// the enforcing path too, which is the one that kills: a parent needs only a real limit (so
@@ -2888,6 +3040,31 @@ mod tests {
         assert!(!should_abort_budget_shutdown(true, false, true));
         // Nothing was pending → nothing to cancel.
         assert!(!should_abort_budget_shutdown(false, false, false));
+    }
+
+    #[test]
+    fn the_today_card_lists_no_limit_that_cannot_fire() {
+        // A blank-named limit is discounted by `has_targets` and dropped by `Targets`, so it can
+        // never fire. Listing it on the card would show a parent a limit that does nothing —
+        // the same class of untrue statement as the zero-valued limit filtered beside it.
+        let rules = Rules {
+            app_limits: [("   ".to_string(), 60u32), ("game.exe".to_string(), 30)].into(),
+            ..Default::default()
+        };
+        let usage = Usage {
+            day: Some(day()),
+            ..Default::default()
+        };
+
+        let s = today_summary(&rules, day(), 0, &usage, Some(1));
+        let per_app = s["per_app"].as_array().unwrap();
+
+        assert_eq!(
+            per_app.len(),
+            1,
+            "only the limit that could actually fire belongs on the card: {per_app:?}"
+        );
+        assert_eq!(per_app[0]["name"], "game.exe");
     }
 
     #[test]
