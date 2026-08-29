@@ -343,8 +343,17 @@
                         <input type="time" x-model="w.end" class="input input-sm w-24" />
                       </label>
                       <div class="flex items-end gap-1">
+                        <!-- `w-6` on the label, not a bigger box on the input. WCAG 2.2 SC 2.5.8
+                             measures the *target* — the area that accepts the click — and a
+                             <label> wrapping an input forwards clicks, so the target here is the
+                             label. Measured before: 17.6 x 32px with a 21.6px centre-to-centre
+                             pitch, which fails the 24px minimum on the horizontal axis and fails
+                             the spacing exception with it. Height already passed. 24px wide plus
+                             the parent's `gap-1` puts the pitch at 28px, so both pass without
+                             making the checkboxes themselves any larger. These are the fiddliest
+                             controls on the page and they are aimed at with a thumb. -->
                         <template x-for="d in dayOptions" :key="d.key">
-                          <label class="flex flex-col items-center text-xs">
+                          <label class="flex w-6 flex-col items-center text-xs">
                             <span class="opacity-70" x-text="d.short"></span>
                             <input type="checkbox" class="checkbox checkbox-xs"
                                    :aria-label="d.full" x-model="w.days[d.key]" />
@@ -1028,9 +1037,26 @@
                     <tr><th scope="col">Date</th><th scope="col">Minutes</th></tr>
                   </thead>
                   <tbody>
+                    <!-- The date is a button, and it drives `toggleStDay` — the same handler the
+                         chart column above uses, so the two cannot drift apart.
+                         This is the WCAG 2.2 SC 2.5.8 story for the chart. A column is 9px wide;
+                         at a 90-day window there are ninety of them touching each other, so they
+                         fail the 24px target minimum and the spacing exception alike, and there
+                         were thirty such targets on screen when this was measured. The success
+                         criterion is met by its "Equivalent" exception instead — the same function
+                         reachable from a control on the same page that does meet the size — and
+                         this row is that control. Widening the columns was the other option and is
+                         worse: it would trade away how many days fit on a phone to fix a problem
+                         this row already solves, and a full-width row is the easier thing to hit
+                         with a thumb anyway. -->
                     <template x-for="d in stDaysNewestFirst" :key="d.date">
-                      <tr>
-                        <td class="whitespace-nowrap" x-text="d.date"></td>
+                      <tr :class="stPinned === d.date ? 'bg-base-200' : ''">
+                        <td class="whitespace-nowrap p-0">
+                          <button type="button"
+                                  class="btn btn-ghost btn-xs w-full justify-start font-normal"
+                                  :aria-pressed="stPinned === d.date"
+                                  @click="toggleStDay(d.date)" x-text="d.date"></button>
+                        </td>
                         <td :class="d.minutes_used == null ? 'opacity-50' : (d.over_budget ? 'text-error' : '')"
                             x-text="stDayLabel(d)"></td>
                       </tr>
