@@ -569,10 +569,33 @@ assumption is the one thing no runtime control can check, so it is established a
   repository, so an advisory opens a pull request by itself — and that pull request runs the gate
   above immediately, which is the fast path. The weekly schedule is the backstop for whatever
   that misses.
+- **A CycloneDX SBOM is attested to the same binary**, because provenance and an SBOM answer
+  different questions and only one of them was covered. Provenance says *this .exe came from this
+  workflow at this commit*; it says nothing about what is inside. Rust strips dependency metadata
+  at link time, so a parent holding an installed binary could not determine whether it contains a
+  crate disclosed after they installed it, short of rebuilding it themselves. `cargo deny` does not
+  close that gap either — it gates the builds we run, not the artifact somebody is already running.
+  Generated for `x86_64-pc-windows-msvc` rather than the host, for the same reason `deny.toml`
+  resolves against that target: the graph differs per platform, and a host SBOM would describe a
+  binary nobody ships. Attested rather than merely uploaded, because a loose file beside a download
+  proves nothing — the argument the checksum bullet already makes.
+  <br>Verify with `gh attestation verify nestwatch.exe --repo emrecdr/nestwatch --predicate-type
+  https://cyclonedx.org/bom`.
 - **Not claimed:** the binary is not code-signed with an Authenticode certificate, so Windows
   SmartScreen will warn on first run and the file needs unblocking. Buying a signing certificate
   for a tool with one user is not proportionate — the attestation is the stronger check anyway,
   and it is free.
+  <br>**The cost half of that reasoning is now out of date and the decision is worth re-taking.**
+  It was written when signing meant an OV/EV certificate at a few hundred euro a year. Microsoft's
+  Azure Artifact Signing (formerly Trusted Signing) reached general availability in April 2026 at
+  from $9.99/month with effectively unlimited signings and a documented GitHub Actions path, which
+  is a different order of expense. Two caveats keep this a decision rather than an obvious yes:
+  individual sign-up is limited to the US and Canada — EU eligibility is for *organisations*, so it
+  turns on whether this ships under an entity — and signing does not grant SmartScreen trust
+  immediately; publisher reputation accrues across consecutively signed releases, so the benefit
+  starts late and only if every subsequent release carries it. Unchanged is that the attestation
+  remains the stronger check for anyone who runs it; what signing buys is the check Windows makes
+  on the parent's behalf, before they choose to trust anything.
 
 ## Resisting the child's own privileges
 

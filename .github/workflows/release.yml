@@ -109,6 +109,30 @@ jobs:
           npm run build
       - name: Build release binary
         run: cargo build --release --locked
+      # A CycloneDX SBOM, resolved for the SHIPPED target rather than the host.
+      #
+      # The provenance attestation below answers "did this .exe come from this repo's release
+      # workflow". It cannot answer "does this .exe contain the crate disclosed on Tuesday",
+      # because rustc strips dependency metadata at link time — so nobody holding the binary can
+      # determine that without rebuilding it. `cargo deny` protects the builds we run; it says
+      # nothing about the binary a parent installed six months ago. This is the missing half, and
+      # it is the same ethic as the SHA-256 and the attestation: checkable rather than claimed.
+      #
+      # `--target x86_64-pc-windows-msvc` for the same reason `deny.toml` pins that target: the
+      # dependency graph differs by platform, and an SBOM listing the host's crates would describe
+      # a binary nobody ships. It is what puts `xcap` and `windows` in the list.
+      #
+      # Spec 1.5, not the tool's 1.3 default — `actions/attest-sbom` takes CycloneDX or SPDX JSON,
+      # and pinning the version means an upgrade of the tool cannot silently change the format.
+      # Build-time dependencies are deliberately left IN (no `--no-build-deps`): a build script is
+      # a supply-chain path even though it ships no code.
+      #
+      # Verified locally before being added here — 209 components, `nestwatch 0.4.0` as the
+      # top-level component, with `xcap`, `windows`, `rustls`, `axum` and `tokio` all present.
+      - name: Install the SBOM generator
+        run: cargo install cargo-cyclonedx --locked
+      - name: Generate the SBOM
+        run: cargo cyclonedx --format json --spec-version 1.5 --target x86_64-pc-windows-msvc --override-filename nestwatch.sbom
       # Stage both files under one directory so the artifact has a flat root: `upload-artifact`
       # roots an artifact at the common ancestor of its paths, and `target/release/nestwatch.exe`
       # plus a workspace-root `.sha256` would root it at the workspace — arriving in the next job
@@ -123,6 +147,11 @@ jobs:
           Copy-Item target/release/nestwatch.exe dist/
           $hash = (Get-FileHash dist/nestwatch.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  nestwatch.exe" | Out-File -Encoding ascii -NoNewline dist/nestwatch.exe.sha256
+          # `cargo cyclonedx` writes to the workspace root. Fail loudly if it is not there rather
+          # than publishing a release whose SBOM step silently produced nothing — the same reason
+          # `if-no-files-found: error` is set below.
+          if (-not (Test-Path nestwatch.sbom.json)) { throw "the SBOM step produced no nestwatch.sbom.json" }
+          Copy-Item nestwatch.sbom.json dist/
       - name: Hand the artifact to the signing job
         uses: actions/upload-artifact@v7
         with:
@@ -167,6 +196,19 @@ jobs:
       - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/nestwatch.exe
+      # Bind the SBOM to the same .exe, so "what is inside this binary" is checkable by whoever
+      # holds it rather than trusted:
+      #
+      #   gh attestation verify nestwatch.exe --repo emrecdr/nestwatch --predicate-type https://cyclonedx.org/bom
+      #
+      # A loose SBOM file next to a download proves nothing — anyone able to publish a release
+      # could publish a matching one, which is exactly the argument the comment above makes about
+      # the .sha256. The attestation is what ties this component list to this artifact.
+      # Commit-pinned like its neighbours: this job holds a signing identity.
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/nestwatch.exe
+          sbom-path: dist/nestwatch.sbom.json
       # Build the release notes from CHANGELOG.md plus a fixed verification footer.
       #
       # With no body, `action-gh-release` publishes an empty release -- a tag and two files, and
@@ -210,3 +252,4 @@ jobs:
           files: |
             dist/nestwatch.exe
             dist/nestwatch.exe.sha256
+            dist/nestwatch.sbom.json
