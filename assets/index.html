@@ -62,6 +62,16 @@
     <!-- ── Dashboard ────────────────────────────────────────────────── -->
     <template x-if="authed === true">
       <div>
+        <!-- The signed-out card has an <h1>; the signed-in page had none, and the two are
+             mutually exclusive `x-if` branches, so the dashboard offered fourteen sibling <h2>s
+             under no root. This page is also a single continuous scroll — 4,612px on a desktop,
+             5,468px on a phone — with 129 focusable controls and no landmark to jump to, so
+             reaching the last card by keyboard meant passing about 120 of them. A skip link is
+             the whole fix for that and costs a line. Visible only when focused, which is the
+             point: it is for the person tabbing, and invisible to everyone else. -->
+        <a href="#main"
+           class="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:text-primary-content"
+           >Skip to dashboard</a>
         <!-- ── Sticky summary ───────────────────────────────────────────
              Eleven cards on one continuous scroll, no tabs and no nav, so the thing a parent opens
              this page for several times a day sat in the same vertical queue as the things they
@@ -103,9 +113,17 @@
           </div>
         </div>
 
-        <div class="navbar bg-base-100 shadow">
-          <div class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</div>
-          <div class="flex-none items-center gap-2">
+        <!-- `flex-wrap`, and the action group allowed to shrink, because without both this bar
+             has a hard intrinsic minimum of 461px and every phone in portrait is narrower —
+             iPhone SE 375, Galaxy S24 384, iPhone 15 393, Pixel 8 412, Pro Max 430. Measured at
+             390px before the fix: brand 106px + an action group of 355px pinned by `flex-none`,
+             document scrollWidth 469 against a 390 viewport. "Log out" sat entirely off-screen
+             and "Shut down" was clipped mid-button, on the one device the pairing QR is for.
+             `flex` on the group is not cosmetic either: it was `display: block`, so the
+             `items-center gap-2` beside it had never applied to anything. -->
+        <div class="navbar flex-wrap bg-base-100 shadow">
+          <h1 class="flex-1 px-2 text-lg font-semibold">🪺 Nestwatch</h1>
+          <div class="flex flex-shrink flex-wrap items-center justify-end gap-2">
             <span class="badge badge-warning gap-1" x-show="showRequests()"
                   x-text="requestBadge()"></span>
             <!-- `btn-active`, not `btn-primary`. The primary colour means "this is the action to
@@ -139,8 +157,19 @@
              controls -- content that reads better wide, unlike prose. Still capped rather than
              full-bleed: on a 4K monitor an uncapped grid gives one 3800px-wide table row, where
              the eye loses which value belongs to which column. -->
+        <!-- `[&>*]:min-w-0` is the second half of the phone fix above, and the less obvious one.
+             A grid item's `min-width` defaults to `auto`, so a column can never be narrower than
+             its widest child's min-content — and one card's content was setting a 442px floor for
+             the single column every card shares. Measured at a 390px viewport: `main` itself was
+             correctly 390 while its `grid-template-columns` computed to 442.391px, which is where
+             the last 68px of sideways scroll came from once the navbar stopped contributing.
+             With this, document scrollWidth is exactly 390 and no card overflows internally —
+             both checked in a browser rather than reasoned about. One rule here rather than
+             `min-w-0` repeated on twelve sections, so the reason has somewhere to live. -->
         <main
-          class="mx-auto grid w-full max-w-5xl gap-4 p-4 md:grid-cols-2 xl:max-w-7xl 2xl:max-w-[110rem]"
+          id="main"
+          tabindex="-1"
+          class="mx-auto grid w-full max-w-5xl gap-4 p-4 [&>*]:min-w-0 md:grid-cols-2 xl:max-w-7xl 2xl:max-w-[110rem]"
         >
           <!-- The three questions this page is opened with, answered before anything else.
                They lived in three non-adjacent cards, one below the fold on a phone — and a phone
@@ -160,7 +189,12 @@
           <!-- Screenshot -->
           <section class="card bg-base-100 shadow">
             <div class="card-body">
-              <div class="flex items-center justify-between">
+              <!-- `flex-wrap` here as well as on the group inside it. Once the cards stopped
+                   forcing the page wider than the phone, this header was the narrowest it had
+                   ever actually had to be, and a nowrap row squeezed the heading against a
+                   control group that is two lines tall on a phone. Letting the outer row break
+                   puts the controls on their own line instead of compressing the title. -->
+              <div class="flex flex-wrap items-center justify-between gap-2">
                 <h2 class="card-title text-base">Screen</h2>
                 <div class="flex flex-wrap items-center gap-2">
                   <label class="label cursor-pointer gap-2 py-0">
