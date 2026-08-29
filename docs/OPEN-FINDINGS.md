@@ -722,8 +722,15 @@ would compile, pass a single-window test, and then report a different horizon fo
 asked for, because surfacing it only when it has already bitten leaves exactly the parent who has
 not hit it yet uninformed, which is the same silence written differently.
 
-**Trigger.** Any decision to advertise a retention period, or the first time someone asks why the
-report will not go back further.
+**What remains open is the deletion itself, which is untouched.** Rotation still keeps two
+generations and still clobbers the older one; nothing prunes, nothing is configurable, and the
+oldest days still leave without warning. The two costed-at-nothing options stand: a rollup-only
+prune that keeps N days regardless of bytes, or a larger `MAX_BYTES` for `screentime.jsonl`
+specifically, since its rows are the irreplaceable ones. What has changed is that the loss is now
+visible before it is discovered, so this is no longer silent — only unbounded.
+
+**Trigger.** Any decision to advertise a retention period, or the first parent who watches
+*History from* move forward and asks why.
 
 ### O68 · The dashboard's own accessibility is behind the child's page
 
@@ -1013,6 +1020,36 @@ retired channel failed by going blind; a cross-repo golden fails by drifting, wh
 
 *(That last paragraph came from a review by a concurrent session in this repository, which verified
 the one-line fix independently and pointed out the gap. Recorded because the entry is better for it.)*
+
+### O73 · One CSS rule is all that keeps `unsafe-inline` in `style-src`
+
+`security.rs` gives two reasons `style-src` still admits `'unsafe-inline'`: the `[x-cloak]` rule is
+an inline `<style>`, and Alpine writes `style` attributes for `x-show` and `:style`. Only the second
+is structural. The first is a single declaration — `[x-cloak] { display: none !important; }` at the
+end of `index.html`, the only `<style>` element on either served page.
+
+Moved into `web/src/app.css` it compiles into `assets/app.css`, which loads from `<head>` and so
+applies *earlier* than a `<style>` at the end of `<body>` — the anti-flash behaviour improves rather
+than degrades. With no inline stylesheet left, CSP Level 3 separates the two cases:
+
+```
+style-src 'self'; style-src-attr 'unsafe-inline';
+```
+
+Alpine keeps its attributes; an injected `<style>` element stops being executable. That is a real
+narrowing on the one page where injected content would land.
+
+**Why it is recorded rather than done, and the caution is the entry.** A browser that does not
+implement `style-src-attr` ignores it and falls back to `style-src 'self'` — which forbids Alpine's
+attributes and therefore breaks every `x-show` on the page. The failure mode is not a missing
+style: it is the whole dashboard rendering with every conditional element visible at once, including
+the ones `x-cloak` exists to hide. Firefox only shipped the directive in 128. This is precisely the
+class the Alpine CSP-build comment already warns about, where "looks equivalent" and "is equivalent"
+diverge without an error.
+
+**Trigger.** Confirm the browsers this household actually uses implement `style-src-attr`, then move
+the rule and split the directive in one change — and look at the page afterwards, because no test
+here can see a CSP the browser enforces.
 
 ## Not covered by any of this
 

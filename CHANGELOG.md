@@ -2,6 +2,47 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Fixed
+- **The dashboard no longer scrolls sideways on a phone, and "Log out" is back on screen.** The top
+  bar could not wrap and its buttons were forbidden to shrink, so it needed 461 pixels — wider than
+  every phone held upright, including the one the pairing QR is meant to be scanned with. The page
+  was pushed 79 pixels wider than the screen: "Shut down" was clipped in half, "Log out" sat off the
+  edge entirely, and reaching either meant scrolling the whole page sideways first. A second, less
+  visible cause sat underneath it — a card whose contents set a 442-pixel floor for the column every
+  card shares — so both are fixed. The page now fits exactly, with nothing cut off and no card
+  overflowing inside.
+- **The day-of-the-week boxes in the curfew are big enough to hit.** They were 17 pixels wide with
+  21 pixels between centres, below the 24 the accessibility guidelines ask for on both counts, and
+  they are the fiddliest thing on the page — fourteen of them, aimed at with a thumb.
+- **A day in the screen-time report can be opened from the list as well as the chart.** Picking a
+  day previously meant hitting its column, which is nine pixels wide and narrower still over a
+  90-day window. The dates in *Day by day* are now buttons that do the same thing, so the chart is
+  no longer the only way in.
+- **Password managers can save the sign-in.** The form had no user-name field, which is what a
+  manager keys a saved password on, so it stored and filled the dashboard unreliably — on a page the
+  guidance tells you to use a long passphrase with, entered on a phone.
+- **`doctor` no longer blames the install's age for something else.** Run anywhere other than
+  Windows it reported the clock as anchored by an install that "predates the zone check" — including
+  for an install made seconds earlier by the current build — and told you to re-install, which
+  cannot record a time zone the platform never reports. It now says which of the two it is.
+- The child's page no longer requests a missing icon and takes a 404 on every load.
+
+### Added
+- **The screen-time report says how far back it can see.** *History from 2026-07-01* now sits beside
+  *Measured days*. Recorded history is not kept forever — the oldest days are deleted as the log
+  rotates, with no setting and, until now, no notice — so a 90-day report could quietly be all there
+  would ever be. This does not change what is kept; it makes the limit visible rather than something
+  you discover. The date is the oldest day held on disk, so it does not move when you switch between
+  7, 30 and 90 days.
+- **Releases now carry a signed list of everything compiled into the binary.** `nestwatch.sbom.json`
+  is published beside the `.exe` and attested to it, so the components of a binary you already
+  installed can be checked against a newly disclosed vulnerability without rebuilding it. Verify with
+  `gh attestation verify nestwatch.exe --repo emrecdr/nestwatch --predicate-type https://cyclonedx.org/bom`.
+- The dashboard has a skip link and a top-level heading, so a keyboard or screen-reader user can
+  reach the last card without passing the roughly 120 controls in front of it.
+
 ## [0.4.0] — 2026-08-27
 
 ### Security
