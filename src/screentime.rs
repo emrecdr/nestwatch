@@ -492,6 +492,78 @@ fn window_total(
     (total, count)
 }
 
+/// One completed day, reduced to the only two facts the child's own page is allowed to show.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DayTotal {
+    pub date: String,
+    /// `None` for a day nothing was measured — never `0`. The distinction is the same one the
+    /// parent's chart draws as a hatched column, and it matters more here, not less: a child
+    /// looking at their own week must not be shown a confident zero for a day the service was
+    /// simply not running.
+    pub minutes: Option<u64>,
+}
+
+/// The child's own recent totals — `days` completed days ending yesterday, oldest first.
+///
+/// Deliberately **not** [`build_report`], and the difference is the whole reason this exists.
+/// `build_report` parses every app, page and group map for every retained row; this reads two
+/// fields. It is called from `GET /status`, which is unauthenticated, LAN-reachable and polled
+/// once a minute by a page that is open for as long as the child is at the machine — the one
+/// route where doing more work than the answer needs is worst.
+///
+/// It also carries nothing else, by construction rather than by filtering afterwards. `/status`
+/// must not name an app: `child_status_is_unauthenticated_and_leaks_no_rules` forbids it, because
+/// anyone on the home network can open that page without signing in — a guest, a sibling. A
+/// per-app breakdown there would publish the child's browsing to the household, which is the
+/// child's privacy to lose and not the parent's to spend. Returning a type that has no room for
+/// an app name is stronger than remembering not to put one in.
+pub fn recent_totals(rows: &[Value], today: NaiveDate, days: u32) -> Vec<DayTotal> {
+    let days = days.clamp(1, 31);
+    let mut by_date: BTreeMap<NaiveDate, u64> = BTreeMap::new();
+    for v in rows {
+        let Some(date) = v
+            .get("date")
+            .and_then(Value::as_str)
+            .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        else {
+            continue;
+        };
+        let Some(minutes) = v.get("minutes_used").and_then(Value::as_u64) else {
+            continue;
+        };
+        // Completed days only, exactly as `build_report` does: today's rollup has not been
+        // written yet, and anything later is a clock artefact.
+        if date >= today {
+            continue;
+        }
+        // The same day can arrive from both logs. Keep the larger, which is the one that saw the
+        // whole day — a legacy row truncated by rotation must not shrink the number.
+        by_date
+            .entry(date)
+            .and_modify(|m| *m = (*m).max(minutes))
+            .or_insert(minutes);
+    }
+
+    let Some(end) = today.pred_opt() else {
+        return Vec::new();
+    };
+    let start = end - chrono::Duration::days(i64::from(days) - 1);
+    let mut out = Vec::new();
+    let mut cursor = start;
+    loop {
+        out.push(DayTotal {
+            date: cursor.to_string(),
+            minutes: by_date.get(&cursor).copied(),
+        });
+        if cursor >= end {
+            break;
+        }
+        let Some(next) = cursor.succ_opt() else { break };
+        cursor = next;
+    }
+    out
+}
+
 /// Every rollup row available, from both the dedicated store and the legacy usage log.
 ///
 /// Installs that predate `screentime.jsonl` have their history only in `usage.jsonl`, so the
@@ -890,6 +962,37 @@ mod tests {
             "the 3-day window holds no row from July, but July is still the oldest day on disk"
         );
         assert_eq!(narrow.days.len(), 3, "sanity: the window really did narrow");
+    }
+
+    /// The child's own week keeps the distinction the parent's chart draws as a hatched column.
+    /// A day the service was not running must not reach them as a confident zero, and a real zero
+    /// must not reach them as a gap.
+    #[test]
+    fn the_childs_week_distinguishes_a_quiet_day_from_an_unwatched_one() {
+        let rows = vec![row("2026-08-14", 0, 90), row("2026-08-16", 120, 90)];
+        let week = recent_totals(&rows, d("2026-08-17"), 7);
+
+        assert_eq!(week.len(), 7, "seven completed days");
+        assert_eq!(week.first().unwrap().date, "2026-08-10", "oldest first");
+        assert_eq!(week.last().unwrap().date, "2026-08-16", "ending yesterday");
+
+        let at = |s: &str| week.iter().find(|d| d.date == s).unwrap().minutes;
+        assert_eq!(at("2026-08-14"), Some(0), "measured zero stays zero");
+        assert_eq!(at("2026-08-15"), None, "no row at all is not a zero");
+        assert_eq!(at("2026-08-16"), Some(120));
+    }
+
+    /// Today's rollup has not been written, so including it would show the child a zero for the
+    /// day they are living through — the same reason `build_report` skips it.
+    #[test]
+    fn the_childs_week_stops_at_yesterday() {
+        let rows = vec![row("2026-08-17", 45, 90), row("2026-08-16", 120, 90)];
+        let week = recent_totals(&rows, d("2026-08-17"), 7);
+        assert!(
+            week.iter().all(|d| d.date != "2026-08-17"),
+            "today must not appear: {week:?}"
+        );
+        assert_eq!(week.last().unwrap().minutes, Some(120));
     }
 
     /// An install with nothing retained must say nothing rather than name a date. Same rule the

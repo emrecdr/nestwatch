@@ -26,6 +26,24 @@
           </div>
         </div>
 
+        <!-- The child's own week, and how often they were watched.
+             Both are the child's own data rather than the parent's rules, which is the line this
+             page has always drawn: `child_status_is_unauthenticated_and_leaks_no_rules` keeps the
+             blocklist, the app limits and the bedtime off this endpoint, because a schedule handed
+             to the child is a map for planning around. A record of their own time is the opposite
+             — it is the thing the research says makes a limit work rather than merely bind, and
+             the one person who already knows all of it is the child.
+             Totals only, no app names: this page needs no sign-in, so anyone on the home network
+             can open it. A per-app breakdown here would publish the child's browsing to the
+             household, which is theirs to lose and not ours to spend.
+             Filled by ask.js; empty until /status answers, so a failed poll leaves the card as it
+             was rather than collapsing it. -->
+        <div class="card-body items-center gap-2 pt-0 pb-3 text-center">
+          <h2 data-i18n="weekHeading" class="text-sm font-semibold opacity-70">Your last 7 days</h2>
+          <div id="week" class="flex w-full items-end justify-between gap-1"></div>
+          <p id="watched" class="text-xs opacity-60" aria-live="polite" aria-atomic="true"></p>
+        </div>
+
         <div data-i18n="needMore" class="divider my-0">need more?</div>
 
         <form class="card-body pt-2" id="form" aria-labelledby="askHeading">

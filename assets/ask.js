@@ -25,6 +25,7 @@ const STRINGS = {
     codeBlurb: "Voer een tijdcode in om nu minuten toe te voegen.",
     codeLabel: "Tijdcode",
     redeem: "Inwisselen",
+    weekHeading: "Je afgelopen 7 dagen",
     disclosureLabel: "Wat dit programma kan zien",
     disclosure:
       "Een ouder heeft dit ingesteld en kan dit scherm zien, welke apps je gebruikt en hoe lang. " +
@@ -47,6 +48,13 @@ const STRINGS = {
     codeAdded: (n) => `${n} minuten toegevoegd!`,
     codeTooMany: "Te veel pogingen \u2014 wacht even en probeer het opnieuw.",
     codeInvalid: "Die code klopt niet.",
+    notMeasured: "niet gemeten",
+    minShort: (n) => `${n} min`,
+    // Counted, never listed with times. Three forms rather than one with a number, because Dutch
+    // and English both read badly as "1 keer"/"1 times" and this sentence is addressed to a child.
+    watchedNone: "Er is vandaag niet naar je scherm gekeken.",
+    watchedOnce: "Er is vandaag \u00e9\u00e9n keer naar je scherm gekeken.",
+    watchedMany: (n) => `Er is vandaag ${n} keer naar je scherm gekeken.`,
   },
 };
 
@@ -68,6 +76,12 @@ const EN = {
   codeAdded: (n) => `Added ${n} minutes!`,
   codeTooMany: "Too many tries \u2014 wait a bit and try again.",
   codeInvalid: "That code isn't valid.",
+  weekHeading: "Your last 7 days",
+  notMeasured: "not measured",
+  minShort: (n) => `${n} min`,
+  watchedNone: "Your screen wasn't looked at today.",
+  watchedOnce: "Your screen was looked at once today.",
+  watchedMany: (n) => `Your screen was looked at ${n} times today.`,
 };
 
 let strings = EN;
@@ -135,6 +149,96 @@ function showOutcome(request) {
 }
 
 
+// --- The child's own week --------------------------------------------
+const weekEl = document.getElementById("week");
+const watchedEl = document.getElementById("watched");
+
+/** Tallest bar, in px. Small on purpose: this is a shape to recognise, not a chart to read. */
+const WEEK_BAR_PX = 44;
+
+/** The weekday name for a `YYYY-MM-DD` string, in whichever language the page is showing.
+ *
+ *  Built from the parts rather than `new Date(d.date)`, which parses a bare date as **UTC**
+ *  midnight — so west of Greenwich every column would be labelled with the day before. The
+ *  three-argument form is local, which is what the date means here.
+ *
+ *  `short` ("Mon"), not `narrow` ("M"). Narrow fits more easily and was tried first, but English
+ *  narrow renders Saturday and Sunday both as S and Tuesday and Thursday both as T — so three of
+ *  seven columns are unidentifiable, on the one view whose entire purpose is recognising which
+ *  days are heavy. Three letters still fit: seven columns of a 390px phone leave ~46px each.
+ */
+function weekdayName(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(appliedLang, { weekday: "short" });
+}
+
+/** Seven columns, oldest to newest. A day with no row is hatched, never drawn as a zero.
+ *
+ *  `.st-nodata` is the same class the parent's chart paints an unmeasured day with, so the two
+ *  views cannot come to disagree about what "nothing recorded" looks like. The distinction is the
+ *  point of showing this at all: a child who sees a flat zero for a day the service was off
+ *  learns something false about their own week.
+ *
+ *  Labelled as one image rather than seven, so a screen reader gets a sentence instead of a
+ *  column-by-column crawl.
+ */
+function renderWeek(days) {
+  weekEl.textContent = "";
+  if (!Array.isArray(days) || days.length === 0) return;
+
+  const known = days.filter((d) => typeof d.minutes === "number");
+  const peak = Math.max(1, ...known.map((d) => d.minutes));
+  const spoken = [];
+
+  for (const d of days) {
+    const col = document.createElement("div");
+    col.className = "flex flex-1 flex-col items-center gap-1";
+
+    const track = document.createElement("div");
+    track.className = "flex w-full items-end";
+    track.style.height = `${WEEK_BAR_PX}px`;
+
+    const bar = document.createElement("div");
+    const measured = typeof d.minutes === "number";
+    if (measured) {
+      bar.className = "w-full rounded-sm bg-primary";
+      // A floor of 2px so a short-but-real day is still visibly different from an empty one.
+      bar.style.height = `${Math.max(2, Math.round((d.minutes / peak) * WEEK_BAR_PX))}px`;
+    } else {
+      bar.className = "st-nodata w-full rounded-sm opacity-70";
+      bar.style.height = `${WEEK_BAR_PX}px`;
+    }
+    track.append(bar);
+
+    const label = document.createElement("span");
+    label.className = "text-[10px] opacity-60";
+    label.textContent = weekdayName(d.date);
+
+    col.append(track, label);
+    weekEl.append(col);
+
+    spoken.push(
+      `${weekdayName(d.date)} ${measured ? strings.minShort(d.minutes) : strings.notMeasured}`,
+    );
+  }
+
+  weekEl.setAttribute("role", "img");
+  weekEl.setAttribute("aria-label", `${strings.weekHeading}: ${spoken.join(", ")}`);
+}
+
+// Only written when the number changes. The page re-polls every minute, and rewriting an
+// `aria-live` region with identical text is how a screen reader comes to repeat the same sentence
+// forever — the same reason `showOutcome` above tracks its last value.
+let lastWatched = null;
+function renderWatched(n) {
+  if (typeof n !== "number" || n === lastWatched) return;
+  lastWatched = n;
+  watchedEl.textContent =
+    n === 0 ? strings.watchedNone
+    : n === 1 ? strings.watchedOnce
+    : strings.watchedMany(n);
+}
+
 async function loadStatus() {
   try {
     const r = await fetch("/status");
@@ -145,6 +249,10 @@ async function loadStatus() {
     // showing on a day that has no minute limit at all.
     applyLanguage(s.language);
     showOutcome(s.request);
+    // Before the `!s.limited` early return below: a week and a look-count are facts about the
+    // child's own machine whether or not a minute limit applies today.
+    renderWeek(s.recent_days);
+    renderWatched(s.watched_today);
     todayEl.innerHTML = "";
 
     if (!s.limited) {

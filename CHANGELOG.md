@@ -30,6 +30,16 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 - The child's page no longer requests a missing icon and takes a 404 on every load.
 
 ### Added
+- **The child's own page now shows their last seven days, and how often you looked.** Two facts
+  about the child, told to the child. The week is totals only — a small bar per day, with a day
+  nothing was recorded hatched rather than drawn as a zero, the same way your own chart marks it.
+  Underneath it, a count: *"Your screen was looked at 3 times today."* Counts, never times: a list
+  of times would be a timetable to plan around, and nothing is lost by aggregating, because Windows
+  already draws its yellow border while a screen is actually being captured — the child could
+  always see a look happening, just never that it had happened. Both in Dutch too.
+  <br>Deliberately no app names and no page titles: `/ask` needs no sign-in, so anyone on your home
+  network can open it, and a per-app breakdown there would publish your child's browsing to the
+  household. The rules stay off that page as they always have — no blocklist, no limits, no bedtime.
 - **The screen-time report says how far back it can see.** *History from 2026-07-01* now sits beside
   *Measured days*. Recorded history is not kept forever — the oldest days are deleted as the log
   rotates, with no setting and, until now, no notice — so a 90-day report could quietly be all there

@@ -641,6 +641,33 @@ pub async fn child_status(
     let requests = state.time_requests.clone();
     let request = spawn(move || requests.latest()).await?;
 
+    // The child's own last week, and how often they were watched. Both onto the blocking pool for
+    // the same reason as the two reads above, and in one hop rather than two so this handler still
+    // costs a single trip off the reactor.
+    //
+    // `RECENT_DAYS` completed days, totals only. Nothing here names an app: `recent_totals`
+    // returns a type with no room for one, because this endpoint needs no session and anyone on
+    // the home network can open the page it feeds.
+    //
+    // The view count is the durable half of a claim this product already makes in the moment —
+    // Windows draws a border around the screen while it is being captured, so the child can see a
+    // look happening. What they could not see was that it happened at all once the border went
+    // away. Counts, never times: a list of times is a timetable to plan around, and this is a page
+    // the adversary in the threat model can open. Nothing is lost by aggregating, because the
+    // live signal was never this endpoint's to give — the border already gives it.
+    let screentime = state.screentime.clone();
+    let usage_log = state.usage.clone();
+    let audit = state.audit.clone();
+    let offset = *crate::clock::now().offset();
+    let (recent_days, watched_today) = spawn(move || {
+        let rows = crate::screentime::history_rows(&screentime, &usage_log);
+        (
+            crate::screentime::recent_totals(&rows, today, RECENT_DAYS),
+            audit.views_on(today, offset),
+        )
+    })
+    .await?;
+
     // Clamped, via the shared helper — `as u32` here used to wrap a corrupt tally to a small
     // number, telling the child they had plenty of time left.
     let remaining = usage.remaining_mins(budget).unwrap_or(0);
@@ -667,8 +694,21 @@ pub async fn child_status(
         // in the child's own browser, and the child does not get to choose the language of the
         // notice telling them what is being watched.
         "language": language.tag(),
+        // The child's own completed days, oldest first, `minutes: null` where nothing was measured.
+        "recent_days": recent_days,
+        // How many times a parent viewed this screen today. Views only — a kill or a lock is not
+        // a look, and the child saw those happen anyway.
+        "watched_today": watched_today,
     })))
 }
+
+/// How many completed days the child's own page shows.
+///
+/// A week, not the parent's 7/30/90. The purpose here is different: the parent's report is for
+/// spotting a change, and the child's is for recognising their own pattern, which a week does and
+/// a quarter buries. It is also the number that fits on a phone under the figure that page exists
+/// to answer, without turning a one-question page into a second dashboard.
+const RECENT_DAYS: u32 = 7;
 
 /// `GET /api/rules` → the current usage rules (budget, blocklist, per-app limits).
 pub async fn get_rules(State(state): State<AppState>) -> Json<crate::rules::Rules> {

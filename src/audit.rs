@@ -38,6 +38,66 @@ impl AuditLog {
     pub fn recent(&self, limit: usize) -> Vec<Value> {
         self.0.recent(limit)
     }
+
+    /// How many times the child's screen was viewed on `day`, in the trusted local zone.
+    ///
+    /// Read through the event-filtered reader rather than [`recent`](Self::recent), which parses
+    /// every line in the file however small its `limit`. This is called from `GET /status` — the
+    /// child's page, unauthenticated, polling once a minute — so it scans for two substrings and
+    /// only parses the lines that could match. Rotation-inclusive, because undercounting how often
+    /// a parent looked is the one direction this number must not fail in.
+    pub fn views_on(&self, day: chrono::NaiveDate, offset: chrono::FixedOffset) -> u32 {
+        let rows: Vec<Value> = VIEW_EVENTS
+            .iter()
+            .flat_map(|e| self.0.recent_matching_including_rotated(e, MAX_VIEW_ROWS))
+            .collect();
+        count_views(&rows, day, offset)
+    }
+}
+
+/// The events that mean *a parent looked at this screen*, as opposed to acted on the machine.
+///
+/// `process_kill`, `lock_issued` and `shutdown_issued` are deliberately absent. The child sees
+/// those happen — an app closes, the screen locks — so counting them here would inflate a number
+/// whose whole claim is "this is how often you were watched", by adding events that were never
+/// watching.
+const VIEW_EVENTS: [&str; 2] = ["screenshot_taken", "live_view"];
+
+/// Upper bound on view lines held while counting. Live frames are already coalesced into one
+/// `live_view` line per window, and captures are human-driven, so a real day is orders below this;
+/// it exists so a corrupted or hostile log cannot make the child's page allocate without limit.
+const MAX_VIEW_ROWS: usize = 20_000;
+
+/// The pure half of [`AuditLog::views_on`]: how many view events in `rows` fall on `day`.
+///
+/// Takes the trusted offset rather than reading a clock, for the same reason `clock::decide` and
+/// `screentime::build_report` take theirs — so the day-boundary arithmetic is testable without a
+/// machine set to the right zone.
+///
+/// **The conversion is the whole function.** `jsonl::record` stamps every line in UTC, while the
+/// day this is counting is the trusted *local* day. Comparing the two as text — matching the
+/// `YYYY-MM-DD` prefix of the timestamp against the local date — is the obvious implementation and
+/// is wrong everywhere except UTC: in Amsterdam at 00:30 local it is still yesterday in UTC, so
+/// every view in the first hour or two of the evening's tail would be counted on the wrong day.
+///
+/// Re-checks the event tag rather than trusting the caller to have filtered, so the function is
+/// correct standalone and can be tested against a mixed log.
+pub fn count_views(rows: &[Value], day: chrono::NaiveDate, offset: chrono::FixedOffset) -> u32 {
+    let n = rows
+        .iter()
+        .filter(|v| {
+            v.get("event")
+                .and_then(Value::as_str)
+                .is_some_and(|e| VIEW_EVENTS.contains(&e))
+        })
+        .filter(|v| {
+            v.get("ts")
+                .and_then(Value::as_str)
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .is_some_and(|t| t.with_timezone(&offset).date_naive() == day)
+        })
+        .count();
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// How long a live-view session runs before it writes a second audit line.
@@ -138,6 +198,77 @@ impl LiveViewAudit {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    mod views {
+        use super::super::count_views;
+        use chrono::{FixedOffset, NaiveDate};
+        use serde_json::json;
+
+        fn day() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 8, 29).unwrap()
+        }
+        /// Amsterdam in summer. Chosen because it is where the difference shows.
+        fn cest() -> FixedOffset {
+            FixedOffset::east_opt(2 * 3600).unwrap()
+        }
+        fn row(event: &str, ts: &str) -> serde_json::Value {
+            json!({ "ts": ts, "event": event })
+        }
+
+        /// The reason this function takes an offset instead of comparing text.
+        ///
+        /// `jsonl::record` stamps UTC; the day being counted is the trusted *local* day. At 00:30
+        /// on the 30th in Amsterdam it is still 22:30 on the 29th in UTC, and at 23:30 on the 29th
+        /// local it is 21:30 UTC on the 29th. A prefix match on the timestamp puts the first of
+        /// those on the 29th and is wrong; both belong to the local day they happened in.
+        /// The fixture is deliberately lopsided, and the first version of it was not — which is
+        /// the more useful half of this comment. It began with one row on each side of both
+        /// boundaries plus one unambiguous row, and counted 2 whether the offset was applied or
+        /// dropped: the row wrongly included and the row wrongly excluded cancelled exactly. It
+        /// passed, and it proved nothing. Only mutating the conversion away and watching the test
+        /// stay green showed it up.
+        ///
+        /// So: two views that belong to the local day and fall on the UTC day *before* it, and one
+        /// that falls on the UTC day but belongs to tomorrow locally. Correct is 2, counting by
+        /// UTC is 1, and no arrangement of the two errors reaches the same number.
+        #[test]
+        fn a_view_is_counted_on_the_local_day_not_the_utc_one() {
+            let rows = vec![
+                // 01:00 local on the 29th -> 23:00 UTC on the 28th. Today.
+                row("live_view", "2026-08-28T23:00:00.000Z"),
+                // 00:30 local on the 29th -> 22:30 UTC on the 28th. Today.
+                row("screenshot_taken", "2026-08-28T22:30:00.000Z"),
+                // 00:30 local on the 30th -> 22:30 UTC on the 29th. Tomorrow, not today.
+                row("screenshot_taken", "2026-08-29T22:30:00.000Z"),
+            ];
+            assert_eq!(count_views(&rows, day(), cest()), 2);
+        }
+
+        /// Acting on the machine is not looking at it. The child watches an app close or the
+        /// screen lock; counting those would inflate a number whose claim is about being watched.
+        #[test]
+        fn actions_are_not_views() {
+            let rows = vec![
+                row("screenshot_taken", "2026-08-29T10:00:00.000Z"),
+                row("process_kill", "2026-08-29T10:01:00.000Z"),
+                row("lock_issued", "2026-08-29T10:02:00.000Z"),
+                row("shutdown_issued", "2026-08-29T10:03:00.000Z"),
+                row("auth_success", "2026-08-29T10:04:00.000Z"),
+            ];
+            assert_eq!(count_views(&rows, day(), cest()), 1);
+        }
+
+        /// A line with no usable timestamp is skipped rather than counted on an arbitrary day.
+        #[test]
+        fn an_unparseable_row_is_skipped_not_guessed() {
+            let rows = vec![
+                row("screenshot_taken", "not-a-timestamp"),
+                json!({ "event": "screenshot_taken" }),
+                row("screenshot_taken", "2026-08-29T10:00:00.000Z"),
+            ];
+            assert_eq!(count_views(&rows, day(), cest()), 1);
+        }
+    }
 
     // The window under test IS the shipped window. Spelling `300` again here would have let
     // `LIVE_AUDIT_WINDOW` be changed to sixty seconds with all four tests still passing, still

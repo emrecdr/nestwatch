@@ -729,6 +729,36 @@ async fn child_status_is_unauthenticated_and_leaks_no_rules() {
             "child status must not reveal `{secret}`: {raw}"
         );
     }
+
+    // The child's own week, and the shape that keeps the rule above true as this endpoint grows.
+    //
+    // Checking the *keys* rather than re-listing forbidden words is the point. The loop above can
+    // only catch app names somebody thought to name in it; asserting that a day carries exactly a
+    // date and a number means no breakdown can be added here at all without this failing first.
+    // That matters because the page this feeds needs no session — anyone on the home network can
+    // open it, so a per-app list here would publish the child's browsing to the household.
+    let days = body["recent_days"]
+        .as_array()
+        .expect("recent_days must be present");
+    assert_eq!(days.len(), 7, "a week of completed days: {days:?}");
+    for day in days {
+        let obj = day.as_object().expect("each day is an object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["date", "minutes"],
+            "a day the child can see carries a date and a number, nothing else: {day}"
+        );
+        assert!(obj["minutes"].is_null() || obj["minutes"].is_u64());
+    }
+
+    // How often the parent looked. A count, never a list of times: this page is openable by the
+    // person the threat model treats as the adversary, and times are a timetable to plan around.
+    assert!(
+        body["watched_today"].is_u64(),
+        "watched_today must be a plain count: {body}"
+    );
 }
 
 /// With no budget configured, say so explicitly rather than reporting a meaningless `0` left.
