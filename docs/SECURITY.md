@@ -380,6 +380,28 @@ machine. What follows describes what the code is written to record. Treat it as 
 promise rather than an observation until
 [WINDOWS-TESTING.md](WINDOWS-TESTING.md) has been walked through on the device.
 
+**Recording starts at install, before any rule is set, and Pause is what stops it.** Worth stating
+plainly, because it is the one part of this answer a parent is likely to guess wrong. The enforcer
+has three modes (`Rules::tick_mode`), and two of them record:
+
+| Enforcing toggle | Limits set | Recorded |
+|---|---|---|
+| On | any | process names, page titles, totals |
+| On | none — a fresh install | the same |
+| **Off (Paused)** | any | **nothing** |
+
+So a household that installs Nestwatch and configures no limits at all is still building a daily
+record of which apps were in front and which pages a browser was showing. That is deliberate — it
+is what makes the report worth reading before anyone decides what to limit, and the dashboard says
+"tracking only" in that state — but it means the decision to record is taken at install, not when
+the first limit is set.
+
+Pause is therefore a privacy control as much as an enforcement one: it leaves a **gap** in the
+record rather than a quiet stretch. It was not always so. Until `tick_mode` split the two, "paused"
+and "nothing configured yet" were one branch, and a fresh install discarded every sample it took
+while `doctor` and the dashboard both reported that it was counting — the disclosure above was
+accurate about what the code intended to record and wrong about what reached disk.
+
 **Per-app foreground time records process names.** The watcher emits a `foreground::Sample`, whose
 `apps` map is normalized process names (`"roblox.exe"`) to seconds. No path, no command line, no
 document name.

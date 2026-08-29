@@ -150,6 +150,30 @@ helper cannot become a fork bomb.
 
 This is the design's sharpest edge and the reason the validation below is not optional.
 
+## When a sample is kept, and when it is thrown away
+
+The watcher reports on its own schedule; whether the report is *kept* is decided by the enforcer,
+from `Rules::tick_mode`:
+
+| Mode | Reached when | Sample |
+|---|---|---|
+| `Enforce` | enabled, something to enforce | drained, clamped, accrued |
+| `Measure` | enabled, nothing configured | drained, clamped, accrued — **no** process scan, no actions |
+| `StandDown` | the parent pressed **Pause** | drained and **discarded** |
+
+Two consequences worth stating, because neither is visible from the watcher's side:
+
+* **A pause leaves a gap, not a zero.** The sample is still drained on a stood-down tick — it has
+  to be, or a paused weekend accumulates in the `Feed` and lands clamped to one interval on the
+  tick that resumes, rendering two days of real use as about a minute of measured time. It is
+  drained and dropped, so `total_secs` and the focus maps do not move either. See
+  `rules::tests::the_foreground_feed_is_drained_before_any_early_continue`.
+* **`Measure` is why a household with no rules has a report at all.** Until `tick_mode` existed,
+  `Measure` and `StandDown` were one branch, so a fresh install — which is `enabled` with nothing
+  configured — discarded every sample it ever took while `doctor` and the dashboard both said it
+  was counting. That is also the moment page titles begin being written to disk for a household
+  that has configured nothing: collection was always happening, persistence was not.
+
 **The watcher runs as the child.** It has to — it must live on the child's desktop to see the
 child's windows. That means everything arriving over that pipe is attacker-controlled in the
 threat model this project already assumes ("the child is the adversary and a reboot is their tool").

@@ -351,7 +351,14 @@
 
           <!-- Today's screen time (live tally). Always rendered: `used_mins` is tracked even
                with no budget set, and "he's been on 2h today" is useful on its own. Hiding this
-               card on a fresh install removed the one view that shows the tool working. -->
+               card on a fresh install removed the one view that shows the tool working.
+
+               That first sentence was false for as long as it had been written. The enforcer
+               stood the whole tick down whenever nothing was configured, and standing down skips
+               measurement as well as enforcement — so the card a parent was pointed at to see the
+               tool working showed a confident zero on exactly the install that had never counted
+               a second. `Rules::tick_mode` splits that state out; the sentence is true now, and
+               the block below still has to say which of the two zeroes it is showing. -->
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
               <div class="flex items-center justify-between">
@@ -413,15 +420,25 @@
               </template>
 
               <!-- No budget: still show the tally. Time is counted regardless, so this answers
-                   "has he been on the PC today?" even before any limit exists. -->
+                   "has he been on the PC today?" even before any limit exists.
+
+                   Which is true while enforcing is *on*. Pause stops the counting too, and then
+                   this number is the frozen one from before the pause rather than a live one —
+                   so the second line has to say which, or a returning parent reads a stalled
+                   figure as a quiet evening. Same measured-versus-unmeasured distinction the
+                   report draws for completed days and `focus_missing` draws for the app list. -->
               <template x-if="today && !(today.budget_mins > 0)">
                 <div class="mt-1">
                   <p class="text-sm">
                     <span class="font-semibold" x-text="todayUsedOrZero()"></span> min used today
                   </p>
-                  <p class="text-sm opacity-70">
+                  <p class="text-sm opacity-70" x-show="!isPaused">
                     No daily limit set — tracking only. Set one under
                     <span class="font-medium">Limits &amp; rules</span> to start enforcing.
+                  </p>
+                  <p class="text-sm opacity-70" x-show="isPaused">
+                    Enforcing is paused, so nothing is being counted either — this figure stops
+                    here until you turn it back on.
                   </p>
                 </div>
               </template>
@@ -555,8 +572,14 @@
                          @change="rules.enabled = $event.target.checked; saveRules()" />
                 </label>
               </div>
+              <!-- "Not enforced" is only half of it, and the missing half is the surprising one:
+                   pausing stops the *recording* too, so the day has a gap rather than a quiet
+                   stretch. Saying only "not enforced" invites the reasonable opposite reading —
+                   that Nestwatch keeps watching and merely stops acting — and a parent who
+                   believed that would come back to a report that silently understates the day. -->
               <p class="text-sm opacity-70" x-show="!rules.enabled">
-                Paused — screen-time, blocked apps, and per-app limits are not enforced (curfew still applies).
+                Paused — screen-time, blocked apps, and per-app limits are not enforced, and
+                nothing is being recorded while it stays off (curfew still applies).
               </p>
               <div class="alert alert-info mt-1" x-show="rules.enabled && !anyRulesSet()">
                 <span class="text-sm">

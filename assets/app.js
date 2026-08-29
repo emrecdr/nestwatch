@@ -509,8 +509,10 @@ function app() {
     },
 
     // Is anything actually configured to enforce? Mirrors `Rules::has_targets()` on the
-    // server — deliberately NOT `any_configured()`, which folds in the pause toggle; the
-    // caller composes that separately to get the three-state badge.
+    // server — deliberately just that half, not the pause toggle, which the caller composes
+    // separately to get the three-state badge. Those three states are `Rules::tick_mode` on
+    // the server: StandDown / Measure / Enforce, matching Paused / Nothing set up yet /
+    // Enforcing here.
     //
     // Reads the live form rows (not the last-saved `rules`) so the badge reacts as soon as
     // the parent types a limit, not only after Save. That's why this can't just be a field

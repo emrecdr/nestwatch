@@ -43,10 +43,10 @@ fn cell(which: Enforcer) -> &'static AtomicI64 {
 /// The two are fused into one call **so the stamp cannot drift away from the await**. The
 /// tempting change is to stamp at the *end* of a loop body instead, on the reasoning that a
 /// heartbeat should prove a tick finished rather than merely started. That is a bug:
-/// `run_rules_enforcer` has two early `continue` paths — nothing configured (the parent pressed
-/// **Pause**) and a transient process-list failure — and stamping at the end would skip both, so
-/// using Pause would make the dashboard report enforcement as **dead** within a couple of
-/// minutes, every time. This shape leaves no end-of-body to move it to.
+/// `run_rules_enforcer` has two early `continue` paths — the parent pressed **Pause**
+/// (`TickMode::StandDown`) and a transient process-list failure — and stamping at the end would
+/// skip both, so using Pause would make the dashboard report enforcement as **dead** within a
+/// couple of minutes, every time. This shape leaves no end-of-body to move it to.
 ///
 /// What it proves is therefore narrower than "a tick completed", but still the thing that
 /// matters: the loop is scheduled and its timer is firing. A loop that has panicked (the release

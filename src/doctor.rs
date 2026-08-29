@@ -440,18 +440,32 @@ pub fn run() -> Result<()> {
             Some(cfg) => {
                 let curfew_on = cfg.curfew.enabled;
                 let rules_on = cfg.rules.enabled;
-                // `has_targets`, not `any_configured` — the latter folds in `enabled`, which made
-                // the "configured but paused" branch below unreachable and reported a fully
-                // configured, paused install as "nothing is being enforced yet" (advising the
-                // parent to add limits that already existed).
+                // `has_targets` alone, so the "configured but paused" branch below stays
+                // reachable. Folding `enabled` in here — as the since-removed `any_configured`
+                // did — made that branch dead and reported a fully configured, paused install as
+                // "nothing is being enforced yet", advising the parent to add limits they already
+                // had. `tick_mode` is the predicate that answers both questions at once, and the
+                // branch below uses it where the *counting* claim has to be right.
                 let configured = cfg.rules.has_targets();
 
                 if !curfew_on && !configured {
-                    checks.push(warn(
-                        "nothing is being enforced yet",
-                        "Nestwatch is running and counting screen time, but no limits exist.\n\
-                         Open the dashboard and set a daily limit, or turn on Curfew.",
-                    ));
+                    // Split on `tick_mode`, because "counting screen time" is true on one of these
+                    // two paths and not the other, and this line is the most-read statement the
+                    // product makes about it. A paused install with nothing configured counts
+                    // nothing — it used to be told, here, that it was counting.
+                    checks.push(match cfg.rules.tick_mode() {
+                        crate::rules::TickMode::Measure => warn(
+                            "nothing is being enforced yet",
+                            "Nestwatch is running and counting screen time, but no limits exist.\n\
+                             Open the dashboard and set a daily limit, or turn on Curfew.",
+                        ),
+                        _ => warn(
+                            "nothing is being enforced, and nothing is being counted",
+                            "Screen-time rules are paused, so Nestwatch is not recording screen\n\
+                             time either. Turn Enforcing back on in the dashboard to resume\n\
+                             tracking, then set a daily limit or turn on Curfew.",
+                        ),
+                    });
                 } else {
                     if configured && rules_on {
                         checks.push(ok(format!(

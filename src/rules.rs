@@ -143,6 +143,30 @@ impl Default for Rules {
     }
 }
 
+/// What [`run_rules_enforcer`] should do with one tick, from [`Rules::tick_mode`].
+///
+/// Three states, because the household that has configured nothing is not the household that
+/// pressed **Pause**, and treating them alike is what made a fresh install report a confident
+/// zero for a day nobody measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickMode {
+    /// The parent pressed **Pause**. Measure nothing and enforce nothing.
+    ///
+    /// Measuring through a pause would be a change to what this product promises, not a bug fix:
+    /// Pause is the one control that means "stop watching him", and a parent who presses it is
+    /// entitled to a gap in the record rather than a quieter kind of surveillance.
+    StandDown,
+    /// Enabled, but nothing is configured yet. Count screen time; take no action.
+    ///
+    /// The process list is not read on this path. It exists only to match blocklist entries,
+    /// per-app limits and group members, and by definition there are none — so the scan
+    /// `has_targets` was introduced to avoid is still avoided, while the accrual it was
+    /// accidentally suppressing now happens.
+    Measure,
+    /// Enabled with something to enforce: the full path, process scan included.
+    Enforce,
+}
+
 impl Rules {
     /// The base daily budget (minutes, before any granted extra) for `weekday`: the per-weekday
     /// override if set, else the everyday `daily_budget_mins`. One home for the day-selection
@@ -180,10 +204,27 @@ impl Rules {
             || self.app_groups.iter().any(|g| g.has_pool())
     }
 
-    /// Whether the enforcer has any work this tick — false when paused, letting the loop skip the
-    /// session/process scan entirely.
-    pub fn any_configured(&self) -> bool {
-        self.enabled && self.has_targets()
+    /// What this tick should do about these rules.
+    ///
+    /// Pure, and beside [`has_targets`](Self::has_targets) rather than inline in the loop, for the
+    /// reason [`should_abort_budget_shutdown`] is: it is a rule the loop applies, and a rule in
+    /// that loop is worth pinning without standing an enforcer up.
+    ///
+    /// It replaced a single `any_configured()` (`enabled && has_targets()`) that collapsed three
+    /// states into two. Both false answers stood the whole tick down — and standing down does not
+    /// merely skip enforcement, it skips *measurement*: every accrual site in
+    /// [`run_rules_enforcer`] sits below that branch's `continue`. So a fresh install, which is
+    /// `enabled` with nothing configured, counted no screen time at all, while the dashboard card,
+    /// its source comment and `doctor` each told the parent it was "counting screen time" /
+    /// "tracking only". Three statements of a thing that was not happening, and nothing to catch
+    /// them, because a household that has set no rules also has no expected number to compare
+    /// against.
+    pub fn tick_mode(&self) -> TickMode {
+        match (self.enabled, self.has_targets()) {
+            (false, _) => TickMode::StandDown,
+            (true, false) => TickMode::Measure,
+            (true, true) => TickMode::Enforce,
+        }
     }
 
     /// Validate (at config load and on POST). Fail-open like curfew: only the warning bound.
@@ -987,13 +1028,15 @@ pub async fn run_rules_enforcer(
             )
         };
 
-        if !rules.any_configured() {
-            // Which of the two states this is. `any_configured()` is `enabled && has_targets()`, so
-            // a parent's pause toggle and a household that has configured nothing both land here,
-            // and they are different facts. This line used to label both "paused", which told a
-            // parent reading their own history that they had switched something off when they had
-            // simply never switched it on.
-            let reason = inactive_reason(rules.enabled);
+        let mode = rules.tick_mode();
+
+        if mode == TickMode::StandDown {
+            // Only a pause reaches here now. A household that has configured nothing used to land
+            // on this branch too, and standing down skips *measurement*, not just enforcement —
+            // every accrual site below sits under this `continue`. So the state a fresh install is
+            // in was the state in which nothing was counted, while the dashboard called it
+            // "tracking only". `tick_mode` splits the two; see [`TickMode::Measure`].
+            let reason = "paused";
 
             // Close an open session before we stop watching it.
             //
@@ -1007,8 +1050,9 @@ pub async fn run_rules_enforcer(
             // `reason` carries the nuance instead. It also keeps the record honest about what
             // ended: enforcement stopped observing, and the child may well still be sitting there.
             //
-            // `budget` is omitted rather than guessed. Nothing is configured on this path, so there
-            // is no budget in force — the same choice `rollup_row` makes when it cannot know one.
+            // `budget` is omitted rather than guessed. Rules may well be configured on this path
+            // now — only a *pause* reaches it — but a paused budget is not one in force, so there
+            // is still none to report: the same choice `rollup_row` makes when it cannot know one.
             if prev_active == Some(true) {
                 usage_log.record(
                     "session_stop",
@@ -1045,7 +1089,14 @@ pub async fn run_rules_enforcer(
             }
         };
 
-        let procs = {
+        // Read only when something might match. On `Measure` the list has nothing to be matched
+        // against — no blocklist, no per-app limit, no group — so `decide` returns the same empty
+        // action set for an empty slice, and skipping the scan keeps the 30-second cost that
+        // `has_targets` exists to avoid. Screen time still accrues: `accrue` charges the interval
+        // to `total_secs` before it looks at any process.
+        let procs = if mode != TickMode::Enforce {
+            Vec::new()
+        } else {
             let control = control.clone();
             match tokio::task::spawn_blocking(move || control.running_processes()).await {
                 Ok(Ok(procs)) => procs,
@@ -1297,20 +1348,6 @@ async fn save_tally_if_changed(
         Ok(Err(e)) => tracing::warn!(error = %e, "usage tally save failed"),
         Err(e) => tracing::error!(error = %e, "usage tally save task panicked"),
     }
-}
-
-/// Why the enforcer is sitting a tick out, for the usage history.
-///
-/// Two different facts reach the same branch, because `Rules::any_configured` is
-/// `enabled && has_targets()`: the parent pressed **Pause**, or they have never set a budget, a
-/// blocklist or a per-app limit. A parent reading their own history should be able to tell those
-/// apart — "paused" against a household that simply has no rules is a claim about something they
-/// did.
-///
-/// Pure, and beside [`should_abort_budget_shutdown`] for the same reason that one is: it is a rule
-/// the loop applies, and rules in that loop are worth pinning without standing up an enforcer.
-fn inactive_reason(enabled: bool) -> &'static str {
-    if enabled { "no_rules" } else { "paused" }
 }
 
 /// Whether the rules enforcer should cancel a pending OS shutdown *it* previously scheduled.
@@ -1915,7 +1952,7 @@ mod tests {
     /// The stand-down branch must close an open session before it forgets one is open.
     ///
     /// A source scan, because the property is the *existence of a call site* and no unit test can
-    /// see one deleted: `inactive_reason` stays green whether or not anything calls it, and the
+    /// see one deleted: `should_abort_budget_shutdown` stays green whether or not anything calls it, and the
     /// emission itself lives inside `run_rules_enforcer`'s async loop where pinning it would mean
     /// standing up an enforcer. Mutation-checked by deleting the guard, which this catches and the
     /// unit tests do not.
@@ -1983,7 +2020,7 @@ mod tests {
             .map_or(SRC, |(before, _)| before);
 
         let branch = code
-            .split_once("if !rules.any_configured() {")
+            .split_once("if mode == TickMode::StandDown {")
             .expect("the stand-down branch must exist")
             .1
             .split_once("continue;")
@@ -2003,37 +2040,152 @@ mod tests {
         );
     }
 
-    /// A pause and an empty rule set are different facts and must not share a label.
+    /// The tick may stand down for a pause, and for nothing else.
     ///
-    /// `any_configured()` is `enabled && has_targets()`, so both reach the same branch. Labelling
-    /// both "paused" told a parent reading their own usage history that they had switched something
-    /// off, when they may simply never have switched it on.
+    /// A source scan, for the reason its two neighbours are: the property is *which* `TickMode`
+    /// values reach the early `continue`, and that lives inside `run_rules_enforcer`'s async loop
+    /// where no unit test can observe it. `tick_mode` stays green whatever the loop does with its
+    /// answer — which is precisely how the original defect survived. `any_configured()` was never
+    /// wrong about what it computed; the loop drew the wrong conclusion from it.
+    ///
+    /// The failure it guards is silent and total. Standing down skips every accrual site in the
+    /// loop, not just the enforcement ones, so widening this condition back to "not enforcing"
+    /// stops the clock for every household that has not set a rule yet — which is every household
+    /// on its first day — while `doctor` and the dashboard card both go on saying screen time is
+    /// being counted. Nothing errors, nothing renders empty, and a household with no rules has no
+    /// expected figure to check the zero against.
     #[test]
-    fn a_pause_and_an_unconfigured_household_are_labelled_differently() {
-        assert_eq!(inactive_reason(false), "paused", "the master switch is off");
-        assert_eq!(
-            inactive_reason(true),
-            "no_rules",
-            "enabled, but with nothing to enforce — the parent paused nothing"
+    fn only_a_pause_stands_the_tick_down() {
+        const SRC: &str = include_str!("rules.rs");
+        let code = SRC
+            .split_once("\n#[cfg(test)]")
+            .map_or(SRC, |(before, _)| before);
+        let loop_body = code
+            .split_once("\n    loop {")
+            .expect("`run_rules_enforcer` must still be a `loop`")
+            .1;
+        let before_first_exit = loop_body
+            .split_once("continue;")
+            .expect("the loop must still have an early `continue`")
+            .0;
+
+        assert!(
+            before_first_exit.contains("if mode == TickMode::StandDown {"),
+            "the early `continue` is no longer reached by `TickMode::StandDown` alone. Standing \
+             down skips measurement as well as enforcement, so any condition that also catches \
+             `TickMode::Measure` stops the clock on every install nobody has set a rule on yet, \
+             while `doctor` and the dashboard both still report screen time as being counted."
         );
-        assert_ne!(
-            inactive_reason(true),
-            inactive_reason(false),
-            "one label for two states is the defect this exists to prevent"
+        assert!(
+            !before_first_exit.contains("has_targets"),
+            "the stand-down condition must ask `tick_mode` rather than re-derive itself from \
+             `has_targets` — folding the two questions back into one expression is exactly how \
+             the three states collapsed into two the first time."
         );
     }
 
-    /// The reason travels to the reader, so it has to survive as a plain JSON string that the
-    /// dashboard's generic `usageDetail` branch (`if (e.reason) return e.reason`) can render.
+    /// A pause and an empty rule set are different facts and must not share a branch.
+    ///
+    /// They used to. `any_configured()` was `enabled && has_targets()`, so both answers stood the
+    /// whole tick down — and standing down skips *measurement*, not just enforcement. A fresh
+    /// install is `enabled` with nothing configured, so the state every new user starts in was the
+    /// state in which no screen time was counted, while the dashboard card, its source comment and
+    /// `doctor` each said it was counting. Nothing caught it because a household with no rules has
+    /// no expected number to check the zero against.
     #[test]
-    fn the_inactive_reason_is_renderable_as_it_stands() {
-        for enabled in [true, false] {
-            let reason = inactive_reason(enabled);
-            assert!(
-                !reason.is_empty() && reason.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                "`{reason}` must be a plain snake_case token — it is shown to a parent verbatim"
-            );
-        }
+    fn a_fresh_install_is_measured_rather_than_stood_down() {
+        assert_eq!(
+            Rules::default().tick_mode(),
+            TickMode::Measure,
+            "a fresh install is enabled with nothing configured — the one state where a parent is \
+             told \"tracking only\", so it must be the state that tracks"
+        );
+    }
+
+    /// Pause must keep meaning "stop watching him", not "watch him more quietly".
+    #[test]
+    fn pausing_stands_the_tick_down_however_much_is_configured() {
+        let paused = Rules {
+            enabled: false,
+            daily_budget_mins: 60,
+            blocklist: vec!["game.exe".into()],
+            ..Default::default()
+        };
+        assert_eq!(paused.tick_mode(), TickMode::StandDown);
+        assert_eq!(
+            Rules {
+                enabled: false,
+                ..Default::default()
+            }
+            .tick_mode(),
+            TickMode::StandDown,
+            "paused with nothing configured is still paused"
+        );
+    }
+
+    /// The load-bearing pair: measuring counts time, and measuring never acts.
+    ///
+    /// The second half is what makes the first safe to ship. `Measure` runs the same `decide` the
+    /// enforcing path does, so the guarantee that it cannot kill, lock, warn or shut down is a
+    /// property of the rules being empty rather than of a separate code path — and a property is
+    /// worth a test where a second code path would have been worth a review.
+    #[test]
+    fn measuring_accrues_screen_time_and_enforces_nothing() {
+        let rules = Rules::default();
+        let mut e = RulesEnforcer::new(Usage::default());
+        let now = Instant::now();
+
+        // `&[]` is what the loop passes on this path — `Measure` skips the process scan.
+        let first = e.decide(&rules, &[], tk(now, 0));
+        assert!(
+            first.is_empty(),
+            "an unconfigured household must never be acted on: {first:?}"
+        );
+        assert_eq!(
+            e.usage.total_secs,
+            TICK.as_secs(),
+            "the tick's seconds must reach the tally — this is the number the card reads"
+        );
+
+        // And it accumulates rather than being overwritten each tick.
+        e.decide(&rules, &[], tk(now + TICK, 0));
+        assert_eq!(e.usage.total_secs, TICK.as_secs() * 2);
+
+        // The foreground watcher's report folds in on this path too, which is what puts app and
+        // page rows on a dashboard belonging to a parent who has set no rules at all.
+        let mut sample = crate::foreground::Sample::default();
+        sample.apps.insert("Roblox.exe".into(), 30);
+        sample.pages.insert("Roblox".into(), 30);
+        e.record_foreground(sample, TICK);
+        assert_eq!(e.usage.foreground_secs.get("roblox.exe"), Some(&30));
+        assert_eq!(e.usage.page_secs.get("Roblox"), Some(&30));
+    }
+
+    /// Why `Measure` may skip the process scan: with nothing configured, the list changes nothing.
+    ///
+    /// `has_targets` was introduced because scanning the process table every 30 seconds with
+    /// nothing to match was pure waste. That reasoning still holds and is the reason the scan is
+    /// gated on `Enforce` — but it is only *safe* while an empty list and the real one produce the
+    /// same tally. Pinned rather than argued, because the day someone adds a rule that reads
+    /// `procs` unconditionally, this is what fails.
+    #[test]
+    fn the_skipped_process_scan_cannot_change_what_is_measured() {
+        let rules = Rules::default();
+        let procs = [proc(1, "roblox.exe"), proc(2, "chrome.exe")];
+        let now = Instant::now();
+
+        let mut scanned = RulesEnforcer::new(Usage::default());
+        let mut skipped = RulesEnforcer::new(Usage::default());
+        let acted = scanned.decide(&rules, &procs, tk(now, 0));
+        skipped.decide(&rules, &[], tk(now, 0));
+
+        assert!(acted.is_empty(), "still nothing to enforce: {acted:?}");
+        assert_eq!(
+            scanned.usage.to_json(),
+            skipped.usage.to_json(),
+            "reading the process list while measuring must be an optimisation to skip, not a \
+             difference in what gets recorded"
+        );
     }
 
     #[test]
@@ -2757,7 +2909,7 @@ mod tests {
         assert!(a.is_empty(), "Thursday has no budget → never locks");
         assert!(e.budget_deadline.is_none());
         // But the weekend budgets still make the enforcer active (so it runs on Sat/Sun).
-        assert!(rules.any_configured());
+        assert_eq!(rules.tick_mode(), TickMode::Enforce);
     }
 
     #[test]
@@ -2769,13 +2921,13 @@ mod tests {
             ..Default::default()
         };
         // Paused → the loop skips everything, even a configured blocklist.
-        assert!(!rules.any_configured());
+        assert_eq!(rules.tick_mode(), TickMode::StandDown);
         // Flip it back on → active again.
         let on = Rules {
             enabled: true,
             ..rules
         };
-        assert!(on.any_configured());
+        assert_eq!(on.tick_mode(), TickMode::Enforce);
     }
 
     #[test]
