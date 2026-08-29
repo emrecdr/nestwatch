@@ -199,6 +199,22 @@ pub struct Report {
     /// `None` when the question cannot be answered honestly — see [`first_seen_in`]. The UI must
     /// distinguish that from `Some` with an empty `apps`, which means "checked, nothing new".
     pub first_seen: Option<FirstSeen>,
+    /// The oldest completed day still on disk, `YYYY-MM-DD`, or `None` when nothing is retained.
+    ///
+    /// Deliberately the oldest day in the **store**, not in the window: the question it answers is
+    /// "how far back can this tool see at all", which is a property of what rotation has left
+    /// rather than of what was asked for.
+    ///
+    /// It exists because rotation *deletes*. `jsonl::append_line` keeps two 2 MiB generations and
+    /// clobbers the older one, with no prune, no retention setting and no notice — so a parent
+    /// reading a 90-day report has no way to learn the tool will never show them a year, and the
+    /// oldest days leave silently long before anyone runs `uninstall --purge`. Of the three options
+    /// weighed for that (`docs/OPEN-FINDINGS.md`, O67), this is the cheapest and the only one that
+    /// changes nothing about what is stored: it turns a silent loss into a visible limit.
+    ///
+    /// Free to compute — `by_date` is already built from every retained row before the window is
+    /// applied, so this is its first key.
+    pub history_from: Option<String>,
 }
 
 /// How many rows each windowed total carries.
@@ -538,6 +554,9 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
             page_totals: Vec::new(),
             group_totals: Vec::new(),
             first_seen: None,
+            // `by_date` is necessarily empty here: every row was skipped by the `date >= today`
+            // filter above, because `today` is the minimum representable date.
+            history_from: None,
         };
     };
     let span = chrono::Duration::days(i64::from(days) - 1);
@@ -599,8 +618,14 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
     let page_totals = totals_across(&day_rows, |d| &d.pages);
     let group_totals = totals_across(&day_rows, |d| &d.groups);
 
+    // Before `by_date` is consumed by anything, and from `by_date` rather than `day_rows` for the
+    // same reason `first_seen` is: this is a fact about the whole retained history, and reading it
+    // from the window would make it move every time the parent pressed 7 / 30 / 90.
+    let history_from = by_date.keys().next().map(NaiveDate::to_string);
+
     Report {
         first_seen,
+        history_from,
         app_totals,
         focus_totals,
         page_totals,
@@ -839,6 +864,40 @@ mod tests {
         assert_eq!(fs.count, TOP_FIRST_SEEN + 5, "the count is not");
         // Heaviest first, so the cap keeps what matters most.
         assert_eq!(fs.apps[0].minutes, (TOP_FIRST_SEEN as u64 + 5) * 10);
+    }
+
+    /// The oldest day held is a fact about the *store*, not about the window, so narrowing the
+    /// range must not move it. That is the whole point: it answers "how far back can this tool
+    /// see", which a parent cannot otherwise find out, because rotation deletes without saying so.
+    ///
+    /// Pinned against the window deliberately. Deriving it from `day_rows` instead would compile,
+    /// pass a single-window test, and then report a different history horizon for each of the
+    /// 7 / 30 / 90 buttons — a number that changes when you ask differently is worse than none.
+    #[test]
+    fn the_oldest_day_held_does_not_move_when_the_window_narrows() {
+        let rows = vec![
+            row("2026-07-01", 60, 180),
+            row("2026-08-14", 120, 180),
+            row("2026-08-16", 90, 180),
+        ];
+        let wide = build_report(&rows, d("2026-08-17"), 90);
+        let narrow = build_report(&rows, d("2026-08-17"), 3);
+
+        assert_eq!(wide.history_from.as_deref(), Some("2026-07-01"));
+        assert_eq!(
+            narrow.history_from.as_deref(),
+            Some("2026-07-01"),
+            "the 3-day window holds no row from July, but July is still the oldest day on disk"
+        );
+        assert_eq!(narrow.days.len(), 3, "sanity: the window really did narrow");
+    }
+
+    /// An install with nothing retained must say nothing rather than name a date. Same rule the
+    /// rest of this file follows: absent is not zero, and here it is not "today" either.
+    #[test]
+    fn an_empty_history_names_no_oldest_day() {
+        let r = build_report(&[], d("2026-08-17"), 30);
+        assert_eq!(r.history_from, None);
     }
 
     /// `measured` and `minutes_used` encode the same fact and must never disagree. The two

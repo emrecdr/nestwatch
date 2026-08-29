@@ -713,10 +713,14 @@ among session starts, stops, locks, warnings and grants, so it rotates far soone
 given day dies first — but that only affects installs predating `screentime.jsonl`, and
 `screentime::history_rows` reads both for exactly that reason.
 
-**Options, none costed.** A rollup-only prune that keeps N days regardless of bytes; a larger
-`MAX_BYTES` for the rollup log specifically, since it is the one whose rows are irreplaceable; or
-simply telling the parent, in the report, the date of the oldest day still held. The third is the
-cheapest and is the one that turns a silent loss into a visible limit.
+**The third option is done.** `Report::history_from` carries the oldest completed day still on
+disk, and the report card renders it as *History from 2026-07-01* beside *Measured days 25/30*. It
+is read from `by_date` — the whole retained history — rather than from the window, and
+`the_oldest_day_held_does_not_move_when_the_window_narrows` pins that: derived from `day_rows` it
+would compile, pass a single-window test, and then report a different horizon for each of the
+7/30/90 buttons. Shown unconditionally rather than only once history is shorter than the range
+asked for, because surfacing it only when it has already bitten leaves exactly the parent who has
+not hit it yet uninformed, which is the same silence written differently.
 
 **Trigger.** Any decision to advertise a retention period, or the first time someone asks why the
 report will not go back further.

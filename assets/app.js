@@ -112,6 +112,9 @@ function emptyScreentime() {
     // and that is a different state from "checked, nothing new". Collapsing them would make a
     // working check look like a broken one on the first day the watcher ran.
     first_seen: null,
+    // `null` until a report has loaded, which is what `stHistoryLabel` reads to stay silent
+    // rather than render the word "undefined" where a date belongs.
+    history_from: null,
   };
 }
 
@@ -1289,6 +1292,22 @@ function app() {
     },
     stMeasuredLabel() {
       return this.screentime.measured_days + "/" + this.screentime.days.length;
+    },
+
+    // How far back this install can see at all, which is not the same as the window on screen.
+    //
+    // Shown unconditionally rather than only when history is shorter than the range asked for,
+    // and that is the point of it. Rotation deletes the oldest days silently — two 2 MiB
+    // generations, no prune, no setting, no notice — so a parent looking at a 90-day report has
+    // no way to discover the tool will never show them a year. Surfacing the horizon only when it
+    // happened to bite would leave exactly the parent who has not hit it yet uninformed, which is
+    // the same silence written differently.
+    //
+    // Empty string while nothing has loaded, so the row renders nothing rather than a stray label
+    // with no value beside it.
+    stHistoryLabel() {
+      const from = this.screentime.history_from;
+      return from ? from : "";
     },
     stTotalsHeading(what) { return what + " over " + this.stDays + " days"; },
 

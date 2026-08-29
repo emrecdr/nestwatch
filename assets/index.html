@@ -992,6 +992,15 @@
                 <div><span class="opacity-70">Measured days</span>
                   <span class="ml-1 font-semibold"
                         x-text="stMeasuredLabel()"></span></div>
+                <!-- The retention horizon, beside the stat that already admits an incomplete
+                     window. Rotation keeps two 2 MiB generations and clobbers the older, so the
+                     oldest days are deleted with no prune, no setting and no notice; this is the
+                     cheapest of the three options O67 weighed and the only one that changes
+                     nothing about what is stored. `x-show` on the value, not the row, so an
+                     install with nothing retained shows no dangling label. -->
+                <div x-show="stHistoryLabel()" x-cloak>
+                  <span class="opacity-70">History from</span>
+                  <span class="ml-1 font-semibold" x-text="stHistoryLabel()"></span></div>
                 <div class="opacity-70" x-text="stChangeLabel()"></div>
               </div>
 
