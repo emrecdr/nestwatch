@@ -5,6 +5,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Fixed
+- **Approving more time during bedtime no longer looks like it worked.** Screen time and bedtime are
+  two independent limits: granting minutes moves the daily budget and has never moved the curfew. So
+  a request approved after bedtime had started was applied correctly and the PC shut down anyway,
+  with the dashboard reporting nothing but success — the tool made you look like you had broken a
+  promise. The grant still goes through (banking minutes is a fair thing to do on purpose), but the
+  confirmation now says what will actually happen: *"Bedtime is in force now, so the PC will still
+  shut down."* It also warns when a grant is long enough to run into tonight's window — *"Bedtime
+  starts in 30 min, so only about that much of this is usable tonight."* Covers both the bonus-time
+  buttons and approving a child's request.
 - **The dashboard no longer scrolls sideways on a phone, and "Log out" is back on screen.** The top
   bar could not wrap and its buttons were forbidden to shrink, so it needed 461 pixels — wider than
   every phone held upright, including the one the pairing QR is meant to be scanned with. The page
@@ -30,6 +39,12 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 - The child's page no longer requests a missing icon and takes a 404 on every load.
 
 ### Added
+- **The countdown warnings tell the child where to ask.** *"5 minutes of screen time left — good
+  time to save."* now carries the address of their own page underneath, so asking does not depend on
+  having been told the URL once, months ago. Uses `localhost` and the port you installed on, so it
+  works from the machine they are sitting at without depending on the PC's name or its current IP.
+  **Not shown during a curfew window** — extra time cannot move bedtime, so inviting them to ask
+  there would promise something that cannot be delivered, and you would be the one left saying no.
 - **The child's own page now shows their last seven days, and how often you looked.** Two facts
   about the child, told to the child. The week is totals only — a small bar per day, with a day
   nothing was recorded hatched rather than drawn as a zero, the same way your own chart marks it.

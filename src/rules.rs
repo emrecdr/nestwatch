@@ -1095,14 +1095,19 @@ pub async fn run_rules_enforcer(
         // wipes the tally, so it needs a monotonic sanity check, not just a trusted clock.
         let today = enforcer.accounting_day(crate::config::today(), now);
         // Snapshot the config under the lock, then drop the guard before any await.
-        let (rules, extra, lang) = {
+        // `port` and the curfew reading come out of the same guard the tick already takes, rather
+        // than a second acquisition later — they feed `ask_hint`, which needs both.
+        let (rules, extra, lang, port, curfew_now) = {
             let guard = crate::state::recover_read(&config);
             (
                 guard.rules.clone(),
                 guard.extra.for_day(today),
                 guard.language,
+                guard.port,
+                guard.curfew.is_active_now(),
             )
         };
+        let hint = ask_hint(port, lang, curfew_now);
 
         let mode = rules.tick_mode();
 
@@ -1314,13 +1319,18 @@ pub async fn run_rules_enforcer(
                 }
                 RuleAction::Warn => has_warn = true,
                 RuleAction::LockWarning => {
-                    notify_child(&control, &lock_warning_message(rules.warn_secs, lang), lang)
-                        .await;
+                    notify_child(
+                        &control,
+                        &with_hint(lock_warning_message(rules.warn_secs, lang), hint.as_deref()),
+                        lang,
+                    )
+                    .await;
                 }
                 RuleAction::TimeWarning(mins) => {
                     // Record the heads-up only if the OS actually took the message. A countdown
                     // the child never saw must not look, in the history, like one they did.
-                    if notify_child(&control, &budget_countdown_message(mins, lang), lang).await {
+                    let msg = with_hint(budget_countdown_message(mins, lang), hint.as_deref());
+                    if notify_child(&control, &msg, lang).await {
                         usage_log.record(
                             "budget_countdown",
                             serde_json::json!({
@@ -1339,7 +1349,8 @@ pub async fn run_rules_enforcer(
         // already shows Windows' own countdown, so it isn't doubled up.) Checked before the
         // `log_transition` calls below, which flip `warning`.
         if has_warn && !warning {
-            notify_child(&control, limit_reached_message(lang), lang).await;
+            let msg = with_hint(limit_reached_message(lang).to_string(), hint.as_deref());
+            notify_child(&control, &msg, lang).await;
         }
 
         // Log budget events once per episode (on the transition into enforcement).
@@ -1478,6 +1489,44 @@ async fn notify_child(control: &Arc<dyn SystemControl>, body: &str, lang: Langua
         Language::Nl => "Schermtijd",
     };
     crate::control::notify(control, title, body).await
+}
+
+/// "Need more? <url>", or `None` when asking cannot help.
+///
+/// The child is sitting at the machine, so **`localhost`** is the right address for them: it needs
+/// no DHCP lease, no name resolution, and no knowledge of what the PC is called. It is also a SAN
+/// on the certificate `install` generates and is admitted by the LAN gate as loopback, so the page
+/// actually opens. The hostname and LAN IP that `install` prints are for the *parent's* phone,
+/// which is a different problem.
+///
+/// The port comes from the live config rather than the 8443 default, because `install --port N`
+/// moves it and a wrong port here is worse than no address at all.
+///
+/// **`None` while a curfew window is open**, which is the half worth the sentence. A grant cannot
+/// move bedtime — `curfew.rs` never reads `Config::extra` — so printing "ask for more time" to a
+/// child whose machine is already shutting down for the night promises something the system cannot
+/// deliver, and the parent would then have to be the one to say no. This is the same rule
+/// `api::grant_shadowed_by_curfew` applies at the other end of the same conversation.
+///
+/// Only *while the window is open*, deliberately. If bedtime is twenty minutes out and screen time
+/// runs out now, asking is still worth doing — they would get the minutes until bedtime. Silence
+/// there would be over-correction.
+fn ask_hint(port: u16, lang: Language, curfew_active: bool) -> Option<String> {
+    if curfew_active {
+        return None;
+    }
+    Some(match lang {
+        Language::En => format!("Need more? https://localhost:{port}/ask"),
+        Language::Nl => format!("Meer nodig? https://localhost:{port}/ask"),
+    })
+}
+
+/// Append the hint on its own line, when there is one.
+fn with_hint(body: String, hint: Option<&str>) -> String {
+    match hint {
+        Some(h) => format!("{body}\n{h}"),
+        None => body,
+    }
 }
 
 /// "The machine is about to lock", with its countdown. Child-facing.
@@ -2723,6 +2772,68 @@ mod tests {
     /// Pins the property that survives rewording: each language says something, says something
     /// *different* from the others (a copy-pasted English arm is the likely mistake), and names
     /// the number it was given.
+    /// The child is at the machine, so the address has to work from there: `localhost`, which
+    /// needs no DHCP lease or machine name, is a SAN on the generated certificate, and is admitted
+    /// by the LAN gate as loopback. The port is the configured one — `install --port N` moves it,
+    /// and a wrong port is worse than no address.
+    #[test]
+    fn the_child_is_told_where_to_ask_at_an_address_that_works_from_the_machine() {
+        for lang in Language::ALL {
+            let hint = ask_hint(9443, lang, false).expect("a hint when curfew is not open");
+            assert!(
+                hint.contains("https://localhost:9443/ask"),
+                "{lang:?}: the address must be reachable from the child's own PC: {hint}"
+            );
+            assert!(
+                !hint.contains("8443"),
+                "{lang:?}: the port must come from config, not a hardcoded default: {hint}"
+            );
+        }
+        let en = ask_hint(8443, Language::En, false).unwrap();
+        let nl = ask_hint(8443, Language::Nl, false).unwrap();
+        assert_ne!(en, nl, "one language was never translated");
+    }
+
+    /// The reported evening, from the child's side. A grant cannot move bedtime, so while the
+    /// window is open "ask for more time" is a promise the system cannot keep — and the parent
+    /// would be the one left saying no to a request that was never going to work.
+    #[test]
+    fn no_one_is_invited_to_ask_while_bedtime_is_shutting_the_machine_down() {
+        for lang in Language::ALL {
+            assert_eq!(
+                ask_hint(8443, lang, true),
+                None,
+                "{lang:?}: asking cannot help once the curfew window is open"
+            );
+        }
+    }
+
+    /// The other half of that rule, and the reason it is scoped to "window open" rather than
+    /// "bedtime is coming". With twenty minutes until bedtime and screen time gone now, asking is
+    /// still worth doing — the child would get the minutes in between.
+    #[test]
+    fn the_invitation_survives_a_bedtime_that_has_not_arrived() {
+        assert!(ask_hint(8443, Language::En, false).is_some());
+    }
+
+    /// The hint is appended, never substituted — a child who cannot act on the address still has
+    /// to be told what is happening to their machine.
+    #[test]
+    fn the_countdown_still_says_what_it_always_said() {
+        let plain = budget_countdown_message(5, Language::En);
+        let with = with_hint(plain.clone(), Some("Need more? https://localhost:8443/ask"));
+        assert!(
+            with.starts_with(&plain),
+            "the warning itself must survive: {with}"
+        );
+        assert!(with.contains("/ask"));
+        assert_eq!(
+            with_hint(plain.clone(), None),
+            plain,
+            "with no hint the message is untouched"
+        );
+    }
+
     #[test]
     fn every_language_has_its_own_lock_and_limit_wording() {
         let locks: Vec<String> = Language::ALL

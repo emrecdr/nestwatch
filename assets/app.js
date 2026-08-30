@@ -1124,11 +1124,34 @@ function app() {
       }
     },
 
-    toast(msg, kind) {
+    // `ms` is optional and defaults to the 3.5s every existing caller was written against, so
+    // adding it changes nothing already on screen. It exists because one message needs longer:
+    // the curfew note on a grant is two sentences explaining why the thing you just did will not
+    // do what it looks like, and 3.5 seconds is not enough time to read that — it would scroll
+    // past exactly the parent it is for.
+    toast(msg, kind, ms = 3500) {
       const id = (this._n = (this._n || 0) + 1);
-      const cls = { success: "alert-success", error: "alert-error", info: "alert-info" }[kind] || "alert-info";
+      const cls = {
+        success: "alert-success",
+        error: "alert-error",
+        warning: "alert-warning",
+        info: "alert-info",
+      }[kind] || "alert-info";
       this.toasts.push({ id, msg, cls });
-      setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, 3500);
+      setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, ms);
+    },
+
+    // How long the curfew note stays up. Long enough to read twice, because it arrives at the
+    // moment a parent has stopped paying attention — they pressed Approve and moved on.
+    _curfewNoteMs: 12000,
+
+    // Show what a grant will actually do, when that differs from what it looks like it does.
+    //
+    // Not an error: the grant succeeded and the minutes are banked. `warning` is the honest
+    // level, and it is a separate toast from the success one rather than appended to it, so the
+    // confirmation still reads as a confirmation.
+    noteCurfew(j) {
+      if (j && j.curfew_note) this.toast(j.curfew_note, "warning", this._curfewNoteMs);
     },
 
     // POST a JSON body; the caller inspects the returned Response for status handling.
@@ -1821,6 +1844,7 @@ function app() {
         const r = await this.postJSON("/api/extra-time", { minutes: mins });
         if (r.ok) {
           this.toast(`Granted +${mins} min`, "success");
+          this.noteCurfew(await r.json().catch(() => ({})));
           this.loadToday();
           this.loadUsage();
         } else if (r.status === 400) {
@@ -1895,6 +1919,7 @@ function app() {
         if (r.ok) {
           const j = await r.json().catch(() => ({}));
           this.toast(approve ? `Granted ${j.minutes ?? ""} min` : "Denied", "success");
+          if (approve) this.noteCurfew(j);
           this.loadTimeRequests();
           if (approve) this.loadUsage();
         } else {

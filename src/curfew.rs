@@ -149,6 +149,35 @@ impl Curfew {
         (1..=LOOKAHEAD_MINS).find(|&m| self.is_active_at(now + TimeDelta::minutes(m.into())))
     }
 
+    /// How soon a grant of `minutes` made at `now` runs into a closed window — `None` when curfew
+    /// will not interrupt it at all, and `Some(0)` when the window is **already open**.
+    ///
+    /// Screen time and bedtime are independent limits: nothing in this module reads
+    /// `Config::extra`, so granting minutes cannot move a curfew, and
+    /// `rules::should_abort_budget_shutdown` deliberately declines to cancel a shutdown while a
+    /// window is open — curfew stays the sole authority over the one OS shutdown slot. Both are
+    /// correct and both are invisible, which is the problem this exists to fix: a parent approves
+    /// a request at 22:05, the machine powers off anyway, and the tool has told them nothing. The
+    /// two places that make the promise can now check whether it can be kept.
+    ///
+    /// Probes minute by minute rather than deriving the next start, for the reason
+    /// [`mins_until_active`](Self::mins_until_active) gives at length — the midnight wrap and the
+    /// day selectors are where an off-by-one hides, and `is_active_at` has already solved both.
+    /// Bounded by `minutes`, which both callers cap at `timereq::MAX_REQUEST_MINUTES` (240), so
+    /// this is at most 240 evaluations of a pure function on a button a parent pressed.
+    ///
+    /// Deliberately **not** [`mins_until_active`](Self::mins_until_active): that one stops at
+    /// `LOOKAHEAD_MINS` (15) because it feeds a "bedtime soon" popup, and a 30-minute grant made
+    /// at 21:40 has to see a 22:00 window that is twenty minutes out.
+    pub fn cuts_grant_short_in(&self, now: DateTime<FixedOffset>, minutes: u32) -> Option<u32> {
+        // `is_active_at` returns false when curfew is disabled, so `enabled` needs no separate
+        // check here.
+        if self.is_active_at(now) {
+            return Some(0);
+        }
+        (1..=minutes).find(|&m| self.is_active_at(now + TimeDelta::minutes(m.into())))
+    }
+
     /// Validate the settings (used when accepting them from the UI and at config load). When
     /// `windows` is non-empty each window is checked; otherwise the legacy `start`/`end` are.
     pub fn validate(&self) -> Result<(), String> {
@@ -558,6 +587,78 @@ mod tests {
             end: end.into(),
             ..Default::default()
         }
+    }
+
+    /// The reported case, reproduced. A parent approved a request on a Saturday just after 22:00
+    /// and the PC shut down anyway — correctly, because the grant moved the budget and bedtime is
+    /// a separate limit. What was missing was anyone saying so.
+    #[test]
+    fn a_grant_made_inside_the_window_is_already_dead() {
+        let c = nightly("22:00", "07:00");
+        assert_eq!(
+            c.cuts_grant_short_in(at(2026, 8, 29, 22, 5), 30),
+            Some(0),
+            "granting minutes during bedtime buys nothing, and the caller must be able to say so"
+        );
+    }
+
+    /// The narrower and easier-to-miss half: the window is not open yet, so every "is curfew on?"
+    /// check says no, and the grant still dies partway through.
+    #[test]
+    fn a_grant_that_outlives_the_evening_is_cut_short() {
+        let c = nightly("22:00", "07:00");
+        assert!(!c.is_active_at(at(2026, 8, 29, 21, 40)), "fixture sanity");
+        assert_eq!(
+            c.cuts_grant_short_in(at(2026, 8, 29, 21, 40), 30),
+            Some(20),
+            "30 minutes granted at 21:40 runs out of evening at 22:00"
+        );
+        assert_eq!(
+            c.cuts_grant_short_in(at(2026, 8, 29, 21, 40), 15),
+            None,
+            "15 minutes fits before the window, so there is nothing to warn about"
+        );
+    }
+
+    /// This must not fire when curfew cannot interfere, or the warning becomes noise a parent
+    /// learns to click past — which would cost more than it buys.
+    #[test]
+    fn nothing_is_claimed_when_curfew_is_off_or_far_away() {
+        let off = Curfew {
+            enabled: false,
+            ..nightly("22:00", "07:00")
+        };
+        assert_eq!(off.cuts_grant_short_in(at(2026, 8, 29, 22, 5), 240), None);
+
+        let c = nightly("22:00", "07:00");
+        assert_eq!(
+            c.cuts_grant_short_in(at(2026, 8, 29, 9, 0), 60),
+            None,
+            "an hour granted at nine in the morning is nowhere near bedtime"
+        );
+    }
+
+    /// The probe has to cross midnight and land on the *next* weekday, the case
+    /// `mins_until_active`'s own tests call out as where an off-by-one hides. A Sunday-only
+    /// window is invisible from Saturday evening to anything that reasons about "today".
+    #[test]
+    fn the_probe_sees_a_window_that_opens_on_the_following_day() {
+        let sunday_small_hours = Curfew {
+            enabled: true,
+            windows: vec![Window {
+                start: "01:00".into(),
+                end: "07:00".into(),
+                days: Days {
+                    sun: true,
+                    ..Default::default()
+                },
+            }],
+            ..nightly("22:00", "07:00")
+        };
+        // Saturday 23:30, so the window opens 90 minutes later on Sunday.
+        let sat = at(2026, 8, 29, 23, 30);
+        assert!(!sunday_small_hours.is_active_at(sat), "fixture sanity");
+        assert_eq!(sunday_small_hours.cuts_grant_short_in(sat, 240), Some(90));
     }
 
     #[test]

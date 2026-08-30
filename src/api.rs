@@ -555,6 +555,40 @@ pub struct ExtraTimeBody {
     minutes: u32,
 }
 
+/// What a parent should be told about a grant of `minutes` they have just made, given the curfew.
+///
+/// `None` when the grant will do what it looks like it does. Otherwise a plain sentence naming
+/// what will actually happen, for the dashboard to show beside the confirmation.
+///
+/// **This exists because of a real evening.** A parent approved their child's request just after
+/// 22:00 on a Saturday and the PC shut down anyway. Nothing was broken: screen time and bedtime
+/// are independent limits, `curfew.rs` never reads the grant, and `should_abort_budget_shutdown`
+/// deliberately refuses to cancel a shutdown while a window is open, so curfew stays the sole
+/// authority over the one OS shutdown slot. Every part of that is correct and every part of it is
+/// invisible — the handler returned `{"ok": true}` while the machine powered off underneath the
+/// child. The information was available the whole time; nothing looked at it.
+///
+/// Reported rather than enforced: the grant still lands. Banking minutes during bedtime is a
+/// reasonable thing to do on purpose (they survive to no later than midnight, when `DailyGrant`
+/// resets), and refusing would be its own surprise. What must not happen is a promise being made
+/// silently that the system cannot keep.
+fn grant_shadowed_by_curfew(state: &AppState, minutes: u32) -> Option<String> {
+    let curfew = crate::state::recover_read(&state.config).curfew.clone();
+    // The trusted clock, not `Local::now()` — the same reading curfew enforces against, so this
+    // cannot disagree with the enforcer about whether a window is open.
+    let mins = curfew.cuts_grant_short_in(crate::clock::now(), minutes)?;
+    Some(if mins == 0 {
+        "Bedtime is in force now, so the PC will still shut down — screen time and bedtime are \
+         separate limits, and extra minutes do not move bedtime."
+            .to_string()
+    } else {
+        format!(
+            "Bedtime starts in {mins} min, so only about that much of this is usable tonight — \
+             screen time and bedtime are separate limits."
+        )
+    })
+}
+
 /// `POST /api/extra-time` → grant bonus minutes to today's budget directly, parent-initiated
 /// (no child request needed). Uses the exact same `DailyGrant` mechanism as approving a time
 /// request, so a mid-day reboot keeps the grant and it resets tomorrow.
@@ -576,7 +610,9 @@ pub async fn extra_time(
     );
     // A second dashboard, or the same parent's other device, is showing a budget that just moved.
     notify(&state, "usage");
-    Ok(Json(json!({ "ok": true, "minutes": minutes })))
+    Ok(Json(
+        json!({ "ok": true, "minutes": minutes, "curfew_note": grant_shadowed_by_curfew(&state, minutes) }),
+    ))
 }
 
 /// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the
@@ -905,7 +941,9 @@ pub async fn approve_time_request(
     // Two panels moved: the queue lost a row and today's budget grew.
     notify(&state, "requests");
     notify(&state, "usage");
-    Ok(Json(json!({ "ok": true, "minutes": minutes })))
+    Ok(Json(
+        json!({ "ok": true, "minutes": minutes, "curfew_note": grant_shadowed_by_curfew(&state, minutes) }),
+    ))
 }
 
 /// `POST /api/time-requests/{id}/deny` → reject a pending request.
