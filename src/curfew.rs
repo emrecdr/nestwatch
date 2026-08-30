@@ -93,6 +93,25 @@ pub struct Curfew {
     /// field (rather than a breaking rename) so existing `config.json` files still load.
     #[serde(default)]
     pub windows: Vec<Window>,
+    /// Bedtime is suppressed until this instant — a parent-granted "half an hour more tonight".
+    ///
+    /// **An absolute instant, deliberately, and not the `date + minutes` shape `DailyGrant` uses
+    /// for screen time.** Bedtime crosses midnight. A grant made at 23:50 and keyed on "today"
+    /// would expire when the date rolled over and slam the window shut ten minutes later — the
+    /// parent having been told they had thirty. An instant has no such edge, and it self-cleans:
+    /// one in the past is simply inert, so there is no reset to forget.
+    ///
+    /// Lives on `Curfew` rather than beside `Config::extra` so that [`Curfew::is_active_at`] can
+    /// honour it, which makes **every** reader correct by construction — the enforcer, the
+    /// budget-shutdown abort coordination in `rules`, the bedtime countdown, and
+    /// [`Curfew::cuts_grant_short_in`]. Suppressing it at one call site and not the others is
+    /// precisely the class of bug this feature exists to fix: the machine would stay up and the
+    /// *budget* enforcer would shut it down instead.
+    ///
+    /// Not sent by the dashboard's curfew form; `api::set_curfew` carries the stored value across
+    /// a save, the way `port` and `password_hash` are never written by a handler.
+    #[serde(default)]
+    pub extra_until: Option<DateTime<FixedOffset>>,
 }
 
 impl Default for Curfew {
@@ -103,6 +122,7 @@ impl Default for Curfew {
             end: "07:00".into(),
             warn_secs: default_warn_secs(),
             windows: Vec::new(),
+            extra_until: None,
         }
     }
 }
@@ -122,6 +142,14 @@ impl Curfew {
     /// window/day-selector logic is directly testable without touching the process clock.
     pub fn is_active_at(&self, at: DateTime<FixedOffset>) -> bool {
         if !self.enabled {
+            return false;
+        }
+        // A parent-granted extension suppresses the window up to its instant. Checked here, in
+        // the one function every caller goes through, so the enforcer, the abort coordination in
+        // `rules`, the bedtime countdown and `cuts_grant_short_in` cannot disagree about whether
+        // the machine is supposed to be off. Probing a time past the instant correctly reports
+        // the window as active again, so an extension delays bedtime rather than cancelling it.
+        if self.extra_until.is_some_and(|until| at < until) {
             return false;
         }
         if !self.windows.is_empty() {
@@ -589,6 +617,93 @@ mod tests {
         }
     }
 
+    /// An extension delays bedtime; it does not cancel it. Past the instant the window is active
+    /// again, which is what makes "+30 tonight" mean thirty minutes rather than the rest of the
+    /// night.
+    #[test]
+    fn an_extension_delays_bedtime_and_then_gives_it_back() {
+        let c = Curfew {
+            extra_until: Some(at(2026, 8, 29, 22, 30)),
+            ..nightly("22:00", "07:00")
+        };
+        assert!(
+            !c.is_active_at(at(2026, 8, 29, 22, 5)),
+            "inside the extension"
+        );
+        assert!(
+            !c.is_active_at(at(2026, 8, 29, 22, 29)),
+            "up to the instant"
+        );
+        assert!(
+            c.is_active_at(at(2026, 8, 29, 22, 30)),
+            "at the instant, bedtime is back"
+        );
+        assert!(c.is_active_at(at(2026, 8, 29, 23, 0)), "and after it");
+    }
+
+    /// **The reason this is an absolute instant and not `date + minutes`.**
+    ///
+    /// Bedtime crosses midnight. A grant stored the way `DailyGrant` stores screen time — keyed on
+    /// the local day — would be granted at 23:50, expire the moment the date rolled over, and slam
+    /// the window shut at 00:00 with the parent having been told they had thirty minutes. An
+    /// instant simply does not have that edge, and this test is what would fail if someone
+    /// "simplified" it into the shape used one file over.
+    #[test]
+    fn an_extension_granted_before_midnight_survives_the_date_change() {
+        let c = Curfew {
+            extra_until: Some(at(2026, 8, 30, 0, 20)), // 23:50 + 30 min
+            ..nightly("22:00", "07:00")
+        };
+        assert!(!c.is_active_at(at(2026, 8, 29, 23, 55)), "before midnight");
+        assert!(
+            !c.is_active_at(at(2026, 8, 30, 0, 10)),
+            "after midnight and still inside the thirty minutes the parent granted"
+        );
+        assert!(c.is_active_at(at(2026, 8, 30, 0, 25)), "and it does end");
+    }
+
+    /// An extension that has run out is inert, so nothing has to reset it. That self-cleaning
+    /// property is half the argument for storing an instant.
+    #[test]
+    fn a_spent_extension_needs_no_clearing() {
+        let c = Curfew {
+            extra_until: Some(at(2026, 8, 28, 23, 0)), // last night
+            ..nightly("22:00", "07:00")
+        };
+        assert!(
+            c.is_active_at(at(2026, 8, 29, 22, 30)),
+            "tonight is unaffected"
+        );
+    }
+
+    /// An extension must not switch curfew *on*. `enabled` is checked first, so a leftover
+    /// instant on a disabled curfew cannot make the machine start shutting down.
+    #[test]
+    fn an_extension_cannot_resurrect_a_disabled_curfew() {
+        let c = Curfew {
+            enabled: false,
+            extra_until: Some(at(2026, 8, 29, 22, 30)),
+            ..nightly("22:00", "07:00")
+        };
+        assert!(!c.is_active_at(at(2026, 8, 29, 23, 0)));
+    }
+
+    /// Every reader goes through `is_active_at`, so the warning a parent gets when granting screen
+    /// time has to see the extension too — otherwise it would tell them bedtime is in force while
+    /// the enforcer has stood down, which is the same disagreement in the opposite direction.
+    #[test]
+    fn the_grant_warning_agrees_with_the_enforcer_about_an_extension() {
+        let c = Curfew {
+            extra_until: Some(at(2026, 8, 29, 22, 30)),
+            ..nightly("22:00", "07:00")
+        };
+        assert_eq!(
+            c.cuts_grant_short_in(at(2026, 8, 29, 22, 5), 60),
+            Some(25),
+            "screen time is usable until bedtime resumes at 22:30, not blocked outright"
+        );
+    }
+
     /// The reported case, reproduced. A parent approved a request on a Saturday just after 22:00
     /// and the PC shut down anyway — correctly, because the grant moved the budget and bedtime is
     /// a separate limit. What was missing was anyone saying so.
@@ -950,6 +1065,7 @@ mod tests {
             end: "07:00".into(),
             warn_secs: 60,
             windows: Vec::new(),
+            extra_until: None,
         };
         assert!(ok.validate().is_ok());
         let bad_time = Curfew {

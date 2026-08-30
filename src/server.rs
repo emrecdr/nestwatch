@@ -18,6 +18,7 @@
 //!     POST /api/shutdown
 //!     POST /api/lock
 //!     GET  POST /api/curfew
+//!     POST /api/curfew/extend
 //!     GET  /api/audit
 //!     GET  /api/usage
 //!     GET  /api/usage/today
@@ -71,6 +72,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/shutdown", post(api::shutdown))
         .route("/lock", post(api::lock))
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
+        .route("/curfew/extend", post(api::extend_curfew))
         .route("/audit", get(api::audit))
         .route("/usage", get(api::usage))
         .route("/usage/today", get(api::usage_today))

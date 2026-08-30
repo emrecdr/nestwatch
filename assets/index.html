@@ -393,6 +393,24 @@
                 </div>
               </template>
 
+              <!-- Push tonight's bedtime back, once.
+                   The control that was missing, and the reason approving a screen-time request
+                   after bedtime looked like it worked and did not: the two are independent limits,
+                   and until now only screen time could be granted more. Separate from the bonus
+                   buttons on the Today card on purpose — approving a request should not quietly
+                   move bedtime every time a parent says yes at eleven o'clock.
+                   Shown only while curfew is on, since with it off there is nothing to extend.
+                   `btn-outline`, matching the bonus row it mirrors: this grants something, but it
+                   is not the card's primary action — Save is. -->
+              <div class="mt-3 flex flex-wrap items-center gap-2" x-show="curfew.enabled" x-cloak>
+                <span class="text-sm">Later bedtime tonight:</span>
+                <button class="btn btn-outline btn-sm" @click="extendCurfew(15)" :disabled="extendingCurfew">+15</button>
+                <button class="btn btn-outline btn-sm" @click="extendCurfew(30)" :disabled="extendingCurfew">+30</button>
+                <button class="btn btn-outline btn-sm" @click="extendCurfew(60)" :disabled="extendingCurfew">+60</button>
+                <span class="text-xs opacity-70" x-show="curfewUntil" x-cloak
+                      x-text="curfewUntilLabel()"></span>
+              </div>
+
               <div class="mt-3 flex flex-wrap items-end gap-3">
                 <button class="btn btn-ghost btn-sm" @click="addWindow()">+ Add day schedule</button>
                 <label class="flex flex-col">

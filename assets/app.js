@@ -235,6 +235,11 @@ function app() {
     // isEnforcerStale, which treats a missing age as stale.
     todayAsked: false,
     grantingExtra: false,
+    // Tonight's bedtime extension: `null` when none is running, else "HH:MM" from the server.
+    // Held separately from `curfew` because the curfew form is a draft the parent edits and saves,
+    // and this is not a setting they edit — it is state the server owns.
+    curfewUntil: null,
+    extendingCurfew: false,
     _lastPerDay: null, // remembers the per-day array while single-limit mode is active
     audit: [],
     loadingAudit: false,
@@ -417,6 +422,17 @@ function app() {
         if (r.ok) {
           this.curfew = await r.json();
           if (!this.curfew.windows) this.curfew.windows = [];
+          // Lift the extension out of the draft the form binds to, and render it only while it
+          // is still in the future — a stale instant means the extension has already run out and
+          // bedtime is back on, which the label must not keep claiming otherwise.
+          const until = this.curfew.extra_until;
+          this.curfewUntil =
+            until && new Date(until) > new Date()
+              // 24-hour, matching the `<input type="time">` fields directly above it. Locale
+              // default would render "11:29 PM" under a form showing "22:00", which reads as two
+              // different clocks on one card.
+              ? new Date(until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
+              : null;
         }
       } catch {}
     },
@@ -1836,6 +1852,33 @@ function app() {
     stDayHas(key) {
       const d = this.stDayFor(key);
       return !!(d && d[key] && d[key].length);
+    },
+
+    curfewUntilLabel() {
+      return this.curfewUntil ? `bedtime paused until ${this.curfewUntil}` : "";
+    },
+
+    // Push tonight's bedtime back. Mirrors `grantExtra`, including its error handling, because a
+    // parent pressing these two rows of buttons should not have to learn two behaviours.
+    async extendCurfew(mins) {
+      this.extendingCurfew = true;
+      try {
+        const r = await this.postJSON("/api/curfew/extend", { minutes: mins });
+        if (r.ok) {
+          const j = await r.json().catch(() => ({}));
+          this.curfewUntil = j.until || null;
+          this.toast(`Bedtime pushed back ${mins} min`, "success");
+          this.loadCurfew();
+        } else if (r.status === 400) {
+          this.toast(await this.rejection(r, "Could not extend bedtime"), "error");
+        } else {
+          this.toast("Could not extend bedtime", "error");
+        }
+      } catch {
+        this.toast("Request failed", "error");
+      } finally {
+        this.extendingCurfew = false;
+      }
     },
 
     async grantExtra(mins) {

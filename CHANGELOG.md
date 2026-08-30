@@ -39,6 +39,13 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 - The child's page no longer requests a missing icon and takes a 404 on every load.
 
 ### Added
+- **You can give a later bedtime for one night.** Screen time had three ways to grant more; bedtime
+  had none, so allowing a late finish meant editing the curfew window and remembering to put it
+  back. **Later bedtime tonight** (+15/+30/+60 on the Curfew card) pushes tonight's window back and
+  then returns it automatically — press it twice for an hour. It survives a restart, it is not
+  undone by saving the curfew form, and it cannot switch a disabled curfew on. Stored as a moment
+  in time rather than a countdown, so a late-evening extension does not quietly expire at midnight
+  and shut the PC down mid-way through the time you granted.
 - **The countdown warnings tell the child where to ask.** *"5 minutes of screen time left — good
   time to save."* now carries the address of their own page underneath, so asking does not depend on
   having been told the URL once, months ago. Uses `localhost` and the port you installed on, so it

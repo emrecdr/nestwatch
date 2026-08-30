@@ -213,7 +213,17 @@ pub async fn set_curfew(
     new_curfew.validate().map_err(AppError::BadRequest)?;
     let audit_fields =
         json!({ "enabled": new_curfew.enabled, "start": new_curfew.start, "end": new_curfew.end });
-    update_config(&state, |c| c.curfew = new_curfew).await?;
+    // Carry tonight's extension across the save. The dashboard's curfew form does not send
+    // `extra_until` — it is transient state, not a setting — so it deserializes to `None`, and
+    // assigning the whole struct would silently revoke an extension a parent granted minutes
+    // earlier. The nearest existing precedent is `port` and `password_hash`, which no handler
+    // writes; this one has to be actively preserved rather than merely not written.
+    update_config(&state, |c| {
+        let mut next = new_curfew;
+        next.extra_until = c.curfew.extra_until;
+        c.curfew = next;
+    })
+    .await?;
     state.audit.record("curfew_change", audit_fields);
     Ok(Json(json!({ "ok": true })))
 }
@@ -555,6 +565,61 @@ pub struct ExtraTimeBody {
     minutes: u32,
 }
 
+/// `POST /api/curfew/extend` → push tonight's bedtime back by `minutes`, once.
+///
+/// The control that was missing. Screen time had three ways to grant more — the bonus buttons,
+/// approving a request, and offline codes — and bedtime had none, so a parent who wanted to allow
+/// a late finish could only edit the window itself, which is permanent until they change it back.
+/// Approving a screen-time request looked like it would work and did not, because the two limits
+/// are independent; that is the confusion `grant_shadowed_by_curfew` explains and this endpoint
+/// removes.
+///
+/// **Extends from the later of "now" and any extension already running**, so pressing +30 twice
+/// gives an hour rather than the second press swallowing the first. Bounded by
+/// `MAX_REQUEST_MINUTES`, the same cap the screen-time grants use.
+///
+/// Deliberately parent-only, with nothing on the child's page: `/ask` does not reveal the curfew
+/// schedule at all — a bedtime handed to the child is a map for planning around it — so it does
+/// not reveal an extension either. They simply notice the machine did not shut down.
+pub async fn extend_curfew(
+    State(state): State<AppState>,
+    Json(body): Json<ExtraTimeBody>,
+) -> Result<Json<Value>, AppError> {
+    require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
+    let minutes = body.minutes;
+    // The trusted clock, so a child who changes the time zone cannot stretch the extension — the
+    // same reading curfew itself enforces against.
+    let now = crate::clock::now();
+    let mut until = None;
+    update_config(&state, |c| {
+        let base = match c.curfew.extra_until {
+            Some(t) if t > now => t,
+            _ => now,
+        };
+        let t = base + chrono::Duration::minutes(i64::from(minutes));
+        c.curfew.extra_until = Some(t);
+        until = Some(t);
+    })
+    .await?;
+
+    let until_local = until
+        .map(|t| t.format("%H:%M").to_string())
+        .unwrap_or_default();
+    state.audit.record(
+        "curfew_extended",
+        json!({ "minutes": minutes, "until": until_local }),
+    );
+    state.usage.record(
+        "curfew_extended",
+        json!({ "minutes": minutes, "until": until_local }),
+    );
+    // The Today card shows whether bedtime is in force, and a second dashboard may be open.
+    notify(&state, "usage");
+    Ok(Json(
+        json!({ "ok": true, "minutes": minutes, "until": until_local }),
+    ))
+}
+
 /// What a parent should be told about a grant of `minutes` they have just made, given the curfew.
 ///
 /// `None` when the grant will do what it looks like it does. Otherwise a plain sentence naming
@@ -579,12 +644,12 @@ fn grant_shadowed_by_curfew(state: &AppState, minutes: u32) -> Option<String> {
     let mins = curfew.cuts_grant_short_in(crate::clock::now(), minutes)?;
     Some(if mins == 0 {
         "Bedtime is in force now, so the PC will still shut down — screen time and bedtime are \
-         separate limits, and extra minutes do not move bedtime."
+         separate limits. Use \"Later bedtime tonight\" on the Curfew card to move bedtime itself."
             .to_string()
     } else {
         format!(
-            "Bedtime starts in {mins} min, so only about that much of this is usable tonight — \
-             screen time and bedtime are separate limits."
+            "Bedtime starts in {mins} min, so only about that much of this is usable tonight. \
+             \"Later bedtime tonight\" on the Curfew card moves bedtime itself."
         )
     })
 }
