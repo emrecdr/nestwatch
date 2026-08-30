@@ -55,13 +55,27 @@ impl AuditLog {
     }
 }
 
+/// A capture a person asked for.
+///
+/// Named here rather than spelled at the `record` call site, for exactly the reason
+/// [`screentime::ROLLUP_EVENT`](crate::screentime::ROLLUP_EVENT) is: it is now **read back as a
+/// filter** as well as written. Renaming it at the write site while this string stayed put would
+/// leave `views_on` matching nothing, so the child's "how often were you looked at" would read
+/// zero forever — a transparency feature failing silently, which is the one way it must not fail.
+/// The compiler cannot see a mismatch between two string literals; it can see a missing constant.
+pub const SCREENSHOT_EVENT: &str = "screenshot_taken";
+
+/// One coalesced window of timer-driven live-view frames. Same naming rule as
+/// [`SCREENSHOT_EVENT`].
+pub const LIVE_VIEW_EVENT: &str = "live_view";
+
 /// The events that mean *a parent looked at this screen*, as opposed to acted on the machine.
 ///
 /// `process_kill`, `lock_issued` and `shutdown_issued` are deliberately absent. The child sees
 /// those happen — an app closes, the screen locks — so counting them here would inflate a number
 /// whose whole claim is "this is how often you were watched", by adding events that were never
 /// watching.
-const VIEW_EVENTS: [&str; 2] = ["screenshot_taken", "live_view"];
+const VIEW_EVENTS: [&str; 2] = [SCREENSHOT_EVENT, LIVE_VIEW_EVENT];
 
 /// Upper bound on view lines held while counting. Live frames are already coalesced into one
 /// `live_view` line per window, and captures are human-driven, so a real day is orders below this;

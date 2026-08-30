@@ -544,24 +544,33 @@ pub fn recent_totals(rows: &[Value], today: NaiveDate, days: u32) -> Vec<DayTota
             .or_insert(minutes);
     }
 
-    let Some(end) = today.pred_opt() else {
-        return Vec::new();
-    };
-    let start = end - chrono::Duration::days(i64::from(days) - 1);
-    let mut out = Vec::new();
-    let mut cursor = start;
-    loop {
-        out.push(DayTotal {
+    window_ending_yesterday(today, days)
+        .map(|cursor| DayTotal {
             date: cursor.to_string(),
             minutes: by_date.get(&cursor).copied(),
-        });
-        if cursor >= end {
-            break;
-        }
-        let Some(next) = cursor.succ_opt() else { break };
-        cursor = next;
-    }
-    out
+        })
+        .collect()
+}
+
+/// The `days` completed days ending yesterday, oldest first.
+///
+/// One definition of "the window", because there are two callers and the rule is not obvious:
+/// the window **ends yesterday**, never today, since today's rollup has not been written and
+/// rendering it would show a confident zero for the day being lived through. Both callers had
+/// their own copy of that `pred_opt` guard, the `days - 1` span arithmetic, and a hand-rolled
+/// cursor loop with a `succ_opt` overflow break — three chances each to get the boundary wrong,
+/// and nothing that would have failed if the two drifted apart by a day.
+///
+/// Empty when `today` is the minimum representable date, which is the same "there is no completed
+/// day to report" both copies handled by returning early.
+fn window_ending_yesterday(today: NaiveDate, days: u32) -> impl Iterator<Item = NaiveDate> {
+    let end = today.pred_opt();
+    let start = end.map(|e| e - chrono::Duration::days(i64::from(days) - 1));
+    // `successors` rather than a loop: it stops at the end date, and `succ_opt` returning `None`
+    // (the maximum representable date) ends it rather than wrapping.
+    std::iter::successors(start, move |cur| {
+        cur.succ_opt().filter(|next| Some(*next) <= end)
+    })
 }
 
 /// Every rollup row available, from both the dedicated store and the legacy usage log.
@@ -634,19 +643,15 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
     let span = chrono::Duration::days(i64::from(days) - 1);
     let start = end - span;
 
-    let mut day_rows = Vec::new();
-    let mut cursor = start;
-    loop {
-        day_rows.push(match by_date.get(&cursor) {
+    // Same window as the child's own view, from the same definition — see
+    // `window_ending_yesterday`. `start`/`end` are still needed below for `window_total` and the
+    // previous-period comparison, so the guard above stays; only the walk is shared.
+    let day_rows: Vec<DayRow> = window_ending_yesterday(today, days)
+        .map(|cursor| match by_date.get(&cursor) {
             Some(row) => DayRow::measured(cursor, row),
             None => DayRow::unmeasured(cursor),
-        });
-        if cursor >= end {
-            break;
-        }
-        let Some(next) = cursor.succ_opt() else { break };
-        cursor = next;
-    }
+        })
+        .collect();
 
     let (total_mins, measured_days) = window_total(&by_date, start, end);
 

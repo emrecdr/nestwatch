@@ -15,6 +15,7 @@ use tower_sessions::Session;
 
 use crate::timereq::{MAX_REQUEST_MINUTES, PendingRequest};
 
+use crate::audit::{LIVE_VIEW_EVENT, SCREENSHOT_EVENT};
 use crate::config::Config;
 use crate::control::{ProcessInfo, SHOT_MIME, ShotTier, SystemControl};
 use crate::curfew::Curfew;
@@ -135,12 +136,17 @@ pub async fn screenshot(
     // and keeps one backup, so it would evict every login, kill and password change to make room
     // for a timer: exactly the failure the coalescer exists to prevent, arriving through the other
     // tier.
+    // Both names come from `audit`, which also reads them back to count how often the child was
+    // looked at. Named constants rather than literals, because a rename here that missed the
+    // reader would leave that count reading zero forever with nothing failing.
     if q.live.is_some() {
         if let Some(frames) = state.live_audit.observe(std::time::Instant::now()) {
-            state.audit.record("live_view", json!({ "frames": frames }));
+            state
+                .audit
+                .record(LIVE_VIEW_EVENT, json!({ "frames": frames }));
         }
     } else {
-        state.audit.record("screenshot_taken", json!({}));
+        state.audit.record(SCREENSHOT_EVENT, json!({}));
     }
 
     // Name the tier actually served, so the client records what it *got* rather than what it
