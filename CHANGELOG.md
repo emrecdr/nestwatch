@@ -5,6 +5,12 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 ## [Unreleased]
 
 ### Fixed
+- **Changes you make now take effect at once, instead of up to 30 seconds later.** Both enforcers
+  woke on a 30-second timer, so anything you did to call off a shutdown — extending bedtime,
+  granting time, pausing the rules, switching curfew off — reached them at their next tick. Against
+  a 60-second warning countdown that meant acting in the last half-minute could still lose: the PC
+  powered off after you had cancelled it. The enforcers now re-check the moment a setting changes,
+  measured at well under a second where it was previously up to 30.
 - **Approving more time during bedtime no longer looks like it worked.** Screen time and bedtime are
   two independent limits: granting minutes moves the daily budget and has never moved the curfew. So
   a request approved after bedtime had started was applied correctly and the PC shut down anyway,

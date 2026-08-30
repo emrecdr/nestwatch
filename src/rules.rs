@@ -1044,6 +1044,7 @@ pub async fn run_rules_enforcer(
     usage_log: Arc<crate::usage::UsageLog>,
     screentime_log: Arc<crate::screentime::ScreentimeLog>,
     foreground: crate::foreground::Feed,
+    mut wake: crate::heartbeat::Wake,
 ) {
     let tally_path = usage_state_path();
     let mut enforcer = RulesEnforcer::new(Usage::load_or_default(&tally_path));
@@ -1066,7 +1067,7 @@ pub async fn run_rules_enforcer(
     let mut last_saved_tally: Option<String> = None;
 
     loop {
-        crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Rules).await;
+        crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Rules, &mut wake).await;
 
         // Charge the time that actually passed, clamped to twice the interval. A hardcoded
         // CHECK_INTERVAL over-charges after any stall (suspend, CPU starvation, a slow scan);

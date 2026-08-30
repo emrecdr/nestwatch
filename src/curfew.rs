@@ -382,13 +382,14 @@ pub async fn run_enforcer(
     control: Arc<dyn SystemControl>,
     config: Arc<RwLock<Config>>,
     usage_log: Arc<crate::usage::UsageLog>,
+    mut wake: crate::heartbeat::Wake,
 ) {
     let mut enforcer = Enforcer::new();
     let mut ticker = tokio::time::interval(CHECK_INTERVAL);
     // See the note in `rules`: without this a resume from sleep replays every missed tick.
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Curfew).await;
+        crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Curfew, &mut wake).await;
 
         let (active, warn_secs, upcoming, lang) = {
             let guard = crate::state::recover_read(&config);

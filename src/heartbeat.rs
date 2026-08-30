@@ -53,9 +53,49 @@ fn cell(which: Enforcer) -> &'static AtomicI64 {
 /// build aborts, and the SCM restarts us), exited, or wedged inside a tick stops stamping, and
 /// the age grows without bound — the silent-death case this module exists to surface. The cost
 /// of stamping early is one tick of extra latency before a wedged tick reads as stale.
-pub async fn tick(ticker: &mut tokio::time::Interval, which: Enforcer) {
-    ticker.tick().await;
+pub async fn tick(ticker: &mut tokio::time::Interval, which: Enforcer, wake: &mut Wake) {
+    // Either the timer fired, or a parent changed something that affects enforcement.
+    //
+    // The second arm is what stops a pending shutdown outliving the decision to cancel it. Both
+    // loops own a shutdown they may have to abort, and both learned about a cancellation only at
+    // their next tick — up to `CHECK_INTERVAL` away, against a warning countdown that defaults to
+    // 60 seconds. So a parent who extended bedtime, granted time, paused the rules or switched
+    // curfew off in the last half-minute watched the machine power off anyway, having been told
+    // the opposite. Waking on the change closes that window to a round trip.
+    //
+    // Safe to wake early on both loops, and worth stating because it would not be for a loop that
+    // assumed its own cadence: `run_rules_enforcer` measures `now.duration_since(last_tick)` for
+    // accrual rather than adding a fixed interval, and the curfew enforcer reasons about deadlines
+    // rather than counting ticks. An extra evaluation costs one more pass over pure decision code.
+    //
+    // The stamp still happens on every path, so this cannot make a live loop look dead.
+    tokio::select! {
+        _ = ticker.tick() => {}
+        changed = wake.changed() => {
+            // The sender lives in `AppState`, which outlives these loops in the real server. If it
+            // is ever dropped first, `changed()` returns `Err` immediately and forever — so fall
+            // back to the timer rather than spinning on a closed channel.
+            if changed.is_err() {
+                ticker.tick().await;
+            }
+        }
+    }
     beat(which);
+}
+
+/// The receiving half of "a parent changed something — re-evaluate now".
+///
+/// A `watch` rather than a `Notify`: each receiver tracks its own version, so a change published
+/// while a loop is busy is still seen at its next await, and two loops both get it. A missed
+/// notification here is a shutdown that proceeds after it was cancelled.
+pub type Wake = tokio::sync::watch::Receiver<u64>;
+
+/// The sending half. `send_modify` bumps a counter; the value carries no meaning beyond "changed".
+pub type Waker = tokio::sync::watch::Sender<u64>;
+
+/// Tell both enforcers to re-evaluate now rather than at their next tick.
+pub fn wake(waker: &Waker) {
+    waker.send_modify(|n| *n = n.wrapping_add(1));
 }
 
 /// Record that `which` reached the top of a tick. Private: reaching it only through [`tick`] is
@@ -117,6 +157,47 @@ mod tests {
         assert!(
             worst >= 3600,
             "a dead enforcer must dominate a healthy one, got {worst}"
+        );
+    }
+
+    /// The point of the wake: a pending shutdown must not outlive the decision to cancel it.
+    ///
+    /// The interval here is five minutes, so if the wake arm did not exist this test would hang
+    /// rather than fail — which is the honest shape for "the loop waited for its timer". Measured
+    /// against the wall clock rather than a paused one because `tokio::time::pause` would make the
+    /// five-minute interval fire instantly and prove nothing.
+    #[tokio::test]
+    async fn a_parent_change_ends_the_wait_immediately() {
+        let (tx, mut rx) = tokio::sync::watch::channel(0u64);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(300));
+        ticker.tick().await; // `interval` yields its first tick immediately; consume it
+
+        let started = std::time::Instant::now();
+        wake(&tx);
+        tick(&mut ticker, Enforcer::Curfew, &mut rx).await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the wake must end the wait, not the 300s timer: waited {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The failure mode the `is_err` arm exists for. A closed channel makes `changed()` return
+    /// `Err` immediately and forever, so without the fallback the loop would spin at full speed —
+    /// burning a core and calling the enforcement path thousands of times a second.
+    #[tokio::test]
+    async fn a_dropped_waker_falls_back_to_the_timer_rather_than_spinning() {
+        let (tx, mut rx) = tokio::sync::watch::channel(0u64);
+        drop(tx);
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(80));
+        ticker.tick().await;
+
+        let started = std::time::Instant::now();
+        tick(&mut ticker, Enforcer::Curfew, &mut rx).await;
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(60),
+            "a closed channel must leave the timer in charge, not return instantly: {:?}",
+            started.elapsed()
         );
     }
 

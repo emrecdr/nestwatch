@@ -60,6 +60,14 @@ fn spawn_enforcer(rules: Rules) -> tokio::task::JoinHandle<()> {
         Arc::new(UsageLog::disabled()),
         Arc::new(ScreentimeLog::disabled()),
         Feed::new(),
+        // A wake channel nothing ever sends on, so this drives the timer path exactly as before.
+        // Held by a leaked sender rather than dropped: a dropped sender makes `changed()` return
+        // `Err` at once, which is a different code path from the one under test here.
+        {
+            let (tx, rx) = tokio::sync::watch::channel(0);
+            Box::leak(Box::new(tx));
+            rx
+        },
     ))
 }
 

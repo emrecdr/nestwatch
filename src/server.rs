@@ -164,8 +164,9 @@ pub async fn serve_with_handle(
         let control = state.control.clone();
         let config = state.config.clone();
         let usage = state.usage.clone();
+        let wake = state.enforcement_wake.subscribe();
         tokio::spawn(async move {
-            crate::curfew::run_enforcer(control, config, usage).await;
+            crate::curfew::run_enforcer(control, config, usage, wake).await;
             tracing::error!("curfew enforcer exited unexpectedly — curfew is no longer enforced");
         });
     }
@@ -191,8 +192,10 @@ pub async fn serve_with_handle(
         let usage = state.usage.clone();
         let screentime = state.screentime.clone();
         let foreground = foreground.clone();
+        let wake = state.enforcement_wake.subscribe();
         tokio::spawn(async move {
-            crate::rules::run_rules_enforcer(control, config, usage, screentime, foreground).await;
+            crate::rules::run_rules_enforcer(control, config, usage, screentime, foreground, wake)
+                .await;
             tracing::error!(
                 "rules enforcer exited unexpectedly — usage rules are no longer enforced"
             );

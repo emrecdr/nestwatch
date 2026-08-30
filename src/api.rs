@@ -92,7 +92,12 @@ where
     };
     spawn(move || snapshot.save())
         .await?
-        .map_err(AppError::Internal)
+        .map_err(AppError::Internal)?;
+    // After the save, so a woken enforcer reads the same config that reached disk. Every parent
+    // action that can invalidate a pending shutdown flows through here, which is why the wake
+    // lives at this choke point rather than in the four handlers that need it.
+    crate::heartbeat::wake(&state.enforcement_wake);
+    Ok(())
 }
 
 /// Query for [`screenshot`]. Absent means [`ShotTier::Full`] — see `ShotTier::from_arg`.

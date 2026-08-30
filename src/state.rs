@@ -75,6 +75,13 @@ pub struct AppState {
     /// others (the page polls once a minute) but present, because each call does file I/O on the
     /// shared blocking pool.
     pub status_limiter: Arc<SubmitLimiter>,
+    /// Tells the two enforcers to re-evaluate immediately, rather than at their next 30s tick.
+    ///
+    /// Sent by `api::try_update_config` — the single place config is mutated — so every parent
+    /// action that can invalidate a pending shutdown reaches the loops promptly: extending
+    /// bedtime, granting screen time, pausing the rules, switching curfew off. Without it the
+    /// abort could arrive after the warning countdown had already expired.
+    pub enforcement_wake: Arc<crate::heartbeat::Waker>,
     /// Login sessions, persisted so a service restart or reboot doesn't sign the parent out.
     /// Held here (rather than built inside `build_router`) so tests can swap in an ephemeral
     /// store and never touch the real data dir.
@@ -115,6 +122,7 @@ impl AppState {
             // 30/min: the /ask page polls once a minute plus a refresh after each redeem, so this
             // is far above real use while still capping a scripted flood.
             status_limiter: Arc::new(SubmitLimiter::new(30, std::time::Duration::from_secs(60))),
+            enforcement_wake: Arc::new(tokio::sync::watch::channel(0).0),
             sessions,
         }
     }
