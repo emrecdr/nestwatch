@@ -47,7 +47,7 @@ dbg_macro = "deny"
 
 [dependencies]
 anyhow = "1.0.103"
-argon2 = "0.5"
+argon2 = "0.6"
 # tower-sessions declares `SessionStore` with `#[async_trait]`, so our file-backed store has to
 # be annotated the same way. Already in the graph via tower-sessions — no new crate.
 async-trait = "0.1"
