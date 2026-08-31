@@ -27,7 +27,7 @@
 
 use std::path::{Path, PathBuf};
 
-use nestwatch::srcscan::statements;
+use nestwatch::srcscan::{production_source, statements};
 
 /// Files whose needle-shaped literal is **known safe**, each with the reason it is safe.
 ///
@@ -139,22 +139,38 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
             .replace('\\', "/");
         let text = std::fs::read_to_string(&path).unwrap_or_default();
 
-        // The shared helper IS the sanctioned answer, so a file using it is by definition fine.
-        if text.contains("srcscan::") {
-            continue;
-        }
+        // **Cut at the test module, and this is the guard's honest limit rather than an
+        // oversight.** A source scanner usually lives inside `#[cfg(test)]`, so cutting there
+        // hides some of what this exists to find — `O79` records it. Scanning the whole file was
+        // tried and produces false positives the rule cannot adjudicate: a test *fixture* holding
+        // a needle string, and a whole-text `split_once` in a file that uses `.lines()` somewhere
+        // unrelated, both look identical to a real line-oriented scanner at this resolution.
+        // Separating them needs the needle tied to a specific loop, which is a different rule
+        // rather than a tweak to this one. A guard with false positives gets deleted; a guard with
+        // a written-down blind spot gets improved.
+        let stmts = statements(production_source(&text));
+
+        // Adoption is a `use` ITEM, not any occurrence of the name. Matching the bare text let a
+        // single COMMENT naming the module switch the guard off for a whole file — demonstrated by
+        // adding one to `spawn_paths.rs` and watching it stop being checked. A comment cannot
+        // import anything, so requiring the import closes it.
+        let adopted = stmts
+            .iter()
+            .any(|(_, s)| s.starts_with("use ") && s.contains("srcscan"));
         let excused = KNOWN_SAFE.iter().find(|(f, _)| *f == rel);
 
-        // Line-oriented reading is only a hazard where a splittable needle also lives.
-        if !text.contains(".lines()") {
-            continue;
-        }
-        for (line, stmt) in statements(&text) {
-            if !holds_a_call_shaped_needle(&stmt) {
+        for (line, stmt) in &stmts {
+            if !holds_a_call_shaped_needle(stmt) {
                 continue;
             }
+            // Counted BEFORE the skips, so the anti-vacuity check below measures the detector
+            // rather than measuring whatever the exemptions happen to leave behind.
             needles_seen += 1;
-            if excused.is_none() {
+            // Line-oriented reading is the hazard; a whole-text scan is not one.
+            if !text.contains(".lines()") {
+                continue;
+            }
+            if !adopted && excused.is_none() {
                 offenders.push(format!(
                     "{rel}:{line}\n    {}\n    ^ a needle of the form `IDENT(` in a file that reads \
                      `.lines()`. rustfmt can break a call at exactly that point, and the scan would \

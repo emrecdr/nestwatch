@@ -49,38 +49,66 @@ pub fn production_source(text: &str) -> &str {
     }
 }
 
-/// The production source as whole statements, each paired with the line it starts on.
+/// `text` as whole statements, each paired with the line it starts on.
+///
+/// **Deliberately does not call [`production_source`]** — compose them when you want the cut:
+/// `statements(production_source(text))`. A guard that polices *other guards* has to see inside
+/// test modules, because that is exactly where a source scanner lives; cutting first made the
+/// needles in `web.rs` and `install.rs` invisible and left a meta-guard's anti-vacuity check
+/// resting on a single file.
 ///
 /// This is the reflow-tolerant reader. Lines are joined until parentheses balance and the text
 /// ends a statement, so a call and the arguments handed to it stay in one unit however the
 /// formatter has broken them up. The reported line is where the statement *starts*, which is the
 /// one a reader wants to be sent to.
 ///
-/// **No separator is inserted before a leading `.`, and that detail is load-bearing.** `rustfmt`
-/// breaks a method chain *at* the dot, so joining with a space turns `control` + `.shutdown(` into
-/// `control .shutdown(` — which contains `control.shutdown(` no more than the two separate lines
-/// did. The first version of this joiner did exactly that: it reassembled the statement and then
-/// broke it again with its own separator, and the probe still passed while the code looked fixed.
+/// **Two places take no separator, and both are load-bearing.** `rustfmt` breaks a call at exactly
+/// two points, and a space inserted at either one re-breaks the needle the join was meant to
+/// repair:
+///
+/// - before a leading `.`, because the formatter breaks a method chain *at* the dot — joining with
+///   a space turns `control` + `.shutdown(` into `control .shutdown(`, which contains
+///   `control.shutdown(` no more than the two separate lines did;
+/// - directly after an open `(`, because the formatter also breaks between a call's paren and its
+///   first argument — `Command::new(` + `"shutdown.exe"` must rejoin as `Command::new("…`, not
+///   `Command::new( "…`.
+///
+/// Each was got wrong once. The first version of this joiner inserted a space before the `.`: it
+/// reassembled the statement and then broke it again with its own separator, and the probe still
+/// passed while the code looked fixed. The second version fixed the dot and left the paren, which
+/// is **the shape that defeated two of the three original guards** — a scan for `Command::new("` or
+/// `.route("` still matched nothing. Found by the other session compiling this function and running
+/// the three real needles through it rather than reading it. Both are pinned by tests below.
+///
+/// A separator IS still inserted after `=`, deliberately: `let msg =` + `"text"` must rejoin as
+/// `let msg = "text"`, which is the shape the translation guard looks for.
 pub fn statements(text: &str) -> Vec<(usize, String)> {
     let mut out: Vec<(usize, String)> = Vec::new();
     let (mut buf, mut start, mut depth) = (String::new(), 0usize, 0i32);
 
-    for (i, raw) in production_source(text).lines().enumerate() {
+    for (i, raw) in text.lines().enumerate() {
         let trimmed = raw.trim();
         if trimmed.starts_with("//") || (buf.is_empty() && trimmed.is_empty()) {
             continue;
         }
         if buf.is_empty() {
             start = i + 1;
-        } else if !trimmed.starts_with('.') {
+        } else if !trimmed.starts_with('.') && !buf.ends_with('(') {
             buf.push(' ');
         }
         buf.push_str(trimmed);
 
-        // Quotes are not tracked. A bracket inside a string literal can only *delay* the close,
-        // which joins more text than needed; over-joining costs a noisier message, while the
-        // under-joining this replaced cost the whole guarantee.
-        depth += trimmed.matches('(').count() as i32 - trimmed.matches(')').count() as i32;
+        // Char literals holding a bracket are scrubbed first. `s.matches('(')` is ordinary Rust
+        // and it used to increment the depth without ever closing, so the statement ran on and
+        // swallowed everything after it — which a scanner then read as one enormous statement and
+        // reported needles at the wrong place. This module's own body contains that exact call,
+        // so it mis-parsed itself.
+        //
+        // String literals are still not tracked, and that stays a deliberate asymmetry: a bracket
+        // inside a `"…"` can only *delay* the close, which over-joins and costs a noisier message.
+        // The char-literal case was different in kind because it could never be balanced at all.
+        let scrubbed = trimmed.replace("'('", "").replace("')'", "");
+        depth += scrubbed.matches('(').count() as i32 - scrubbed.matches(')').count() as i32;
         let ends = trimmed.ends_with(';') || trimmed.ends_with('{') || trimmed.ends_with('}');
         if depth <= 0 && ends {
             out.push((start, std::mem::take(&mut buf)));
@@ -112,6 +140,73 @@ mod tests {
             all.contains("control.shutdown(") && all.contains('"'),
             "the sink and the literal handed to it must land in the SAME statement, or a scan can \
              see one without the other and pass"
+        );
+    }
+
+    /// The paren shape — the one that defeated two of the three original guards.
+    ///
+    /// `rustfmt` breaks between a call's paren and its first argument at least as readily as at a
+    /// dot, and these are the two real needles it hid. This test exists because the joiner shipped
+    /// handling the dot and not the paren, which made the module doc's promise false for exactly
+    /// the cases it named.
+    #[test]
+    fn a_call_split_between_its_paren_and_first_argument_is_rejoined() {
+        for (needle, src) in [
+            (
+                "Command::new(\"",
+                "fn f() {\n    let c = Command::new(\n        \"shutdown.exe\",\n    );\n}\n",
+            ),
+            (
+                ".route(\"",
+                "fn f() {\n    r = r\n        .route(\n            \"/ask\",\n            get(h),\n        );\n}\n",
+            ),
+        ] {
+            let joined = statements(src)
+                .into_iter()
+                .map(|(_, s)| s)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                joined.contains(needle),
+                "`{needle}` was not rebuilt — a scan for it would match nothing:\n{joined}"
+            );
+        }
+    }
+
+    /// …but a binding still keeps its spaces, which the paren fix must not break.
+    ///
+    /// `let msg =` + `"text"` has to rejoin as `let msg = "text"`. Suppressing the separator before
+    /// every quote — the obvious way to fix the paren case — would produce `let msg ="text"` and
+    /// blind the translation guard instead. Only an open paren suppresses it.
+    #[test]
+    fn a_binding_keeps_the_space_the_paren_fix_removes_elsewhere() {
+        let src = "fn f() {\n    let msg =\n        \"Screen time is up.\";\n}\n";
+        let joined = statements(src)
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("let msg = \""),
+            "not rejoined as a binding:\n{joined}"
+        );
+    }
+
+    /// A bracket in a char literal must not open a statement that never closes.
+    ///
+    /// `s.matches('(')` is unremarkable Rust, and an unbalanced depth made every following line
+    /// join the same statement — so a scan over it reported needles at whatever line the run-on
+    /// had started, and a meta-guard built on this flagged three files that were fine. Caught
+    /// because this module's own body contains that call and therefore mis-parsed itself.
+    #[test]
+    fn a_bracket_in_a_char_literal_does_not_run_the_statement_on() {
+        let src = "fn f() {\n    let n = s.matches('(').count();\n    let m = 1;\n}\n";
+        let joined: Vec<String> = statements(src).into_iter().map(|(_, s)| s).collect();
+        assert!(
+            joined
+                .iter()
+                .any(|s| s.contains("let n =") && !s.contains("let m")),
+            "the char-literal statement ran on and swallowed what followed it: {joined:?}"
         );
     }
 

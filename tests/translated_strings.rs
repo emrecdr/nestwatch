@@ -97,7 +97,7 @@ fn no_child_facing_string_is_written_in_place_of_a_translation() {
     let mut sinks_seen = 0usize;
 
     for (path, text) in sources() {
-        for (n, stmt) in statements(&text) {
+        for (n, stmt) in statements(production_source(&text)) {
             let trimmed = stmt.as_str();
             let at = format!("{}:{n}", path.display());
 
