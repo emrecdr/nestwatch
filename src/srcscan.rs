@@ -30,6 +30,8 @@
 //! So it is an ordinary `pub` module. The cost is a few pure string functions compiled into the
 //! library that production never calls; nothing in the binary references them.
 
+use std::borrow::Cow;
+
 /// The part of a source file above its unit-test module.
 ///
 /// Test code writes `let msg = "expected wording"` legitimately and constantly, so a scan that
@@ -107,7 +109,14 @@ pub fn statements(text: &str) -> Vec<(usize, String)> {
         // String literals are still not tracked, and that stays a deliberate asymmetry: a bracket
         // inside a `"…"` can only *delay* the close, which over-joins and costs a noisier message.
         // The char-literal case was different in kind because it could never be balanced at all.
-        let scrubbed = trimmed.replace("'('", "").replace("')'", "");
+        // Only allocate when there is something to scrub. The unconditional form built two
+        // `String`s for every line of every scanned file, and the overwhelming majority contain no
+        // char literal at all.
+        let scrubbed = if trimmed.contains("'(") || trimmed.contains("')") {
+            Cow::Owned(trimmed.replace("'('", "").replace("')'", ""))
+        } else {
+            Cow::Borrowed(trimmed)
+        };
         depth += scrubbed.matches('(').count() as i32 - scrubbed.matches(')').count() as i32;
         let ends = trimmed.ends_with(';') || trimmed.ends_with('{') || trimmed.ends_with('}');
         if depth <= 0 && ends {
@@ -125,13 +134,25 @@ pub fn statements(text: &str) -> Vec<(usize, String)> {
 mod tests {
     use super::*;
 
+    /// The statements of `src`, one per line — what every test here asserts against.
+    ///
+    /// Written out five times before this existed, in two spellings, which is the shape that makes
+    /// a sixth test a sixth variant.
+    fn joined(src: &str) -> String {
+        parts(src).join("\n")
+    }
+
+    /// The statements of `src`, for the two tests that need them apart rather than run together.
+    fn parts(src: &str) -> Vec<String> {
+        statements(src).into_iter().map(|(_, s)| s).collect()
+    }
+
     /// The shape every one of the three blind guards was defeated by.
     #[test]
     fn a_call_the_formatter_has_broken_up_is_read_as_one_statement() {
         let src = "fn f() {\n    let _ = control\n        .shutdown(\n            60,\n            \
                    Some(\"Bedtime.\".to_string()),\n        );\n}\n";
-        let joined: Vec<String> = statements(src).into_iter().map(|(_, s)| s).collect();
-        let all = joined.join("\n");
+        let all = joined(src);
         assert!(
             all.contains("control.shutdown("),
             "the method chain was not rejoined — this is the whole point of the module:\n{all}"
@@ -161,35 +182,12 @@ mod tests {
                 "fn f() {\n    r = r\n        .route(\n            \"/ask\",\n            get(h),\n        );\n}\n",
             ),
         ] {
-            let joined = statements(src)
-                .into_iter()
-                .map(|(_, s)| s)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let all = joined(src);
             assert!(
-                joined.contains(needle),
-                "`{needle}` was not rebuilt — a scan for it would match nothing:\n{joined}"
+                all.contains(needle),
+                "`{needle}` was not rebuilt — a scan for it would match nothing:\n{all}"
             );
         }
-    }
-
-    /// …but a binding still keeps its spaces, which the paren fix must not break.
-    ///
-    /// `let msg =` + `"text"` has to rejoin as `let msg = "text"`. Suppressing the separator before
-    /// every quote — the obvious way to fix the paren case — would produce `let msg ="text"` and
-    /// blind the translation guard instead. Only an open paren suppresses it.
-    #[test]
-    fn a_binding_keeps_the_space_the_paren_fix_removes_elsewhere() {
-        let src = "fn f() {\n    let msg =\n        \"Screen time is up.\";\n}\n";
-        let joined = statements(src)
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            joined.contains("let msg = \""),
-            "not rejoined as a binding:\n{joined}"
-        );
     }
 
     /// A bracket in a char literal must not open a statement that never closes.
@@ -201,25 +199,31 @@ mod tests {
     #[test]
     fn a_bracket_in_a_char_literal_does_not_run_the_statement_on() {
         let src = "fn f() {\n    let n = s.matches('(').count();\n    let m = 1;\n}\n";
-        let joined: Vec<String> = statements(src).into_iter().map(|(_, s)| s).collect();
+        let stmts = parts(src);
         assert!(
-            joined
+            stmts
                 .iter()
                 .any(|s| s.contains("let n =") && !s.contains("let m")),
-            "the char-literal statement ran on and swallowed what followed it: {joined:?}"
+            "the char-literal statement ran on and swallowed what followed it: {stmts:?}"
         );
     }
 
-    /// A binding broken after the `=` is the same failure wearing different clothes.
+    /// A binding broken after the `=` is the same failure wearing different clothes — **and it is
+    /// what stops the paren fix being written too broadly.**
+    ///
+    /// `let msg =` + `"text"` must rejoin as `let msg = "text"`. The obvious way to make
+    /// `Command::new(` + `"…"` rejoin is to suppress the separator before every `"`, which would
+    /// produce `let msg ="text"` here and blind the translation guard instead. Only an open paren
+    /// suppresses it, and this test is what fails if someone widens that rule.
+    ///
+    /// A second fixture was added for that trade and then removed: it differed only by a trailing
+    /// `.to_string()`, drove the identical branch, and asserted the identical string, so it failed
+    /// and passed in lockstep with this one. Two tests moving together are one test and one
+    /// liability.
     #[test]
     fn a_binding_split_after_the_equals_is_read_as_one_statement() {
         let src = "fn f() {\n    let msg =\n        \"Screen time is up.\".to_string();\n}\n";
-        let all = statements(src)
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(all.contains("let msg = \""), "not rejoined:\n{all}");
+        assert!(joined(src).contains("let msg = \""), "not rejoined");
     }
 
     /// The reported line is the statement's first, not its last.

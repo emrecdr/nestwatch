@@ -22,43 +22,10 @@
 //! way one could reach them. That is the trade for having no false positives — see
 //! `MESSAGE_BINDINGS`.
 
-use std::path::{Path, PathBuf};
-
 use nestwatch::srcscan::{production_source, statements};
 
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
-
-/// Every `.rs` file under `src/`, paired with its contents.
-fn sources() -> Vec<(PathBuf, String)> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    rust_files(&src, &mut files);
-    assert!(
-        !files.is_empty(),
-        "no sources found under {} — this test would silently pass forever",
-        src.display()
-    );
-    files
-        .into_iter()
-        .map(|p| {
-            let text = std::fs::read_to_string(&p)
-                .unwrap_or_else(|e| panic!("reading {}: {e}", p.display()));
-            (p, text)
-        })
-        .collect()
-}
+mod common;
+use common::crate_sources;
 
 /// The names a message takes in the moment before it is handed to the child.
 ///
@@ -96,7 +63,7 @@ fn no_child_facing_string_is_written_in_place_of_a_translation() {
     // pass forever while the guarantee quietly lapsed. Counting them makes that failure loud.
     let mut sinks_seen = 0usize;
 
-    for (path, text) in sources() {
+    for (path, text) in crate_sources(&["src"]) {
         for (n, stmt) in statements(production_source(&text)) {
             let trimmed = stmt.as_str();
             let at = format!("{}:{n}", path.display());
@@ -149,7 +116,7 @@ fn no_child_facing_string_is_written_in_place_of_a_translation() {
 #[test]
 fn every_file_is_scanned_down_to_its_own_tests() {
     let mut cut = 0usize;
-    for (path, text) in sources() {
+    for (path, text) in crate_sources(&["src"]) {
         let rest = &text[production_source(&text).len()..];
         assert!(
             rest.is_empty() || rest.starts_with("\n#[cfg(test)]\nmod tests"),

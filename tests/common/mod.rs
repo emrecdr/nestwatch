@@ -250,3 +250,54 @@ pub fn idle_waker() -> nestwatch::heartbeat::Wake {
     Box::leak(Box::new(tx));
     rx
 }
+
+// ---------------------------------------------------------------------------
+// Reading the crate's own source
+// ---------------------------------------------------------------------------
+//
+// Three test binaries scan this repository's sources to defend a property — no program launched by
+// bare name, no unauthenticated route outside a known list, no child-facing string written in
+// place of a translation. All three had opened the tree themselves, with byte-identical recursion
+// and two slightly different wrappers around it (`O80`).
+
+/// Every `.rs` file under `dir`, recursively, appended to `out`.
+pub fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Every `.rs` file under each of `dirs` (relative to the crate root), paired with its contents.
+///
+/// **Panics when a directory yields nothing**, deliberately. A scan whose input silently became
+/// empty is the failure mode every guard in this repo has had at least once: it keeps reporting
+/// success while reading nothing at all, and no assertion downstream can tell the difference.
+pub fn crate_sources(dirs: &[&str]) -> Vec<(PathBuf, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for d in dirs {
+        let dir = root.join(d);
+        let before = files.len();
+        rust_files(&dir, &mut files);
+        assert!(
+            files.len() > before,
+            "no .rs files under {} — this scan would pass forever while reading nothing",
+            dir.display()
+        );
+    }
+    files
+        .into_iter()
+        .map(|p| {
+            let text = std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("reading {}: {e}", p.display()));
+            (p, text)
+        })
+        .collect()
+}

@@ -25,9 +25,12 @@
 //! written in a language this does not read. The trade is deliberate: the rule has no false
 //! positives across the tree today, and a guard that cries wolf is one somebody deletes.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use nestwatch::srcscan::{production_source, statements};
+
+mod common;
+use common::crate_sources;
 
 /// Files whose needle-shaped literal is **known safe**, each with the reason it is safe.
 ///
@@ -36,11 +39,12 @@ use nestwatch::srcscan::{production_source, statements};
 /// row here is a decision someone has to write a sentence about.
 ///
 /// **The exemption is per file, not per needle, and that is a real limitation rather than a
-/// simplification.** `tests/spawn_paths.rs` is listed for its `system32(` needles, and that listing
-/// also covers its `Command::new("` needle — so if the reflow-tolerance there were ever reverted,
-/// this guard would not notice. Per-needle exemptions would close that, at the cost of an
-/// exemption list keyed on the very strings it is policing, which rots differently. Listed as the
-/// trade it is; the file's own fixture test is what actually holds that one.
+/// simplification.** `tests/spawn_paths.rs` holds several needle-shaped literals; the row below
+/// justifies the one that actually fires, and the exemption then covers all of them — so if the
+/// reflow-tolerance on any of the others were reverted, this guard would not notice. Per-needle
+/// exemptions would close it, at the cost of an exemption list keyed on the very strings it is
+/// policing, which rots differently. Listed as the trade it is; each file's own fixture tests are
+/// what actually hold the needles this excuses.
 const KNOWN_SAFE: [(&str, &str); 3] = [
     (
         "tests/spawn_paths.rs",
@@ -64,20 +68,6 @@ const KNOWN_SAFE: [(&str, &str); 3] = [
          requires it to be present, so a reflow fails the test rather than silencing it.",
     ),
 ];
-
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
 
 /// A string literal of the form `IDENT(` — an identifier immediately followed by an open paren.
 ///
@@ -123,24 +113,15 @@ fn holds_a_call_shaped_needle(stmt: &str) -> bool {
 #[test]
 fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    rust_files(&root.join("src"), &mut files);
-    rust_files(&root.join("tests"), &mut files);
-    assert!(
-        !files.is_empty(),
-        "no sources found — this test would pass forever"
-    );
-
     let mut offenders = Vec::new();
     let mut needles_seen = 0usize;
 
-    for path in files {
+    for (path, text) in crate_sources(&["src", "tests"]) {
         let rel = path
             .strip_prefix(root)
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
-        let text = std::fs::read_to_string(&path).unwrap_or_default();
 
         // **Cut at the test module, and this is the guard's honest limit rather than an
         // oversight.** A source scanner usually lives inside `#[cfg(test)]`, so cutting there
@@ -157,10 +138,19 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
         // single COMMENT naming the module switch the guard off for a whole file — demonstrated by
         // adding one to `spawn_paths.rs` and watching it stop being checked. A comment cannot
         // import anything, so requiring the import closes it.
-        let adopted = stmts
-            .iter()
-            .any(|(_, s)| s.starts_with("use ") && s.contains("srcscan"));
+        // The import must name `statements`, not merely `srcscan`. `production_source` is the other
+        // export and it does nothing about reflow — a file importing only that one, while still
+        // hand-rolling a line-oriented needle scan, would otherwise be excused for the very thing
+        // this guard is about. Adoption means using the tolerant reader, not touching the module.
+        let adopted = stmts.iter().any(|(_, s)| {
+            s.starts_with("use ") && s.contains("srcscan") && s.contains("statements")
+        });
         let excused = KNOWN_SAFE.iter().find(|(f, _)| *f == rel);
+        // Line-oriented reading is the hazard; a whole-text scan is not one. Hoisted beside its two
+        // siblings because it is a property of the FILE — inside the loop it re-scanned the whole
+        // text once per needle, which is O(needles × filesize) in a guard whose express purpose is
+        // to attract more needles.
+        let reads_lines = text.contains(".lines()");
 
         for (line, stmt) in &stmts {
             if !holds_a_call_shaped_needle(stmt) {
@@ -169,8 +159,7 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
             // Counted BEFORE the skips, so the anti-vacuity check below measures the detector
             // rather than measuring whatever the exemptions happen to leave behind.
             needles_seen += 1;
-            // Line-oriented reading is the hazard; a whole-text scan is not one.
-            if !text.contains(".lines()") {
+            if !reads_lines {
                 continue;
             }
             if !adopted && excused.is_none() {
