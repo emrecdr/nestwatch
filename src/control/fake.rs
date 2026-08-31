@@ -21,7 +21,10 @@ pub struct FakeControl {
     /// toast beside it. Two real defects lived in that string with nothing able to observe it: it
     /// was hard-coded English on every install, and it was the one child-facing message that never
     /// carried the "where to ask for more time" address. A `tracing::warn!` cannot be asserted on,
-    /// so the loop that builds it had no test at all (`docs/OPEN-FINDINGS.md` O70).
+    /// so nothing could reach the loop that builds it. `tests/enforcer_shutdown.rs` and
+    /// `tests/curfew_enforcer.rs` now do, through this field; `docs/OPEN-FINDINGS.md` O70 tracks
+    /// what a driver test still cannot see, which is the *order* the loop does things in —
+    /// `notify_user` is still only a log line, so the warnings remain unassertable.
     shutdowns: Mutex<Vec<(u32, Option<String>)>>,
 }
 
@@ -222,6 +225,38 @@ mod tests {
         assert!(
             running(&c).iter().all(|(pid, _)| *pid != victim),
             "the killed process is still reported as running"
+        );
+    }
+
+    /// The log is bounded, and it is bounded at the **front**.
+    ///
+    /// Both halves matter and neither is visible from the call site. `control::new()` hands this
+    /// type to the real server on every non-Windows build, where `shutdown` is a no-op — so the
+    /// machine never powers off, the curfew enforcer re-issues for the whole window, and an
+    /// unbounded `Vec` grows all night in a process nothing restarts. That is the cap.
+    ///
+    /// Which end it drops is the part a future tidy-up would get wrong. A ring buffer keeping the
+    /// *newest* is the more usual shape, and it would leave every existing assertion still
+    /// compiling while silently renumbering what `shutdowns()[0]` means — the first shutdown a
+    /// test asserts on becomes whichever one happened to survive.
+    #[test]
+    fn the_shutdown_log_is_capped_and_keeps_the_oldest() {
+        let c = FakeControl::new();
+        for i in 0..(SHUTDOWN_LOG_CAP as u32 + 10) {
+            c.shutdown(i, Some(format!("notice {i}"))).unwrap();
+        }
+
+        let log = c.shutdowns();
+        assert_eq!(log.len(), SHUTDOWN_LOG_CAP, "the log grew past its cap");
+        assert_eq!(
+            log[0],
+            (0, Some("notice 0".to_string())),
+            "the front of the log moved — assertions that index from it now read a different call"
+        );
+        assert_eq!(
+            log[SHUTDOWN_LOG_CAP - 1].0,
+            SHUTDOWN_LOG_CAP as u32 - 1,
+            "the retained window is not the first {SHUTDOWN_LOG_CAP} calls"
         );
     }
 }
