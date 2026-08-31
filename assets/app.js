@@ -1880,7 +1880,11 @@ function app() {
         const r = await this.postJSON("/api/curfew/extend", { minutes: mins });
         if (r.ok) {
           const j = await r.json().catch(() => ({}));
-          this.curfewUntil = j.until || null;
+          // `curfewUntil` is deliberately NOT set from `j.until` here. `loadCurfew()` below is the
+          // single place it is derived, and it applies a rule this response cannot: render the
+          // label only while the instant is still in the future. Setting it from the response as
+          // well was dead on arrival — overwritten moments later — except on the one path where
+          // `loadCurfew()` fails, where it left the un-future-checked value on screen.
           this.toast(`Bedtime pushed back ${mins} min`, "success");
           // Screen time can still stop them tonight even though bedtime no longer will.
           this.noteOtherLimit(j);

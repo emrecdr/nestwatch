@@ -618,8 +618,6 @@ pub async fn extend_curfew(
         "curfew_extended",
         json!({ "minutes": minutes, "until": until_local }),
     );
-    // The Today card shows whether bedtime is in force, and a second dashboard may be open.
-    notify(&state, "usage");
     Ok(Json(json!({
         "ok": true,
         "minutes": minutes,
@@ -682,20 +680,29 @@ fn grant_shadowed_by_curfew(state: &AppState, minutes: u32) -> Option<String> {
 /// not fail the parent's extension. The cost is a missing sentence, not a missing grant.
 async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<String> {
     let today = crate::config::today();
-    let (rules, extra) = {
-        let cfg = crate::state::recover_read(&state.config);
-        (cfg.rules.clone(), cfg.extra.for_day(today))
-    };
+    // Tally first, config second. The read guard is a `std::RwLock`, so it cannot be held across
+    // the `await` — and taking it first meant cloning the whole `Rules` (blocklist, per-app limits,
+    // groups, per-weekday budgets) to carry three fields past the suspension point. Loading first
+    // leaves the guard entirely inside the synchronous tail, where a borrow is enough.
     let usage = spawn(move || crate::rules::Usage::load_for_today(today))
         .await
         .ok()?;
-    let left = rules.budget_cuts_extension_short(today, extra, &usage, minutes)?;
+    let (left, budget_action) = {
+        let cfg = crate::state::recover_read(&state.config);
+        let left = cfg.rules.budget_cuts_extension_short(
+            today,
+            cfg.extra.for_day(today),
+            &usage,
+            minutes,
+        )?;
+        (left, cfg.rules.budget_action)
+    };
     // Exhaustive rather than a `_` fallback. `Warn` cannot reach here — it interrupts nobody, so
     // `budget_cuts_extension_short` filters it — but a wildcard would have silently told a
     // Warn-configured household that their PC "will still lock" if that filter were ever relaxed,
     // and a fourth action would inherit whichever verb happened to be the default. Naming all
     // three makes the compiler ask the next person which one applies.
-    let stops = match rules.budget_action {
+    let stops = match budget_action {
         crate::rules::EnforceAction::Shutdown => "shut down",
         crate::rules::EnforceAction::Lock => "lock",
         crate::rules::EnforceAction::Warn => return None,
