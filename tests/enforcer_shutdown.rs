@@ -23,7 +23,6 @@
 //! the loop's own code, arriving at `SystemControl::shutdown`.
 
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
 
 use nestwatch::config::{Language, data_paths};
 use nestwatch::control::{FakeControl, SystemControl};
@@ -33,26 +32,11 @@ use nestwatch::screentime::ScreentimeLog;
 use nestwatch::usage::UsageLog;
 
 mod common;
-use common::{ScratchDir, test_config};
-
-/// Longest we wait for the first tick's shutdown before calling it absent.
-const SETTLE: Duration = Duration::from_secs(5);
+use common::{ScratchDir, idle_waker, test_config, wait_for};
 
 /// The port this install is on — deliberately not 8443, so a hint that hard-coded the default
 /// would fail here rather than pass by coincidence.
 const PORT: u16 = 9443;
-
-/// Poll `cond` until it holds or [`SETTLE`] elapses.
-async fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + SETTLE;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    false
-}
 
 /// Write a tally that leaves the child well over budget the moment the loop starts.
 ///
@@ -102,13 +86,7 @@ async fn a_dutch_child_is_told_in_dutch_why_the_pc_is_shutting_down_and_where_to
         Arc::new(UsageLog::disabled()),
         Arc::new(ScreentimeLog::disabled()),
         Feed::new(),
-        {
-            // A wake channel nothing sends on; leaked rather than dropped so `changed()` does not
-            // return `Err` at once, which is a different path from the timer one under test.
-            let (tx, rx) = tokio::sync::watch::channel(0);
-            Box::leak(Box::new(tx));
-            rx
-        },
+        idle_waker(),
     ));
 
     let arrived = wait_for(|| !fake.shutdowns().is_empty()).await;

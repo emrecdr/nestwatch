@@ -196,3 +196,57 @@ pub async fn body_json(res: axum::response::Response) -> Value {
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
 }
+
+// ---------------------------------------------------------------------------
+// Driving the enforcement loops
+// ---------------------------------------------------------------------------
+//
+// Three binaries spawn a real enforcer against a `FakeControl` and wait for it to do something:
+// `enforcer_loop` (what a tick writes to the tally), `enforcer_shutdown` (the bytes the child sees
+// when screen time runs out) and `curfew_enforcer` (the same at bedtime). They had a copy each of
+// the three pieces below, comments included — which is how `idle_waker`'s reasoning came to be
+// written out three times in three slightly different wordings, none of them the obvious place to
+// look.
+
+/// Longest we wait for a tick's observable before calling it absent.
+///
+/// Generously above the milliseconds a first tick actually takes — a slow CI box must not turn
+/// these red.
+pub const SETTLE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Poll `cond` until it holds or [`SETTLE`] elapses.
+///
+/// Condition-based rather than a fixed sleep, so a pass is a real signal and not a guess about how
+/// fast the machine is — and a failure costs `SETTLE` only when the thing genuinely never happens.
+pub async fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + SETTLE;
+    while std::time::Instant::now() < deadline {
+        if cond() {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    false
+}
+
+/// A wake channel nothing ever sends on, so the loop under test drives its **timer** path.
+///
+/// **The sender is leaked, and that is the whole point of having this as a function.** Dropping it
+/// makes `changed()` return `Err` immediately and forever, which is a different arm of
+/// `heartbeat::tick` — the spin-guard arm that `a_dropped_waker_falls_back_to_the_timer_rather_than_spinning`
+/// covers deliberately. A test that means "no wake ever arrives" and accidentally writes "the
+/// waker is gone" is still green while measuring the wrong path, and nothing about the shape of
+/// the code says so. Written out inline three times, that is three chances to tidy the leak away
+/// as if it were an oversight.
+///
+/// **The obvious alternative — return the sender and let the test hold it — was considered and
+/// rejected.** It trades one leaked `watch::Sender` per test process, freed at exit, for a binding
+/// the caller must get right: `let _tx = ..` keeps it alive, `let _ = ..` drops it immediately and
+/// silently puts the loop back on the `Err` arm. That is the same footgun [`ScratchDir`] above
+/// carries a paragraph of warning about, because it already caught someone here. One leak that
+/// cannot be misused beats a second guard that can.
+pub fn idle_waker() -> nestwatch::heartbeat::Wake {
+    let (tx, rx) = tokio::sync::watch::channel(0);
+    Box::leak(Box::new(tx));
+    rx
+}

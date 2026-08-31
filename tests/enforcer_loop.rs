@@ -30,7 +30,7 @@
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nestwatch::config::data_paths;
 use nestwatch::control::{FakeControl, SystemControl};
@@ -40,11 +40,7 @@ use nestwatch::screentime::ScreentimeLog;
 use nestwatch::usage::UsageLog;
 
 mod common;
-use common::{ScratchDir, test_config};
-
-/// Longest we wait for a tick's observable before calling it absent. Generously above the
-/// milliseconds a first tick actually takes — a slow CI box must not turn this red.
-const SETTLE: Duration = Duration::from_secs(5);
+use common::{ScratchDir, idle_waker, test_config, wait_for};
 
 /// Start the enforcer with `rules` and nothing else changed. Returns the handle so the caller can
 /// abort it; the loop never returns on its own.
@@ -60,28 +56,8 @@ fn spawn_enforcer(rules: Rules) -> tokio::task::JoinHandle<()> {
         Arc::new(UsageLog::disabled()),
         Arc::new(ScreentimeLog::disabled()),
         Feed::new(),
-        // A wake channel nothing ever sends on, so this drives the timer path exactly as before.
-        // Held by a leaked sender rather than dropped: a dropped sender makes `changed()` return
-        // `Err` at once, which is a different code path from the one under test here.
-        {
-            let (tx, rx) = tokio::sync::watch::channel(0);
-            Box::leak(Box::new(tx));
-            rx
-        },
+        idle_waker(),
     ))
-}
-
-/// Poll `cond` until it holds or [`SETTLE`] elapses. Condition-based rather than a fixed sleep, so
-/// the pass is a real signal and not a guess about how fast the machine is.
-async fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + SETTLE;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    false
 }
 
 fn tally_path() -> std::path::PathBuf {

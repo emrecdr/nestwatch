@@ -25,27 +25,14 @@
 //! directory — unlike the rules enforcer, which persists a tally.
 
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
 
 use nestwatch::config::{Config, Language};
 use nestwatch::control::{FakeControl, SystemControl};
 use nestwatch::curfew::{Curfew, run_enforcer};
 use nestwatch::usage::UsageLog;
 
-/// Longest we wait for the first tick's shutdown before calling it absent.
-const SETTLE: Duration = Duration::from_secs(5);
-
-/// Poll `cond` until it holds or [`SETTLE`] elapses.
-async fn wait_for(mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + SETTLE;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    false
-}
+mod common;
+use common::{idle_waker, wait_for};
 
 /// A window that is open right now, whatever "now" happens to be on the machine running this.
 ///
@@ -82,13 +69,7 @@ async fn a_dutch_child_is_told_in_dutch_that_bedtime_is_shutting_the_pc_down() {
         control,
         Arc::new(RwLock::new(cfg)),
         Arc::new(UsageLog::disabled()),
-        {
-            // A wake channel nothing sends on, leaked rather than dropped so `changed()` does not
-            // return `Err` at once — a different path from the timer one under test.
-            let (tx, rx) = tokio::sync::watch::channel(0);
-            Box::leak(Box::new(tx));
-            rx
-        },
+        idle_waker(),
     ));
 
     let arrived = wait_for(|| !fake.shutdowns().is_empty()).await;
