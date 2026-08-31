@@ -1092,3 +1092,45 @@ desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
 `ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
 and a third size axis is exactly what it was written against. Weigh those before touching it.
 
+
+### O74 · A bedtime extension can be granted but never taken back
+
+**Later bedtime tonight** offers +15/+30/+60 and nothing else. There is no way to shorten an
+extension, and no way to cancel one. A parent who meant +15 and hit +60 has no route back:
+
+* Saving the curfew form deliberately preserves `extra_until` — that is the fix for a real defect
+  (`tests/curfew_extend.rs`, phase 3), so the obvious escape hatch is the one thing guaranteed not
+  to work.
+* Switching curfew off and on again preserves it too, for the same reason.
+* Nothing else on the dashboard touches the field. Only editing `config.json` by hand clears it,
+  which requires Administrator and is not something a parent at 22:00 will do.
+
+So the control is one-way by construction, and its irreversibility is a *consequence* of the fix
+next to it rather than a decision anyone made.
+
+**Why this is worth an entry rather than a quick button.** Current guidance on destructive or
+hard-to-reverse actions measures them on reversibility, frequency and complexity, and prefers an
+**undo** over a confirmation dialog wherever the action can be reversed: a confirm on every press
+would tax the common case (the parent meant it) to protect the rare one. That argues for a way out
+after the fact, not a speed bump before it — most likely a "Back to normal" control that appears
+only while an extension is running and clears `extra_until`.
+
+**The part that needs deciding, and is why this is not just written.** Clearing the field is not
+symmetric with granting it. An extension that has already been *announced* has, in effect, been
+promised to the child — they were not shut down at 22:00 and have arranged the rest of their evening
+around it. Revoking silently at 22:20 hands the child the same experience this whole feature exists
+to prevent, only with the parent as the cause. Options worth weighing:
+
+* **Clear outright**, and accept that bedtime can arrive early. Simplest, and the honest reading of
+  "undo" — but the child loses the *advance* notice, not merely some of it: once `extra_until` goes,
+  `is_active_at` is true immediately, so `mins_until_active` returns `None` and the "bedtime in N
+  minutes" popups never fire. They still get the shutdown's own `warn_secs` grace (60s by default),
+  which is the Windows dialog rather than a heads-up.
+* **Clear, but never sooner than `LOOKAHEAD_MINS`**, so the child always gets the same "bedtime in
+  N minutes" warning they would have had. Kinder, slightly more code, and it makes an undo that is
+  not quite an undo.
+* **Offer −15/−30 rather than a clear**, mirroring the grant. Reversible in the same units it was
+  granted in, and it cannot land the child in an immediate shutdown unless the parent walks it there.
+
+Not urgent: the failure is a parent granting more time than they meant to, which is the benign
+direction. Filed so the asymmetry is a choice next time rather than an oversight.
