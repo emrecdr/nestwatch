@@ -53,6 +53,19 @@ pub fn production_source(text: &str) -> &str {
 
 /// `text` as whole statements, each paired with the line it starts on.
 ///
+/// **Prefer [`find_tokens`]. This is the weaker primitive and it has one consumer left.** It joins
+/// lines until parentheses balance, which is approximate in ways that are not fixable by patching:
+/// a binding inside a closure is swallowed into the enclosing statement, an `#[allow(...)]` line
+/// prepends itself to the statement below it, and one trailing comment holding an unbalanced `(`
+/// corrupts the depth for the rest of the file. Measured: 115 of 1,716 statements across six
+/// production files span ten or more lines, the worst 56.
+///
+/// Whether that matters depends entirely on what the consumer asserts. `translated_strings.rs`
+/// anchored its rule to a statement's *start*, so over-joining cost it the whole guarantee — three
+/// ordinary shapes silently switched the guard off, and it has been rewritten onto `find_tokens`.
+/// `scanner_guards.rs` asserts on content found anywhere *within* a statement, so over-joining
+/// costs it a wrong line number in a failure message and nothing else.
+///
 /// **Takes `text` as given; it does not cut at the test module.** Compose when you want the cut:
 /// `statements(production_source(text))`. Both callers do — the cut is a policy each guard states
 /// for itself rather than something this reader decides for them.
@@ -134,6 +147,84 @@ pub fn statements(text: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// 1-based line number containing byte offset `at`.
+pub fn line_of(text: &str, at: usize) -> usize {
+    text[..at].matches('\n').count() + 1
+}
+
+/// Whether the line containing `at` is a comment line.
+///
+/// Judged by the line the match *starts* on, the same rule `spawn_paths.rs` uses — parsing comments
+/// properly is `O63` and not needed here. A doc comment quoting a call shape is not a call.
+fn in_a_comment_line(text: &str, at: usize) -> bool {
+    let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+    text[line_start..at].trim_start().starts_with("//")
+}
+
+/// Byte offsets where `tokens` appear **in order, separated only by whitespace**.
+///
+/// This is the reflow-proof primitive, and it is deliberately not a parser. `rustfmt` can only ever
+/// put whitespace between the pieces of a call, so skipping whitespace between tokens is the whole
+/// of what tolerance requires: `find_tokens(text, &["Command::new", "(", "\""])` matches the call
+/// however the formatter has broken it, on one line or five.
+///
+/// **It replaced a statement-reconstructing reader, and the reason is worth keeping.** That reader
+/// joined lines until parentheses balanced, which made every scan built on it fail open on ordinary
+/// Rust: a binding inside a closure was swallowed into the enclosing statement, an
+/// `#[allow(...)]` line above a binding prepended itself to it, and a single trailing comment
+/// containing an unbalanced `(` corrupted the depth for the rest of the file. Measured, not
+/// feared — three of the three shapes tried were missed, and 115 of 1,716 "statements" across six
+/// production files spanned ten or more lines, the worst 56. Matching tokens never reconstructs a
+/// statement, so none of those shapes exists to be got wrong.
+///
+/// Matches beginning on a comment line are skipped; see [`in_a_comment_line`].
+pub fn find_tokens(text: &str, tokens: &[&str]) -> Vec<usize> {
+    let Some((first, rest)) = tokens.split_first() else {
+        return Vec::new();
+    };
+    text.match_indices(first)
+        .filter(|(at, _)| !in_a_comment_line(text, *at))
+        .filter_map(|(at, needle)| {
+            let mut cursor = at + needle.len();
+            for tok in rest {
+                let after = text[cursor..].trim_start();
+                if !after.starts_with(tok) {
+                    return None;
+                }
+                // `trim_start` moved the cursor by however much whitespace it removed.
+                cursor = text.len() - after.len() + tok.len();
+            }
+            Some(at)
+        })
+        .collect()
+}
+
+/// The text between the parentheses of the call whose `(` is the first one at or after `from`.
+///
+/// Bounded and local: it balances parentheses from one known opening, rather than reconstructing
+/// statements across a file. A call's arguments are where a hard-coded string hides when it is not
+/// the first argument — `control.shutdown(60, Some("…"))` — so a token sequence alone cannot see
+/// it, and this is the smallest thing that can.
+///
+/// `None` when there is no `(` after `from`, or when it is never closed.
+pub fn call_arguments(text: &str, from: usize) -> Option<&str> {
+    let open = from + text[from..].find('(')?;
+    let mut depth = 0i32;
+    for (i, c) in text[open..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&text[open + 1..open + i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +240,72 @@ mod tests {
     /// The statements of `src`, for the two tests that need them apart rather than run together.
     fn parts(src: &str) -> Vec<String> {
         statements(src).into_iter().map(|(_, s)| s).collect()
+    }
+
+    /// The four shapes that defeated the statement reader this replaced.
+    ///
+    /// Every one of them made a scan miss a binding it was written to catch, and every one fails
+    /// *open* — which is the defect class the module exists to close, reproduced inside it. They
+    /// are fixtures rather than a probe against the tree so they keep holding after the tree stops
+    /// happening to contain an example.
+    #[test]
+    fn token_matching_survives_what_statement_joining_did_not() {
+        for (label, src) in [
+            ("plain", "fn f() {\n    let msg = \"Bedtime.\";\n}\n"),
+            (
+                "inside a closure",
+                "fn f() {\n    x.map(|y| {\n        let msg = \"Bedtime.\";\n    });\n}\n",
+            ),
+            (
+                "under an attribute",
+                "fn f() {\n    #[allow(dead_code)]\n    let msg = \"Bedtime.\";\n}\n",
+            ),
+            (
+                "after a comment holding an unbalanced paren",
+                "fn f() {\n    let a = 1; // see notify_child(\n    let msg = \"Bedtime.\";\n}\n",
+            ),
+            (
+                "broken across lines by the formatter",
+                "fn f() {\n    let msg =\n        \"Bedtime.\";\n}\n",
+            ),
+        ] {
+            assert_eq!(
+                find_tokens(src, &["let msg", "=", "\""]).len(),
+                1,
+                "missed the binding {label}"
+            );
+        }
+    }
+
+    /// A comment naming the shape is not the shape.
+    #[test]
+    fn a_call_written_only_in_a_comment_is_not_a_hit() {
+        let src = "fn f() {\n    // let msg = \"Bedtime.\";\n    let x = 1;\n}\n";
+        assert!(find_tokens(src, &["let msg", "=", "\""]).is_empty());
+    }
+
+    /// Tokens must be consecutive-modulo-whitespace, or the matcher would agree with anything.
+    #[test]
+    fn tokens_separated_by_anything_but_whitespace_do_not_match() {
+        let src = "fn f() {\n    let msg = compute(\"x\");\n}\n";
+        assert!(
+            find_tokens(src, &["let msg", "=", "\""]).is_empty(),
+            "`let msg = compute(\"x\")` binds a call result, not a literal"
+        );
+    }
+
+    /// A literal that is not the first argument still has to be found.
+    #[test]
+    fn call_arguments_reaches_a_literal_that_is_not_the_first_argument() {
+        let src = "fn f() {\n    control\n        .shutdown(\n            60,\n            Some(\"Bedtime.\".into()),\n        );\n}\n";
+        let at = *find_tokens(src, &["control", ".shutdown", "("])
+            .first()
+            .expect("the reflowed sink must be found");
+        let args = call_arguments(src, at).expect("the call must close");
+        assert!(
+            args.contains('"'),
+            "the literal in the second argument was not reachable: {args}"
+        );
     }
 
     /// The shape every one of the three blind guards was defeated by.

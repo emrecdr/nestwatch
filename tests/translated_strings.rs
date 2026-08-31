@@ -22,7 +22,7 @@
 //! way one could reach them. That is the trade for having no false positives — see
 //! `MESSAGE_BINDINGS`.
 
-use nestwatch::srcscan::{production_source, statements};
+use nestwatch::srcscan::{call_arguments, find_tokens, line_of, production_source};
 
 mod common;
 use common::crate_sources;
@@ -41,20 +41,17 @@ const MESSAGE_BINDINGS: [&str; 3] = ["msg", "body", "title"];
 /// `control::notify(` earns its place separately from `notify_child(`: the latter is `rules.rs`'s
 /// own wrapper, but `curfew.rs` calls the underlying helper directly for the bedtime countdown, so
 /// listing only the wrapper left the child's *other* notification path unwatched.
-const CHILD_FACING_SINKS: [&str; 3] = ["control.shutdown(", "notify_child(", "control::notify("];
-
-/// Whether `trimmed` binds `binding` to a string written in place rather than translated.
+/// Written as token sequences rather than as one string, and the split point is the whole reason.
 ///
-/// Covers `format!` as well as a plain literal. A bare `"…"` was how both real defects were
-/// written, but the moment one of these messages needs to interpolate a countdown the natural
-/// thing to reach for is `let msg = format!("… {secs} …")` — still English, still hard-coded, and
-/// invisible to a check that only looked for an opening quote.
-fn binds_a_literal(trimmed: &str, binding: &str) -> bool {
-    let Some(rhs) = trimmed.strip_prefix(&format!("let {binding} = ")) else {
-        return false;
-    };
-    rhs.starts_with('"') || rhs.starts_with("format!(\"")
-}
+/// `rustfmt` breaks a method chain **before** the dot, so the tolerant match has to look for
+/// `control` then `.shutdown` — deriving the tokens by splitting `"control.shutdown("` produced
+/// `control.` and `shutdown`, which never matches a call the formatter has broken, and silently
+/// reintroduced the exact blindness this guard exists for. Caught by probe, not by review.
+const CHILD_FACING_SINKS: [&[&str]; 3] = [
+    &["control", ".shutdown", "("],
+    &["notify_child", "("],
+    &["control", "::notify", "("],
+];
 
 #[test]
 fn no_child_facing_string_is_written_in_place_of_a_translation() {
@@ -63,24 +60,46 @@ fn no_child_facing_string_is_written_in_place_of_a_translation() {
     // pass forever while the guarantee quietly lapsed. Counting them makes that failure loud.
     let mut sinks_seen = 0usize;
 
-    for (path, text) in crate_sources(&["src"]) {
-        for (n, stmt) in statements(production_source(&text)) {
-            let trimmed = stmt.as_str();
-            let at = format!("{}:{n}", path.display());
+    for (path, full) in crate_sources(&["src"]) {
+        let text = production_source(&full);
 
-            if MESSAGE_BINDINGS.iter().any(|b| binds_a_literal(trimmed, b)) {
-                offenders.push(format!(
-                    "{at}\n    {trimmed}\n    ^ a literal the child will read. Build it in a \
-                     `*_message(lang)` fn beside the others and call that instead."
-                ));
-            }
-
-            if CHILD_FACING_SINKS.iter().any(|s| trimmed.contains(s)) {
-                sinks_seen += 1;
-                if trimmed.contains('"') {
+        // A binding to a literal written in place. `format!` earns its own sequence: the moment one
+        // of these messages needs to interpolate a countdown, `let msg = format!("… {secs} …")` is
+        // the natural thing to reach for — still English, still hard-coded, and invisible to a
+        // check that only looked for an opening quote.
+        for binding in MESSAGE_BINDINGS {
+            let owned = format!("let {binding}");
+            for tokens in [
+                [owned.as_str(), "=", "\""].as_slice(),
+                [owned.as_str(), "=", "format!", "(", "\""].as_slice(),
+            ] {
+                for at in find_tokens(text, tokens) {
                     offenders.push(format!(
-                        "{at}\n    {trimmed}\n    ^ a literal passed straight to the child. Same \
-                         fix: a `*_message(lang)` fn."
+                        "{}:{}\n    ^ `{binding}` is bound to a literal the child will read. Build \
+                         it in a `*_message(lang)` fn beside the others and call that instead.",
+                        path.display(),
+                        line_of(text, at)
+                    ));
+                }
+            }
+        }
+
+        // A literal handed straight to a sink. The literal is not necessarily the first argument —
+        // `control.shutdown(60, Some("…"))` is the real shape — so the whole argument list is
+        // examined rather than the token immediately after the paren.
+        for sink in CHILD_FACING_SINKS {
+            for at in find_tokens(text, sink) {
+                sinks_seen += 1;
+                let Some(args) = call_arguments(text, at) else {
+                    continue;
+                };
+                if args.contains('"') {
+                    offenders.push(format!(
+                        "{}:{}\n    {}\n    ^ a literal passed straight to the child. Same fix: a \
+                         `*_message(lang)` fn.",
+                        path.display(),
+                        line_of(text, at),
+                        args.split_whitespace().collect::<Vec<_>>().join(" ")
                     ));
                 }
             }
