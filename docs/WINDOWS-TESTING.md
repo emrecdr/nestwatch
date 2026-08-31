@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 182 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 188 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -108,7 +108,13 @@ failures rather than being surprised by them.
 - [ ] `nestwatch.exe install` (or `install --port <N>`) completes and prints a **TLS SHA-256
       fingerprint** — write it down.
 - [ ] The success output shows the **real LAN URL** (e.g. `https://192.168.1.42:8443`), not a
-      `<this-pc>` placeholder, plus the child's `/ask` URL.
+      `<this-pc>` placeholder, and the second address line is the **machine name** labelled
+      *(from another PC — survives an IP change)*.
+- [ ] **The child's `/ask` line is `https://localhost:<port>/ask`** — deliberately *not* the LAN IP
+      the two lines above it use. The child is at this machine, and the LAN IP is the one address
+      that stops resolving when the router hands out a new lease. This is the line that broke in
+      the field: a reboot changed the lease and the parent went hunting for an address that had
+      already moved, with the working one printed directly above it and unlabelled.
 - [ ] **Scan the QR** with your phone's camera → it opens the dashboard **already signed in**
       (after the one-time certificate warning). Then confirm the token is single-use: opening the
       same pairing URL again in a private window shows the **login page**, not the dashboard.
@@ -811,6 +817,33 @@ a check that cannot fail is worse than no check.
       at the top, and its "min left" must match the Today card's when both are visible. A blank
       strip means an Alpine directive failed to parse — the CSP build renders nothing rather than
       erroring, so an empty strip is indistinguishable from "nothing to report".
+
+### H6. What the child is told, and where they are sent
+
+Four screen-time notices now carry the address of the child's own page; the bedtime one deliberately
+does not. That asymmetry is the point of the section — a checklist that only proves the address
+*appears* would pass just as well if it appeared everywhere, which would be the defect.
+
+- [ ] **The countdown notices carry the ask link.** As HIM, run the budget down. At 15, 5 and 1
+      minutes a notice appears, and each ends with a second line reading
+      `Need more? https://localhost:<port>/ask` (Dutch: `Meer nodig?`). **`localhost`, not the LAN
+      IP** — that is the whole fix, and it is what keeps working after the router reboots.
+- [ ] **The link actually opens from that notice.** Type it into HIS browser exactly as printed. It
+      must load his page, not a certificate warning and not a refusal. `localhost` is a SAN on the
+      certificate and loopback is admitted by the LAN gate, so both halves have to hold — and this
+      is the only place they are checked together on real hardware.
+- [ ] **The shutdown ending carries it too.** Set the screen-time action to **Shut down** rather than
+      Lock and run the budget out. Windows' own shutdown dialog must carry the same `Need more?`
+      line. This is the harsher of the two endings and, until this release, the one that told the
+      child nothing — a coin-flip on a setting chosen for unrelated reasons.
+- [ ] **Bedtime does NOT offer it.** Let a curfew window open. The bedtime notice must carry **no**
+      ask link, because approving time cannot move bedtime — the PC shuts down anyway. If the link
+      appears here, the child is being invited to ask for something the system will refuse, and the
+      parent is made to be the one who says no.
+- [ ] **Both shutdown notices are in the child's language.** With Dutch set, run out the budget on a
+      Shutdown-configured install, and separately let bedtime arrive. Both dialogs must be Dutch.
+      These were English on every install until this release, which meant a Dutch household got a
+      Dutch countdown and then an English explanation of why the machine was going off.
 
 ## Troubleshooting
 
