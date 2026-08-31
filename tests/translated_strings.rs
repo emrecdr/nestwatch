@@ -117,6 +117,70 @@ fn binds_a_literal(trimmed: &str, binding: &str) -> bool {
     rhs.starts_with('"') || rhs.starts_with("format!(\"")
 }
 
+/// The production source as **whole statements**, each paired with the line it starts on.
+///
+/// Scanning raw lines is what made the first version of this guard blind, and blind in the one
+/// direction that matters: `rustfmt` splits a call the moment it grows past the width, so
+///
+/// ```ignore
+/// control
+///     .shutdown(
+///         60,
+///         Some("Bedtime - this computer is shutting down.".to_string()),
+///     );
+/// ```
+///
+/// contains no line holding `control.shutdown(`, and no line holding both a sink and a quote. The
+/// scan passed over exactly the defect it exists to catch — verified by inserting that probe into
+/// `curfew.rs` against the shipped guard and watching it report success.
+///
+/// The trigger is not exotic. A call acquires that shape automatically as soon as its arguments
+/// get long enough, which is precisely when a message is being composed rather than passed
+/// through. The sibling scanner in `server.rs` was found to have the same blindness on the same
+/// day, for routes rather than for messages — a line-oriented scan over a language whose
+/// formatter reflows lines is the shared mistake, not two coincidences.
+///
+/// Statements are joined until parentheses balance and the text ends the statement, so a sink and
+/// the literal handed to it always land in the same unit however the formatter has broken them.
+/// The reported line is where the statement *starts*, which is the one a reader wants.
+fn statements(text: &str) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let (mut buf, mut start, mut depth) = (String::new(), 0usize, 0i32);
+
+    for (i, raw) in production_source(text).lines().enumerate() {
+        let trimmed = raw.trim();
+        if trimmed.starts_with("//") || (buf.is_empty() && trimmed.is_empty()) {
+            continue;
+        }
+        if buf.is_empty() {
+            start = i + 1;
+        } else if !trimmed.starts_with('.') {
+            // No separator before a leading `.`, and that detail is the whole fix rather than a
+            // nicety. `rustfmt` breaks a method chain *at* the dot, so joining with a space turns
+            // `control` + `.shutdown(` into `control .shutdown(` — which does not contain
+            // `control.shutdown(` any more than the two separate lines did. The first version of
+            // this joiner did exactly that and the probe still slipped through: the statement was
+            // reassembled and then broken again by its own separator.
+            buf.push(' ');
+        }
+        buf.push_str(trimmed);
+
+        // Quotes are not tracked: a `(` or `)` inside a string literal can only *delay* the close,
+        // which joins more text than needed. Over-joining costs a noisier offender message; the
+        // under-joining this replaced cost the whole guarantee.
+        depth += trimmed.matches('(').count() as i32 - trimmed.matches(')').count() as i32;
+        let ends = trimmed.ends_with(';') || trimmed.ends_with('{') || trimmed.ends_with('}');
+        if depth <= 0 && ends {
+            out.push((start, std::mem::take(&mut buf)));
+            depth = 0;
+        }
+    }
+    if !buf.is_empty() {
+        out.push((start, buf));
+    }
+    out
+}
+
 #[test]
 fn no_child_facing_string_is_written_in_place_of_a_translation() {
     let mut offenders = Vec::new();
@@ -125,11 +189,8 @@ fn no_child_facing_string_is_written_in_place_of_a_translation() {
     let mut sinks_seen = 0usize;
 
     for (path, text) in sources() {
-        for (i, line) in production_source(&text).lines().enumerate() {
-            let (n, trimmed) = (i + 1, line.trim());
-            if trimmed.starts_with("//") {
-                continue;
-            }
+        for (n, stmt) in statements(&text) {
+            let trimmed = stmt.as_str();
             let at = format!("{}:{n}", path.display());
 
             if MESSAGE_BINDINGS.iter().any(|b| binds_a_literal(trimmed, b)) {
