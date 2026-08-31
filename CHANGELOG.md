@@ -2,7 +2,7 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
-## [Unreleased]
+## [0.5.0] — 2026-08-31
 
 ### Fixed
 - **Changes you make now take effect at once, instead of up to 30 seconds later.** Both enforcers
