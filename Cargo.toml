@@ -1,6 +1,6 @@
 [package]
 name = "nestwatch"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 license = "MIT"
 # Matches the pin in rust-toolchain.toml, which CI and local builds both use — so this is the

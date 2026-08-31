@@ -2,7 +2,7 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
-## [Unreleased]
+## [0.5.1] — 2026-08-31
 
 ### Security
 - **The dashboard is no longer open to a page on another port when you view it from an older
@@ -36,6 +36,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 - Added `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy`, both `same-origin`. These
   are enforced by the browser rather than asked of it, so they still apply on the older browsers
   the first item above is about.
+
+- **A second guard, this one over the child's own notices, could not see part of what it guarded.**
+  Every message the child reads is meant to be built by a translation function, and a test scans the
+  codebase to catch one written in place instead. It read the source a line at a time, so a call the
+  formatter had broken across lines — which happens automatically once the arguments grow, exactly
+  when a message is being composed — was invisible to it. A hardcoded English shutdown notice in
+  that shape passed. Demonstrated by inserting one and watching the test report success. It now
+  reads whole statements, so a call and the text handed to it stay together however they are laid
+  out.
 
 ### Documentation
 - **The README now says that one install manages one child.** There is a single budget, curfew and
