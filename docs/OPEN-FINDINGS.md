@@ -1282,29 +1282,34 @@ Neither reaches a locked phone. That limit is real and must stay stated — but 
 all" and "cannot notify while away from the page" are different claims, and the docs currently make
 the stronger one.
 
-### O79 · `spawn_paths::bare_name_spawns` still hand-rolls a scan that `srcscan::find_tokens` now does better
+### O79 · The meta-guard classifies a file as line-oriented from a substring of its own comments
 
-**The class is closed.** A guard whose needle spans a syntactic boundary was defeated by `rustfmt`;
-`src/srcscan.rs` is the shared answer and `tests/scanner_guards.rs` pushes new scanners onto it.
-Everything this entry used to list is fixed and shipped in `432e616`, `e8f257e`, `837c03f` and
-`f76ba07`. One piece of work is left, and it is a migration rather than a defect.
+**The class is otherwise closed.** A guard whose needle spans a syntactic boundary is defeated by
+`rustfmt`; `src/srcscan.rs` is the shared answer and `tests/scanner_guards.rs` pushes new scanners
+onto it. Every scanner in the crate now reads tokens rather than lines, the last two migrating in
+`f76ba07` and the commit that added this entry. What is left is how the meta-guard decides which
+files to police.
 
-`bare_name_spawns` matches `Command::new(` with `match_indices` over the whole text and then
-hand-rolls the whitespace tolerance, the comment skip and the argument extraction — roughly fifteen
-lines of index arithmetic. `find_tokens(text, &["Command::new", "("])` plus `line_of` now does all of
-it, and `call_arguments` covers the extraction.
+**`reads_lines` is `text.contains(".lines()")` over the whole file, comments included.** So a file
+that no longer reads a line anywhere is still classified as line-oriented if any comment in it
+*mentions* `.lines()` — and `tests/spawn_paths.rs` is now exactly that file: its scanners use
+`find_tokens`, and the only `.lines()` left is a doc comment recording the historical bug. It
+remains on the `KNOWN_SAFE` list for that reason alone.
 
-**Measured 2026-08-31 against `f76ba07`, on a fixture holding a needle literal on line 2 above a
-real split call whose `Command::new(` is on line 7:** `find_tokens` reports lines 2 and 7;
-the superseded `statements` reports only line 2 — it misses the real call outright. The false
-positive on line 2 is shared with today's hand-roll, which matches the needle inside a string
-literal for the same reason, so adopting trades nothing away.
+This is the mirror of the defect fixed in `e8f257e`, which stopped adoption being decided by a
+substring. Both read code out of prose; they differ only in direction — that one over-exempted, this
+one over-reports. Over-reporting is the safe direction, which is why this is a tidy-up rather than a
+hole, but the two rules should not disagree about whether comments are code.
 
-**Fix.** Rewrite `bare_name_spawns` over `find_tokens`. Keep the fixture test
-`the_bare_name_scan_sees_a_call_the_formatter_has_broken_up` exactly as it is — it asserts the
-detector's contract, not its implementation, so it is the check that the migration preserved
-behaviour. Re-run the planted-offender mutation afterwards; that is what caught this scan failing
-open in the first place.
+**Adoption has the same shape, and its content is now wrong.** `adopted` requires the `use` item to
+name `statements` — the reader `f76ba07` replaced *for failing open*. A file importing `find_tokens`,
+the primitive that superseded it, is therefore not credited with adopting anything, and the guard's
+own failure message still tells authors to use `statements`.
+
+**Fix.** Decide both from parsed items rather than raw text: `reads_lines` from a `.lines()` call
+outside comments, `adopted` from a `use` naming any of the reflow-proof primitives. Then delete the
+`tests/spawn_paths.rs` row from `KNOWN_SAFE`, whose stated reason — that its needle is matched with
+`match_indices` over the whole text — is stale as of this commit.
 
 
 ## Not covered by any of this

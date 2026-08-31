@@ -12,11 +12,31 @@
 
 use std::path::Path;
 
+use nestwatch::srcscan::{find_tokens, line_of};
+
 mod common;
 use common::crate_sources;
 
-/// Byte offsets in `text` where a program is spawned by a **bare name** — `Command::new("…")`
-/// with a literal rather than a resolved path.
+/// The string literal opening the call matched at `at`, which the caller has already established
+/// begins with a quote.
+///
+/// An unterminated literal cannot compile, so it only arrives by someone editing a scan. It is
+/// still reported rather than dropped: losing a hit because the name could not be read would be
+/// these guards failing open one level below the failure they exist to close.
+fn literal_after(text: &str, at: usize) -> &str {
+    let open = at + text[at..].find('"').expect("caller matched a quote token");
+    let rest = &text[open + 1..];
+    rest.find('"')
+        .map_or("<unterminated literal>", |end| &rest[..end])
+}
+
+/// Every place `text` spawns a program by a **bare name** — `Command::new("…")` with a literal
+/// rather than a resolved path — as the line the call is on and the program it names.
+///
+/// Returning the program, not just the position, is what lets the failure identify the offending
+/// binary. It used to return offsets and the caller printed the starting line's text, which for a
+/// call the formatter had split is `Command::new(` and nothing else — so the one report whose job
+/// is to name the binary did not contain it, in exactly the case this scan exists to catch.
 ///
 /// **Scans the whole text, not line by line, and that is the entire point.** This guard read
 /// `text.lines()` looking for `Command::new("` until 2026-08-31, when the same blindness was found
@@ -43,51 +63,27 @@ use common::crate_sources;
 /// that the reflowed shape is ordinary code in this tree, so the tolerance below is exercised
 /// against the real sources and not only against the fixtures.
 ///
-/// Worth recording that its neighbour [`scan_call_sites`] survives the same reflow, and by
-/// construction rather than by care: it counts `system32(` against `system32("` on each line, so a
-/// broken call yields one call and no literal, trips `calls > literals`, and lands in `unreadable`
-/// — which asserts. That one fails **closed**. This one failed **open**. Same file, opposite
-/// directions. The class is tracked as `O79`.
+/// Its neighbour [`scan_call_sites`] had the same weakness and survived it by luck rather than by
+/// care: comparing `system32(` against `system32("` per line meant a broken call produced a count
+/// mismatch and landed in the bucket that asserts, so it failed **closed** while this one failed
+/// **open**. Same file, same blind spot, opposite consequences — which is the argument for both
+/// reading tokens now instead of each carrying its own idea of what a call looks like.
 ///
-/// # Why this is still hand-rolled, and why that is now only a matter of time
+/// # Why this reads tokens rather than text
 ///
-/// `src/srcscan.rs` is the sanctioned answer to this hazard. Every objection that once kept this
-/// scan out of it has been answered: `432e616` taught the joiner to rebuild a needle broken between
-/// a paren and its first argument, `e8f257e` stopped the meta-guard deciding adoption from a
-/// substring of a file's own text, and `f76ba07` replaced statement rebuilding with
-/// `find_tokens`, which matches tokens separated only by whitespace and reports the offset of the
-/// match itself.
+/// `find_tokens` matches its tokens in order separated only by whitespace, which is the whole of
+/// what reflow tolerance requires: whitespace is the only thing `rustfmt` can insert between the
+/// pieces of a call. It reports the offset of the match itself, so the failure below names the line
+/// the call is on rather than the line some enclosing construct started on, and it skips comment
+/// lines already.
 ///
-/// That last one removed the final objection, which was about the failure message rather than the
-/// detection: the reader this scan declined to use reported the line a rebuilt statement began on,
-/// not the line of the match. Measured against `f76ba07` on a fixture with a needle literal above a
-/// real split call, `find_tokens` reports both the literal and the call at their own lines, while
-/// the old reader missed the call entirely.
-///
-/// So what is below is superseded, not defended. `find_tokens(text, &["Command::new", "("])` with
-/// `line_of` replaces the index arithmetic here, and `O79` carries the migration. Left in place
-/// only because replacing it is a change of its own, with its own mutation proof — not because
-/// there is anything left to weigh.
+/// This scan hand-rolled all three of those until `f76ba07` landed the primitive. The hand-roll is
+/// gone rather than defended: keeping a private copy of a shared reflow rule is what let three
+/// guards in this crate drift into failing open on the same day.
 fn bare_name_spawns(text: &str) -> Vec<(usize, &str)> {
-    text.match_indices("Command::new(")
-        .filter_map(|(at, needle)| {
-            // A doc example mentions the call shape without being one. Judge by the line the call
-            // *starts* on, the same way `scan_call_sites` does — parsing comments properly is `O63`.
-            let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
-            if text[line_start..at].trim_start().starts_with("//") {
-                return None;
-            }
-            // The literal need not be the next character: whatever the formatter put between the
-            // paren and the argument is whitespace, and skipping it is what makes this reflow-proof.
-            let arg = text[at + needle.len()..].trim_start().strip_prefix('"')?;
-            // Returning the program rather than the offset is what lets the failure name it. An
-            // unterminated literal cannot compile, but it still counts as a hit: losing one here
-            // would be the scan failing open again, one level down.
-            let program = arg
-                .find('"')
-                .map_or("<unterminated literal>", |end| &arg[..end]);
-            Some((text[..at].matches('\n').count() + 1, program))
-        })
+    find_tokens(text, &["Command::new", "(", "\""])
+        .into_iter()
+        .map(|at| (line_of(text, at), literal_after(text, at)))
         .collect()
 }
 
@@ -184,25 +180,27 @@ fn requested_system_binaries() -> Vec<(String, String)> {
 /// Counting both matters: extracting only literals would quietly ignore `system32(SOME_CONST)`,
 /// leaving that call site unverified while the test still passed — the same silent-gap shape
 /// this whole check exists to remove.
+///
+/// **Every call, then the subset opening with a literal.** The difference is what cannot be
+/// checked. Reading it as two token searches rather than as counts-per-line is what makes it
+/// reflow-proof: the old form compared `system32(` against `system32("` on a single line, which
+/// happened to fail closed when the formatter split a call — a broken call yielded a count mismatch
+/// and landed in `unreadable`, so it complained rather than went quiet. That was luck, not design,
+/// and it was the last line-oriented scan in this file.
 fn scan_call_sites() -> (Vec<(String, String)>, Vec<String>) {
     let (mut found, mut unreadable) = (Vec::new(), Vec::new());
     for (path, text) in crate_sources(&["src"]) {
-        for (n, line) in text.lines().enumerate() {
-            // Doc examples mention the call shape without being call sites.
-            if line.trim_start().starts_with("//") {
+        let opens_with_literal = find_tokens(&text, &["system32", "(", "\""]);
+        for at in find_tokens(&text, &["system32", "("]) {
+            // `fn system32(` is the definition, not a call.
+            if text[..at].trim_end().ends_with("fn") {
                 continue;
             }
-            let at = format!("{}:{}", path.display(), n + 1);
-            // `fn system32(` is the definition, not a call.
-            let calls = line.matches("system32(").count() - line.matches("fn system32(").count();
-            let literals = line.matches("system32(\"").count();
-            if calls > literals {
-                unreadable.push(format!("  {at} — {}", line.trim()));
-            }
-            for tail in line.split("system32(\"").skip(1) {
-                if let Some((name, _)) = tail.split_once('"') {
-                    found.push((name.to_string(), at.clone()));
-                }
+            let site = format!("{}:{}", path.display(), line_of(&text, at));
+            if opens_with_literal.contains(&at) {
+                found.push((literal_after(&text, at).to_string(), site));
+            } else {
+                unreadable.push(format!("  {site} — first argument is not a string literal"));
             }
         }
     }

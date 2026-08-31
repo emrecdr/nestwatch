@@ -20,9 +20,10 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   <br>This is the third guard found with the same blindness in one day, after the route guard in
   0.5.1 below and a sibling in the other session's work, and a sweep found no fourth. What makes the
   *next* such guard safe by default — one shared reflow-tolerant reader, plus a build-time check
-  that new guards use it — landed separately in the other session's work. What is still open is
-  narrower, and recorded as `O79`: this particular scan has not yet been moved onto the shared
-  reader, which now does the same job in fewer lines.
+  that new guards use it — landed separately in the other session's work. Both scanners in that file now read
+  tokens through the shared helper rather than carrying private copies of the reflow rule, which is
+  what let three guards drift into failing open on the same day. What is still open is recorded as
+  `O79`, and is about how the meta-guard picks files to check rather than about any scan.
 
 ## [0.5.1] — 2026-08-31
 
