@@ -10,41 +10,10 @@
 //! **every** CI job rather than only the Windows one — the guard is cross-platform even though
 //! the thing it guards is not.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()));
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
-}
-
-/// Every `.rs` file under `src/`, paired with its contents.
-fn sources() -> Vec<(PathBuf, String)> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    rust_files(&src, &mut files);
-    assert!(
-        !files.is_empty(),
-        "no sources found under {} — these tests would silently pass forever",
-        src.display()
-    );
-    files
-        .into_iter()
-        .map(|path| {
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-            (path, text)
-        })
-        .collect()
-}
+mod common;
+use common::crate_sources;
 
 /// Byte offsets in `text` where a program is spawned by a **bare name** — `Command::new("…")`
 /// with a literal rather than a resolved path.
@@ -68,37 +37,58 @@ fn sources() -> Vec<(PathBuf, String)> {
 /// and a long argument is precisely what an unqualified program name looks like when someone
 /// spells out an executable rather than reaching for `syspath`.
 ///
+/// Nor is it hypothetical. `install.rs::configure_recovery` carries exactly that shape today —
+/// `Command::new(` on one line and its argument on the next, put there by the formatter rather than
+/// by anyone's choice. That one is `syspath`-resolved, so it is correctly not a hit; what it establishes is
+/// that the reflowed shape is ordinary code in this tree, so the tolerance below is exercised
+/// against the real sources and not only against the fixtures.
+///
 /// Worth recording that its neighbour [`scan_call_sites`] survives the same reflow, and by
 /// construction rather than by care: it counts `system32(` against `system32("` on each line, so a
 /// broken call yields one call and no literal, trips `calls > literals`, and lands in `unreadable`
 /// — which asserts. That one fails **closed**. This one failed **open**. Same file, opposite
-/// directions, which is the argument for a shared helper rather than a fourth careful hand-roll;
-/// tracked as `O54`.
-fn bare_name_spawns(text: &str) -> Vec<usize> {
-    const NEEDLE: &str = "Command::new(";
-    let mut hits = Vec::new();
-    let mut from = 0usize;
-    while let Some(rel) = text[from..].find(NEEDLE) {
-        let at = from + rel;
-        from = at + NEEDLE.len();
-        // A doc example mentions the call shape without being one. Judge by the line the call
-        // *starts* on, the same way `scan_call_sites` does — parsing comments properly is `O63`.
-        let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
-        if text[line_start..at].trim_start().starts_with("//") {
-            continue;
-        }
-        // The literal need not be the next character: whatever the formatter put between the
-        // paren and the argument is whitespace, and skipping it is what makes this reflow-proof.
-        if text[from..].trim_start().starts_with('"') {
-            hits.push(at);
-        }
-    }
-    hits
-}
-
-/// One-based line number of `offset` in `text`.
-fn line_of(text: &str, offset: usize) -> usize {
-    text[..offset].matches('\n').count() + 1
+/// directions. The class is tracked as `O79`.
+///
+/// # Why this is still hand-rolled, and why that is now only a matter of time
+///
+/// `src/srcscan.rs` is the sanctioned answer to this hazard. Every objection that once kept this
+/// scan out of it has been answered: `432e616` taught the joiner to rebuild a needle broken between
+/// a paren and its first argument, `e8f257e` stopped the meta-guard deciding adoption from a
+/// substring of a file's own text, and `f76ba07` replaced statement rebuilding with
+/// `find_tokens`, which matches tokens separated only by whitespace and reports the offset of the
+/// match itself.
+///
+/// That last one removed the final objection, which was about the failure message rather than the
+/// detection: the reader this scan declined to use reported the line a rebuilt statement began on,
+/// not the line of the match. Measured against `f76ba07` on a fixture with a needle literal above a
+/// real split call, `find_tokens` reports both the literal and the call at their own lines, while
+/// the old reader missed the call entirely.
+///
+/// So what is below is superseded, not defended. `find_tokens(text, &["Command::new", "("])` with
+/// `line_of` replaces the index arithmetic here, and `O79` carries the migration. Left in place
+/// only because replacing it is a change of its own, with its own mutation proof — not because
+/// there is anything left to weigh.
+fn bare_name_spawns(text: &str) -> Vec<(usize, &str)> {
+    text.match_indices("Command::new(")
+        .filter_map(|(at, needle)| {
+            // A doc example mentions the call shape without being one. Judge by the line the call
+            // *starts* on, the same way `scan_call_sites` does — parsing comments properly is `O63`.
+            let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+            if text[line_start..at].trim_start().starts_with("//") {
+                return None;
+            }
+            // The literal need not be the next character: whatever the formatter put between the
+            // paren and the argument is whitespace, and skipping it is what makes this reflow-proof.
+            let arg = text[at + needle.len()..].trim_start().strip_prefix('"')?;
+            // Returning the program rather than the offset is what lets the failure name it. An
+            // unterminated literal cannot compile, but it still counts as a hit: losing one here
+            // would be the scan failing open again, one level down.
+            let program = arg
+                .find('"')
+                .map_or("<unterminated literal>", |end| &arg[..end]);
+            Some((text[..at].matches('\n').count() + 1, program))
+        })
+        .collect()
 }
 
 /// The scan must see both shapes — otherwise the guard below is whatever `rustfmt` last decided.
@@ -109,14 +99,20 @@ fn line_of(text: &str, offset: usize) -> usize {
 #[test]
 fn the_bare_name_scan_sees_a_call_the_formatter_has_broken_up() {
     let one_line = r#"let s = Command::new("shutdown").status();"#;
-    assert_eq!(bare_name_spawns(one_line).len(), 1, "one-line form missed");
+    assert_eq!(
+        bare_name_spawns(one_line),
+        vec![(1, "shutdown")],
+        "one-line form missed"
+    );
 
     let reflowed = "let s = std::process::Command::new(\n    \"shutdown.exe\",\n)\n.status();";
     assert_eq!(
-        bare_name_spawns(reflowed).len(),
-        1,
-        "a call the formatter split across lines was missed — this is the defect this scan was \
-         rewritten to close, and the rewrite has been undone"
+        bare_name_spawns(reflowed),
+        vec![(1, "shutdown.exe")],
+        "a call the formatter split across lines was either missed, or found without the program \
+         it names — the first is the defect this scan was rewritten to close, the second leaves \
+         the failure printing `Command::new(` and nothing else, which is the same blindness one \
+         level down"
     );
 
     // A resolved path is the whole point of `syspath`, and must not be reported.
@@ -132,21 +128,25 @@ fn the_bare_name_scan_sees_a_call_the_formatter_has_broken_up() {
         bare_name_spawns(commented).is_empty(),
         "a doc comment was reported as a call site"
     );
+
+    // An unterminated literal cannot compile, so this shape only ever arrives by someone editing
+    // the scan itself. It must still be reported: dropping the hit because the name could not be
+    // read would be this guard failing open again, one level below the failure it was rewritten
+    // to close. Pinned because the branch is otherwise unreachable from the tree.
+    let unterminated = "let s = Command::new(\"never-closed";
+    assert_eq!(
+        bare_name_spawns(unterminated),
+        vec![(1, "<unterminated literal>")],
+        "a spawn whose literal never closes was dropped instead of reported"
+    );
 }
 
 #[test]
 fn no_source_file_spawns_a_program_by_bare_name() {
     let mut offenders = Vec::new();
-    for (file, text) in sources() {
-        for at in bare_name_spawns(&text) {
-            let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
-            let line_end = text[at..].find('\n').map_or(text.len(), |n| at + n);
-            offenders.push(format!(
-                "  {}:{} — {}",
-                file.display(),
-                line_of(&text, at),
-                text[line_start..line_end].trim()
-            ));
+    for (file, text) in crate_sources(&["src"]) {
+        for (line, program) in bare_name_spawns(&text) {
+            offenders.push(format!("  {}:{line} — spawns `{program}`", file.display()));
         }
     }
 
@@ -186,7 +186,7 @@ fn requested_system_binaries() -> Vec<(String, String)> {
 /// this whole check exists to remove.
 fn scan_call_sites() -> (Vec<(String, String)>, Vec<String>) {
     let (mut found, mut unreadable) = (Vec::new(), Vec::new());
-    for (path, text) in sources() {
+    for (path, text) in crate_sources(&["src"]) {
         for (n, line) in text.lines().enumerate() {
             // Doc examples mention the call shape without being call sites.
             if line.trim_start().starts_with("//") {

@@ -13,11 +13,16 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   sure no program is ever launched by bare name. It matched the text `Command::new("`, so any such
   call the formatter had broken across two lines was invisible to it, and the test reported success.
   Demonstrated by inserting exactly that call and watching it pass. Now scans whole text rather than
-  single lines, with its own fixture test so the tolerance cannot be quietly undone.
-  <br>This is the third guard found with the same blindness in one day, after the route guard above
-  and a sibling in the other session's work. A sweep for the remaining vulnerable pattern found none
-  left; what is still open — that nothing makes the *next* such guard safe by default — is recorded
-  as `O79`.
+  single lines, with its own fixture test so the tolerance cannot be quietly undone. The failure also
+  names the program now: it used to print the line the call starts on, which for a call broken across
+  lines is `Command::new(` and nothing else — so the one report that existed to identify the offending
+  binary did not contain it, in exactly the case the scan was rewritten to catch.
+  <br>This is the third guard found with the same blindness in one day, after the route guard in
+  0.5.1 below and a sibling in the other session's work, and a sweep found no fourth. What makes the
+  *next* such guard safe by default — one shared reflow-tolerant reader, plus a build-time check
+  that new guards use it — landed separately in the other session's work. What is still open is
+  narrower, and recorded as `O79`: this particular scan has not yet been moved onto the shared
+  reader, which now does the same job in fewer lines.
 
 ## [0.5.1] — 2026-08-31
 

@@ -174,3 +174,21 @@ are kept here because they are not recorded anywhere else:
 selector. Both have already been reviewed and accepted by the parent. If it is ever revisited, note
 that `btn-primary` is **not** the answer — that was tried, and it made a settled choice look like a
 pending action, which is why that colour is reserved for *Save* and *Take screenshot*.
+
+### Have the scanner sweep read whole files instead of cutting at the test module
+
+**Proposed** 2026-08-31 (this session), as `O79`'s third item: `tests/scanner_guards.rs` composes
+`statements(production_source(&text))`, so it cannot see below `#[cfg(test)] mod tests` — which is
+where source-scanning guards actually live. `src/server.rs`'s route scanner, the canonical broken
+instance of the class, sits there and is invisible to the sweep meant to catch its kind.
+
+**Tried and backed out** by the other session, same day. Scanning whole files produces false
+positives the rule cannot adjudicate at this resolution: a test *fixture* holding a needle string,
+and a whole-text `split_once` in a file that happens to use `.lines()` somewhere unrelated, are
+indistinguishable from a real line-oriented scanner. A guard that cries wolf is one somebody
+switches off, which costs more than the coverage gained.
+
+**Do not re-propose without** a way to tell a fixture from a scanner — the needle being *compared
+against* file contents rather than merely present. Reopening on coverage grounds alone repeats work
+already done.
+
