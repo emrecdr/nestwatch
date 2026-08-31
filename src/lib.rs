@@ -53,6 +53,10 @@ pub mod screentime;
 pub mod security;
 pub mod server;
 pub mod sessionstore;
+/// Reflow-tolerant primitives shared by the source-scanning guards. Not `cfg(test)`: the
+/// scanners live in both the library's own test module and in integration binaries, and a
+/// `cfg(test)` helper cannot be seen from the latter. See the module docs for O79.
+pub mod srcscan;
 pub mod state;
 #[cfg(test)]
 mod testutil;

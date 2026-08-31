@@ -24,6 +24,8 @@
 
 use std::path::{Path, PathBuf};
 
+use nestwatch::srcscan::{production_source, statements};
+
 /// Every `.rs` file under `dir`, recursively.
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries =
@@ -58,36 +60,6 @@ fn sources() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// The part of a source file above its unit-test module.
-///
-/// Test code says `let msg = "expected wording"` legitimately and constantly; including it would
-/// make the scan noisy enough to be turned off, which is the usual way a guard like this dies.
-///
-/// **Matches the whole `#[cfg(test)] mod tests` opening, not just the attribute**, and that
-/// precision is the entire point — the first version of this cut on the first `#[cfg(test)]`
-/// *anywhere in the text*, which silently truncated three files at something that was not a test
-/// module at all:
-///
-/// | file | cut by | production lines then skipped |
-/// |---|---|---|
-/// | `testutil.rs` | the string `#[cfg(test)]` inside a `//!` doc comment | 174 of 177 |
-/// | `foreground.rs` | an indented `#[cfg(test)]` on a single helper method | ~895 |
-/// | `lib.rs` | `#[cfg(test)] mod testutil;`, a module declaration | 567 of 623 |
-///
-/// The guard still caught the two real defects, because both happened to sit above their own
-/// file's cut — which is exactly how a scan like this rots unnoticed. It reports success while
-/// reading a third of the crate. `every_file_is_scanned_down_to_its_own_tests` below is the
-/// standing check on that, and [`cuts_only_at_a_real_test_module`] pins the three shapes above.
-///
-/// Splitting on the literal text mirrors `rules.rs` and `server.rs`, which already locate their
-/// own test modules this way.
-fn production_source(text: &str) -> &str {
-    match text.split_once("\n#[cfg(test)]\nmod tests") {
-        Some((before, _)) => before,
-        None => text,
-    }
-}
-
 /// The names a message takes in the moment before it is handed to the child.
 ///
 /// Narrow on purpose. A broad "no string literals in these files" rule would flag log lines, JSON
@@ -115,70 +87,6 @@ fn binds_a_literal(trimmed: &str, binding: &str) -> bool {
         return false;
     };
     rhs.starts_with('"') || rhs.starts_with("format!(\"")
-}
-
-/// The production source as **whole statements**, each paired with the line it starts on.
-///
-/// Scanning raw lines is what made the first version of this guard blind, and blind in the one
-/// direction that matters: `rustfmt` splits a call the moment it grows past the width, so
-///
-/// ```ignore
-/// control
-///     .shutdown(
-///         60,
-///         Some("Bedtime - this computer is shutting down.".to_string()),
-///     );
-/// ```
-///
-/// contains no line holding `control.shutdown(`, and no line holding both a sink and a quote. The
-/// scan passed over exactly the defect it exists to catch — verified by inserting that probe into
-/// `curfew.rs` against the shipped guard and watching it report success.
-///
-/// The trigger is not exotic. A call acquires that shape automatically as soon as its arguments
-/// get long enough, which is precisely when a message is being composed rather than passed
-/// through. The sibling scanner in `server.rs` was found to have the same blindness on the same
-/// day, for routes rather than for messages — a line-oriented scan over a language whose
-/// formatter reflows lines is the shared mistake, not two coincidences.
-///
-/// Statements are joined until parentheses balance and the text ends the statement, so a sink and
-/// the literal handed to it always land in the same unit however the formatter has broken them.
-/// The reported line is where the statement *starts*, which is the one a reader wants.
-fn statements(text: &str) -> Vec<(usize, String)> {
-    let mut out: Vec<(usize, String)> = Vec::new();
-    let (mut buf, mut start, mut depth) = (String::new(), 0usize, 0i32);
-
-    for (i, raw) in production_source(text).lines().enumerate() {
-        let trimmed = raw.trim();
-        if trimmed.starts_with("//") || (buf.is_empty() && trimmed.is_empty()) {
-            continue;
-        }
-        if buf.is_empty() {
-            start = i + 1;
-        } else if !trimmed.starts_with('.') {
-            // No separator before a leading `.`, and that detail is the whole fix rather than a
-            // nicety. `rustfmt` breaks a method chain *at* the dot, so joining with a space turns
-            // `control` + `.shutdown(` into `control .shutdown(` — which does not contain
-            // `control.shutdown(` any more than the two separate lines did. The first version of
-            // this joiner did exactly that and the probe still slipped through: the statement was
-            // reassembled and then broken again by its own separator.
-            buf.push(' ');
-        }
-        buf.push_str(trimmed);
-
-        // Quotes are not tracked: a `(` or `)` inside a string literal can only *delay* the close,
-        // which joins more text than needed. Over-joining costs a noisier offender message; the
-        // under-joining this replaced cost the whole guarantee.
-        depth += trimmed.matches('(').count() as i32 - trimmed.matches(')').count() as i32;
-        let ends = trimmed.ends_with(';') || trimmed.ends_with('{') || trimmed.ends_with('}');
-        if depth <= 0 && ends {
-            out.push((start, std::mem::take(&mut buf)));
-            depth = 0;
-        }
-    }
-    if !buf.is_empty() {
-        out.push((start, buf));
-    }
-    out
 }
 
 #[test]
@@ -222,42 +130,6 @@ fn no_child_facing_string_is_written_in_place_of_a_translation() {
         "{} child-facing string(s) bypass translation:\n\n{}\n",
         offenders.len(),
         offenders.join("\n\n")
-    );
-}
-
-/// The three shapes that are **not** a test module, each of which truncated the scan once.
-///
-/// A guard whose reach can shrink without failing is worse than no guard: it reports success over
-/// whatever it still happens to read. These are the real cases from this crate, kept as literals
-/// so the rule is legible without going and looking at the files.
-#[test]
-fn cuts_only_at_a_real_test_module() {
-    let keep = "//! mentions `#[cfg(test)]` in prose\nfn real() {}\n";
-    assert_eq!(
-        production_source(keep),
-        keep,
-        "a doc comment naming the attribute is not a test module (src/testutil.rs)"
-    );
-
-    let indented = "fn a() {}\n    #[cfg(test)]\n    fn helper() {}\nfn b() {}\n";
-    assert_eq!(
-        production_source(indented),
-        indented,
-        "a test-only helper *inside* a production impl is not the test module (src/foreground.rs)"
-    );
-
-    let other_mod = "pub mod state;\n#[cfg(test)]\nmod testutil;\npub mod timecode;\n";
-    assert_eq!(
-        production_source(other_mod),
-        other_mod,
-        "a cfg(test) module declaration that is not `mod tests` is not the test module (src/lib.rs)"
-    );
-
-    let real = "fn keep_me() {}\n#[cfg(test)]\nmod tests {\n    let msg = \"ignored\";\n}\n";
-    assert_eq!(
-        production_source(real),
-        "fn keep_me() {}",
-        "the actual test module is where the scan must stop"
     );
 }
 
