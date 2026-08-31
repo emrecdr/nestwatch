@@ -738,12 +738,24 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in this release — none of it has run on Windows
+## H. New in 0.5.0 — none of it has run on Windows
+
+**Released 2026-08-31 as `v0.5.0`, with every item in this section still unchecked.** That is a
+deliberate decision rather than an oversight, and it is recorded in the `Cut 0.5.0` commit as well
+as here: the binary is on the download page and the behaviour below has never executed on the
+platform it was written for.
 
 Everything in this section was written, tested and reviewed on a Mac. The parts that talk to
 Windows are compile- and lint-verified for the target and have **never executed**. Each item below
 says what it proves, because several of them pass trivially when the underlying call is failing —
 a check that cannot fail is worse than no check.
+
+**The heading carries a version on purpose.** It read "New in this release" until 0.5.0 shipped,
+which is a name that silently stops being true the moment the next one goes out — the section
+would still say "new" while describing behaviour two releases old, and nobody reading it could tell
+which. Re-stamp this heading at each release and move anything already verified out of H into the
+section it belongs to. Elsewhere in this file "this release" means the release that introduced that
+item, and is left as written; H is the only section whose whole meaning is *not yet verified*.
 
 ### H1. The trusted clock reports itself
 

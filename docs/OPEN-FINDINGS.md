@@ -68,6 +68,30 @@ would confirm or kill them.
 Last audited against the tree on **2026-08-31**. Entries that did not survive that audit were removed
 or rewritten rather than annotated, per the rules above.
 
+## Release state
+
+**`v0.5.0`, published 2026-08-31.** Everything below is open against a release that is on the
+download page, not against unreleased work — which is what makes the list worth keeping honest
+rather than tidy.
+
+What that release was verified by: unit and integration tests, `cargo test --all-targets --locked`
+and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compilation to
+`x86_64-pc-windows-gnu`, and a published SBOM plus binary attestation that were both checked against
+the downloaded artifacts.
+
+What it was **not** verified by: running on the machine it is for. The 32 items in section H of
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) cover everything headline in 0.5.0 — the bedtime extension,
+the enforcer wake, the translated shutdown notices and the ask link — and none of them has executed
+on Windows. The three gates that were green when it shipped are the same three that were green when
+`install` failed on real hardware and again when `remove_file` turned out not to be exclusive. That
+is not an argument for distrusting them; it is the reason the section below exists and the reason
+the checklist is the only method here with a track record.
+
+The enforcer wake is the one to run first. Its entire value is a timing property — an abort arriving
+in well under a second where it previously took up to 30 — measured once, on macOS, where `shutdown`
+is a no-op. On Windows it is a real `shutdown.exe` with a real pending timer, and whether the abort
+beats a 60-second countdown there is unknown.
+
 ---
 
 ## Open

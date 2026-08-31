@@ -337,6 +337,13 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
+**Where the current release stands.** `v0.5.0` (2026-08-31) shipped with tiers 1 and 2 green and
+**tier 3 unrun**: the 32 items in section H of the checklist — covering the bedtime extension, the
+enforcer wake, the translated shutdown notices and the ask link — have not been executed on a
+Windows machine. That is stated here rather than only in the changelog, because tier 3 is the tier
+the sentence above says every serious bug has lived in, and a reader deciding whether to install
+this is entitled to know which tier the newest features sit in.
+
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were
 weighed and declined — so neither has to be rediscovered.
