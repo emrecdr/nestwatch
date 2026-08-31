@@ -65,7 +65,7 @@ solid, and each says which it is: some are read directly off the tree and are fa
 exists; others rest on a primary source plus a mechanism, and name the one on-device observation that
 would confirm or kill them.
 
-Last audited against the tree on **2026-08-26**. Entries that did not survive that audit were removed
+Last audited against the tree on **2026-08-31**. Entries that did not survive that audit were removed
 or rewritten rather than annotated, per the rules above.
 
 ---
@@ -881,37 +881,45 @@ module-level `pub fn` list at zero (it is two entries away) so that anything app
 short enough to be read, since reading is what found every instance. That is a guard on list length,
 not on the defect.
 
-### O70 · The enforcement loops themselves are never executed by any test
+### O70 · The enforcer loops are driven down one path each, never across a scripted day
 
-The first coverage run this project has had (`cargo llvm-cov`, 2026-08-27 at `7091c84`, host
-target) puts the crate at **84.03%** of lines. The number is not the finding. Where the misses
-sit is:
+The coverage run that opened this entry (`cargo llvm-cov`, 2026-08-27 at `7091c84`, host target)
+put the crate at **84.03%** of lines. The number was not the finding; where the misses sat was:
 
 | file | lines uncovered | what they are |
 |---|---|---|
-| `rules.rs` | 251 of 1,471 | almost all of `run_rules_enforcer` (L923+) |
-| `curfew.rs` | 72 of 579 | almost all of `run_enforcer` (L324-411) |
+| `rules.rs` | 251 of 1,471 | almost all of `run_rules_enforcer` |
+| `curfew.rs` | 72 of 579 | almost all of `run_enforcer` |
 | `helper.rs` | 29 of 32 (**0%**) | the whole file — capture/lock/watch, all Windows shell-outs |
 | `clock.rs` | 6 of 224 | effectively none |
 
-**This is the architecture working, and also the gap it leaves.** `lib.rs` argues for a pure
-decision layer that can be tested cheaply beside an I/O layer that cannot, and the measurement
-confirms both halves of that claim exactly: `is_within`, `decide`, `Enforcer::decide` and the
-whole of `clock::decide` are covered, while the `async` drivers that *call* them are not. The
-enforcement decisions are tested. The code that wires those decisions to the machine is not.
+**The headline this entry used to carry — that no test executes the loops — is retired.** Three
+now do, all spawning the real driver against a `FakeControl`: `tests/enforcer_loop.rs` asserts what
+a paused tick and an unconfigured one write to the tally, `tests/enforcer_shutdown.rs` runs the
+budget out to its shutdown and asserts the bytes the child would really see, and
+`tests/curfew_enforcer.rs` does the same for `run_enforcer` at bedtime.
 
-**Why that is worth an entry rather than a shrug.** Two of this project's real defects — the
-dropped `enabled` guard and the Win+L bypass — were wiring, not arithmetic. Nothing currently
-executes the paths where a decision is turned into a `SystemControl` call, an audit line and a
-tally write, in the order and under the timing the real loop uses.
+**What survives is the shape of the coverage rather than its absence.** Each of those drives one
+path to one ending. Nothing asserts a *sequence*: the 15/5/1 warnings in order and each fired once,
+then the kill or lock or shutdown, with the tally write and the audit rows that belong beside them,
+over a simulated day. Ordering is where this project's real defects have lived — the dropped
+`enabled` guard and the Win+L bypass were both wiring — and a single-path test cannot see a warning
+that fires twice, one that fires after the ending, or an audit row written for a notice that never
+reached the child.
 
-**Not a coverage gate** — see the row in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md). The useful
-shape is a driver test: `FakeControl` plus `tokio::time` pause/advance, asserting the sequence of
-control calls a scripted config produces over a simulated day. `control::fake` already exists and
-is at 86%, so the harness is most of the way there.
+**Not a coverage gate** — see the row in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md), whose
+re-raise trigger this entry has now tripped. The remaining work is `tokio::time` pause/advance over
+a scripted config, asserting an ordered list of control calls. Half that harness exists:
+`FakeControl` records every `shutdown` as `(delay_secs, message)` in order, bounded at 64.
+`notify_user` is still only a `tracing::info!`, so the warnings — the half of the sequence that
+carries the ordering risk — cannot be asserted on at all until it records too.
 
-**Already banked from this run.** Three child-facing strings were reachable only from these loops
-and so had never been asserted at all — `lock_warning_message`, `limit_reached_message` and
+**helper.rs is untouched by any of the above** and stands at 0%: capture, lock and watch are
+Windows shell-outs that no host test reaches. That row of the original measurement is unchanged,
+and it is not the row a driver test can move.
+
+**Already banked from the original run.** Three child-facing strings were reachable only from these
+loops and so had never been asserted at all — `lock_warning_message`, `limit_reached_message` and
 `bedtime_title`, each with a Dutch translation that nothing checked. Fixed, with `Language::ALL`
 added so the tests cannot go stale when a third language lands.
 
@@ -1051,48 +1059,6 @@ diverge without an error.
 the rule and split the directive in one change — and look at the page afterwards, because no test
 here can see a CSP the browser enforces.
 
-## Not covered by any of this
-
-**None of the above has run on the target machine.** Everything here was found by reading, tests,
-and cross-compilation — the same three gates that were green when `install` failed on real
-hardware, and again when `remove_file` turned out not to be exclusive. See
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md); it is the only method with a track record of finding what
-matters here.
-
-### O64 · The helper pipe is a 4 KiB buffer, and full frames now cross it every tick
-
-`spawn_piped` passes `nSize = 0` to `CreatePipe` (`src/session.rs`), which asks Windows for the
-system default — 4 KiB. That was unremarkable while a full-tier frame crossed the pipe only when a
-parent clicked. `liveTier()` now sends one every `_refreshMs` for as long as the full-size view is
-open, so a roughly megabyte payload is a per-tick event.
-
-At that size the frame is several hundred `WriteFile`/`ReadFile` pairs per tick, against about
-seven for a preview, with the helper blocking each time the buffer fills. `read_to_end` compounds
-it: the destination `Vec` starts empty, so it reallocates its way up and memcpys roughly twice the
-payload, every tick.
-
-**Estimated, not measured** — the 4 KiB figure is `CreatePipe`'s documented default for `nSize = 0`
-and the payload size is inferred from this repo's own 4K measurements. Nobody has run it.
-
-**Fix.** Give `CreatePipe` a real `nSize` (256 KiB) and hand `read_to_end` a `Vec::with_capacity`.
-Two lines, no behaviour change. **Measure first** — this is on the child's machine, which is where
-this project's guesses have been wrong before.
-
-### O66 · A full frame is sized by the overlay being open, not by what the overlay can show
-
-`liveTier()` returns `full` whenever `shotFull` is set, and full means the native capture — 3840×2160
-on a 4K panel. The overlay renders it `object-contain` inside `inset-0`. On the parent's phone, which
-is the device the pairing QR exists for, that box resolves roughly 1170×658 of the frame: about a
-tenth of the pixels the child's PC captured, encoded, piped, encrypted and uploaded. On a 2560×1440
-desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
-
-**Fix, and it is a decision rather than a tidy-up.** The overlay could send its own device-pixel box
-(`?tier=full&w=…&h=…`, clamped to native) and let `encode_shot` fit to it; the machinery exists and
-`a_small_frame_is_never_scaled_up` already pins the never-upscale rule. Against that,
-`ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
-and a third size axis is exactly what it was written against. Weigh those before touching it.
-
-
 ### O74 · A bedtime extension can be granted but never taken back
 
 **Later bedtime tonight** offers +15/+30/+60 and nothing else. There is no way to shorten an
@@ -1183,3 +1149,80 @@ installed on this machine and another project here runs it. Two things to weigh 
 
 A cheaper interim measure, and the one already in use: when adding a helper, mutate its call site
 once by hand before believing the tests. Four of the five above were found that way in an afternoon.
+
+### O76 · The enforcement wake fires on every config write, including the ones that change nothing
+
+`api::try_update_config` calls `heartbeat::wake` after every save. That choke point is deliberate and
+the reasoning still holds — it is the one place config is mutated, so no future handler has to
+remember to wake — but it does not distinguish a write that can invalidate a pending shutdown from
+one that cannot. `set_language`, `change_password`, `save_routine` and `delete_routine` all wake both
+enforcers.
+
+**What an out-of-cadence wake costs**, from `run_rules_enforcer`:
+
+- a `session_state()` call on the blocking pool;
+- on any install with a blocklist, a per-app limit or a group — i.e. `TickMode::Enforce` — a full
+  `running_processes()` enumeration, also on the blocking pool. This is precisely the scan the
+  `has_targets` gate above it exists to skip, and the pool it shares with screenshots;
+- a `Usage::to_json()` of the whole tally for the `save_tally_if_changed` comparison;
+- a curfew-loop pass alongside it.
+
+**Human-paced, so this is waste rather than a hazard.** A parent working through the settings page
+buys a handful of extra enumerations inside a 30-second window. Nothing accrues wrongly: the loop
+derives elapsed time from `duration_since(last_tick)` rather than counting ticks, which is the
+property that makes an early wake safe in the first place.
+
+**Why it is filed rather than fixed.** The obvious repair is to wake only when the enforcement-
+relevant slice actually changed — `(curfew, rules, extra.for_day(today))` before versus after
+`mutate` — which keeps the choke point and its "nothing to remember" property intact. Two things
+make that more than a tidy-up. `Config`, `Rules` and `Curfew` derive no `PartialEq`, so it needs
+three new derives or a hand-written comparison. And getting the slice wrong does not fail loudly: it
+silently restores the 30-second delay on some path, which is the defect `f16f4de` exists to remove —
+a machine powering off after the parent cancelled it. **Any attempt must be inverted to be safe** —
+wake unless *only* known-irrelevant fields changed — and must land with a test per handler proving
+which ones still wake. Passing an explicit `Wake::{Enforcement,None}` at the four call sites is the
+other option and is worse: it hands back exactly the remembering that the choke point removed.
+
+**Trigger.** Worth doing when something makes a wake expensive — a heavier tick, a slower
+`running_processes`, or a config-writing endpoint that stops being human-paced.
+
+## Not covered by any of this
+
+**None of the above has run on the target machine.** Everything here was found by reading, tests,
+and cross-compilation — the same three gates that were green when `install` failed on real
+hardware, and again when `remove_file` turned out not to be exclusive. See
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md); it is the only method with a track record of finding what
+matters here.
+
+### O64 · The helper pipe is a 4 KiB buffer, and full frames now cross it every tick
+
+`spawn_piped` passes `nSize = 0` to `CreatePipe` (`src/session.rs`), which asks Windows for the
+system default — 4 KiB. That was unremarkable while a full-tier frame crossed the pipe only when a
+parent clicked. `liveTier()` now sends one every `_refreshMs` for as long as the full-size view is
+open, so a roughly megabyte payload is a per-tick event.
+
+At that size the frame is several hundred `WriteFile`/`ReadFile` pairs per tick, against about
+seven for a preview, with the helper blocking each time the buffer fills. `read_to_end` compounds
+it: the destination `Vec` starts empty, so it reallocates its way up and memcpys roughly twice the
+payload, every tick.
+
+**Estimated, not measured** — the 4 KiB figure is `CreatePipe`'s documented default for `nSize = 0`
+and the payload size is inferred from this repo's own 4K measurements. Nobody has run it.
+
+**Fix.** Give `CreatePipe` a real `nSize` (256 KiB) and hand `read_to_end` a `Vec::with_capacity`.
+Two lines, no behaviour change. **Measure first** — this is on the child's machine, which is where
+this project's guesses have been wrong before.
+
+### O66 · A full frame is sized by the overlay being open, not by what the overlay can show
+
+`liveTier()` returns `full` whenever `shotFull` is set, and full means the native capture — 3840×2160
+on a 4K panel. The overlay renders it `object-contain` inside `inset-0`. On the parent's phone, which
+is the device the pairing QR exists for, that box resolves roughly 1170×658 of the frame: about a
+tenth of the pixels the child's PC captured, encoded, piped, encrypted and uploaded. On a 2560×1440
+desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
+
+**Fix, and it is a decision rather than a tidy-up.** The overlay could send its own device-pixel box
+(`?tier=full&w=…&h=…`, clamped to native) and let `encode_shot` fit to it; the machinery exists and
+`a_small_frame_is_never_scaled_up` already pins the never-upscale rule. Against that,
+`ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
+and a third size axis is exactly what it was written against. Weigh those before touching it.

@@ -28,11 +28,17 @@ authenticated session*:
 | Power off the PC | `POST /api/shutdown` |
 | **Download the whole recorded history** | `GET /api/export` |
 | Read / change the curfew | `GET`·`POST /api/curfew` |
+| **Push tonight's bedtime back** (+15/+30/+60, stacking, until the trusted clock passes it) | `POST /api/curfew/extend` |
 | Read / change usage rules (budget, blocklist, per-app limits) | `GET`·`POST /api/rules` |
 | Read the access log / usage history | `GET /api/audit`, `GET /api/usage` |
 | Read the screen-time report (per-day totals and per-app minutes, up to a year back) | `GET /api/screentime` |
 | See pending time requests | `GET /api/time-requests` |
 | Approve / deny a time request (grants screen time) | `POST /api/time-requests/{id}/approve`·`deny` |
+| Grant screen time directly, without a request | `POST /api/extra-time` |
+| **Issue single-use offline codes** that grant screen time with no network and no login | `GET`·`POST /api/time-codes` |
+| Save, apply and delete routines — one click replaces the whole rule set | `GET`·`POST /api/routines`, `POST /api/routines/{name}/apply`·`delete` |
+| **Re-anchor the trusted clock** | `POST /api/re-anchor` |
+| Set the language of everything the child is shown | `GET`·`POST /api/language` |
 | Change the control password | `POST /api/password` |
 
 `POST /api/password` keeps the parent logged in (rotating their session id) and **does** revoke

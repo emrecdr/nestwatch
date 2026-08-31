@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 188 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 199 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -388,9 +388,12 @@ this PC**, which is the half that matters and the half only you can do.
 ## E. Curfew (the enforcement feature)
 
 - [ ] Set a window that includes **now** (e.g. now-1min → now+10min), warn = 60s, Save.
-- [ ] Within ~30s the PC shows the shutdown countdown. **Cancel the test:** disable curfew in the
-      dashboard → within ~30s the pending shutdown is **aborted** (no power-off). Verify:
-      `shutdown /a` as admin should say "no shutdown in progress" (we already aborted it).
+- [ ] The PC shows the shutdown countdown **within a second or two of Save** — not on the next
+      30-second tick. **Cancel the test:** disable curfew in the dashboard → the pending shutdown is
+      **aborted just as promptly** (no power-off). Verify: `shutdown /a` as admin should say "no
+      shutdown in progress" (we already aborted it). **A ~30s delay on either half is a failure,
+      not a slow pass** — a parent action now wakes both enforcers instead of waiting for a tick,
+      and the previous wording of this item tolerated exactly the delay that was fixed.
 - [ ] **Anti-bypass: cancelling doesn't help.** Re-enable the covering window; when the countdown
       starts, as HIM run `shutdown /a`. Within ~30s the PC should **shut down with no countdown at
       all** — the re-issue is deliberately immediate, because a second warned countdown would just
@@ -412,8 +415,9 @@ this PC**, which is the half that matters and the half only you can do.
       service). After ~1–2 min of use the screen **locks**. Set it back to 0 (off) afterwards.
 - [ ] **Screen-time warnings arrive early.** You don't have to burn a whole budget to test this —
       aim the limit just above where he already is. Check today's **used minutes** on the
-      dashboard, then set the **Daily limit** to `used + 16`. Within ~30s a **"15 minutes of screen
-      time left today."** message box appears. Set it to `used + 6` for the 5-minute one, and
+      dashboard, then set the **Daily limit** to `used + 16`. A **"15 minutes of screen
+      time left today."** message box appears within a second or two of Save — the save wakes the
+      enforcer rather than waiting up to 30s for its next tick. Set it to `used + 6` for the 5-minute one, and
       `used + 2` for **"1 minute of screen time left!"**. Each fires **once**, not every 30s.
 - [ ] **A warning that didn't reach him isn't recorded as if it did.** After the above, check
       **Usage history** for `budget_countdown` rows — one per warning you actually saw on his
@@ -428,9 +432,12 @@ this PC**, which is the half that matters and the half only you can do.
       at the sign-in screen with nobody logged in — a PC left on overnight won't burn the budget.)
 - [ ] **A grant rescues an in-flight shutdown.** Set the daily limit action to **Shutdown**, tiny
       limit; when the shutdown **countdown** starts, from your dashboard approve a `/ask` request
-      (or use bonus time) → within ~30s the pending shutdown is **cancelled** (verify as admin:
+      (or use bonus time) → the pending shutdown is **cancelled at once** (verify as admin:
       `shutdown /a` says "no shutdown in progress" because we already aborted it). Set action back
-      to Lock afterwards.
+      to Lock afterwards. **This is the item the enforcer wake exists for.** The warning countdown
+      defaults to 60 seconds, so a 30-second wait to notice meant a grant made in the last half
+      minute lost the race and the machine powered off *after* you had rescued it. Time it: if it
+      is not effectively immediate, the wake has regressed.
 - [ ] Add a **Blocked app** (e.g. `notepad.exe`), Save; launch Notepad → within ~30s it's
       **killed**. Remove it afterwards.
 - [ ] **Know the limit of app rules** (this one is *expected to fail* — run it so you're not
@@ -844,6 +851,54 @@ does not. That asymmetry is the point of the section — a checklist that only p
       Shutdown-configured install, and separately let bedtime arrive. Both dialogs must be Dutch.
       These were English on every install until this release, which meant a Dutch household got a
       Dutch countdown and then an English explanation of why the machine was going off.
+
+### H7. Later bedtime tonight
+
+The one control bedtime never had. Screen time could always be topped up three ways; bedtime could
+only be edited, which meant remembering to put it back. Several items below check that it *stops*
+on its own — an extension that outlived the night would be worse than no extension at all.
+
+**Known and deliberate: there is no way to shorten or cancel one** (`O74`). Press +60 when you
+meant +15 and the only route back is editing the window. Do not file that as a defect here.
+
+- [ ] **It moves tonight's bedtime.** With a window covering now, press **+30** on the Curfew card.
+      The toast says *"Bedtime pushed back 30 min"*, and the shutdown that was due now falls 30
+      minutes later. Leave it running long enough to see the new time actually arrive.
+- [ ] **Two presses stack.** Press **+30** twice → the second must add to the first (an hour), not
+      swallow it. The card's *until* time is the check: it moves twice.
+- [ ] **It reaches the enforcer at once.** Let the bedtime countdown start, then press **+30**
+      mid-countdown → the pending shutdown is **aborted immediately** (`shutdown /a` as admin says
+      "no shutdown in progress"). Not within 30 seconds — at once. The warning countdown defaults
+      to 60s, so a delay here is the machine powering off after you rescued it.
+- [ ] **It survives a reboot.** Extend, then restart the PC before the extension runs out. The
+      extension is still in force afterwards. It is stored as a moment in time rather than a
+      countdown, so also check the case that shape exists for: **an extension granted before
+      midnight that runs past it** must not expire at 00:00 and shut the machine down mid-way
+      through the time you granted.
+- [ ] **Saving the curfew form does not undo it.** Extend, then open the Curfew card, change
+      something unrelated (a warn time) and **Save**. The extension must still be in force. The
+      form does not post the extension, so a naive save would silently discard it — this is the
+      one failure mode a parent would hit by accident, on the same card, minutes later.
+- [ ] **It cannot switch a disabled curfew on.** With curfew **off**, press +30. Nothing about the
+      evening changes — no window opens, no shutdown is scheduled. Extending a bedtime that does
+      not exist must not create one.
+- [ ] **A spent screen-time budget is admitted, not hidden.** Run the daily budget out, then press
+      **+30**. A second warning appears beside the success toast: *"Screen time is already used up,
+      so the PC will still lock"* (or *shut down*, matching your configured action), pointing you at
+      **Add bonus time today**. Bedtime and screen time are independent limits; without this the
+      dashboard reports success and the machine locks anyway.
+- [ ] **A partly-spent budget says how much is left.** With fewer minutes left than you are adding
+      — e.g. 20 minutes remaining, press **+60** — the note reads *"Only 20 min of screen time is
+      left."* rather than claiming the whole hour is usable.
+- [ ] **The clock cannot be used to stretch it.** As HIM, change the Windows time zone after an
+      extension is granted. The extension must still end when it was going to: it is anchored to
+      the trusted clock, the same reading curfew itself enforces against.
+- [ ] **It is recorded.** After extending, **Usage history** shows a `curfew_extended` row with the
+      minutes and the new time, and the access log carries the same event. A parent control that
+      moves bedtime and leaves no trace is the one an older child learns to use.
+- [ ] **The child is told nothing.** Open `/ask` as HIM after extending. No bedtime, no extension,
+      no *until* time — `/ask` never reveals the curfew schedule, because a bedtime handed to the
+      child is a map for planning around it. They simply notice the machine did not shut down.
 
 ## Troubleshooting
 
