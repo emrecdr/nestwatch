@@ -43,6 +43,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   for an install made seconds earlier by the current build — and told you to re-install, which
   cannot record a time zone the platform never reports. It now says which of the two it is.
 - The child's page no longer requests a missing icon and takes a 404 on every load.
+- **The shutdown notice is now in your child's language, and stops calling bedtime a "curfew".** The
+  two notices Windows shows as it powers the machine off — one when screen time runs out, one at
+  bedtime — were written in English on every install. So a Dutch household got a Dutch countdown, a
+  Dutch lock warning, and then an English explanation of why the computer was going off, at the one
+  moment a child most needs to understand what is happening. Both are now translated. The bedtime
+  one also no longer says *"Curfew"*: that is the word for the setting on your dashboard, it appears
+  nowhere the child can see, and the countdown they had been reading a minute earlier says
+  *"Bedtime"*. Naming the same thing two ways across two messages a minute apart is a small cruelty
+  at bedtime.
 
 ### Added
 - **You can give a later bedtime for one night.** Screen time had three ways to grant more; bedtime

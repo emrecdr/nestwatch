@@ -1306,7 +1306,7 @@ pub async fn run_rules_enforcer(
                         0
                     };
                     let control = control.clone();
-                    let msg = "Screen time is up — shutting down.".to_string();
+                    let msg = shutdown_message(lang).to_string();
                     match tokio::task::spawn_blocking(move || control.shutdown(secs, Some(msg)))
                         .await
                     {
@@ -1545,6 +1545,21 @@ fn limit_reached_message(lang: Language) -> &'static str {
     match lang {
         Language::En => "You've reached today's screen-time limit.",
         Language::Nl => "Je hebt je schermtijd voor vandaag opgebruikt.",
+    }
+}
+
+/// The reason Windows shows in its own shutdown dialog when the budget runs out. Child-facing.
+///
+/// A function rather than the literal it replaced, which is the whole point: every other string
+/// the child reads is built by one of these and guarded by a test that walks `Language::ALL`, so
+/// the one string that had no function was the one string that was never translated. Reusing the
+/// exact opening of [`lock_warning_message`] is deliberate — the two are alternative endings to
+/// the same sentence, chosen by `budget_action`, and a child who has seen one should recognise
+/// the other.
+fn shutdown_message(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "Screen time is up — this computer is shutting down.",
+        Language::Nl => "Je schermtijd is op — deze computer wordt afgesloten.",
     }
 }
 
@@ -2853,6 +2868,22 @@ mod tests {
                 assert_ne!(
                     a, b,
                     "two languages share a lock warning — one was never translated"
+                );
+            }
+        }
+
+        // The shutdown notice, which until now was a bare English literal. It is the harsher of
+        // the two budget endings — `budget_action` picks between this and the lock warning above —
+        // and it was the only one of the pair that a Dutch install showed in English.
+        let shutdowns: Vec<&str> = Language::ALL.iter().map(|&l| shutdown_message(l)).collect();
+        for (lang, msg) in Language::ALL.iter().zip(&shutdowns) {
+            assert!(!msg.trim().is_empty(), "{lang:?} has no shutdown notice");
+        }
+        for (i, a) in shutdowns.iter().enumerate() {
+            for b in &shutdowns[i + 1..] {
+                assert_ne!(
+                    a, b,
+                    "two languages share a shutdown notice — one was never translated"
                 );
             }
         }

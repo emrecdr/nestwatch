@@ -441,7 +441,7 @@ pub async fn run_enforcer(
                     0
                 };
                 let control = control.clone();
-                let msg = "Curfew: this computer is shutting down.".to_string();
+                let msg = bedtime_shutdown_message(lang).to_string();
                 match tokio::task::spawn_blocking(move || control.shutdown(delay, Some(msg))).await
                 {
                     Ok(Ok(())) => {}
@@ -492,6 +492,22 @@ fn bedtime_title(lang: Language) -> &'static str {
     match lang {
         Language::En => "Bedtime",
         Language::Nl => "Bedtijd",
+    }
+}
+
+/// The reason Windows shows in its own shutdown dialog when the window opens. Child-facing.
+///
+/// Replaces a bare English literal, which on a Dutch install followed a Dutch countdown with an
+/// English notice at the one moment the child most needs to understand what is happening.
+///
+/// It also stops saying **"Curfew"**. That word appears nowhere else the child can see — the
+/// countdown they have just been reading says "Bedtime in 5 minutes" — and it is the parent's
+/// word for the setting, not the child's word for the event. Naming the same thing two ways
+/// across two notifications a minute apart is a small cruelty at bedtime.
+fn bedtime_shutdown_message(lang: Language) -> &'static str {
+    match lang {
+        Language::En => "Bedtime — this computer is shutting down.",
+        Language::Nl => "Het is bedtijd — deze computer wordt afgesloten.",
     }
 }
 
@@ -1023,6 +1039,40 @@ mod tests {
                 assert_ne!(
                     a, b,
                     "two languages share a bedtime title — one was never translated"
+                );
+            }
+        }
+    }
+
+    /// The shutdown notice, which until now was a bare English literal on every install.
+    ///
+    /// `tests/translated_strings.rs` guards the *shape* — that this string comes from a function
+    /// taking `lang` rather than sitting inline. It cannot tell whether the function actually
+    /// translates, because a `match lang` returning the same English twice would satisfy it. This
+    /// is the other half.
+    #[test]
+    fn every_language_has_its_own_bedtime_shutdown_notice() {
+        let notices: Vec<&str> = Language::ALL
+            .iter()
+            .map(|&l| bedtime_shutdown_message(l))
+            .collect();
+        for (lang, notice) in Language::ALL.iter().zip(&notices) {
+            assert!(
+                !notice.trim().is_empty(),
+                "{lang:?} has no bedtime shutdown notice"
+            );
+            // The word the child has been reading in the countdown for the last five minutes.
+            // "Curfew" was the parent's word for the setting and appeared nowhere else they see.
+            assert!(
+                !notice.to_lowercase().contains("curfew"),
+                "{lang:?} still calls it a curfew to the child: {notice}"
+            );
+        }
+        for (i, a) in notices.iter().enumerate() {
+            for b in &notices[i + 1..] {
+                assert_ne!(
+                    a, b,
+                    "two languages share a bedtime shutdown notice — one was never translated"
                 );
             }
         }
