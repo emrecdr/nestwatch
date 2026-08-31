@@ -255,11 +255,34 @@ open the door on its own.
   <br>This is a **security** property rather than a tidiness one. At the old cadence a per-frame
   line was 1,200 rows an hour; `audit.jsonl` rotates at 2 MiB and keeps exactly one backup, so
   roughly 57 hours of live viewing would evict the entire security history — every login, every
-  kill, every password change — to make room for a timer. Of the fourteen places this codebase
-  writes an audit line, thirteen are each bounded by one human action; live frames are the
-  only ones a clock can drive, and so the only ones whose volume nothing bounds. The coalesced
+  kill, every password change — to make room for a timer. Live frames are the only audit event a
+  *clock* drives, which is what coalescing answers. They were not the only event whose volume
+  nothing bounded: `auth_failure` is written once per wrong password by a caller who has presented
+  no credential at all, and it is handled separately below. The coalesced
   line is also the more useful record: it says the screen was watched for forty minutes and looked
   at closely five times, rather than repeating one sentence 1,200 times.
+- **The two events an unauthenticated caller can provoke live in their own file.**
+  `auth_failure` and `pair_failed` are written for someone who has presented no session, no
+  password and no code, at whatever rate the limiters allow — five a minute per source address for
+  the first, and a home LAN lets one machine hold many addresses. Sharing one 2 MiB ring with the
+  parent's history meant the cheapest event in the system could evict the most valuable one:
+  measured, four hundred wrong passwords removed a recorded `lock_issued` from `GET /api/audit`,
+  the parent's only view of the log. Those two now append to `auth_attempts.jsonl`, which rotates
+  on its own budget, and `GET /api/audit` reads both with a separate row budget each — so a
+  guessing run can destroy attempt history and nothing else, and cannot push the parent's actions
+  off the page either.
+  <br>**Partitioned rather than thinned, deliberately.** The cheaper fix is to write fewer lines —
+  coalesce the failures, or record only the lockout. OWASP ASVS 5.0 **16.3.1** forbids that: all
+  authentication operations are logged, successful and unsuccessful alike, because failed attempts
+  are the early indicator of credential stuffing and password spraying. **16.4.2** requires that
+  logs cannot be modified, and an attacker evicting entries is modifying them; the Logging Cheat
+  Sheet names the shape directly — *an attacker uses one log entry to destroy other log entries*.
+  Keeping every attempt and denying it the power to evict meets both. The residual is stated
+  plainly: an attacker who already **has** a session can still flood the action log through any
+  parent endpoint, which no partition fixes and which the tamper model already treats as lost.
+  <br>Which events sit on which side is a list in `src/audit.rs`, not a convention, and
+  `tests/audit_partition.rs` fails when a new `audit.record` call site appears that nobody has
+  classified.
 - Further append-only logs live beside it with independent retention: `usage.jsonl` (usage
   history — session edges, countdowns, enforcement actions — read-only via `GET /api/usage`),
   `screentime.jsonl` (one rollup row per completed day, read-only via `GET /api/screentime`; kept

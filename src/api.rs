@@ -237,7 +237,8 @@ pub async fn set_curfew(
 /// see logins and their source IP. Read-only; behind `require_auth` like the rest of `/api`.
 pub async fn audit(State(state): State<AppState>) -> Result<Json<Vec<Value>>, AppError> {
     let audit = state.audit.clone();
-    let events = spawn(move || audit.recent(200)).await?;
+    let events =
+        spawn(move || audit.recent(crate::audit::AUDIT_VIEW, crate::audit::ATTEMPT_VIEW)).await?;
     Ok(Json(events))
 }
 
