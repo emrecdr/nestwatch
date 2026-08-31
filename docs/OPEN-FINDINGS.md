@@ -1282,6 +1282,66 @@ Neither reaches a locked phone. That limit is real and must stay stated — but 
 all" and "cannot notify while away from the page" are different claims, and the docs currently make
 the stronger one.
 
+### O79 · The scanner-reflow class is closed except for one hole in the guard that closes it
+
+**The class, found 2026-08-31 by two sessions independently on the same day.** A source-scanning
+guard whose needle spans a syntactic boundary is defeated by `rustfmt`, because the formatter breaks
+a call the moment it outgrows the width. `Command::new(` and its argument then sit on different
+lines, and a line-oriented scan for `Command::new("` matches nothing.
+
+**The sharp form of it, which took both sessions and one correction to reach: direction decides
+severity.** A scan asserting its needle is **absent** — "no file may spawn by bare name", "no route
+outside this list" — fails **open** under reflow: the offender becomes invisible and the test
+reports success. A scan asserting its needle is **present** — "the markup must still call
+`gamePortal(`" — fails **closed**: reflow makes it fail loudly. Only the absence-asserting half was
+ever dangerous, and all three broken guards were that half.
+
+| Guard | Needle | Asserts | Direction | State |
+|---|---|---|---|---|
+| `spawn_paths::no_source_file_spawns_a_program_by_bare_name` | `Command::new("` | absence | failed **open** | fixed |
+| `server::only_the_known_child_facing_routes…` | `.route("` | absence | failed **open** | fixed |
+| `translated_strings` child-string scan | sink + literal | absence | failed **open** | fixed (other session) |
+| `spawn_paths::scan_call_sites` | `system32("` | absence | fails **closed** | correct by construction |
+| `web.rs` `gamePortal(` · `budgetTone(` · `limitTone(`, `install.rs` `alternate_note(` | various | presence | fail **closed** | correct by construction |
+
+**A correction to this entry's own first version, which is why the table above has five rows and not
+two.** It claimed a sweep for needles of the shape `IDENT("` returned "exactly two hits, so there is
+no fourth instance". The conclusion held; the search behind it was too narrow. It required the
+needle literal to contain the opening quote, which misses every needle written as `IDENT(` alone —
+four of which exist. They are safe, but for a structural reason nobody had stated rather than
+because the grep did not find them, and a sweep that reaches the right answer by not looking is not
+a sweep. Found by the other session running the broader search.
+
+**Closed since, by the other session in `f6bd72a`.** `src/srcscan.rs` is the shared helper, as an
+ordinary `pub` module — which dissolves the obstacle this entry originally recorded. It claimed the
+choice was between a test-only feature flag and two copies, because `testutil.rs` is
+`cfg(test)`-private. A normal `pub` module is visible to the library's own `cfg(test)` module *and*
+to integration binaries, and needs neither. The cost is a few pure string functions compiled into
+the lib that production never calls. `tests/scanner_guards.rs` then automates the sweep itself, so a
+fifth scanner written the old way fails CI on the day it lands rather than waiting for someone to
+have the idea again — which is the part that actually closes this, since a helper only helps
+somebody who goes looking for it.
+
+## What is still open
+
+**`KNOWN_SAFE` excuses a file, not a needle.** `tests/spawn_paths.rs` is listed there for
+`system32(`, and that listing also silently covers `Command::new(` in the same file. So if the
+reflow tolerance in `no_source_file_spawns_a_program_by_bare_name` were ever reverted, the meta-guard
+would not notice. What holds that line instead is that guard's own fixture test,
+`the_bare_name_scan_sees_a_call_the_formatter_has_broken_up`, which asserts the detector against
+fixtures rather than against whatever the tree happens to contain.
+
+**Fix.** Key the exemptions on `(file, needle)` rather than on `file`. The cost is an exemption list
+keyed on the very strings it polices, which is its own maintenance surface — hence a decision rather
+than an obvious patch.
+
+**Worth keeping from how this was found**, because it is the same lesson twice: the other session's
+meta-guard initially required a needle to begin with an alphabetic character, which excused `.route(`
+— the exact needle that defeated `server.rs`. It passed its own tree scan while being blind to the
+most important shape in the class it polices. It was caught only by asserting the detector against
+known needles rather than trusting what the repository currently contains. **A guard whose
+non-vacuity depends on the code it guards is one refactor away from testing nothing.**
+
 ## Not covered by any of this
 
 **None of the above has run on the target machine.** Everything here was found by reading, tests,

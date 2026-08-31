@@ -2,6 +2,23 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Security
+
+- **A guard against a Windows privilege-escalation route could not see part of what it guards.**
+  Rust resolves a bare program name by searching the running executable's *own directory* before
+  `System32`, and this installer runs elevated from wherever you left the `.exe` — so a planted file
+  next to it could be run instead of the real Windows tool. A test scans the whole codebase to make
+  sure no program is ever launched by bare name. It matched the text `Command::new("`, so any such
+  call the formatter had broken across two lines was invisible to it, and the test reported success.
+  Demonstrated by inserting exactly that call and watching it pass. Now scans whole text rather than
+  single lines, with its own fixture test so the tolerance cannot be quietly undone.
+  <br>This is the third guard found with the same blindness in one day, after the route guard above
+  and a sibling in the other session's work. A sweep for the remaining vulnerable pattern found none
+  left; what is still open — that nothing makes the *next* such guard safe by default — is recorded
+  as `O79`.
+
 ## [0.5.1] — 2026-08-31
 
 ### Security

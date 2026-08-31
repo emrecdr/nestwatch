@@ -46,14 +46,107 @@ fn sources() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
+/// Byte offsets in `text` where a program is spawned by a **bare name** — `Command::new("…")`
+/// with a literal rather than a resolved path.
+///
+/// **Scans the whole text, not line by line, and that is the entire point.** This guard read
+/// `text.lines()` looking for `Command::new("` until 2026-08-31, when the same blindness was found
+/// in two sibling scanners on the same day: `server.rs`'s unauthenticated-route scan and
+/// `translated_strings.rs`'s child-string scan. `rustfmt` breaks a call the moment it outgrows the
+/// width, and
+///
+/// ```ignore
+/// std::process::Command::new(
+///     "a-bare-name-long-enough-to-push-this-call-past-one-hundred-columns.exe",
+/// )
+/// ```
+///
+/// contains no line holding `Command::new("` at all. Verified by inserting exactly that into
+/// `src/syspath.rs` against the previous version of this test and watching it report success.
+///
+/// The trigger is not exotic: a call acquires that shape automatically once its argument is long,
+/// and a long argument is precisely what an unqualified program name looks like when someone
+/// spells out an executable rather than reaching for `syspath`.
+///
+/// Worth recording that its neighbour [`scan_call_sites`] survives the same reflow, and by
+/// construction rather than by care: it counts `system32(` against `system32("` on each line, so a
+/// broken call yields one call and no literal, trips `calls > literals`, and lands in `unreadable`
+/// — which asserts. That one fails **closed**. This one failed **open**. Same file, opposite
+/// directions, which is the argument for a shared helper rather than a fourth careful hand-roll;
+/// tracked as `O54`.
+fn bare_name_spawns(text: &str) -> Vec<usize> {
+    const NEEDLE: &str = "Command::new(";
+    let mut hits = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(NEEDLE) {
+        let at = from + rel;
+        from = at + NEEDLE.len();
+        // A doc example mentions the call shape without being one. Judge by the line the call
+        // *starts* on, the same way `scan_call_sites` does — parsing comments properly is `O63`.
+        let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+        if text[line_start..at].trim_start().starts_with("//") {
+            continue;
+        }
+        // The literal need not be the next character: whatever the formatter put between the
+        // paren and the argument is whitespace, and skipping it is what makes this reflow-proof.
+        if text[from..].trim_start().starts_with('"') {
+            hits.push(at);
+        }
+    }
+    hits
+}
+
+/// One-based line number of `offset` in `text`.
+fn line_of(text: &str, offset: usize) -> usize {
+    text[..offset].matches('\n').count() + 1
+}
+
+/// The scan must see both shapes — otherwise the guard below is whatever `rustfmt` last decided.
+///
+/// Fixtures rather than a probe in `src/`: this asserts the *detector* directly, so it keeps
+/// holding after the production tree stops happening to contain an example of either form. A
+/// guard whose non-vacuity depends on the code it guards is one refactor from testing nothing.
+#[test]
+fn the_bare_name_scan_sees_a_call_the_formatter_has_broken_up() {
+    let one_line = r#"let s = Command::new("shutdown").status();"#;
+    assert_eq!(bare_name_spawns(one_line).len(), 1, "one-line form missed");
+
+    let reflowed = "let s = std::process::Command::new(\n    \"shutdown.exe\",\n)\n.status();";
+    assert_eq!(
+        bare_name_spawns(reflowed).len(),
+        1,
+        "a call the formatter split across lines was missed — this is the defect this scan was \
+         rewritten to close, and the rewrite has been undone"
+    );
+
+    // A resolved path is the whole point of `syspath`, and must not be reported.
+    let resolved = "let s = Command::new(syspath::system32(\"shutdown.exe\")).status();";
+    assert!(
+        bare_name_spawns(resolved).is_empty(),
+        "a `syspath`-resolved call was reported as a bare name"
+    );
+
+    // A doc example is prose, not a call site.
+    let commented = "/// nothing stops the next Command::new(\"shutdown\") from returning";
+    assert!(
+        bare_name_spawns(commented).is_empty(),
+        "a doc comment was reported as a call site"
+    );
+}
+
 #[test]
 fn no_source_file_spawns_a_program_by_bare_name() {
     let mut offenders = Vec::new();
     for (file, text) in sources() {
-        for (n, line) in text.lines().enumerate() {
-            if line.contains("Command::new(\"") {
-                offenders.push(format!("  {}:{} — {}", file.display(), n + 1, line.trim()));
-            }
+        for at in bare_name_spawns(&text) {
+            let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+            let line_end = text[at..].find('\n').map_or(text.len(), |n| at + n);
+            offenders.push(format!(
+                "  {}:{} — {}",
+                file.display(),
+                line_of(&text, at),
+                text[line_start..line_end].trim()
+            ));
         }
     }
 
