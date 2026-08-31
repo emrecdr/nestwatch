@@ -4,9 +4,9 @@
 //!
 //! Several tests here defend a property by scanning the source: no program launched by bare name,
 //! no unauthenticated route outside a known list, no child-facing string written in place of a
-//! translation. Each looked for a needle naming a call — the bare-name spawn that `spawn_paths.rs`
-//! polices, or the route registration that `server.rs` does — a needle that spans
-//! a syntactic boundary — and each read the file a line at a time.
+//! translation. Each looked for a needle naming a call: the bare-name spawn that `spawn_paths.rs`
+//! polices, or the route registration that `server.rs` does. Every one of those needles spans a
+//! syntactic boundary, and every one of those scans read the file a line at a time.
 //!
 //! `rustfmt` breaks a call the moment it outgrows the line width. The needle then straddles the
 //! break and the scan matches nothing, so the guard reports success over exactly the code it
@@ -53,11 +53,15 @@ pub fn production_source(text: &str) -> &str {
 
 /// `text` as whole statements, each paired with the line it starts on.
 ///
-/// **Deliberately does not call [`production_source`]** — compose them when you want the cut:
-/// `statements(production_source(text))`. A guard that polices *other guards* has to see inside
-/// test modules, because that is exactly where a source scanner lives; cutting first made the
-/// needles in `web.rs` and `install.rs` invisible and left a meta-guard's anti-vacuity check
-/// resting on a single file.
+/// **Takes `text` as given; it does not cut at the test module.** Compose when you want the cut:
+/// `statements(production_source(text))`. Both callers do — the cut is a policy each guard states
+/// for itself rather than something this reader decides for them.
+///
+/// The justification here previously claimed the opposite: that a guard policing *other* guards
+/// needs uncut text, because that is where scanners live. That is true of the ambition and false
+/// of the code — scanning whole files was tried and reverted, and `tests/scanner_guards.rs` now
+/// carries nine lines explaining why it must cut. A reader acting on the old paragraph would have
+/// removed that call and reintroduced the false positives it describes.
 ///
 /// This is the reflow-tolerant reader. Lines are joined until parentheses balance and the text
 /// ends a statement, so a call and the arguments handed to it stay in one unit however the

@@ -48,13 +48,10 @@ use common::crate_sources;
 const KNOWN_SAFE: [(&str, &str); 3] = [
     (
         "tests/spawn_paths.rs",
-        "Measured, not assumed: the needle that actually fires here is `Command::new(`, and it is \
-         matched with `match_indices` over the WHOLE text rather than per line, so the formatter \
-         cannot hide it. This row previously named `system32(` — a different needle in the same \
-         file — which was a plausible reason for the wrong hit, and the kind of exemption that \
-         reads as checked while excusing something nobody looked at. (`system32(` is also safe, \
-         separately: it is counted against `system32(\"` so a broken call trips a count mismatch \
-         and fails CLOSED.)",
+        "Both needle-shaped literals here are safe, and for different reasons. `Command::new(` — \
+         the one that actually fires — is matched with `match_indices` over the whole text, so the \
+         formatter cannot hide it. `system32(` is counted against `system32(\"`, so a broken call \
+         trips a count mismatch and fails CLOSED.",
     ),
     (
         "src/web.rs",
@@ -69,42 +66,43 @@ const KNOWN_SAFE: [(&str, &str); 3] = [
     ),
 ];
 
+/// Whether `text` reads its input a line at a time, which is the hazard this guard is about.
+fn reads_lines(text: &str) -> bool {
+    text.contains(".lines()")
+}
+
 /// A string literal of the form `IDENT(` — an identifier immediately followed by an open paren.
 ///
 /// That is the whole vulnerable shape: the only place `rustfmt` can insert a break inside such a
 /// needle is between the name and its paren, or between the paren and the first argument. A needle
 /// without a `(` cannot be split by the formatter and is not interesting here.
 fn holds_a_call_shaped_needle(stmt: &str) -> bool {
-    let bytes = stmt.as_bytes();
-    let mut i = 0usize;
-    while let Some(open) = stmt[i..].find('"') {
-        let start = i + open + 1;
-        let Some(close_rel) = stmt[start..].find('"') else {
-            return false;
-        };
-        let lit = &stmt[start..start + close_rel];
-        // `foo(` or `foo::bar(` or `foo.bar(`, optionally with the opening quote of an argument.
-        if let Some(paren) = lit.find('(') {
-            let name = &lit[..paren];
-            // A leading `.` is allowed, and that is not an edge case: `.route("` is the needle
-            // that defeated `server.rs`, and a method call is the single most likely thing for the
-            // formatter to break. Requiring an alphabetic first character rejected the real one.
-            let bare = name.trim_start_matches(['.', ':']);
-            if !bare.is_empty()
-                && name
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || c == '_' || c == ':' || c == '.')
-                && bare
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_alphabetic() || c == '_')
-            {
-                return true;
-            }
+    // Splitting on the quote yields the literals as the odd-indexed pieces. Pulling them two at a
+    // time is what preserves the bail on an unterminated literal — `.skip(1).step_by(2)` looks
+    // equivalent and is not, because it would go on to examine a trailing fragment that no closing
+    // quote ever ended.
+    let mut parts = stmt.split('"');
+    parts.next(); // text before the first quote
+    while let Some(lit) = parts.next() {
+        if parts.next().is_none() {
+            return false; // an opening quote with no closer
         }
-        i = start + close_rel + 1;
-        if i >= bytes.len() {
-            break;
+        let Some(paren) = lit.find('(') else { continue };
+        let name = &lit[..paren];
+        // A leading `.` is allowed, and that is not an edge case: `.route("` is the needle that
+        // defeated `server.rs`, and a method call is the single most likely thing for the formatter
+        // to break. Requiring an alphabetic FIRST character rejected the real one — so the check is
+        // on the name with any leading `.`/`:` stripped, which is also `false` when nothing is left.
+        if name
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | ':' | '.'))
+            && name
+                .trim_start_matches(['.', ':'])
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
+        {
+            return true;
         }
     }
     false
@@ -145,24 +143,22 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
         let adopted = stmts.iter().any(|(_, s)| {
             s.starts_with("use ") && s.contains("srcscan") && s.contains("statements")
         });
-        let excused = KNOWN_SAFE.iter().find(|(f, _)| *f == rel);
-        // Line-oriented reading is the hazard; a whole-text scan is not one. Hoisted beside its two
-        // siblings because it is a property of the FILE — inside the loop it re-scanned the whole
-        // text once per needle, which is O(needles × filesize) in a guard whose express purpose is
-        // to attract more needles.
-        let reads_lines = text.contains(".lines()");
+        // Whether a needle in THIS file is worth reporting is entirely a property of the file, so
+        // it is decided once. Line-oriented reading is the hazard; a whole-text scan is not one.
+        // Leaving these inside the loop meant re-scanning the whole text once per needle —
+        // O(needles × filesize) in a guard whose express purpose is to attract more needles — and,
+        // worse, it put two skips of different kinds around the "counted before the skips" comment,
+        // which is the exact confusion that comment exists to prevent.
+        let reports = reads_lines(&text) && !adopted && !KNOWN_SAFE.iter().any(|(f, _)| *f == rel);
 
         for (line, stmt) in &stmts {
             if !holds_a_call_shaped_needle(stmt) {
                 continue;
             }
-            // Counted BEFORE the skips, so the anti-vacuity check below measures the detector
-            // rather than measuring whatever the exemptions happen to leave behind.
+            // Counted BEFORE the report decision, so the anti-vacuity check below measures the
+            // detector rather than measuring whatever the exemptions happen to leave behind.
             needles_seen += 1;
-            if !reads_lines {
-                continue;
-            }
-            if !adopted && excused.is_none() {
+            if reports {
                 offenders.push(format!(
                     "{rel}:{line}\n    {}\n    ^ a needle of the form `IDENT(` in a file that reads \
                      `.lines()`. rustfmt can break a call at exactly that point, and the scan would \
@@ -207,6 +203,13 @@ fn the_needle_detector_knows_the_shape_from_its_neighbours() {
         );
     }
     for no in [
+        // An UNTERMINATED literal, and this one is load-bearing rather than an edge case. The
+        // trailing `"foo(` has no closing quote, so it is not a literal at all — a scan can never
+        // match a needle there. Reading quote-delimited pieces two at a time is what makes this
+        // `false`; the tempting `.skip(1).step_by(2)` spelling looks equivalent, examines the
+        // trailing fragment anyway, and returns `true`. Without this fixture that difference is
+        // invisible: removing the bail leaves every other test passing.
+        r#"let a = "x"; let b = "foo("#,
         r#"let msg = "Bedtime - this computer is shutting down.";"#,
         r#"let tag = "progress-error";"#,
         r#"let s = "(not a call)";"#,
