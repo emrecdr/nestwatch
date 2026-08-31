@@ -44,10 +44,13 @@ use nestwatch::srcscan::{production_source, statements};
 const KNOWN_SAFE: [(&str, &str); 3] = [
     (
         "tests/spawn_paths.rs",
-        "`system32(` is counted against `system32(\"` per line, so a call the formatter has broken \
-         yields one call and no literal, trips the count mismatch, and lands in the bucket that \
-         asserts. It fails CLOSED — by construction rather than by care, which is why it is listed \
-         rather than trusted.",
+        "Measured, not assumed: the needle that actually fires here is `Command::new(`, and it is \
+         matched with `match_indices` over the WHOLE text rather than per line, so the formatter \
+         cannot hide it. This row previously named `system32(` — a different needle in the same \
+         file — which was a plausible reason for the wrong hit, and the kind of exemption that \
+         reads as checked while excusing something nobody looked at. (`system32(` is also safe, \
+         separately: it is counted against `system32(\"` so a broken call trips a count mismatch \
+         and fails CLOSED.)",
     ),
     (
         "src/web.rs",
