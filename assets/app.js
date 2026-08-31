@@ -1157,17 +1157,31 @@ function app() {
       setTimeout(() => { this.toasts = this.toasts.filter((t) => t.id !== id); }, ms);
     },
 
-    // How long the curfew note stays up. Long enough to read twice, because it arrives at the
+    // How long a limit note stays up. Long enough to read twice, because it arrives at the
     // moment a parent has stopped paying attention — they pressed Approve and moved on.
-    _curfewNoteMs: 12000,
+    _limitNoteMs: 12000,
 
     // Show what a grant will actually do, when that differs from what it looks like it does.
     //
-    // Not an error: the grant succeeded and the minutes are banked. `warning` is the honest
-    // level, and it is a separate toast from the success one rather than appended to it, so the
-    // confirmation still reads as a confirmation.
-    noteCurfew(j) {
-      if (j && j.curfew_note) this.toast(j.curfew_note, "warning", this._curfewNoteMs);
+    // Not an error: the action succeeded. `warning` is the honest level, and it is a separate
+    // toast from the success one rather than appended to it, so the confirmation still reads as a
+    // confirmation.
+    //
+    // One function for both notes because they are one idea pointing two ways: screen time and
+    // bedtime are independent limits, so whichever one the parent just moved, the *other* can
+    // still stop the child. `curfew_note` answers it for a screen-time grant, `budget_note` for a
+    // bedtime extension.
+    //
+    // Shows every note present rather than the first one. Today no response carries both — each
+    // endpoint reports on the limit it did not move — so this reads as belt-and-braces. It is
+    // cheap insurance against a specific mistake: `a || b` would silently drop the second note,
+    // and a warning that exists and is not shown is the exact failure both of these were added to
+    // stop. If an endpoint ever has two things to say, it will say them.
+    noteOtherLimit(j) {
+      if (!j) return;
+      for (const note of [j.curfew_note, j.budget_note]) {
+        if (note) this.toast(note, "warning", this._limitNoteMs);
+      }
     },
 
     // POST a JSON body; the caller inspects the returned Response for status handling.
@@ -1868,6 +1882,8 @@ function app() {
           const j = await r.json().catch(() => ({}));
           this.curfewUntil = j.until || null;
           this.toast(`Bedtime pushed back ${mins} min`, "success");
+          // Screen time can still stop them tonight even though bedtime no longer will.
+          this.noteOtherLimit(j);
           this.loadCurfew();
         } else if (r.status === 400) {
           this.toast(await this.rejection(r, "Could not extend bedtime"), "error");
@@ -1887,7 +1903,7 @@ function app() {
         const r = await this.postJSON("/api/extra-time", { minutes: mins });
         if (r.ok) {
           this.toast(`Granted +${mins} min`, "success");
-          this.noteCurfew(await r.json().catch(() => ({})));
+          this.noteOtherLimit(await r.json().catch(() => ({})));
           this.loadToday();
           this.loadUsage();
         } else if (r.status === 400) {
@@ -1962,7 +1978,7 @@ function app() {
         if (r.ok) {
           const j = await r.json().catch(() => ({}));
           this.toast(approve ? `Granted ${j.minutes ?? ""} min` : "Denied", "success");
-          if (approve) this.noteCurfew(j);
+          if (approve) this.noteOtherLimit(j);
           this.loadTimeRequests();
           if (approve) this.loadUsage();
         } else {

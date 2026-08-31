@@ -312,6 +312,40 @@ impl Rules {
             0
         }
     }
+
+    /// How much screen time is left, for a parent who is about to push bedtime back by `minutes`
+    /// — `None` when the budget will not cut that short, `Some(0)` when it is **already spent**.
+    ///
+    /// The mirror of [`crate::curfew::Curfew::cuts_grant_short_in`], and it exists for the mirror
+    /// of its reason. Screen time and bedtime are independent limits, so moving bedtime cannot
+    /// give the child a minute of screen time they do not have: nothing on the budget path reads
+    /// the curfew, and `run_rules_enforcer` locks or shuts down on its own schedule regardless of
+    /// what bedtime says.
+    ///
+    /// That asymmetry is what made this necessary. The bonus-time buttons already warn when a
+    /// grant cannot beat bedtime; the bedtime button shipped without the opposite warning, so
+    /// "Later bedtime tonight" reported success while the machine locked for the budget anyway.
+    /// That is the same silent broken promise the curfew note was added to stop — on the control
+    /// built to answer it, which is the one a parent burned by it once will reach for next.
+    ///
+    /// `None` while the rules are paused or set to **Warn**, because then nothing interrupts the
+    /// child and there is nothing to warn about. `remaining_mins` returns `None` for a zero
+    /// budget, which is "no limit configured" rather than "no minutes left" — the distinction
+    /// this codebase keeps everywhere, and inverting it here would tell every parent without a
+    /// budget that their child was out of time.
+    pub fn budget_cuts_extension_short(
+        &self,
+        today: NaiveDate,
+        extra: u32,
+        usage: &Usage,
+        minutes: u32,
+    ) -> Option<u32> {
+        if !self.enabled || self.budget_action == EnforceAction::Warn {
+            return None;
+        }
+        let remaining = usage.remaining_mins(self.effective_budget_mins(today, extra))?;
+        (remaining < minutes).then_some(remaining)
+    }
 }
 
 /// The running daily tally, persisted to a sidecar so a mid-day reboot doesn't reset the budget.
@@ -1916,6 +1950,100 @@ mod tests {
         grant.add(day, u32::MAX);
         grant.add(day, 60);
         assert_eq!(grant.for_day(day), u32::MAX);
+    }
+
+    /// A parent pushing bedtime back must be told when screen time will stop the child anyway.
+    ///
+    /// The mirror of `curfew::a_grant_that_runs_into_the_window_is_reported`: the two limits are
+    /// independent in both directions, and the bedtime control shipped warning about neither.
+    #[test]
+    fn the_budget_shadows_an_extension_that_outlasts_the_remaining_screen_time() {
+        let day = day();
+        let spent = |mins: u64| Usage {
+            day: Some(day),
+            total_secs: mins * 60,
+            ..Default::default()
+        };
+        let rules = Rules {
+            enabled: true,
+            daily_budget_mins: 60,
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+
+        // Nothing left: the extension buys the child no screen time at all.
+        assert_eq!(
+            rules.budget_cuts_extension_short(day, 0, &spent(60), 30),
+            Some(0),
+            "an extension granted after the budget is spent changes nothing, and saying so is the \
+             whole point"
+        );
+        // Some left, but less than the extension.
+        assert_eq!(
+            rules.budget_cuts_extension_short(day, 0, &spent(50), 30),
+            Some(10)
+        );
+        // Enough left to cover it — nothing to say.
+        assert_eq!(
+            rules.budget_cuts_extension_short(day, 0, &spent(20), 30),
+            None
+        );
+        // The grant is counted, so bonus time already given must not be reported as missing.
+        assert_eq!(
+            rules.budget_cuts_extension_short(day, 45, &spent(50), 30),
+            None,
+            "60 + 45 granted, 50 used — 55 left, which covers the extension"
+        );
+    }
+
+    /// The three states in which there is nothing to warn about, kept apart from "no minutes left".
+    ///
+    /// The zero-budget case is the one that matters: `remaining_mins` returns `None` for it
+    /// because it means *no limit is configured*, not *no time remains*. Collapsing those would
+    /// tell every household without a screen-time budget that their child was out of time — the
+    /// absent-versus-measured-zero confusion this codebase treats as a first-class bug.
+    #[test]
+    fn a_budget_that_cannot_interrupt_shadows_nothing() {
+        let day = day();
+        let heavily_used = Usage {
+            day: Some(day),
+            total_secs: 10 * 3_600,
+            ..Default::default()
+        };
+        let enforcing = Rules {
+            enabled: true,
+            daily_budget_mins: 60,
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            Rules {
+                daily_budget_mins: 0,
+                ..enforcing.clone()
+            }
+            .budget_cuts_extension_short(day, 0, &heavily_used, 30),
+            None,
+            "no budget means no limit, not a spent one"
+        );
+        assert_eq!(
+            Rules {
+                enabled: false,
+                ..enforcing.clone()
+            }
+            .budget_cuts_extension_short(day, 0, &heavily_used, 30),
+            None,
+            "paused rules interrupt nobody"
+        );
+        assert_eq!(
+            Rules {
+                budget_action: EnforceAction::Warn,
+                ..enforcing
+            }
+            .budget_cuts_extension_short(day, 0, &heavily_used, 30),
+            None,
+            "Warn records and never acts, so nothing is cut short"
+        );
     }
 
     /// Regression: flipping the timezone must not hand out a fresh budget.

@@ -620,9 +620,14 @@ pub async fn extend_curfew(
     );
     // The Today card shows whether bedtime is in force, and a second dashboard may be open.
     notify(&state, "usage");
-    Ok(Json(
-        json!({ "ok": true, "minutes": minutes, "until": until_local }),
-    ))
+    Ok(Json(json!({
+        "ok": true,
+        "minutes": minutes,
+        "until": until_local,
+        // Read *after* the extension is stored, so the sentence describes the state the parent is
+        // now in rather than the one they were in a moment ago.
+        "budget_note": extension_shadowed_by_budget(&state, minutes).await,
+    })))
 }
 
 /// What a parent should be told about a grant of `minutes` they have just made, given the curfew.
@@ -655,6 +660,57 @@ fn grant_shadowed_by_curfew(state: &AppState, minutes: u32) -> Option<String> {
         format!(
             "Bedtime starts in {mins} min, so only about that much of this is usable tonight. \
              \"Later bedtime tonight\" on the Curfew card moves bedtime itself."
+        )
+    })
+}
+
+/// What a parent should be told about pushing bedtime back by `minutes`, given the screen-time
+/// budget. `None` when the extension will do what it looks like it does.
+///
+/// **The mirror of [`grant_shadowed_by_curfew`], and the reason is the same evening.** That one
+/// exists because approving screen time during a curfew window looked like it worked and did not.
+/// The fix for it was this endpoint — a way to move bedtime itself — which then shipped with the
+/// opposite hole: a parent whose child has no screen time left can push bedtime back, be told
+/// "Bedtime pushed back 30 min", and watch the PC lock anyway. Same two independent limits, same
+/// silent broken promise, now on the button the parent burned by it once will reach for first.
+///
+/// Reported rather than enforced, matching the other direction: the extension still lands. Moving
+/// bedtime while the budget is spent is a sensible thing to do on purpose — a parent may well
+/// grant bonus time next — and refusing would be its own surprise.
+///
+/// A tally that cannot be read yields `None` rather than an error: failing to load a sidecar must
+/// not fail the parent's extension. The cost is a missing sentence, not a missing grant.
+async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<String> {
+    let today = crate::config::today();
+    let (rules, extra) = {
+        let cfg = crate::state::recover_read(&state.config);
+        (cfg.rules.clone(), cfg.extra.for_day(today))
+    };
+    let usage = spawn(move || crate::rules::Usage::load_for_today(today))
+        .await
+        .ok()?;
+    let left = rules.budget_cuts_extension_short(today, extra, &usage, minutes)?;
+    // Exhaustive rather than a `_` fallback. `Warn` cannot reach here — it interrupts nobody, so
+    // `budget_cuts_extension_short` filters it — but a wildcard would have silently told a
+    // Warn-configured household that their PC "will still lock" if that filter were ever relaxed,
+    // and a fourth action would inherit whichever verb happened to be the default. Naming all
+    // three makes the compiler ask the next person which one applies.
+    let stops = match rules.budget_action {
+        crate::rules::EnforceAction::Shutdown => "shut down",
+        crate::rules::EnforceAction::Lock => "lock",
+        crate::rules::EnforceAction::Warn => return None,
+    };
+    Some(if left == 0 {
+        format!(
+            "Screen time is already used up, so the PC will still {stops} — screen time and \
+             bedtime are separate limits. Use \"Add bonus time today\" on the Today card to give \
+             minutes as well."
+        )
+    } else {
+        format!(
+            "Only {left} min of screen time is left, so that is about as much of tonight's later \
+             bedtime as they can actually use. \"Add bonus time today\" on the Today card gives \
+             more."
         )
     })
 }

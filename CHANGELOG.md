@@ -59,6 +59,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   identical one set to **Shut down** never did — on the harsher of the two endings, where the
   Windows dialog is the only thing on screen and there is no notification beside it to carry the
   address.
+- **Pushing bedtime back now warns you when screen time will stop them anyway.** Bedtime and screen
+  time are two independent limits, and the warning only ran one way: granting minutes during a
+  curfew window explained that the PC would still shut down, but moving bedtime while the daily
+  budget was already spent reported nothing but success — and the machine locked regardless. That is
+  the same silent broken promise, on the button added to fix it, which is the one you would reach
+  for next. **Later bedtime tonight** now says so — *"Screen time is already used up, so the PC will
+  still lock"* — and points at **Add bonus time today**. It also warns when only part of the
+  extension is usable: *"Only 20 min of screen time is left."*
 
 ### Added
 - **You can give a later bedtime for one night.** Screen time had three ways to grant more; bedtime
