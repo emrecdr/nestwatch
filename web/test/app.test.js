@@ -1993,3 +1993,67 @@ test("budgetTone treats an unknown remaining as ordinary, never as urgent", () =
   assert.equal(app.budgetTone(null), "primary");
   assert.equal(app.budgetTone(undefined), "primary");
 });
+
+// --- noteOtherLimit at its call sites ---------------------------------------
+//
+// Screen time and bedtime are independent limits, so moving one leaves the other free to stop the
+// child anyway. Both grant paths return a note saying so, and a note that exists and is not shown
+// is worth exactly nothing — it is the same silent broken promise the notes were added to end.
+//
+// These test the *call sites*, not `noteOtherLimit` itself, and that distinction is the whole
+// reason they exist. Removing `this.noteOtherLimit(j)` from `extendCurfew` was measured to leave
+// all 148 tests passing: the helper was covered, the line calling it was not. That is the fifth
+// instance of one shape found in this repo in two days — a pure helper is cheap to test and gets
+// tested well, while the one line wiring it in is reachable only through an async method and gets
+// nothing at all. See `docs/OPEN-FINDINGS.md` O75.
+
+/** An app whose fetch always succeeds and returns `body`, recording the toasts raised. */
+function appReturning(body) {
+  const toasts = [];
+  const app = loadApp({
+    fetch: async () => ({ ok: true, status: 200, json: async () => body }),
+  });
+  app.toast = (msg, kind) => toasts.push([msg, kind]);
+  return { app, toasts };
+}
+
+test("extendCurfew shows the budget note when screen time will stop them anyway", async () => {
+  const note = "Screen time is already used up, so the PC will still lock";
+  const { app, toasts } = appReturning({ until: "23:30", budget_note: note });
+
+  await app.extendCurfew(30);
+
+  const warnings = toasts.filter(([, kind]) => kind === "warning").map(([msg]) => msg);
+  assert.deepEqual(
+    warnings,
+    [note],
+    `the parent must be told the extension will not help; toasts were ${JSON.stringify(toasts)}`,
+  );
+  // The success toast still stands on its own, so the confirmation reads as a confirmation.
+  assert.ok(
+    toasts.some(([, kind]) => kind === "success"),
+    "the extension still succeeded and should still say so",
+  );
+});
+
+test("grantExtra shows the curfew note when bedtime will stop them anyway", async () => {
+  const note = "Bedtime is in force now, so the PC will still shut down";
+  const { app, toasts } = appReturning({ curfew_note: note });
+
+  await app.grantExtra(30);
+
+  const warnings = toasts.filter(([, kind]) => kind === "warning").map(([msg]) => msg);
+  assert.deepEqual(warnings, [note], `toasts were ${JSON.stringify(toasts)}`);
+});
+
+test("neither call site invents a warning when there is nothing to say", async () => {
+  for (const [name, args] of [
+    ["extendCurfew", [30]],
+    ["grantExtra", [30]],
+  ]) {
+    const { app, toasts } = appReturning({ until: "23:30" });
+    await app[name](...args);
+    const warnings = toasts.filter(([, kind]) => kind === "warning");
+    assert.deepEqual(warnings, [], `${name} warned with no note present: ${JSON.stringify(toasts)}`);
+  }
+});

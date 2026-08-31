@@ -1134,3 +1134,52 @@ to prevent, only with the parent as the cause. Options worth weighing:
 
 Not urgent: the failure is a parent granting more time than they meant to, which is the benign
 direction. Filed so the asymmetry is a choice next time rather than an oversight.
+
+### O75 · Pure helpers are tested thoroughly; the lines that call them are not tested at all
+
+Five instances in two days, across two sessions working this repository concurrently. Each one is
+the same shape, and in each the deletion was **measured**, not argued:
+
+| what was removed | suite afterwards | what the family would have lost |
+|---|---|---|
+| `api.rs:228`, carrying `extra_until` across a curfew save | **497 pass** | a granted bedtime extension, silently revoked by saving the form |
+| `install.rs`'s call to `web::ask_url` | **497 pass** | the child's link reverts to a LAN IP that moves on a new lease |
+| `install.rs`'s call to `alternate_note` | **504 pass** | both printed addresses labelled the same; the durable one unmarked |
+| `curfew.rs:444`'s call to `bedtime_shutdown_message` | **507 pass** | the bedtime notice reduced to the single word "Bedtijd" |
+| `app.js`'s `noteOtherLimit(j)` in `extendCurfew` | **148 web pass** | the parent is not told screen time will still lock the PC |
+
+**The mechanism is structural, not carelessness.** A pure function is trivial to call from a test,
+so it attracts thorough tests — `alternate_note` has four, `bedtime_shutdown_message` has one per
+language. The single line that *calls* it sits inside an enforcer loop, an install routine or an
+async handler, none of which a unit test can reach. So the suite grows precisely where testing is
+cheap, and the hole forms precisely where a silent revert does the most damage. Coverage cannot see
+this: the call site is *executed* by nothing, and even when it is, executing a line is not asserting
+on it.
+
+The fourth entry is the sharpest evidence that this is structural. It was introduced **in the commit
+that was fixing the same class elsewhere** — a driver test was written for the rules enforcer and
+its sibling for curfew was not, so a helper added that hour was already unguarded at its only call
+site.
+
+**What has been done.** Each of the five now has a guard, and each guard was proven by re-applying
+the mutation: `tests/curfew_extend.rs`, `install.rs`'s two source scans,
+`tests/curfew_enforcer.rs`, and three call-site tests in `web/test/app.test.js`.
+
+**What has not.** Nothing finds the *next* one. Every guard above was written after a human or an
+agent went looking, and the searching was manual each time.
+
+**The obvious answer, and the reason it is not simply done.** `cargo-mutants` is built for exactly
+this — it injects mutations and reports which survive, which is the question asked five times by
+hand above — and it is on the Thoughtworks Technology Radar rather than being exotic. It is already
+installed on this machine and another project here runs it. Two things to weigh before adopting it:
+
+* **Cost.** Each mutant is an incremental build plus a test run. This crate's baseline test run is
+  already seconds and the mutant count would be in the hundreds. The practical shapes are
+  `--in-diff` on pull requests, or a scheduled full run, not a per-push gate.
+* **Disk, concretely.** A single `cargo-mutants` run on a *sibling* project filled this machine's
+  shared `~/.cache/cargo-target` to 100% while this entry was being written, which is exactly the
+  hazard that makes builds fail in crates nobody touched. Whatever is adopted has to bound where it
+  builds, or it takes the whole machine down with it.
+
+A cheaper interim measure, and the one already in use: when adding a helper, mutate its call site
+once by hand before believing the tests. Four of the five above were found that way in an afternoon.
