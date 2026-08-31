@@ -43,6 +43,14 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   for an install made seconds earlier by the current build — and told you to re-install, which
   cannot record a time zone the platform never reports. It now says which of the two it is.
 - The child's page no longer requests a missing icon and takes a 404 on every load.
+- **The link your child is given no longer breaks when the router hands out a new address.** The
+  install output printed the PC's LAN IP as the child's request-more-time link. That address is
+  whatever DHCP happened to assign at install time, so a reboot onto a new lease left the child with
+  a link that no longer loaded — the same change that sends a parent hunting for the dashboard, aimed
+  at the person least equipped to work out why. It now prints `https://localhost:<port>/ask`, which
+  needs no lease, no name resolution, and no knowledge of what the PC is called. The two addresses
+  printed above it are unchanged: those are for reaching the dashboard from your phone, which is a
+  different problem with a different answer.
 - **The shutdown notice is now in your child's language, and stops calling bedtime a "curfew".** The
   two notices Windows shows as it powers the machine off — one when screen time runs out, one at
   bedtime — were written in English on every install. So a Dutch household got a Dutch countdown, a

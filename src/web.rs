@@ -20,9 +20,42 @@ pub async fn index(headers: HeaderMap) -> Response {
     serve_asset("index.html", &headers)
 }
 
+/// The path the child's "request more time" page is served at.
+///
+/// Named once because two places now have to agree on it: the route registration in `server.rs`
+/// and [`ask_url`], which prints it. A literal in each would be the shape this codebase keeps
+/// finding — nothing empty, nothing erroring, one of them simply no longer true.
+pub const ASK_PATH: &str = "/ask";
+
 /// `GET /ask` → the child's "request more time" page (unauthenticated, LAN-gated).
 pub async fn ask(headers: HeaderMap) -> Response {
     serve_asset("ask.html", &headers)
+}
+
+/// The URL a child opens to ask for more minutes, for the callers that have to *print* it.
+///
+/// **`localhost`, and it is the only address that is always right for this reader.** The child is
+/// sitting at the machine, so this needs no DHCP lease, no name resolution, and no knowledge of
+/// what the PC is called — the three things that broke the address `install` used to print here.
+/// A lease change on a rebooted router is not hypothetical; it is what sent a parent looking for
+/// an IP that had already moved. The LAN IP and hostname `install` prints solve a different
+/// problem, which is reaching the dashboard from the *parent's* phone.
+///
+/// It resolves for free, it is a SAN on the certificate `cert::generate` writes, and
+/// `security::is_lan` admits loopback — so the page opens rather than warning or refusing.
+///
+/// **The v6 stumble is real and was measured rather than argued.** `server.rs` binds `0.0.0.0`,
+/// which is IPv4 only, while resolvers hand back `::1` first for `localhost`. The v6 attempt is
+/// therefore refused — but a refusal is an immediate RST, not a hang, so a Happy Eyeballs client
+/// (RFC 8305: every current browser) has already connected on `127.0.0.1`. Measured against a
+/// socket bound exactly as `server.rs` binds it: 0.3 ms. Worth knowing before anyone "fixes" this
+/// to `127.0.0.1`, which would connect but fail the certificate — the cert carries `localhost` as
+/// a DNS SAN and no loopback IP SAN.
+///
+/// The port is a parameter because `install --port N` moves it, and a wrong port here is worse
+/// than printing no address at all.
+pub fn ask_url(port: u16) -> String {
+    format!("https://localhost:{port}{ASK_PATH}")
 }
 
 /// Fallback → serve any other embedded asset by path (e.g. `/app.css`, `/alpine.min.js`).
@@ -217,6 +250,40 @@ mod tests {
              module iterates `PAGES`, so a page that is served but unlisted is guarded by none of \
              them while the suite stays green. Add it to `PAGES` with its `include_str!`."
         );
+    }
+
+    /// The address printed to the child resolves without the network, and its route exists.
+    ///
+    /// Two silent failures, both of which have a precedent in this file's history. Renaming the
+    /// route leaves `install` printing a 404 at a child who was just told to go there, and no
+    /// compiler can see across a string literal in `server.rs` and one here. And "fixing" the host
+    /// to the LAN IP or the machine name would reintroduce the exact lease-change failure this
+    /// replaced — the IP was what this line printed until now, and it stopped resolving the moment
+    /// a rebooted router handed out a new lease.
+    #[test]
+    fn the_child_link_is_loopback_and_its_route_exists() {
+        const SERVER_RS: &str = include_str!("server.rs");
+
+        // Non-vacuity: an empty or bare-slash path would make the `contains` below match any
+        // route at all, and the scan would pass while proving nothing.
+        assert!(
+            super::ASK_PATH.len() > 1 && super::ASK_PATH.starts_with('/'),
+            "ASK_PATH must be a real path; the route scan below is vacuous otherwise, got {:?}",
+            super::ASK_PATH
+        );
+        let registration = format!(".route(\"{}\"", super::ASK_PATH);
+        assert!(
+            SERVER_RS.contains(&registration),
+            "`server.rs` registers no route at {:?}, so `ask_url` prints a 404 to a child who was \
+             told to open it. Looked for {:?}.",
+            super::ASK_PATH,
+            registration
+        );
+
+        assert_eq!(super::ask_url(8443), "https://localhost:8443/ask");
+        // A non-default port, because `install --port N` moves it and a hardcoded 8443 here would
+        // pass the line above while sending the child to a port nothing is listening on.
+        assert_eq!(super::ask_url(9001), "https://localhost:9001/ask");
     }
 
     /// Every authenticated endpoint is reachable from the only interface that can authenticate.

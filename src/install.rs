@@ -353,8 +353,12 @@ pub fn print_access_block(port: u16) {
             alternate_note(host, machine_name.as_deref())
         );
     }
+    // `localhost`, not `primary`. The child is at this machine, and the LAN IP above is the one
+    // address that stops resolving when the router hands out a new lease — which is what happened,
+    // and is why the two lines above now say which of them survives it. This line was printing
+    // that same stale address to the person least able to work out why it broke.
     println!("\nYour child asks for more time at:");
-    println!("  https://{primary}:{port}/ask");
+    println!("  {}", crate::web::ask_url(port));
 }
 
 /// What to say after an address that isn't the headline one.
@@ -2115,5 +2119,96 @@ mod tests {
         // The pathological case: a host string exists but there is no name to compare it against.
         // `Some(host) == None` is false, so this must not accidentally match.
         assert_eq!(alternate_note("HIS-PC", None), "(also works)");
+    }
+
+    /// The child's printed link comes from [`crate::web::ask_url`] and is never spelled out here.
+    ///
+    /// **A source scan because nothing else can reach this.** `print_access_block` writes to
+    /// stdout and returns nothing, so no test can read what it printed, and `web.rs`'s test of
+    /// `ask_url` proves only that the helper is right — not that this file calls it. That gap was
+    /// measured, not guessed: reverting the line below to `https://{primary}:{port}/ask` leaves
+    /// **all 497 tests green**. This scan is the only thing between that revert and a child being
+    /// handed the one address that stops resolving when the router reboots.
+    ///
+    /// Both halves are load-bearing. The first catches the line being deleted outright; the second
+    /// catches it being rewritten by hand, which is how it would actually come back — someone
+    /// making the child's line "consistent" with the two parent lines above it, which legitimately
+    /// do use `primary`.
+    ///
+    /// The test module is split off before scanning, for the reason
+    /// `server.rs::only_the_known_child_facing_routes_are_reachable_without_a_session` documents:
+    /// `include_str!` pulls in comments too, so this very doc comment would be read as the defect
+    /// it forbids and the guard would report itself.
+    #[test]
+    fn the_child_link_is_never_spelled_out_by_hand() {
+        const INSTALL_RS: &str = include_str!("install.rs");
+        let body = INSTALL_RS
+            .split_once("#[cfg(test)]")
+            .map_or(INSTALL_RS, |(before, _)| before);
+
+        assert!(
+            body.contains("crate::web::ask_url"),
+            "`print_access_block` no longer builds the child's link with `web::ask_url`. If that \
+             line was deleted the child is told nothing; if it was inlined, see the assertion below."
+        );
+
+        let hand_built: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && l.contains("/ask"))
+            .collect();
+        assert!(
+            hand_built.is_empty(),
+            "the child's link must come from `web::ask_url`, which keeps it on `localhost` — the \
+             one address that survives a DHCP lease change. These lines build it by hand: {hand_built:?}"
+        );
+    }
+
+    /// The parent's address labels come from [`alternate_note`], never from a literal.
+    ///
+    /// The same gap as [`the_child_link_is_never_spelled_out_by_hand`], found by applying that
+    /// lesson to the function next to it. `alternate_note` has thorough tests of what it
+    /// *returns* and nothing whatever that it is *called*, and the two are not the same claim:
+    /// replacing the call with a bare `"(also works)"` was measured to leave **all 504 tests
+    /// green** while deleting the entire point of the function. The parent is then no longer told
+    /// which of the two printed addresses survives a lease change — the exact failure that sent
+    /// one looking for an IP that had already moved.
+    ///
+    /// A helper is not covered by testing the helper. Something has to pin the call.
+    #[test]
+    fn the_address_labels_come_from_the_helper_not_a_literal() {
+        const INSTALL_RS: &str = include_str!("install.rs");
+        let body = INSTALL_RS
+            .split_once("#[cfg(test)]")
+            .map_or(INSTALL_RS, |(before, _)| before);
+        let (caller, helper) = body.split_once("fn alternate_note").expect(
+            "`alternate_note` must exist — this guard is about how it is used, so its \
+                     disappearance is a bigger change than this test can speak to",
+        );
+
+        assert!(
+            caller.contains("alternate_note("),
+            "nothing above `fn alternate_note` calls it, so every printed address now carries the \
+             same label and the durable one is unmarked again"
+        );
+
+        let inlined: Vec<&str> = caller
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && l.contains("(also works)"))
+            .collect();
+        assert!(
+            inlined.is_empty(),
+            "the note text belongs to `alternate_note`; inlining it at the call site is how the \
+             label silently stops distinguishing the two addresses: {inlined:?}"
+        );
+
+        // Non-vacuity: if the note text is ever reworded, the scan above starts matching nothing
+        // and would pass over an inlined literal it no longer recognises.
+        assert!(
+            helper.contains("(also works)"),
+            "`alternate_note` no longer returns the text this guard searches for, so the scan \
+             above is now vacuous — update both together"
+        );
     }
 }
