@@ -47,6 +47,10 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 | **Deriving "today" in the timeline from `this.today.day` rather than the browser clock** | A genuine second definition of "today" on a page where every other today-figure comes from the server. Declined **from a cleanup pass**: it changes timezone semantics, needs a fallback for the pre-load `null`, and belongs in a correctness review rather than a tidy-up. |
 | **Labelling the live frame with the app that has focus** | Proposed as the best available mitigation for a black frame: show *which game* rather than a blank rectangle meaning either "monitor off" or "capture defeated". **Declined because the premise was false**, and it was written before that was checked. The watcher's foreground data reaches the dashboard only as `focus_totals` — a per-day *aggregate* in the screen-time report. There is no "what has focus right now" anywhere on the wire, so the label would have named whatever the child used **most today**, pinned under a live picture of something else. Delivering it properly means a new field on `/api/usage/today` or the capture response, which is a feature, not a label. Recorded here because the idea is obviously attractive and will be proposed again. Its idle sibling — skipping capture while `GetLastInputInfo` reports idle — is refuted under O18. |
 | **A web-app manifest and icon set, so the dashboard installs to the phone's home screen** | Proposed as finishing the substitute for the app `MOBILE-APP.md` declined: if the browser is the product on a phone, Add to Home Screen is how a parent keeps it, and today that yields a screenshot thumbnail because there is no `apple-touch-icon`, `theme-color` or manifest. **Refuted by this repository, twice over, before any of it was written.** `MOBILE-APP.md` §"Why not simply install the existing dashboard as a web app" records that an installed PWA runs in a separate storage and trust context, so *the certificate exception the parent granted in Safari does not travel into it* — the installed app cannot connect at all against a self-signed certificate. `app.js`'s `syncTitle` comment says the same thing from the other direction, ruling out the Badging API for the same reason. So the feature does not degrade gracefully; it produces an icon that opens a broken app. Two things survive and are separable from it: `ask.html` carries no `rel="icon"` at all, so the child's page really does request `/favicon.ico` and take a 404 on every load, and the low-profile naming (`Host Health`, the stethoscope) is a deliberate decision a manifest would have to respect rather than a gap to fill. Recorded because the idea is obviously attractive — it was proposed in a review of this repository — and the counter-argument is two files away from where anyone would start writing it. |
+| **WDAC or AppLocker, to make the blocklist an actual wall** | The blocklist is kill-on-sight and loses to a rename, which the README states. WDAC would fix that — publisher/hash rules, all Windows 11 SKUs — and AppLocker would not (enforcement needs Enterprise/Education, wrong SKU for families, and Microsoft has it in maintenance). **Declined on the failure mode, not the capability.** A bad WDAC policy can leave a machine unbootable, and this tool's whole safety argument is that its worst outcome is a service that stops enforcing, never a PC that stops starting. The same reasoning declines `net user <name> /times:` for the curfew: it enforces logon hours natively and is a *partial* answer at best, because it does not apply to Microsoft accounts, which is what most families sign in with. |
+| **A CSRF token or a required custom header, instead of the `Origin` fallback** | OWASP lists the custom-header defence as well suited to API endpoints, and for browsers it is strictly stronger than comparing `Origin` — a cross-origin form cannot set a header at all. **Ruled out by a client, not by the argument.** The Android app in `nestwatch-mobile` reaches this server through Dart's `HttpClient` setting only `Accept` and a cookie (`lib/src/api/nestwatch_api.dart`, verified by reading it), so requiring a header would 403 every call it makes, and the fix lives in a different repository from the break. `Origin` covers the same population — WebKit has sent it on POST since 2008 — and costs that client nothing, because it sends neither header and is admitted on the both-absent arm. |
+| **Failing closed when neither `Sec-Fetch-Site` nor `Origin` is present** | OWASP recommends blocking here and this declines it, on a property of the product rather than of the web. The header-less caller on this LAN is a shipped phone app and the test suite's own `oneshot` requests; the browser population that omits `Origin` on an unsafe method is essentially pre-2008. Blocking would cost a real client to shut a window no current browser stands in. Re-raise if the Android client ever gains a header to check, which would make the trade different rather than merely closer. |
+| **`Cross-Origin-Embedder-Policy`, alongside the COOP/CORP pair that was added** | The other two are cheap and pay for themselves on browsers without fetch metadata. COEP does not: it exists to enable cross-origin *isolation* for `SharedArrayBuffer` and high-resolution timers, which this page has no use for, and in exchange it constrains what the page may load later. Added headers should each answer a question something actually asks. |
 | An `Enforcer` trait unifying the two background loops | The genuinely shared skeleton is ~6 lines. The blocks that *look* duplicated aren't: curfew calls `disarm()` when a shutdown fails so it retries with a fresh countdown; the rules enforcer deliberately doesn't, and returns as the uncancellable `ShutdownNow`. A shared helper would extract the boilerplate and leave the divergent part behind. |
 
 ---
@@ -59,6 +63,43 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 ---
 
 ## Withdrawn after measurement
+
+### The dashboard needs navigation — fourteen cards in one flat scroll
+
+**Raised and withdrawn the same day, 2026-08-31. The claim was false and the method that produced
+it is the part worth keeping.**
+
+The claim: `index.html` is 94,682 bytes and holds fourteen top-level cards with one `id`, one
+in-page anchor, no tab bar and no drawer — so a parent on a phone scrolls past three configuration
+cards to reach *More-time requests*, seventh in source order. Three fixes were proposed: reorder by
+urgency, add a sticky glance bar, and collapse the settings tail.
+
+**All three were already done, at the exact commit that was measured.** `f637fde` ("Let the
+dashboard fit a phone, and give it a way in"):
+
+- **Seven of the fourteen cards are `<details>`** — Routines, Time codes, Recent access, Usage
+  history, Trusted clock, Language and Change password. That is the settings tail, already
+  collapsed, already last.
+- **An "At a glance" row is the first child of the grid**, full width, carrying enforcement state,
+  today's minutes and the pending-request count. Its comment says why: the three questions the page
+  is opened with "lived in three non-adjacent cards, one below the fold on a phone — and a phone is
+  what the onboarding QR hands you."
+- **The requests card is `x-show="showRequests()"`** — it is not seventh-and-buried, it is absent
+  when there is nothing waiting and present when there is, with a documented `null`-vs-`[]`
+  distinction so a failed fetch cannot look like a quiet evening.
+
+So the ordering complaint was wrong twice: everything above the requests card is operational
+(Screen, Running apps, Curfew, Today, Limits), not configuration, and the count the parent needed
+was already at the top of the page.
+
+**The method error, which is the reusable part.** The measurement counted `card-title`, `id=`,
+`href="#"`, `tabs` and `drawer` — a list of the navigation idioms the reviewer *expected* — found
+them absent, and reported "no navigation" as a measured fact. It never grepped for `<details>`,
+which is the idiom actually in use. Counting proxies for a property and reporting the conclusion
+with the confidence of a direct measurement is how a false claim acquires a number and survives
+review. The byte count in the claim was correct; everything inferred from it was not.
+
+
 
 ### 94% of every tally write is data the enforcer never reads — and it does not matter
 

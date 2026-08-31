@@ -37,6 +37,13 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   are enforced by the browser rather than asked of it, so they still apply on the older browsers
   the first item above is about.
 
+### Documentation
+- **The README now says that one install manages one child.** There is a single budget, curfew and
+  set of rules per PC, because nothing stored has a person in it — so two children sharing a
+  machine share one budget, and a parent using that PC spends their child's screen time. This was
+  always true and was never written down, which made it something you discovered by watching the
+  numbers behave oddly.
+
 ## [0.5.0] — 2026-08-31
 
 ### Fixed

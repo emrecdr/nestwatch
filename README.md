@@ -361,6 +361,17 @@ weighed and declined — so neither has to be rediscovered.
   monitored PC a way out.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
+- **More than one child on the same PC** — not supported, and this is a shape rather than a gap.
+  There is one daily budget, one curfew and one set of app rules per install, because nothing in
+  the stored configuration has a *person* in it. So two children sharing a PC share one budget and
+  the first to use it spends the second's evening, and your own account on that PC draws down your
+  child's screen time while you do the taxes. One managed child per PC is the design; if two
+  children share a machine, give them separate Windows accounts and know that the limits still
+  apply to the machine, not to whoever is signed in.
+  <br>This is called out here rather than left to be discovered because the failure is quiet: the
+  budget is not wrong, it is measuring something other than what you assumed, and it looks exactly
+  like a child who used more than they say. Reporting has the same boundary — see
+  [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md) `O6`.
 - **Web/content filtering** — not built, and not planned in the blocking sense. There is code to
   break browser time out by **page title** — what a tab was called — but see the warning below
   before relying on it. It blocks nothing, records no addresses, and builds no browsing history;

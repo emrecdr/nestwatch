@@ -255,7 +255,24 @@ Three things learned while designing it are worth not re-deriving:
   attacker-chosen. They are report-only, and `foreground_time_cannot_trigger_a_per_app_limit` keeps
   them that way.
 
-**The per-account half of this entry is unchanged and still open.**
+**The per-account half of this entry is unchanged and still open — and it is larger than this entry
+says.** Everything above concerns *attribution in the report*. There is a second half, not tracked
+anywhere until now: **enforcement has no person in it either.** `Config` holds one `Rules`, one
+`Curfew` and one `DailyGrant`, and `Rules` holds one `daily_budget_mins`, one `blocklist` and one
+`app_limits` map. A sweep of `src/` for `per_user|username|child_id|per_child` returns three hits,
+all unrelated. So two children on one PC share a budget and the first to use it spends the second's
+evening, and a parent doing the taxes on that machine draws down their child's screen time.
+
+The reporting half is a `SystemControl` change. The enforcement half is a config-schema change with
+migration, touching both enforcers, the API surface and the whole dashboard — a different order of
+work, and it should not be smuggled in behind the smaller one.
+
+**Documented rather than scheduled, 2026-08-31.** The README's *Not included* list now states "one
+managed child per PC" as a boundary, because the failure was quiet: the budget is not wrong, it is
+measuring something other than what the parent assumed, and it looks exactly like a child who used
+more than they admit. Stating it is not the same as fixing it, and this entry stays open. Note the
+knock-on if it is ever taken: `DECLINED-OPTIONS.md` names "a row per `(day, app)`" as the trigger
+that would make SQLite defensible, and per-account multiplies rows by the same argument.
 
 ### O16 · UWP windows resolve to `ApplicationFrameHost.exe`, not to the app
 
@@ -1209,6 +1226,61 @@ other option and is worse: it hands back exactly the remembering that the choke 
 
 **Trigger.** Worth doing when something makes a wake expensive — a heavier tick, a slower
 `running_processes`, or a config-writing endpoint that stops being human-paced.
+
+### O77 · A leaked session can only be revoked by signing every device out
+
+Sessions persist 30 days across restarts, which is right: a parent on a phone behind a certificate
+warning should not be signed out by every service restart. The consequence is that a cookie is
+valid for 30 days and the **only** way to end one early is `api::change_password`, which calls
+`sessions.clear_all()` and signs out *everything*.
+
+So "I left my phone in a taxi" costs a password rotation plus re-pairing every other device, on a
+service where signing in already costs a certificate click-through. There is no way to see which
+devices hold a session, and no way to drop one.
+
+The information already exists on both sides and is simply not joined: the audit log records every
+`auth_success` with source IP and user-agent, and `tower_sessions::Record` carries the id and
+expiry. The dashboard already shows *Recent access*, which answers the neighbouring question.
+
+**Fix.** A *Signed-in devices* card — first seen, last seen, source IP, user-agent — with per-row
+revoke. One route, one card, no schema migration.
+
+**Weigh first:** `FileSessionStore` deliberately keeps reads off the disk and writes only on
+mutation, and a revoke list is a read of the map on a parent action, which is fine. What is not
+obviously fine is putting user-agent strings in the store — they are attacker-influenced text
+rendered in the parent's dashboard, so this lands next to the escaping rules rather than beside
+them.
+
+### O78 · The notification decision rests on an assumption nobody has spent a minute testing
+
+`app.js::titleFor` reasons through the options for telling a parent that their child is waiting,
+and lands on the tab title. Two of its three rejections are solid and should not be re-opened: Web
+Push needs an external push service, which "nothing leaves the house" forbids outright, and the
+Badging API needs an installed app, which `MOBILE-APP.md` already refuted because an installed PWA
+does not inherit the browser's certificate exception.
+
+The third is not a rejection. It reads: *"The Notifications API needs a secure context, and whether
+a self-signed certificate accepted on a private IP counts as one is **unverified**"* — an honest
+note that has been standing in for a decision ever since.
+
+**It costs one line on the paired phone to settle**: read `isSecureContext` in the console, or from
+the address bar, on the device the QR actually paired. Nobody has.
+
+The research leans toward `false`: the W3C definition of a potentially trustworthy origin exempts
+`localhost`, `file:` and `wss:` and says nothing about HTTPS-with-a-bypassed-chain on a private
+address, and MDN reads the network-channel requirement as excluding it. **That is a reading of a
+spec, not a measurement of a browser, and the two have diverged here before.**
+
+**Which makes the fallback the more interesting half.** There is a permission-free option the
+comment does not consider: the dashboard already holds an SSE connection and already knows the
+moment a request arrives. An **audio cue** needs no secure context, no permission prompt, no
+service worker and no installed app — only a prior user gesture, which a parent who has just signed
+in has made. On a phone with the tab open that is the difference between a silent title change and
+something a person notices.
+
+Neither reaches a locked phone. That limit is real and must stay stated — but "cannot notify at
+all" and "cannot notify while away from the page" are different claims, and the docs currently make
+the stronger one.
 
 ## Not covered by any of this
 
