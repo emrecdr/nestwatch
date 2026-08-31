@@ -52,6 +52,13 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   nowhere the child can see, and the countdown they had been reading a minute earlier says
   *"Bedtime"*. Naming the same thing two ways across two messages a minute apart is a small cruelty
   at bedtime.
+- **If you have screen time set to shut down rather than lock, your child is now told where to ask
+  for more.** The countdown warnings carry the address of their own page; the shutdown notice was
+  the one child-facing message that never did. That made it a coin-flip on a setting you probably
+  chose for unrelated reasons: an install set to **Lock** told them where to ask, and an otherwise
+  identical one set to **Shut down** never did — on the harsher of the two endings, where the
+  Windows dialog is the only thing on screen and there is no notification beside it to carry the
+  address.
 
 ### Added
 - **You can give a later bedtime for one night.** Screen time had three ways to grant more; bedtime

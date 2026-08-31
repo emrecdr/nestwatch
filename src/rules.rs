@@ -1306,7 +1306,14 @@ pub async fn run_rules_enforcer(
                         0
                     };
                     let control = control.clone();
-                    let msg = shutdown_message(lang).to_string();
+                    // Carries the hint for the same reason the lock warning does, and it matters
+                    // more here: this is the harsher of the two budget endings, and `/c` is the
+                    // *only* text a `shutdown.exe` dialog shows — there is no notification beside
+                    // it to carry the address. Without this, a Shutdown-configured install never
+                    // told the child where to ask, while a Lock-configured one always did.
+                    // Over-long text is truncated at 512 chars by the caller, not rejected, so a
+                    // future longer hint degrades the message rather than failing the shutdown.
+                    let msg = with_hint(shutdown_message(lang).to_string(), hint.as_deref());
                     match tokio::task::spawn_blocking(move || control.shutdown(secs, Some(msg)))
                         .await
                     {

@@ -8,8 +8,21 @@ use std::sync::Mutex;
 
 use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
+/// How many shutdown requests [`FakeControl`] remembers. Far above what any test asserts on, and
+/// small enough that a dev server left running for weeks cannot grow a list out of it.
+const SHUTDOWN_LOG_CAP: usize = 64;
+
 pub struct FakeControl {
     processes: Mutex<Vec<ProcessInfo>>,
+    /// Every `(delay_secs, message)` this fake was asked to shut down with, in order.
+    ///
+    /// Recorded rather than merely logged because the message is the *only* thing the child sees
+    /// on a Shutdown-configured install — `shutdown.exe /c "…"` is the whole notification, with no
+    /// toast beside it. Two real defects lived in that string with nothing able to observe it: it
+    /// was hard-coded English on every install, and it was the one child-facing message that never
+    /// carried the "where to ask for more time" address. A `tracing::warn!` cannot be asserted on,
+    /// so the loop that builds it had no test at all (`docs/OPEN-FINDINGS.md` O70).
+    shutdowns: Mutex<Vec<(u32, Option<String>)>>,
 }
 
 impl FakeControl {
@@ -42,7 +55,16 @@ impl FakeControl {
                     memory_bytes: 8_000_000,
                 },
             ]),
+            shutdowns: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every shutdown this fake was asked for, as `(delay_secs, message)`, oldest first.
+    pub fn shutdowns(&self) -> Vec<(u32, Option<String>)> {
+        self.shutdowns
+            .lock()
+            .expect("fake shutdown log poisoned")
+            .clone()
     }
 }
 
@@ -115,6 +137,19 @@ impl SystemControl for FakeControl {
             ?message,
             "[fake] shutdown requested (no-op on this platform)"
         );
+        // Bounded, because this type is not only a test double: `control::new()` hands the real
+        // server a `FakeControl` on every non-Windows build, so a dev machine left running with a
+        // curfew accumulates these for the life of the process. And it accumulates *fast* — the
+        // shutdown here is a no-op, so the machine never powers off, so the curfew enforcer keeps
+        // re-issuing `ShutdownNow` for the whole window rather than the once a real shutdown would
+        // allow. Unbounded growth in a long-lived process for a log nothing in production reads.
+        //
+        // Keeps the **oldest**, not the newest: assertions index from the front, so a cap that
+        // dropped from the front would silently renumber what a test is looking at.
+        let mut log = self.shutdowns.lock().expect("fake shutdown log poisoned");
+        if log.len() < SHUTDOWN_LOG_CAP {
+            log.push((delay_secs, message));
+        }
         Ok(())
     }
 
