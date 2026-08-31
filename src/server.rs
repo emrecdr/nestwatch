@@ -41,6 +41,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Result;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::{Router, middleware};
 use axum_server::tls_rustls::RustlsConfig;
@@ -50,6 +51,24 @@ use tower_sessions::{Expiry, SessionManagerLayer};
 
 use crate::state::AppState;
 use crate::{api, auth, cert, config, security, web};
+
+/// Body cap for the two routes an **unauthenticated** caller can reach.
+///
+/// axum already applies a `DefaultBodyLimit` of 2 MB to every `Bytes`-derived extractor, `Json`
+/// included, so this is a tightening rather than a missing bound — checked before writing it,
+/// after expecting to find no limit at all.
+///
+/// 2 MB is the wrong number *here* because of who can send it. Everything else behind
+/// `require_auth` is a request the parent made; these two are reachable by anyone on the LAN,
+/// which includes the child, and the per-IP limiters cap the **rate** rather than the **size** —
+/// so the product they permit is megabytes of parsing per minute from an unauthenticated caller.
+///
+/// 8 KiB is derived from the markup rather than picked. `assets/ask.html` caps the reason at
+/// `maxlength="200"` and the code at `maxlength="12"`, so the largest honest body is a 200-char
+/// reason: 800 bytes at 4 bytes per char, or about 1.2 KiB if every one of them JSON-escapes to
+/// `\uXXXX`. This leaves more than five times that, and the server truncates to
+/// `timereq::MAX_REASON_CHARS` afterwards regardless.
+const CHILD_BODY_LIMIT: usize = 8 * 1024;
 
 /// Build the full application router. Kept separate from [`serve`] so tests can drive it
 /// directly without binding a socket or setting up TLS.
@@ -110,8 +129,14 @@ pub fn build_router(state: AppState) -> Router {
         // Child-facing, unauthenticated but LAN-gated (see the outer layers below).
         .route("/ask", get(web::ask))
         .route("/status", get(api::child_status))
-        .route("/time-request", post(api::time_request))
-        .route("/redeem-code", post(api::redeem_code))
+        .route(
+            "/time-request",
+            post(api::time_request).layer(DefaultBodyLimit::max(CHILD_BODY_LIMIT)),
+        )
+        .route(
+            "/redeem-code",
+            post(api::redeem_code).layer(DefaultBodyLimit::max(CHILD_BODY_LIMIT)),
+        )
         .nest("/api", api)
         .fallback(web::static_handler)
         .layer(session_layer)
@@ -285,12 +310,28 @@ mod tests {
             "sanity: the guarded half should hold the parent's routes"
         );
 
-        // `.route("` only: `.nest(` and `.fallback(` are not routes, and the fallback is the static
-        // asset handler, which is deliberately public.
+        // `.route(` only: `.nest(` and `.fallback(` are not routes, and the fallback is the static
+        // asset handler, which is deliberately public. `.route_layer(` does not match — the `(` is
+        // part of the needle.
+        //
+        // **The path literal is not necessarily the next character.** This scanned for `.route("`
+        // until a per-route `.layer(...)` pushed two registrations past rustfmt's 100 columns and
+        // it reformatted them across four lines each. Those two routes then matched nothing, and
+        // the failure was loud only because they were already in `UNAUTHENTICATED`. The dangerous
+        // direction is silent: a *new* multi-line route that nobody adds to the list is absent from
+        // both sides of the comparison, so the guard passes while an unauthenticated route sits
+        // there unguarded. Any per-route middleware — a body limit, a rate limit, a timeout —
+        // triggers that reformatting, so it is an ordinary edit rather than an exotic one.
         let mut found: Vec<&str> = open
-            .match_indices(".route(\"")
+            .match_indices(".route(")
             .map(|(i, m)| {
-                let rest = &open[i + m.len()..];
+                let rest = open[i + m.len()..].trim_start();
+                let rest = rest.strip_prefix('"').unwrap_or_else(|| {
+                    panic!(
+                        "a `.route(` whose first argument is not a string literal: {}",
+                        &rest[..rest.len().min(60)]
+                    )
+                });
                 &rest[..rest.find('"').expect("unterminated route path literal")]
             })
             .collect();

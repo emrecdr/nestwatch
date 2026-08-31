@@ -73,6 +73,77 @@ async fn navigate(app: &Router, uri: &str, site: &str) -> StatusCode {
     send(app, "GET", uri, None, Some((site, "navigate"))).await
 }
 
+/// The authority every fallback test below treats as "this server".
+const HERE: &str = "192.168.1.5:8443";
+
+/// A request from a browser that sends **no** fetch metadata — Safari before 16.4 — carrying an
+/// `Origin` and arriving on `HERE`.
+///
+/// `h2` chooses how the authority reaches the server, and it is the whole point of this helper.
+/// With `h2 = false` the request is HTTP/1.1 shaped: a path-only URI plus a `Host` header. With
+/// `h2 = true` it is HTTP/2 shaped: the authority on the URI and **no `Host` header at all**,
+/// which is what hyper hands the middleware once `:authority` is parsed. A check that consulted
+/// only `Host` passes every `h2 = false` case here and admits every `h2 = true` one.
+async fn legacy_browser_post(app: &Router, origin: &str, h2: bool) -> StatusCode {
+    let mut b = Request::builder().method("POST");
+    if h2 {
+        b = b.uri(format!("https://{HERE}/api/lock"));
+    } else {
+        b = b.uri("/api/lock").header(header::HOST, HERE);
+    }
+    let cookie = login(app, PASSWORD).await.expect("login");
+    app.clone()
+        .oneshot(
+            b.header(header::ORIGIN, origin)
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// The gap `Sec-Fetch-Site` cannot close, because it did not exist yet.
+///
+/// Fetch metadata shipped in Safari **16.4**, March 2023. An iPad Air 2 / iPad 5 / mini 4 tops out
+/// below that permanently, and that is the device a household promotes to "the thing we check the
+/// dashboard on". It sends the session cookie and no `Sec-` headers, so before the `Origin`
+/// fallback this exact request — a form POST from a page the child serves on another port of the
+/// same PC — was **admitted**, cookie and all.
+///
+/// Both transports, because the answer differed between them and only one is what a browser
+/// actually negotiates.
+#[tokio::test]
+async fn a_browser_without_fetch_metadata_cannot_post_from_another_port() {
+    let app = test_app();
+
+    for h2 in [false, true] {
+        let status =
+            legacy_browser_post(&app, &format!("https://{}", "192.168.1.5:9000"), h2).await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "a page on another port drove /api/lock with the parent's cookie (h2 = {h2})"
+        );
+    }
+}
+
+/// The other half of the same change: the parent's own old iPad must still work.
+#[tokio::test]
+async fn the_dashboards_own_post_still_works_without_fetch_metadata() {
+    let app = test_app();
+
+    for h2 in [false, true] {
+        let status = legacy_browser_post(&app, &format!("https://{HERE}"), h2).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "the dashboard's own POST was blocked on a browser without fetch metadata (h2 = {h2})"
+        );
+    }
+}
+
 /// The attack: a page on another port of the same host, with the parent signed in.
 #[tokio::test]
 async fn a_same_site_page_cannot_drive_the_bodyless_post_endpoints() {
@@ -143,9 +214,13 @@ async fn a_link_or_qr_scan_to_the_dashboard_still_opens() {
     assert_ne!(status, StatusCode::FORBIDDEN, "/ask was blocked");
 }
 
-/// A client that sends no fetch metadata — `curl`, a health probe, a browser too old to send it
-/// — is unaffected. Those carry no ambient cookie authority for a third party to abuse, and
-/// failing closed here would break every non-browser caller.
+/// A client that sends no fetch metadata **and no `Origin`** — `curl`, a health probe, the
+/// Android client — is unaffected.
+///
+/// This used to say such callers "carry no ambient cookie authority for a third party to
+/// abuse". That was true of `curl` and false of the browser half, which is why the `Origin`
+/// fallback above now exists. What survives is the *other* reason, and it is the load-bearing
+/// one: failing closed here would break every non-browser caller.
 ///
 /// **One of those callers is now a shipped product.** The Android client in `nestwatch-mobile`
 /// talks to this server with Dart's `HttpClient`, which sends no `Sec-Fetch-*` headers at all —

@@ -64,16 +64,54 @@ fn is_lan(ip: IpAddr) -> bool {
 /// distinction the cookie attribute can't make. Browsers forbid page scripts from setting any
 /// `Sec-` header, so the value can't be forged from JavaScript.
 ///
-/// **Policy.** Allow when the header is absent (a non-browser client — `curl`, a probe — or a
-/// browser too old to send it; those carry no ambient cookie authority to abuse), or when it
-/// says `same-origin` or `none` (`none` is a user-initiated load: a typed URL, a bookmark, the
-/// pairing QR). Otherwise allow only a top-level navigation `GET`, so following a link to the
-/// dashboard from a chat message still works, and reject everything else.
+/// # Two signals, because one of them is younger than the devices in the house
+///
+/// `Sec-Fetch-Site` is the primary check and decides every request that carries it. When it is
+/// **absent** the request is judged on `Origin` instead, and the reason is a date: fetch metadata
+/// shipped in Chrome 76 (2019) and Firefox 90 (2021) but in **Safari only at 16.4**, in March
+/// 2023. An iPad Air 2, iPad 5 or iPad mini 4 cannot reach that version and never will, and that
+/// is precisely the device a household promotes to "the thing we check the dashboard on". Such a
+/// browser sends the session cookie and no fetch metadata, so for it the port-confusion gap above
+/// would be wide open on a header this middleware never looked at.
+///
+/// A previous version of this comment justified admitting the header-less case as "a non-browser
+/// client — `curl`, a probe — or a browser too old to send it; those carry no ambient cookie
+/// authority to abuse". **The second half of that was false, and it was the half doing the work.**
+/// An old browser has a full cookie jar; that is what makes it dangerous. The sentence was true of
+/// `curl` and got extended to a case where it is exactly backwards. OWASP's CSRF guidance is
+/// blunt about the shape: a fallback to origin verification is a *mandatory requirement* for any
+/// fetch-metadata implementation, because some browsers do not send the `Sec-` headers.
+///
+/// `Origin` is the right fallback here rather than a token or a custom header, and the choice was
+/// forced rather than preferred. WebKit has sent `Origin` on POST since **2008** (bug 20792), so
+/// it covers the entire population fetch metadata misses. The custom-header defence OWASP also
+/// lists would work for browsers and **would break the shipped Android client**, which reaches
+/// this server through Dart's `HttpClient` setting only `Accept` and a cookie — see
+/// `tests/origin.rs`.
+///
+/// # Policy
+///
+/// * `same-origin` / `none` — allow. (`none` is a user-initiated load: a typed URL, a bookmark,
+///   the pairing QR.)
+/// * `same-site` / `cross-site` — allow only a top-level navigation `GET`, so following a link
+///   to the dashboard from a chat message still works.
+/// * **absent** — fall back to [`origin_names_target`]. No `Origin` either means a non-browser
+///   caller (`curl`, a probe, the Android client), which is admitted exactly as before; an
+///   `Origin` that names somewhere else is refused unless it is a `GET`/`HEAD`, which mirrors the
+///   navigation exemption above as closely as the missing `Sec-Fetch-Mode` allows.
+///
+/// Note what the last bullet deliberately is **not**: it does not fail closed when both headers
+/// are missing. OWASP recommends blocking there, and this declines that recommendation on a
+/// property of this product rather than of the web — the header-less caller here is a shipped
+/// phone app, and every browser engine has sent `Origin` on unsafe methods for over fifteen
+/// years, so blocking would cost a real client to close a window no current browser stands in.
 pub async fn require_same_origin(request: Request, next: Next) -> Result<Response, StatusCode> {
     let headers = request.headers();
     let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
     let mode = headers.get("sec-fetch-mode").and_then(|v| v.to_str().ok());
-    let allowed = is_same_origin(site, mode, request.method());
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    let target = target_authority(&request);
+    let allowed = is_same_origin(site, mode, request.method(), origin, target);
 
     if allowed {
         Ok(next.run(request).await)
@@ -87,15 +125,69 @@ pub async fn require_same_origin(request: Request, next: Next) -> Result<Respons
     }
 }
 
+/// Where this request actually arrived, as a `host[:port]` authority — the value an `Origin` is
+/// compared against.
+///
+/// **Both sources are checked because both occur, and reading only one would be a guard that
+/// tests green and protects nothing.** HTTP/1.1 puts the authority in the `Host` header. HTTP/2
+/// replaces it with the `:authority` pseudo-header, which hyper lifts onto the request URI and
+/// which **never appears in the header map at all** — so on an h2 connection a `Host`-only lookup
+/// returns `None`, the comparison below is skipped, and every request is admitted. `h2` is in this
+/// build (`axum` enables it by default and it is in `Cargo.lock`), and Safari has spoken HTTP/2
+/// since Safari 9 — which is to say, on exactly the old iPads the fallback exists for.
+fn target_authority(request: &Request) -> Option<&str> {
+    request
+        .uri()
+        .authority()
+        .map(axum::http::uri::Authority::as_str)
+        .or_else(|| {
+            request
+                .headers()
+                .get(header::HOST)
+                .and_then(|v| v.to_str().ok())
+        })
+}
+
+/// Does `origin` — a serialized origin, `https://host[:port]` — name `target`, an authority of
+/// `host[:port]`?
+///
+/// The scheme is compared by requiring it, not by parsing it: this service is HTTPS-only, so
+/// `http://…` and the opaque `null` (which a sandboxed frame or a redirected POST sends) are
+/// mismatches by construction. Hosts are ASCII-case-insensitive; ports are not optional on either
+/// side, because a browser omits a default port from *both* `Origin` and `Host`, so the two agree
+/// or disagree together.
+fn origin_names_target(origin: &str, target: &str) -> bool {
+    origin
+        .strip_prefix("https://")
+        .is_some_and(|host| host.eq_ignore_ascii_case(target))
+}
+
 /// The policy behind [`require_same_origin`], as a pure function of the two fetch-metadata
-/// headers and the request method — so it is testable without standing up a router, the same
-/// way [`is_lan`] is.
-fn is_same_origin(site: Option<&str>, mode: Option<&str>, method: &Method) -> bool {
+/// headers, the method, and the origin/target pair — so it is testable without standing up a
+/// router, the same way [`is_lan`] is.
+fn is_same_origin(
+    site: Option<&str>,
+    mode: Option<&str>,
+    method: &Method,
+    origin: Option<&str>,
+    target: Option<&str>,
+) -> bool {
     match site {
-        None | Some("same-origin") | Some("none") => true,
+        Some("same-origin") | Some("none") => true,
         // Cross-site or same-site: only a top-level navigation that can't carry a payload.
         // A form submission is *also* a navigation, which is why the method is checked too.
         Some(_) => mode == Some("navigate") && matches!(*method, Method::GET | Method::HEAD),
+        None => match (origin, target) {
+            // Nothing claims a source. `curl`, a health probe, and the Android client all land
+            // here, and all three are admitted exactly as they were before this fallback existed.
+            (None, _) => true,
+            // We cannot say what our own authority is, so we cannot call anything a mismatch.
+            // Reached by the test suite's `oneshot` requests, which have neither.
+            (Some(_), None) => true,
+            (Some(origin), Some(target)) => {
+                origin_names_target(origin, target) || matches!(*method, Method::GET | Method::HEAD)
+            }
+        },
     }
 }
 
@@ -174,6 +266,28 @@ pub async fn set_security_headers(mut response: Response) -> Response {
     h.insert(
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static(PERMISSIONS_POLICY),
+    );
+    // The two cross-origin isolation headers, and they are here for one specific reason rather
+    // than for completeness: **they keep working when `Sec-Fetch-Site` is missing.** That is the
+    // same population `require_same_origin`'s `Origin` fallback exists for — a browser predating
+    // March 2023 — and these are enforced by the browser rather than asked of it, so they hold
+    // even on a request the middleware decided to admit.
+    //
+    // `same-origin` is safe for both. The dashboard opens no cross-origin popups that need a
+    // window handle back (COOP severs exactly that, which is `rel="noopener"` by another route),
+    // and nothing here is meant to be embedded by another origin (CORP), which is the port-confusion
+    // case again from the resource side.
+    //
+    // `Cross-Origin-Embedder-Policy` is deliberately **absent**. It would buy nothing here — it
+    // gates cross-origin isolation for `SharedArrayBuffer`, which this page has no use for — and
+    // it would constrain what the page may load later for no present benefit.
+    h.insert(
+        HeaderName::from_static("cross-origin-opener-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    h.insert(
+        HeaderName::from_static("cross-origin-resource-policy"),
+        HeaderValue::from_static("same-origin"),
     );
     // `no-store` is the DEFAULT, not an override. The most sensitive bytes this service produces
     // are captures of a child's desktop, so anything that has not thought about caching must not be
@@ -319,31 +433,118 @@ mod tests {
         );
     }
 
+    /// Shorthand for the fetch-metadata half: no `Origin`, no target, which is what a browser
+    /// that sends `Sec-Fetch-Site` looks like to the fallback (it is never consulted).
+    fn by_metadata(site: Option<&str>, mode: Option<&str>, method: &Method) -> bool {
+        is_same_origin(site, mode, method, None, None)
+    }
+
+    /// Shorthand for the fallback half: no fetch metadata, judged on `Origin` against the
+    /// authority the request arrived on.
+    fn by_origin(origin: Option<&str>, target: Option<&str>, method: &Method) -> bool {
+        is_same_origin(None, None, method, origin, target)
+    }
+
     #[test]
     fn only_this_exact_origin_may_make_a_request_with_a_payload() {
         let post = Method::POST;
 
         // The gap `SameSite=Strict` leaves open: another port on this same host is *same-site*.
-        assert!(!is_same_origin(Some("same-site"), Some("cors"), &post));
-        assert!(!is_same_origin(Some("cross-site"), Some("cors"), &post));
+        assert!(!by_metadata(Some("same-site"), Some("cors"), &post));
+        assert!(!by_metadata(Some("cross-site"), Some("cors"), &post));
 
         // A form submission is a navigation too, so "allow navigations" alone would reopen it.
-        assert!(!is_same_origin(Some("same-site"), Some("navigate"), &post));
-        assert!(!is_same_origin(Some("cross-site"), Some("navigate"), &post));
+        assert!(!by_metadata(Some("same-site"), Some("navigate"), &post));
+        assert!(!by_metadata(Some("cross-site"), Some("navigate"), &post));
 
         // The dashboard's own calls, and a user-initiated load (typed URL, bookmark, QR).
-        assert!(is_same_origin(Some("same-origin"), Some("cors"), &post));
-        assert!(is_same_origin(Some("none"), Some("navigate"), &Method::GET));
+        assert!(by_metadata(Some("same-origin"), Some("cors"), &post));
+        assert!(by_metadata(Some("none"), Some("navigate"), &Method::GET));
 
         // Following a link to the dashboard from elsewhere must still work.
-        assert!(is_same_origin(
+        assert!(by_metadata(
             Some("cross-site"),
             Some("navigate"),
             &Method::GET
         ));
 
-        // Non-browser clients (curl, probes) send no fetch metadata and carry no ambient
-        // cookie authority for a third party to abuse.
-        assert!(is_same_origin(None, None, &post));
+        // Non-browser clients (curl, probes, the Android client) send no fetch metadata and no
+        // `Origin`, and carry no ambient cookie authority for a third party to abuse.
+        assert!(by_metadata(None, None, &post));
+    }
+
+    /// The population `Sec-Fetch-Site` cannot reach: a browser predating March 2023.
+    ///
+    /// Every case here arrives with **no** fetch metadata, which before this fallback existed was
+    /// an unconditional allow. The attack and the two legitimate callers are separated by `Origin`
+    /// alone, so each assertion below is load-bearing on its own.
+    #[test]
+    fn without_fetch_metadata_a_mismatched_origin_cannot_carry_a_payload() {
+        let post = Method::POST;
+        let here = Some("192.168.1.5:8443");
+
+        // The attack, on an iPad that will never see Safari 16.4: a page the child serves from
+        // another port of the same PC, submitting a form with the parent's cookie attached.
+        assert!(
+            !by_origin(Some("https://192.168.1.5:9000"), here, &post),
+            "a page on another port drove a POST"
+        );
+        // Same host, plain HTTP — a second server the child runs. Refused on the scheme, which is
+        // why the check requires `https://` rather than parsing round it.
+        assert!(!by_origin(Some("http://192.168.1.5:8443"), here, &post));
+        // A sandboxed frame, or a POST that followed a redirect.
+        assert!(!by_origin(Some("null"), here, &post));
+        // Somewhere else entirely.
+        assert!(!by_origin(Some("https://evil.example"), here, &post));
+
+        // The dashboard's own form/fetch POST from that same old browser must still work.
+        assert!(
+            by_origin(Some("https://192.168.1.5:8443"), here, &post),
+            "the dashboard's own POST was blocked on a browser without fetch metadata"
+        );
+        // Hosts are case-insensitive; a browser may not normalise what the parent typed.
+        assert!(by_origin(
+            Some("https://PC-NAME:8443"),
+            Some("pc-name:8443"),
+            &post
+        ));
+
+        // The two shapes that must stay exactly as they were.
+        assert!(
+            by_origin(None, here, &post),
+            "the Android client sends no Origin and must not be blocked"
+        );
+        assert!(
+            by_origin(Some("https://192.168.1.5:9000"), None, &post),
+            "with no target to compare against, nothing can be called a mismatch"
+        );
+
+        // A cross-origin GET carries no payload and cannot read the reply (no CORS headers are
+        // ever sent), so it keeps the same exemption a cross-site navigation has above.
+        assert!(by_origin(
+            Some("https://192.168.1.5:9000"),
+            here,
+            &Method::GET
+        ));
+        assert!(!by_origin(
+            Some("https://192.168.1.5:9000"),
+            here,
+            &Method::DELETE
+        ));
+    }
+
+    /// The default port is omitted from `Origin` *and* from `Host`, so the two still agree.
+    /// Pinned because "compare the port too" invites hand-normalising one side only.
+    #[test]
+    fn a_default_port_is_absent_from_both_sides_and_still_matches() {
+        assert!(origin_names_target("https://nest.local", "nest.local"));
+        assert!(!origin_names_target(
+            "https://nest.local",
+            "nest.local:8443"
+        ));
+        assert!(!origin_names_target(
+            "https://nest.local:8443",
+            "nest.local"
+        ));
     }
 }

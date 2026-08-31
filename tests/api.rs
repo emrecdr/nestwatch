@@ -277,6 +277,69 @@ async fn security_headers_are_present() {
     );
     assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
     assert_eq!(h.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
+    // Enforced by the browser rather than asked of it, so these still hold on a request the
+    // `Sec-Fetch-Site` middleware admitted — which is the whole reason they are worth setting.
+    assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
+    assert_eq!(
+        h.get("cross-origin-resource-policy").unwrap(),
+        "same-origin"
+    );
+}
+
+/// The two routes an unauthenticated caller can reach must not accept axum's 2 MB default.
+///
+/// Both are LAN-reachable without a session, which on this product means the child can reach
+/// them. The per-IP limiters cap how *often* they can be called and say nothing about how *large*
+/// each one may be, so without this the pair permit megabytes of parsing per minute from a caller
+/// who has not signed in.
+///
+/// The accepted case is asserted too, and it is the half that would catch a limit set so tight it
+/// broke the child's page: `assets/ask.html` allows a 200-character reason.
+#[tokio::test]
+async fn the_child_facing_posts_cap_the_body_far_below_axums_default() {
+    let app = test_app();
+
+    let oversized = "x".repeat(9 * 1024);
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/time-request")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "minutes": 30, "reason": oversized }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "a 9 KiB body reached an unauthenticated handler"
+    );
+
+    // The largest reason the child's own page can produce must still go through.
+    let longest_honest_reason = "é".repeat(200);
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/time-request")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "minutes": 30, "reason": longest_honest_reason }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "the longest reason `ask.html` permits was rejected"
+    );
 }
 
 #[tokio::test]

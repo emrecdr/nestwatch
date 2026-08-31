@@ -2,6 +2,41 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Security
+- **The dashboard is no longer open to a page on another port when you view it from an older
+  iPad or iPhone.** The check that stops a page your child serves from a different port on the same
+  PC from operating your controls relied on a browser header — `Sec-Fetch-Site` — that Safari only
+  began sending in **16.4, March 2023**. An iPad Air 2, iPad 5 or mini 4 can never reach that
+  version, and that is exactly the kind of device a household ends up using as "the dashboard
+  device". On one of those, the check was doing nothing at all: your browser sent the login cookie
+  and no header, and the request was let through. Requests that carry no such header are now judged
+  on `Origin` instead, which every browser has sent on form submissions since 2008. Nothing that
+  worked before stops working — `curl`, health probes and the Android app send neither header and
+  are admitted exactly as they were.
+  <br>The comment in the source explaining why the header-less case was safe said those callers
+  "carry no ambient cookie authority to abuse". That is true of `curl` and false of an old browser,
+  which has a full cookie jar — it was the wrong half of the sentence doing the work. `SECURITY.md`
+  repeated it, and additionally dated it to "pre-2020 browsers", which was wrong by three years.
+  Both are corrected.
+- **A guard protecting the login boundary could not see part of what it was guarding.** A test
+  scans this project's own source for routes reachable without a password, so one added to the
+  wrong router fails the build. It matched the text `.route("` — so any route the formatter had
+  broken across lines was invisible to it, and a new unauthenticated route in that shape would be
+  absent from both sides of its comparison and pass silently. That formatting is what happens
+  automatically as soon as a route gains any per-route setting. Demonstrated against the shipped
+  0.5.0 code, which accepted a deliberately unguarded route without complaint. The scan now
+  tolerates the line break.
+- **The two pages your child can reach without logging in now cap how much data they can send.**
+  Both were on the framework's 2 MB default. The existing per-IP limits cap how *often* they can be
+  called and said nothing about size, so between them they allowed megabytes of parsing a minute
+  from someone who has not signed in. The cap is now 8 KiB — over five times the largest request
+  the child's own page can produce.
+- Added `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy`, both `same-origin`. These
+  are enforced by the browser rather than asked of it, so they still apply on the older browsers
+  the first item above is about.
+
 ## [0.5.0] — 2026-08-31
 
 ### Fixed

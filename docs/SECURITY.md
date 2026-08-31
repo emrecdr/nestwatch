@@ -146,18 +146,49 @@ open the door on its own.
     top-level navigation `GET` (following a link still works) — and reject the rest. A cross-site
     **form POST** is also a navigation, so the `GET`-only condition is load-bearing; there's a test
     pinning it.
-  - The header is absent from non-browser clients (`curl`, probes) and pre-2020 browsers, which are
-    allowed through: they carry no ambient cookie authority for a third party to abuse, and failing
-    closed would break every non-browser caller.
+  - **When `Sec-Fetch-Site` is absent, the request is judged on `Origin` instead.** The header is
+    younger than the devices in a lot of houses: Chrome 76 (2019) and Firefox 90 (2021), but
+    **Safari only at 16.4, in March 2023**. An iPad Air 2, iPad 5 or mini 4 cannot reach that
+    version and never will, and that is exactly the device a household promotes to "the thing we
+    check the dashboard on". It sends the session cookie and no `Sec-` headers, so for it the
+    port-confusion hole above was **wide open** until this fallback landed.
+  - This corrects what this page used to say. It described the header-less case as non-browser
+    clients "and pre-2020 browsers", allowed through because "they carry no ambient cookie
+    authority for a third party to abuse". Two errors: the date was wrong by three years, and an
+    old *browser* has a full cookie jar — that is what makes it dangerous. The sentence was true of
+    `curl` and had been extended to the one case where it is backwards. OWASP's CSRF guidance calls
+    an origin-verification fallback a *mandatory requirement* for any fetch-metadata implementation,
+    for this reason.
+  - `Origin` rather than a CSRF token or a custom header, and the choice was **forced**: WebKit has
+    sent `Origin` on POST since 2008, so it covers the whole population fetch metadata misses,
+    while the custom-header defence OWASP also lists would break the shipped Android client, which
+    sets only `Accept` and a cookie.
+  - What is compared is `Origin` against the authority the request actually arrived on — taken from
+    the request URI first and the `Host` header second, **because HTTP/2 sends no `Host` header at
+    all**. Reading only `Host` would have produced a guard that passes every test over HTTP/1.1 and
+    admits the attack over the transport browsers actually negotiate; `tests/origin.rs` runs both
+    shapes for that reason.
+  - Still allowed through: a caller sending **neither** header — `curl`, a health probe, the
+    Android client. OWASP recommends blocking there and this declines it, on a property of this
+    product rather than of the web: the header-less caller here is a shipped phone app, and every
+    browser engine has sent `Origin` on unsafe methods for over fifteen years, so failing closed
+    would cost a real client to shut a window no current browser stands in.
 
 ### 5. Browser hardening
 - Every response carries a strict **Content-Security-Policy** (`default-src 'none'`, allowing
   only the same-origin script/style the page needs, plus `blob:`/`data:` images for
   screenshots and UI icons), `frame-ancestors 'none'` / `X-Frame-Options: DENY`
   (anti-clickjacking), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a
-  deny-all `Permissions-Policy`. HSTS is intentionally **not** set — with a self-signed cert a
-  browser ignores it, and if it ever stuck it would make cert rotation an unrecoverable
-  lockout.
+  deny-all `Permissions-Policy`, plus `Cross-Origin-Opener-Policy` and
+  `Cross-Origin-Resource-Policy`, both `same-origin`. HSTS is intentionally **not** set — with a
+  self-signed cert a browser ignores it, and if it ever stuck it would make cert rotation an
+  unrecoverable lockout.
+- The two cross-origin isolation headers are here for one specific reason rather than for
+  completeness: **they keep working when `Sec-Fetch-Site` is missing**, which is the same
+  population the `Origin` fallback above exists for. They are enforced by the browser rather than
+  asked of it, so they hold even on a request the middleware decided to admit.
+  `Cross-Origin-Embedder-Policy` is deliberately absent — it gates `SharedArrayBuffer` isolation
+  this page has no use for, and would constrain what it may load later for no present benefit.
 - **`script-src` does not admit `'unsafe-inline'`.** Both served pages keep their JavaScript in
   `assets/app.js` and `assets/ask.js` rather than in the markup, so `'self'` covers them and a
   `<script>` appearing in the HTML cannot run. That is the directive worth having here, because
@@ -310,6 +341,12 @@ on every axis:
 - **Rate-limited** by *separate* per-IP `SubmitLimiter`s (`src/timereq.rs`, 5/min/IP) — one for
   requests, one for redemptions — that count **every** call (unlike the login limiter, which
   counts only failures), so a child can neither flood the parent's queue nor rapidly guess codes.
+- **Size-limited** to 8 KiB each (`server::CHILD_BODY_LIMIT`), because the limiters above cap how
+  *often* these can be called and say nothing about how *large* each one may be. axum's default is
+  2 MB, which is the right order for a route only the parent can reach and the wrong one for these
+  two — the product it permits is megabytes of parsing per minute from a caller who has not signed
+  in. 8 KiB is derived from the markup rather than picked: `ask.html` caps the reason at 200
+  characters and the code at 12, so the largest honest body is about 1.2 KiB in the worst encoding.
 - **Request is powerless on its own**: `POST /time-request` only *enqueues a request* (always
   answering `{ok:true}`, leaking no queue state). No screen time is granted until the **parent
   approves it** (`POST /api/time-requests/{id}/approve`). Input is bounded (1–240 minutes; reason
