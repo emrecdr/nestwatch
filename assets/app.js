@@ -1366,6 +1366,55 @@ function app() {
     // Whether the glance row shows the certificate line at all. A getter beside its siblings
     // rather than a `?.` chain in the attribute, for the reason this whole block exists.
     get certExpiring() { return !!this.today?.cert_expiring; },
+
+    // Whether anything was refused today. The server sends `refused_total` already summed, so this
+    // file holds no copy of the arithmetic — the same argument `cert_expiring` makes for shipping
+    // a verdict beside a number.
+    get refusedAny() { return (this.today?.refused_total ?? 0) > 0; },
+
+    // The non-zero refusals, as sentences.
+    //
+    // Zero rows are dropped rather than rendered greyed-out: the card only appears at all when
+    // something happened, so a "0 clock changes" line inside it would be answering a question
+    // nobody asked and diluting the two lines that matter.
+    //
+    // The wording states what *this tool did*, never what the child intended. "Clock change
+    // ignored" is a fact; "tampering detected" is a guess, and a guess that is wrong whenever the
+    // family actually travelled. That distinction is what makes this card safe to show the child
+    // too — which is the shape the research on monitoring says survives contact with a teenager,
+    // where an accusation does not.
+    refusedRows() {
+      const r = this.today?.refused;
+      if (!r) return [];
+      const plural = (n, one, many) => (n === 1 ? one : many);
+      const rows = [];
+      if (r.clock_changes > 0) {
+        rows.push({
+          key: "clock",
+          count: r.clock_changes,
+          text: plural(r.clock_changes, "clock change ignored", "clock changes ignored") +
+                " — screen time and bedtime kept using the trusted time",
+        });
+      }
+      if (r.day_resets > 0) {
+        rows.push({
+          key: "reset",
+          count: r.day_resets,
+          text: plural(r.day_resets, "attempt to start the day over refused",
+                                     "attempts to start the day over refused") +
+                " — today's total stood",
+        });
+      }
+      if (r.shutdown_cancels > 0) {
+        rows.push({
+          key: "shutdown",
+          count: r.shutdown_cancels,
+          text: plural(r.shutdown_cancels, "shutdown cancelled on the PC", "shutdowns cancelled on the PC") +
+                " — re-issued straight away, without a fresh countdown",
+        });
+      }
+      return rows;
+    },
     bonusLabel() { return " (incl. +" + this.today.extra_mins + " bonus)"; },
     todayBarLabel() {
       return "Screen time: " + this.today.used_mins + " of " + this.today.budget_mins + " minutes used";

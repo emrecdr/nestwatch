@@ -435,6 +435,12 @@ pub async fn run_enforcer(
                     tracing::warn!("curfew active — scheduling shutdown ({warn_secs}s warning)");
                     warn_secs
                 } else {
+                    // Counted through the same global as the budget enforcer's cancellation, and
+                    // deliberately into the same figure: from the parent's side "the shutdown was
+                    // cancelled" is one fact, and which of two independent loops issued it is an
+                    // implementation detail they should not have to hold. See `crate::refusals`
+                    // for why this is not threaded through either enforcer's state.
+                    crate::refusals::shutdown_cancel_seen();
                     tracing::warn!(
                         "curfew shutdown did not happen (cancelled?) — shutting down now"
                     );

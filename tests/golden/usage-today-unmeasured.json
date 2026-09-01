@@ -11,6 +11,12 @@
   "groups": [],
   "pages": [],
   "per_app": [],
+  "refused": {
+    "clock_changes": 0,
+    "day_resets": 0,
+    "shutdown_cancels": 0
+  },
+  "refused_total": 0,
   "remaining_mins": null,
   "used_mins": 10
 }

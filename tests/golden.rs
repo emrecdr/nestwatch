@@ -36,6 +36,7 @@ use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use nestwatch::auth::{LOGIN_LOCKOUT, LOGIN_MAX_FAILS};
+use nestwatch::refusals::Refused;
 use nestwatch::rules::{Rules, Usage, today_summary};
 use nestwatch::timecode::{ActiveCode, CODE_LEN, MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
 use nestwatch::timereq::PendingRequest;
@@ -198,6 +199,14 @@ fn usage_today() {
         per_group_secs: BTreeMap::new(),
         foreground_secs: BTreeMap::from([("minecraft".into(), 2_400), ("chrome".into(), 900)]),
         page_secs: BTreeMap::from([("Poki - Free Online Games".into(), 780)]),
+        // A day that refused things, on purpose. The quiet fixture below covers the zeros; if
+        // both were empty this file would prove only that the key exists, not that any count
+        // ever reaches the client — which is how a field ships reporting a constant.
+        refused: Refused {
+            clock_changes: 2,
+            day_resets: 1,
+            shutdown_cancels: 3,
+        },
     };
     golden(
         "usage-today",
@@ -220,6 +229,8 @@ fn usage_today() {
         per_group_secs: BTreeMap::new(),
         foreground_secs: BTreeMap::new(),
         page_secs: BTreeMap::new(),
+        // Nothing refused, which is what almost every real day looks like.
+        refused: Refused::default(),
     };
     golden(
         "usage-today-unmeasured",

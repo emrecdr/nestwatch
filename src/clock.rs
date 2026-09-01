@@ -284,6 +284,11 @@ pub fn today() -> NaiveDate {
 fn log_tamper(observed: i32, anchor: i32) {
     static LAST_LOGGED: AtomicI32 = AtomicI32::new(UNSET);
     if LAST_LOGGED.swap(observed, Ordering::Relaxed) != observed {
+        // Counted on the same edge the warning is written on, and for the same reason: `now()` is
+        // called many times a second and every call refuses, so counting refusals would report how
+        // long the clock stayed wrong rather than how many times it was changed. The parent's card
+        // wants the second number. See `crate::refusals`.
+        crate::refusals::clock_change_rejected();
         tracing::warn!(
             "system timezone offset is {observed} min but this install is anchored to {anchor} \
              min — ignoring the change and using the anchored time (screen-time limits and \

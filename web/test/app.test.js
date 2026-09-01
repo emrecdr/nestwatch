@@ -2174,3 +2174,81 @@ test("neither call site invents a warning when there is nothing to say", async (
     assert.deepEqual(warnings, [], `${name} warned with no note present: ${JSON.stringify(toasts)}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// What was refused today
+// ---------------------------------------------------------------------------
+//
+// Like the certificate line, this card is ABSENT on almost every day — which is what makes it
+// worth noticing on the day it is not. The counts arrive already summed from the server, so these
+// tests are about presentation only: which rows are shown, and whether the wording states a fact
+// about the tool rather than a guess about the child.
+
+test("nothing refused renders no card at all", () => {
+  const a = loadApp();
+  a.today = { refused: { clock_changes: 0, day_resets: 0, shutdown_cancels: 0 }, refused_total: 0 };
+  assert.equal(a.refusedAny, false, "a card reading '0, 0, 0' every evening stops being read");
+  // Length, not `deepEqual` against a literal: app.js is evaluated in a `vm` realm, so an array
+  // it creates has a different `Array.prototype` and strict deep-equality rejects it. Same
+  // reason as `themeOptions` above.
+  assert.equal(a.refusedRows().length, 0);
+});
+
+test("the card is absent before the first answer, rather than claiming a quiet day", () => {
+  const a = loadApp();
+  assert.equal(a.refusedAny, false, "no reading yet is not the same as nothing happened");
+  assert.equal(a.refusedRows().length, 0, "and it must not throw reaching into an absent answer");
+});
+
+test("only the refusals that happened get a row", () => {
+  const a = loadApp();
+  a.today = { refused: { clock_changes: 3, day_resets: 0, shutdown_cancels: 1 }, refused_total: 4 };
+  assert.equal(a.refusedAny, true);
+
+  const rows = a.refusedRows();
+  assert.equal(rows.length, 2, "a zero row inside the card answers a question nobody asked");
+  assert.equal(rows.map((r) => r.key).join(","), "clock,shutdown");
+  assert.equal(rows[0].count, 3);
+  assert.equal(rows[1].count, 1);
+});
+
+test("each row is pluralised, because '1 clock changes' reads as a bug", () => {
+  const a = loadApp();
+  a.today = { refused: { clock_changes: 1, day_resets: 1, shutdown_cancels: 1 }, refused_total: 3 };
+  const text = a.refusedRows().map((r) => r.text).join(" | ");
+  assert.match(text, /clock change ignored/);
+  assert.doesNotMatch(text, /clock changes ignored/);
+  assert.match(text, /shutdown cancelled/);
+  assert.doesNotMatch(text, /shutdowns cancelled/);
+
+  a.today = { refused: { clock_changes: 2, day_resets: 2, shutdown_cancels: 2 }, refused_total: 6 };
+  const many = a.refusedRows().map((r) => r.text).join(" | ");
+  assert.match(many, /clock changes ignored/);
+  assert.match(many, /shutdowns cancelled/);
+});
+
+// The wording is the feature, not decoration.
+//
+// A machine that genuinely crossed a time zone produces exactly the same count as one whose clock
+// was moved on purpose, so the card must not claim to know which happened. It says what this
+// service did — declined a change, refused a reset, re-issued a shutdown — and every one of those
+// is checkable. This is also what makes the card safe to show the child, which the research on
+// monitoring says is the arrangement that survives; an accusation is the arrangement that does not.
+test("the rows state what the tool did, never what the child intended", () => {
+  const a = loadApp();
+  a.today = { refused: { clock_changes: 2, day_resets: 1, shutdown_cancels: 1 }, refused_total: 4 };
+  const text = a.refusedRows().map((r) => r.text).join(" | ").toLowerCase();
+
+  for (const accusation of ["tamper", "cheat", "bypass", "attempt to break", "caught", "suspicious"]) {
+    assert.doesNotMatch(
+      text,
+      new RegExp(accusation),
+      `"${accusation}" asserts intent this card cannot know — a family that really travelled ` +
+        "produces the identical counts",
+    );
+  }
+  // And it says what actually held, so the parent knows nothing needs doing.
+  assert.match(text, /trusted time/);
+  assert.match(text, /stood/);
+  assert.match(text, /re-issued/);
+});

@@ -209,6 +209,34 @@
             </div>
           </section>
 
+          <!-- What this tool refused today.
+               Absent on a quiet day, which is nearly every day — the same rule as the certificate
+               line above. A card that reads "0, 0, 0" every evening is a card that stops being
+               read, and this one has to still be noticeable on the evening it is not zero.
+               The counts come from the server already summed (`refused_total`), so nothing here
+               decides what counts as a refusal. -->
+          <section class="card bg-base-100 shadow md:col-span-2" x-show="refusedAny" x-cloak
+                   aria-label="What was refused today">
+            <div class="card-body">
+              <h2 class="card-title text-base">Refused today</h2>
+              <!-- States what the tool did, not what anyone meant by it. A machine that genuinely
+                   crossed a time zone produces the same first line as one whose clock was moved
+                   on purpose, and this card does not pretend to tell them apart. -->
+              <p class="text-sm opacity-70">
+                Things this PC tried that Nestwatch declined. The limits held; nothing here needs
+                fixing. Counted since midnight.
+              </p>
+              <ul class="mt-1 space-y-1 text-sm" aria-live="polite" aria-atomic="true">
+                <template x-for="r in refusedRows()" :key="r.key">
+                  <li class="flex items-baseline gap-2">
+                    <span class="badge badge-warning badge-sm" x-text="r.count"></span>
+                    <span x-text="r.text"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+          </section>
+
           <!-- Screenshot -->
           <section class="card bg-base-100 shadow">
             <div class="card-body">

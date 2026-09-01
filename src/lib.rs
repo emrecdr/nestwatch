@@ -10,6 +10,10 @@
 //!   both enforcers so "15 minutes left" behaves identically for screen time and for bedtime.
 //! - `heartbeat` — last-completed-tick stamps for the two enforcers, so a silently dead one is
 //!   visible in the dashboard instead of looking like an idle day.
+//! - `refusals` — counts of what the service declined (a clock change, a second day rollover, a
+//!   cancelled shutdown). Process-global and drained into the day's tally by the rules enforcer,
+//!   because both enforcers and the clock increment them and none of the three shares state.
+//!   Counts rather than logged events on purpose: all of them are child-paced and unbounded.
 //! - `clock` — tamper-resistant local time. A standard Windows user can change the time zone with
 //!   no prompt, and both enforcers key off the date and the wall clock.
 //! - `audit` / `usage` / `screentime` / `timereq` / `timecode` / `jsonl` — append-only JSONL logs
@@ -47,6 +51,7 @@ pub mod install;
 pub mod jsonl;
 pub mod pairing;
 pub mod preflight;
+pub mod refusals;
 pub mod remotesetup;
 pub mod rules;
 pub mod screentime;

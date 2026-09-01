@@ -375,6 +375,18 @@ pub struct Usage {
     /// rather than a fixed set of installed programs.
     #[serde(default)]
     pub page_secs: BTreeMap<String, u64>,
+    /// What this tool refused today. Report-only, like the two fields above, and for a stronger
+    /// reason: nothing in [`RulesEnforcer::decide`] may read it, because a count the child can
+    /// drive must never be able to change what is enforced.
+    ///
+    /// It lives on the tally rather than in a log because these are child-paced and unbounded —
+    /// see [`crate::refusals`] for why that rules out appending a row per occurrence.
+    ///
+    /// `#[serde(default)]` so a tally written before this field existed still parses. The
+    /// alternative is `load_or_default` swallowing the error and handing the child a zeroed budget
+    /// on upgrade day, which is the same trap `foreground_secs` documents above.
+    #[serde(default)]
+    pub refused: crate::refusals::Refused,
 }
 
 /// Rule-derived, normalized enforcement targets for one tick — built once by `decide` and shared
@@ -454,6 +466,11 @@ impl Usage {
             // Cleared with the rest: the day's focus figures belong to the day that just ended,
             // and `decide_after_snapshot` has already taken the copy the rollup row is built from.
             self.foreground_secs.clear();
+            // Same contract, and the ordering matters more here than for the maps: the tick drains
+            // `refusals` into this field *after* `decide_after_snapshot` has run, so a refusal
+            // counted during the rollover tick lands on the new day rather than on the one whose
+            // row has already been built. At most one tick of imprecision, once a day, at midnight.
+            self.refused = crate::refusals::Refused::default();
         }
         self.total_secs = self.total_secs.saturating_add(delta_secs);
         for name in running {
@@ -616,6 +633,22 @@ pub fn today_summary(
         // failure this codebase has already fixed twice.
         "focus_missing": usage.total_secs >= FOCUS_EVIDENCE_SECS
             && usage.foreground_secs.is_empty(),
+        // What this tool refused today.
+        //
+        // Sent as the counts rather than as a verdict, and always sent rather than only when
+        // non-zero, because the two consumers want different things: the dashboard hides the card
+        // when nothing was refused, and a test needs to see the zeros to know the field is being
+        // reported at all. `refused_total` rides along so the client does not add a fourth place
+        // that knows how to sum these — the same argument `cert_expiring` makes beside
+        // `cert_days_left`.
+        //
+        // Deliberately **not** framed as tampering. Every count here is a fact about what this
+        // service did — it declined a clock change, declined a second day reset, re-issued a
+        // cancelled shutdown — and none of them requires guessing why. That is what makes the card
+        // safe to show the child as well, which is the shape the research on monitoring says
+        // actually survives contact with a teenager.
+        "refused": usage.refused,
+        "refused_total": usage.refused.total(),
     })
 }
 
@@ -774,6 +807,8 @@ pub struct PreRollover {
     /// view every comparable product leads with, and the one that turns thirty rows of executable
     /// names into a sentence.
     pub per_group_secs: BTreeMap<String, u64>,
+    /// What the day that just ended refused, so the rollup row keeps it after the tally is cleared.
+    pub refused: crate::refusals::Refused,
 }
 
 /// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
@@ -821,6 +856,10 @@ impl RulesEnforcer {
         }
         match self.last_reset {
             Some(last) if now.duration_since(last) < MIN_RESET_GAP => {
+                // The refusal a parent most wants to know about: this is the one that would have
+                // wiped the whole day's tally, and it cannot happen by accident twice in twelve
+                // hours. See `crate::refusals`.
+                crate::refusals::day_reset_refused();
                 tracing::warn!(
                     "refusing a second day rollover within 12h (clock says {today}, tally is for \
                      {current}) — keeping today's screen-time tally"
@@ -869,6 +908,7 @@ impl RulesEnforcer {
             foreground_secs: self.usage.foreground_secs.clone(),
             page_secs: self.usage.page_secs.clone(),
             per_group_secs: self.usage.per_group_secs.clone(),
+            refused: self.usage.refused,
         };
         (prev, self.decide(rules, procs, t))
     }
@@ -1238,6 +1278,22 @@ fn rollup_row(prev: &PreRollover, date: NaiveDate, budget: Option<u32>) -> Value
         "groups".into(),
         Value::Object(per_app_minutes(&prev.per_group_secs)),
     );
+    // What the day refused, kept only when there was something to keep.
+    //
+    // Omitted on a quiet day rather than written as three zeros, and the reason is the same
+    // absent-is-not-zero rule the maps above follow — inverted. Here a *present* key means this
+    // build was counting and the answer was "these", so an absent one means "not recorded",
+    // which is exactly what every row written before this existed should say. Writing zeros
+    // would claim a build that never counted had watched and seen nothing.
+    //
+    // It also keeps the common case free: almost every day refuses nothing, and this is a row
+    // retained for years.
+    if prev.refused.any() {
+        row.insert(
+            "refused".into(),
+            serde_json::to_value(prev.refused).unwrap_or(Value::Null),
+        );
+    }
     Value::Object(row)
 }
 
@@ -1416,6 +1472,16 @@ pub async fn run_rules_enforcer(
                 active,
             },
         );
+        // Move what was refused since the last tick onto today's tally.
+        //
+        // **After `decide_after_snapshot`, not before**, and that ordering is the whole correctness
+        // argument: `accrue` clears `usage.refused` when the day turns, and the rollup row for the
+        // day that just ended has already been snapshotted by this point. Draining first would put
+        // a refusal on a day whose row was already written and then wipe it.
+        //
+        // The counters are global and drained rather than passed in because curfew increments them
+        // too and the two enforcers share no state — see `crate::refusals`.
+        enforcer.usage.refused.merge(crate::refusals::drain());
         // Fold in what the foreground watcher reported, **after** `decide` — see
         // `record_foreground` for why the order is load-bearing.
         //
@@ -1507,6 +1573,10 @@ pub async fn run_rules_enforcer(
                     let secs = if action == RuleAction::Shutdown {
                         rules.warn_secs
                     } else {
+                        // A standard user holds `SeShutdownPrivilege`, so `shutdown /a` needs no
+                        // settings screen and no prompt — which makes this the cheapest of the
+                        // three refusals to attempt and the one most likely to be repeated.
+                        crate::refusals::shutdown_cancel_seen();
                         tracing::warn!("budget shutdown did not happen (cancelled?) — now");
                         0
                     };
@@ -2773,6 +2843,109 @@ mod tests {
         );
     }
 
+    /// A quiet day writes no `refused` key; a day that refused something writes the counts.
+    ///
+    /// The asymmetry is the point, and it is the absent-is-not-zero rule pointing the other way
+    /// from usual. A row from a build that never counted refusals has no key — so an *absent* key
+    /// must keep meaning "not recorded" and a *present* one must mean "counted, and here is the
+    /// answer". Writing three zeros on every quiet day would erase that distinction for every row
+    /// written from now on, and these rows are kept for years.
+    #[test]
+    fn a_quiet_day_records_no_refusals_and_a_loud_one_records_the_counts() {
+        let quiet = rollup_row(&PreRollover::default(), day(), None);
+        assert!(
+            quiet.as_object().expect("object").get("refused").is_none(),
+            "a day that refused nothing must leave the key absent, not write zeros: {quiet}"
+        );
+
+        let loud = rollup_row(
+            &PreRollover {
+                total_secs: 7_200,
+                refused: crate::refusals::Refused {
+                    clock_changes: 4,
+                    day_resets: 1,
+                    shutdown_cancels: 0,
+                },
+                ..Default::default()
+            },
+            day(),
+            None,
+        );
+        assert_eq!(loud["refused"]["clock_changes"], 4);
+        assert_eq!(loud["refused"]["day_resets"], 1);
+        // Written even though it is zero: the *day* had refusals, so every field is now a measured
+        // figure. Only the whole-day case is omitted.
+        assert_eq!(loud["refused"]["shutdown_cancels"], 0);
+    }
+
+    /// Yesterday's refusals do not follow the tally into today.
+    ///
+    /// `accrue` clears the counts on a day change for the same reason it clears the maps, and the
+    /// rollup row has already taken its copy by then. Without this, a single refused clock change
+    /// would sit on the card forever, which turns a signal that means "this happened today" into
+    /// one that means "this happened once, some time".
+    #[test]
+    fn refusals_belong_to_their_own_day_and_are_cleared_when_it_turns() {
+        let mut usage = Usage {
+            day: Some(day()),
+            refused: crate::refusals::Refused {
+                clock_changes: 3,
+                day_resets: 2,
+                shutdown_cancels: 1,
+            },
+            ..Default::default()
+        };
+        assert_eq!(usage.refused.total(), 6);
+
+        // Same day: untouched.
+        usage.accrue(day(), 30, &BTreeSet::new(), &Targets::default());
+        assert_eq!(usage.refused.total(), 6, "the day did not turn");
+
+        // Next day: cleared.
+        let tomorrow = day().succ_opt().expect("a representable tomorrow");
+        usage.accrue(tomorrow, 30, &BTreeSet::new(), &Targets::default());
+        assert_eq!(
+            usage.refused,
+            crate::refusals::Refused::default(),
+            "yesterday's refusals must not be shown as today's"
+        );
+    }
+
+    /// The counts reach the card a parent actually reads.
+    ///
+    /// `today_summary` is the only path from the tally to the dashboard, and the field is reported
+    /// unconditionally — including as zeros — so that a test can tell "reported and nothing
+    /// happened" from "never reported at all". The client decides whether to draw a card.
+    #[test]
+    fn todays_card_reports_what_was_refused_including_the_running_total() {
+        let rules = Rules::default();
+        let usage = Usage {
+            day: Some(day()),
+            refused: crate::refusals::Refused {
+                clock_changes: 2,
+                day_resets: 0,
+                shutdown_cancels: 5,
+            },
+            ..Default::default()
+        };
+        let s = today_summary(&rules, day(), 0, &usage, Some(5), None);
+        assert_eq!(s["refused"]["clock_changes"], 2);
+        assert_eq!(s["refused"]["shutdown_cancels"], 5);
+        // Summed on the server so the client holds no second copy of the arithmetic — the same
+        // argument `cert_expiring` makes for shipping the verdict beside the number.
+        assert_eq!(s["refused_total"], 7);
+
+        let quiet = today_summary(&rules, day(), 0, &Usage::default(), Some(5), None);
+        assert_eq!(
+            quiet["refused_total"], 0,
+            "a quiet day must still report the field, as zero"
+        );
+        assert!(
+            !quiet["refused"].is_null(),
+            "reported-as-zero and never-reported must not look the same to a client"
+        );
+    }
+
     #[test]
     fn rollup_row_includes_budget_when_known() {
         let per_app = BTreeMap::new();
@@ -3820,6 +3993,7 @@ mod tests {
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
+            refused: Default::default(),
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
@@ -3847,6 +4021,7 @@ mod tests {
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
+            refused: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage, Some(12), None);
         assert_eq!(s["budget_mins"], 0);
@@ -3866,6 +4041,7 @@ mod tests {
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
+            refused: Default::default(),
         };
         let s = today_summary(&rules, day(), 30, &usage, Some(12), None); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
@@ -3886,6 +4062,7 @@ mod tests {
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
+            refused: Default::default(),
         };
         let s = today_summary(&rules, day(), 0, &usage, Some(12), None);
         assert_eq!(s["budget_mins"], 90);
@@ -3909,6 +4086,7 @@ mod tests {
             per_group_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
+            refused: Default::default(),
         };
 
         let fresh = today_summary(&rules, day(), 0, &usage, Some(7), None);

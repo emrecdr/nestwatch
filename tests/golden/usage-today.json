@@ -31,6 +31,12 @@
       "used_mins": 40
     }
   ],
+  "refused": {
+    "clock_changes": 2,
+    "day_resets": 1,
+    "shutdown_cancels": 3
+  },
+  "refused_total": 6,
   "remaining_mins": 80,
   "used_mins": 55
 }

@@ -25,6 +25,32 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   you never open and `nestwatch doctor`, which needs an elevated console on the PC. The "at a
   glance" row now says how many days are left for the final thirty of them, and what to do about it
   (re-run `install`). The threshold stays on the server, so the dashboard holds no copy of it.
+- **You can now see what this tool refused.** Nestwatch detects and declines several things a day
+  and gets every one of them right — a clock moved to shift the day boundary, a second midnight
+  rollover that would have wiped the day's tally, a shutdown cancelled with `shutdown /a`. Every one
+  of those refusals went to a `tracing::warn!` in a daily-rotated file inside the ACL-hardened data
+  folder, which needs an Administrator console on the child's PC to read. So the record existed
+  precisely where a parent checking from their phone could not reach it: the dashboard could answer
+  "what did *I* do?" from the access log in detail, and "has anything been pushed back against?"
+  not at all.
+  <br>A **Refused today** card now appears on the dashboard when — and only when — there is
+  something to show, which is not most days. It counts rather than lists, deliberately: all three
+  of these are things the child can repeat on a timer, and a row per occurrence would hand the
+  person being limited a way to rotate the history out. A count cannot grow the file, so hammering
+  any of them produces a bigger number and not a bigger store. The counts ride in the daily tally
+  that is already rewritten in place, so they **survive a reboot** — which matters, because
+  rebooting is the cheapest thing a child can do and an in-memory count would be cleared by the
+  very person it describes.
+  <br>**It says what the tool did, never what anyone meant by it.** A family that genuinely crossed
+  a time zone produces exactly the same count as a clock moved on purpose, so the card does not
+  claim to tell them apart: it reads "clock change ignored — screen time and bedtime kept using the
+  trusted time", and adds that nothing needs fixing. That is a fact you can check. It is also what
+  makes the card safe to show the child as well as the parent, which is the arrangement research on
+  monitoring finds survives; an accusation is the one that does not. A test asserts the wording
+  never uses "tamper", "caught", "cheat" or "suspicious".
+  <br>Deliberately **not** included: signals whose meaning is ambiguous. An enforcer that stopped
+  ticking might be tampering or might be a Windows update, and mixing "we blocked this" with "this
+  looked odd" is how a warning becomes one nobody reads.
 - **What to do if you forget the control password.** There is no reset link and no recovery email —
   there is no account and no vendor, which is the point — and until now there was nowhere that said
   what to do instead. The README has a section, and `install` says it before asking you to choose:

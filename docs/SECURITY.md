@@ -748,6 +748,41 @@ README. One case needed its own defense, because Windows grants the privilege by
   identity (`GetDynamicTimeZoneInformation`) is compile- and lint-verified for the Windows target
   but **has never executed** — see §E3 of `WINDOWS-TESTING.md`. If it fails at runtime it returns
   "cannot tell", which selects the old behaviour rather than a worse one.
+
+### The refusals are now visible to the parent
+
+Every defense above is silent by design: it declines the change and carries on, which is the right
+behaviour and a poor report. The refusals went only to `tracing::warn!`, in a daily-rotated file
+inside the ACL-hardened data directory — readable with an Administrator console on the child's PC,
+which is the one place a parent checking from their phone is not. **The record existed exactly where
+it could not be read.**
+
+`refusals` counts three of them and the rules enforcer folds them into the day's tally each tick, so
+they reach the dashboard and survive a reboot:
+
+| Counted | Refused by | Privilege the child already has |
+|---|---|---|
+| A distinct clock change ignored | `clock::now` falling back to the anchor | `SeTimeZonePrivilege`, granted to **Users**, no UAC prompt |
+| A second day rollover inside 12 h | `rules::accounting_day` | the same — this is what the zone flip was *for* |
+| A cancelled shutdown, re-issued at once | both enforcers | `SeShutdownPrivilege`, so `shutdown /a` needs no settings screen at all |
+
+Three properties are deliberate and each closes a way this could have gone wrong:
+
+- **Counts, not events.** All three are child-paced and unbounded — a clock can be flipped on a
+  timer, a shutdown cancelled again every thirty seconds. Appending a row per occurrence would hand
+  the person being limited a way to rotate the security history out, which is the hazard
+  `tests/audit_partition.rs` polices for the audit log and `O67` records for rotation generally. A
+  counter cannot grow the file.
+- **Not readable by `decide`.** The counts are report-only, like `foreground_secs`. A figure the
+  child can drive must never be able to change what is enforced.
+- **Facts, not accusations.** Each line says what this service did, not what anyone intended. A
+  machine that genuinely crossed a time zone produces the identical count to one whose clock was
+  moved on purpose, and the card does not pretend otherwise. That is also what makes it safe to show
+  the child — the arrangement the research on monitoring finds actually survives.
+
+**Not counted, deliberately:** an enforcer that stopped ticking. It might be tampering or it might
+be a Windows update, and mixing "we blocked this" with "this looked odd" produces a warning nobody
+reads. The dashboard's existing liveness banner still covers it as a live signal.
 - Independently, the enforcer refuses more than one day rollover per 12 monotonic hours, so the
   tally survives even if the clock is wrong for some other reason.
 - **The anchor is recorded at install time.** An install upgraded in place from before this existed
