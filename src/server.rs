@@ -29,6 +29,7 @@
 //!     GET  POST /api/language
 //!     POST /api/extra-time
 //!     GET  POST /api/rules
+//!     GET  POST /api/policy   (household settings: download / restore)
 //!     GET  POST /api/routines
 //!     POST /api/routines/{name}/apply  POST /api/routines/{name}/delete
 //!     GET  /api/time-requests
@@ -45,6 +46,8 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::{Router, middleware};
 use axum_server::tls_rustls::RustlsConfig;
+use hyper_util::rt::{TokioExecutor, TokioTimer};
+use hyper_util::server::conn::auto::Builder as HyperBuilder;
 use tower_sessions::cookie::SameSite;
 use tower_sessions::cookie::time::Duration as CookieDuration;
 use tower_sessions::{Expiry, SessionManagerLayer};
@@ -102,6 +105,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/language", get(api::get_language).post(api::set_language))
         .route("/extra-time", post(api::extra_time))
         .route("/rules", get(api::get_rules).post(api::set_rules))
+        .route("/policy", get(api::get_policy).post(api::set_policy))
         .route("/routines", get(api::list_routines).post(api::save_routine))
         .route("/routines/{name}/apply", post(api::apply_routine))
         .route("/routines/{name}/delete", post(api::delete_routine))
@@ -230,7 +234,9 @@ pub async fn serve_with_handle(
     let router = build_router(state);
 
     tracing::info!("listening on https://0.0.0.0:{port} (reach it at https://<this-pc>:{port})");
-    axum_server::bind_rustls(addr, tls)
+    let mut server = axum_server::bind_rustls(addr, tls);
+    install_connection_timeouts(server.http_builder());
+    server
         .handle(handle)
         // `_with_connect_info` populates `ConnectInfo<SocketAddr>` so the LAN gate, per-IP
         // login limiter, and audit log can see the true peer address. `Handle<SocketAddr>`
@@ -240,11 +246,165 @@ pub async fn serve_with_handle(
     Ok(())
 }
 
+/// Give a stalled connection a way to die.
+///
+/// # The hole this closes, and why nothing reported it
+///
+/// `hyper` documents a **30-second default** for `header_read_timeout`, and it is real —
+/// `http1::Builder::new` sets `Dur::Default(Some(30s))`. It is also **inert here**, and the
+/// reason is one line further on: applying it runs through `Time::check`, which returns `None`
+/// (with an internal `warn!` nobody sees) whenever no `Timer` was installed. `axum-server`
+/// constructs its builder as `Builder::new(TokioExecutor::new())` and never calls `.timer(..)`,
+/// so the default resolved to nothing and every connection had **no read timeout at all**.
+///
+/// Measured before writing this, against the real binary on a scratch data dir rather than
+/// reasoned about. A connection that completed the TLS handshake and then sent **zero bytes**,
+/// and one that sent `GET / HTTP/1.1\r\nHost: …\r\n` and then stopped mid-header, were both still
+/// open after 65 seconds. A complete request on the same build answered `200` throughout, so the
+/// probe was measuring the server and not itself.
+///
+/// **Both protocols, because `axum-server` offers `h2` in ALPN** (`tls_rustls/mod.rs` sets
+/// `alpn_protocols = ["h2", "http/1.1"]`). An h1-only fix is one an attacker steps around by
+/// choosing the other protocol, which is worse than no fix: it looks closed. An idle `h2`
+/// connection — preface plus an empty `SETTINGS` and then silence — was measured open at 66s too.
+///
+/// # What each half is worth
+///
+/// * **h1** costs no invented number. Installing the timer activates hyper's own documented
+///   default, so the value stays hyper's to choose and this line stays a wiring fix.
+/// * **h2 has no timer-dependent default** — checked, `http2.rs` contains no `Dur::Default` — so
+///   this half sets a policy, and the numbers are derived rather than picked: the same 30 seconds
+///   h1 already uses, so a client cannot get a longer grace merely by negotiating the other
+///   protocol. It reaps a peer that stops answering `PING`.
+///
+/// # What it does NOT fix, and this half matters more than the half it does
+///
+/// **A connection that sends nothing at all is still held forever.** Re-measured after this
+/// change: the partial-header case now closes between 10s and 31s, and the idle `h2` case closes
+/// at ~60s, but the zero-byte case was still open at 66s — exactly as before.
+///
+/// The cause is above hyper, in `hyper-util`'s protocol sniffing, and no builder setting reaches
+/// it. `auto::Builder::serve_connection` only constructs an h1 or h2 `Conn` once it knows which;
+/// until then it parks in `ReadVersion`, a future that polls for the 24 bytes of the h2 preface
+/// **with no timeout of its own**. Send one byte that is not `P` and it resolves instantly and
+/// the h1 timer arms — which is why the partial-header case is now covered. Send nothing and
+/// neither protocol's timeout machinery is ever built.
+///
+/// So this does not change an attacker's cheapest strategy, which was always "connect, say
+/// nothing". Recorded as `O81` rather than papered over, with the two candidate fixes:
+///
+/// * A first-byte deadline on the accepted stream — an `Accept` wrapper whose `AsyncRead` fails
+///   the connection if no plaintext byte arrives in N seconds. Complete, and it is ~90 lines of
+///   hand-written pinning in the TLS path of a service whose worst outcome is supposed to be a PC
+///   that keeps working. Not landed during this pass on that ground alone.
+/// * `http1_only()`, which is one line and **verified in `hyper-util` source** to skip
+///   `ReadVersion` entirely (`version: Some(Version::H1)` takes the `serve_connection` arm
+///   directly). It closes the case completely and costs HTTP/2 — which is a product decision, not
+///   a cleanup: `/api/events` holds one connection open per tab, and h1.1 browsers cap at six per
+///   origin, so a parent with several tabs is exactly who would pay for it.
+///
+/// # The size of the thing, measured rather than assumed
+///
+/// 300 stalled connections cost this process **12.5 MB of RSS (~42 KB each)** and 300 handles,
+/// opened at ~1,100/s from one client — and the dashboard still answered instantly throughout.
+/// So this was never the instant lock-out it first looked like. It is an unbounded leak that
+/// nothing reclaims, and one machine's worth of ephemeral ports (~16k on Windows' default dynamic
+/// range) is roughly 690 MB held for as long as the attacker cares to hold it.
+///
+/// A **responsive** client holding idle h2 connections open, answering every `PING`, is unbounded
+/// too. That is true of every h2 server and is what a connection *limit* is for, not a timeout.
+fn install_connection_timeouts(builder: &mut HyperBuilder<TokioExecutor>) {
+    // Mirrors hyper's own h1 default, so the two protocols expire a stalled peer alike.
+    const H2_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(30);
+
+    // Installing the timer is the whole h1 fix; no timeout value is set here on purpose.
+    builder.http1().timer(TokioTimer::new());
+    builder
+        .http2()
+        .timer(TokioTimer::new())
+        .keep_alive_interval(Some(H2_KEEPALIVE))
+        .keep_alive_timeout(H2_KEEPALIVE);
+}
+
 #[cfg(test)]
 mod tests {
+    // Imported *inside* the test module, below the `#[cfg(test)]` cut, deliberately.
+    // `tests/scanner_guards.rs` decides whether a file has "adopted" srcscan by looking for the
+    // `use` item in the file's PRODUCTION half, and an adopted file is skipped wholesale. A
+    // top-of-file import here would therefore switch that guard off for `server.rs` — silently,
+    // and for a scanner (the route guard below) that genuinely reads line-oriented text.
+    use crate::srcscan::{find_tokens, production_source};
+
     /// This file's own source, so the guard below reads the router as written rather than as
     /// remembered.
     const SERVER_RS: &str = include_str!("server.rs");
+
+    /// The connection timeouts are wired in, on both protocols.
+    ///
+    /// # Why this is a source scan and not a behavioural test
+    ///
+    /// The property is "a stalled connection eventually dies", and the shortest honest
+    /// observation of it costs **thirty seconds of wall clock** — hyper owns the h1 value and it
+    /// is not injectable, so a real test would add half a minute to every CI run to assert one
+    /// boolean. The behaviour was verified by probe instead, against the real binary on a scratch
+    /// data dir, and both directions were watched: before the fix a partial-header connection was
+    /// open at 65s, after it the same connection closed between 10s and 31s.
+    ///
+    /// What a probe run by hand cannot do is notice when somebody deletes the call. That is what
+    /// this is for, and it is the same trade `only_the_known_child_facing_routes_are_reachable…`
+    /// below already makes: pin the wiring in the text, because the text is where the information
+    /// exists.
+    ///
+    /// **Both protocols are asserted, and that is the point rather than completeness.**
+    /// `axum-server` offers `h2` in ALPN, so a timer installed on h1 alone is one an attacker
+    /// steps around by negotiating the other protocol — a fix that looks closed and is not. Half
+    /// of this guard exists to make that specific regression loud.
+    #[test]
+    fn a_stalled_connection_is_given_a_way_to_die_on_both_protocols() {
+        let src = production_source(SERVER_RS);
+
+        assert_eq!(
+            find_tokens(
+                src,
+                &[
+                    "install_connection_timeouts",
+                    "(",
+                    "server",
+                    ".http_builder"
+                ]
+            )
+            .len(),
+            1,
+            "`serve_with_handle` no longer installs the connection timeouts. Without that call \
+             hyper's own 30s `header_read_timeout` default silently resolves to None — it is \
+             gated on a Timer that nothing else here installs — and every connection is held \
+             until the peer closes it."
+        );
+
+        for (tokens, why) in [
+            (
+                [".http1", "(", ")", ".timer", "("].as_slice(),
+                "h1 has no timer, so hyper's `header_read_timeout` default is inert again",
+            ),
+            (
+                [".http2", "(", ")", ".timer", "("].as_slice(),
+                "h2 has no timer, so its keep-alive below cannot fire",
+            ),
+            (
+                [".keep_alive_interval", "("].as_slice(),
+                "h2 never probes an idle peer, so an h2 connection is held forever",
+            ),
+            (
+                [".keep_alive_timeout", "("].as_slice(),
+                "h2 probes but never gives up, so a peer that stops answering is still held",
+            ),
+        ] {
+            assert!(
+                !find_tokens(src, tokens).is_empty(),
+                "{tokens:?} is gone from server.rs — {why}"
+            );
+        }
+    }
 
     /// Every route reachable **without a session**, exactly.
     ///

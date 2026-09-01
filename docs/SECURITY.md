@@ -77,6 +77,18 @@ open the door on its own.
   missing, disabled, or the network profile flips to *Public*, the controls are not reachable
   from off-LAN. The peer address comes from the TCP socket (`ConnectInfo`), never from a
   spoofable `X-Forwarded-For` header (there is no reverse proxy).
+- **Connections that stall are closed** (`src/server.rs::install_connection_timeouts`). Both gates
+  above act **per request**, so neither sees a client that opens a connection and then never sends
+  one. `hyper` documents a 30-second `header_read_timeout` for exactly that, and it was **inert**
+  here: applying it needs a `Timer`, `axum-server` never installs one, and the default then
+  resolves to `None` silently. The timer is now installed, and `h2` — which `axum-server` offers in
+  ALPN, so an attacker can simply choose it — gets a matching 30-second keep-alive. Verified by
+  probe against the real binary in both directions, not by reading.
+  <br>**One case is still open and is written down rather than glossed:** a connection that sends
+  *zero* bytes is held indefinitely, because the protocol sniffing that decides h1-vs-h2 happens
+  before either timeout exists. It is a resource leak, not a lock-out — measured at ~42 KB and one
+  handle per connection, with the dashboard still answering normally under 300 of them. See `O81`
+  for the measurements and the two candidate fixes.
 
 ### 2. Transport — TLS with a verifiable identity
 - All traffic is HTTPS (rustls, TLS 1.2+). The password and screenshots never travel in clear.
@@ -532,6 +544,33 @@ Neither installs a keyboard hook, and nothing anywhere reads key state. The desi
 [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md); this section exists so the answer is also where
 someone checking the privacy claim will look.
 
+## Taking the settings off the machine (`GET`/`POST /api/policy`)
+
+The companion to the history export below, and it is a **write** endpoint, so what it refuses
+matters more than what it carries.
+
+- **Behind `require_auth`**, like everything else under `/api`. Both directions are audited
+  (`policy_exported` / `policy_imported`), and the import line records the version the file came
+  from and what it contained.
+- **The exported file holds no secret and nothing machine-specific.** Not the password hash, the
+  port, the certificate's names, today's granted minutes, or the trusted-clock anchor. The anchor
+  is the load-bearing exclusion: importing another machine's `tz_zone` / `tz_offset_mins` would
+  leave this enforcer comparing against a zone the PC is not in, which is the same two-hour
+  evening a substituted time zone would buy. Re-anchoring stays its own authenticated action that
+  reads the machine (`POST /api/re-anchor`).
+- **A document cannot suppress bedtime.** `Curfew::extra_until` — the "later bedtime tonight"
+  grant — lives *inside* `Curfew`, so it cannot be excluded by leaving a field out of the exported
+  shape. It is cleared on the way out and taken from the live config on the way in, so a
+  hand-edited file carrying an instant far in the future switches nothing off.
+- **A document cannot resume paused enforcement.** The pause toggle is preserved from the live
+  config, matching what applying a saved routine already does.
+- **All-or-nothing.** The whole document is validated through the same `validate` calls the live
+  editors use before any of it is applied, so a rejected restore leaves the household on the setup
+  it had rather than on half of two.
+- A file that is not a settings file — the history export, say, which sits beside it in a downloads
+  folder — is refused rather than read as an empty setup that would wipe everything and report
+  success.
+
 ## Taking the data off the machine (`GET /api/export`)
 
 The history lives in JSONL inside a data directory `install` ACL-locks to SYSTEM and
@@ -755,6 +794,31 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   question about the specific device, not a settled property of this software, so do not assume a
   reboot cannot get around it. The specifics, the fix, and the check are tracked outside this
   public repository — see `docs/private/OPERATIONAL-FINDINGS.md`.
+- **The watcher pipe is bounded on every axis, and each bound had to be argued separately.** The
+  helper reporting focused time runs inside the child's session, so `foreground.rs` treats its
+  output as hostile: `MAX_LINE` caps a line, `clamp` caps the seconds any entry may claim,
+  `MAX_PAGES`/`MAX_APPS` cap how many entries survive, and `MAX_KEY_CHARS` caps how long a key may
+  be. The last of those was missing until it was measured: the only length limit lived inside the
+  helper, and a forged line within the wire budget persisted 919,913 bytes from one tick — enough
+  to rotate the screen-time history away in days. Bounding a count and a value is not the same as
+  bounding a size, and the log this fed is the one holding the irreplaceable rows.
+- **A stalled connection that never sends a byte is never reclaimed.** Everything else in that
+  class now times out (see §1), but the zero-byte case sits above `hyper` in the protocol sniffing
+  and no setting reaches it. Bounded and measured — ~42 KB and one handle each, ~690 MB for one
+  machine's worth of ephemeral ports — and it costs an unauthenticated LAN device nothing but a
+  loop. Enforcement is unaffected; what degrades is the parent's dashboard. See O81.
+- **A substituted time zone still buys an hour, if the child reboots afterwards.** The zone-identity
+  check is the real defence and it holds; what is short-lived is the DST high-water mark it falls
+  back to, which lives in memory and is reset to the install-time offset at every startup. Change
+  the zone and then reboot and the mark never recovers, so in the DST half of the year the trusted
+  clock runs an hour behind true local — a 21:00 curfew fires at 22:00. Measured, not estimated;
+  see `O82` for the table and the three candidate fixes. The two-hour version of this attack, which
+  the offset-only check permitted, is closed.
+- **The certificate expires after 825 days and nothing renews it.** `install` regenerates it, so an
+  install that is ever upgraded is fine; one left alone reaches the end and the browser then
+  hard-fails, which means the dashboard is the thing that breaks. The dashboard now warns in its
+  "at a glance" row for the last 30 days, alongside `doctor` and the service log, so the notice
+  arrives while there is still a page to put it on. The fix is still manual: re-run `install`.
 - **A wedged enforcer is reported but not repaired.** A panic restarts the service, but a tick that
   hangs leaves enforcement off until someone looks at the dashboard or runs `doctor`. See O4.
 - **Local administrator on the PC** can defeat any of this — out of scope by design.

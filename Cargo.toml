@@ -76,6 +76,19 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # the first of those every three seconds. Raising PNG's compression instead was measured too and
 # is far worse — 63% smaller for 1,477 ms per frame, against 44.7 ms today.
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# `TokioTimer`, for `server::install_connection_timeouts`. **Zero new crates**: `hyper-util 0.1.20`
+# is already in the graph via BOTH `axum` and `axum-server` — verified with
+# `cargo tree -i hyper-util --target x86_64-pc-windows-msvc`, which names them as the two parents.
+#
+# Declared rather than leaned on. `axum-server` already turns the `tokio` feature on, so the type
+# resolves today without this line — but only by feature unification through a dependency that has
+# no reason to keep doing so. Naming it here means a future `axum-server` that stopped needing
+# `hyper-util/tokio` breaks the build instead of silently removing the read timeout, which is the
+# failure this whole entry exists to prevent.
+#
+# `default-features = false` drops the client stack (`client`, `client-legacy`, the proxy
+# features): this is a server, and the deny.toml ban on HTTP clients says why that matters here.
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 # gzip for the embedded dashboard assets (`web.rs`). **Zero new crates, anywhere**: flate2 is
 # already in the Windows graph via png <- image <- xcap, so `Cargo.lock` grows by exactly one line
 # — the dependency edge — and no new package. Verified by diffing the lockfile, after
@@ -122,6 +135,22 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[dev-dependencies]
+# Property-based tests for the parsers that read the CHILD's own stream.
+#
+# The watcher helper runs inside the child's session, so `foreground::parse_sample`, `clamp`,
+# `bound` and `read_bounded_line` are the only parsers in this crate whose input an adversary
+# writes. Their existing tests are good and every one of them is a hand-chosen example — which is
+# the same gap the mutation discipline elsewhere exists to close, pointed at inputs instead of at
+# code. `clamp`'s invariant is already written out in prose ("no app exceeds elapsed, the sum does
+# not exceed elapsed"); this is what checks it against inputs nobody thought of.
+#
+# **Dev-only, so it reaches no shipped byte.** Verified rather than assumed: `cargo deny check
+# advisories sources licenses bans` was run before and after adding this and reports ok both times,
+# with no widening of the licence allow-list. `default-features = false` drops `fork`/`timeout`,
+# which need `rusty-fork` and a process supervisor this suite has no use for.
+proptest = { version = "1", default-features = false, features = ["std", "bit-set"] }
 
 [target."cfg(windows)".dependencies]
 # Screen capture is only used on Windows (control/windows.rs); keeping it Windows-only

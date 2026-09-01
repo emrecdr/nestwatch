@@ -72,13 +72,34 @@ static ANCHOR_ZONE: Mutex<Option<String>> = Mutex::new(None);
 
 /// The largest offset seen while the zone identity still matched the recorded one.
 ///
-/// This is what makes the tamper *fallback* correct rather than merely bounded. The anchor is a
-/// single offset frozen at install; six months later the same zone is legitimately an hour off it,
-/// so falling back to the anchor in summer hands back the hour the check just took away. The
-/// high-water mark is the honest machine's own reading, so it tracks the real DST excursion — and
-/// it only ever moves *up*, which is the direction that increases enforcement. A child cannot use
-/// it: raising the offset brings curfew forward, and lowering it requires changing the zone, which
-/// is the thing that stops the mark being updated at all.
+/// The anchor is a single offset frozen at install; six months later the same zone is legitimately
+/// an hour off it, so falling back to the anchor in summer hands back the hour the check just took
+/// away. The high-water mark is the honest machine's own reading, so it tracks the real DST
+/// excursion — and it only ever moves *up*, which is the direction that increases enforcement.
+/// A child cannot raise it usefully: raising the offset brings curfew forward, and lowering it
+/// requires changing the zone, which is the thing that stops the mark being updated at all.
+///
+/// # It is in memory only, and that is a real limit rather than a detail — see `O82`
+///
+/// This used to claim it "makes the tamper fallback correct rather than merely bounded". **That is
+/// true only within one process lifetime.** [`set_anchor`] writes the config's install-time offset
+/// into this on every startup, and nothing persists it, so a restart discards whatever DST
+/// excursion had been observed.
+///
+/// The order that matters is *change the zone, then reboot*. After the reboot the zone is still
+/// changed, so the identity never matches again, so the mark is never re-seeded from the OS and
+/// stays at the install-time anchor. Measured against this decision table: installed at `+60` in
+/// winter, true local `+120` in summer, child on `UTC` —
+///
+/// | | fallback offset | error against true local |
+/// |---|---|---|
+/// | service kept running | `+120` | 0 min |
+/// | after a reboot | `+60` | **60 min** |
+///
+/// A trusted clock an hour *behind* true local makes a 21:00 curfew fire at 22:00, every night of
+/// the half-year DST is in force, for the price of a settings change and a reboot — neither of
+/// which needs a prompt. That is half of the two hours this module was written to close, and the
+/// paragraph above used to imply it was closed entirely.
 static HIGH_WATER_MINS: AtomicI32 = AtomicI32::new(UNSET);
 
 /// Record the trusted offset (called at startup from the saved config).

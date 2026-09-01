@@ -42,7 +42,7 @@ use common::{PASSWORD, app_with_audit_file, body_json, crate_sources, get, login
 /// to do with the module they live in: the first is only recorded when the submission was
 /// **accepted**, and acceptance is capped at `timereq::MAX_PENDING` until a parent resolves one; the
 /// second is only recorded on a **valid** code, of which at most `timecode::MAX_ACTIVE_CODES` exist.
-const CLASSIFIED: [(&str, bool); 27] = [
+const CLASSIFIED: [(&str, bool); 29] = [
     // auth.rs — the only module where an unauthenticated caller reaches a writer.
     ("\"auth_failure\"", true), // no credential at all; 5/min/IP from the login limiter
     ("\"pair_failed\"", true),  // no credential; coalesced onto the lockout, so 1/min/IP
@@ -53,6 +53,11 @@ const CLASSIFIED: [(&str, bool); 27] = [
     ("SCREENSHOT_EVENT", false),
     ("LIVE_VIEW_EVENT", false), // timer-paced, and already coalesced by `LiveViewAudit`
     ("\"process_kill\"", false),
+    // The settings backup pair. Both are parent-paced: a person clicking a link, and a person
+    // choosing a file. Neither can be reached without a session, and neither is on a timer — the
+    // property this table exists to record.
+    ("\"policy_exported\"", false),
+    ("\"policy_imported\"", false),
     ("\"shutdown_issued\"", false),
     ("\"lock_issued\"", false),
     ("\"curfew_change\"", false),

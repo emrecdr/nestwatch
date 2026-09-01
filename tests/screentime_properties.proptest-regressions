@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 9f65c96ce4a653a2232ae7b9c3488d07818dbb5defcbef92ed6ce471a863dd37 # shrinks to rows = [], days = 1
+cc 2122b0a3e6f7ec9e990cca80996ca8a7a7d0d250acac526c81fbd6c8dfb43ec4 # shrinks to rows = [Object {"apps": Object {"aaaaaa": Number(0), "aaaaab": Number(0), "aaaaac": Number(0), "aaaaad": Number(0), "aaaaae": Number(0), "aaaaaf": Number(0), "aaaaag": Number(0), "aaaaah": Number(0), "aaaaai": Number(0), "aaaaaj": Number(0), "aaaaak": Number(0), "aaaaal": Number(0), "aaaaam": Number(0)}, "date": String("2026-06-14"), "minutes_used": Number(0)}, Object {"apps": Object {"aaaaan": Number(0), "aaaaao": Number(0), "aaaaap": Number(0), "aaaaaq": Number(0), "aaaaar": Number(0), "aaaaas": Number(0), "aaaaat": Number(0), "aaaaba": Number(0), "aaaabb": Number(0), "aaaabc": Number(0), "aaaabd": Number(0), "aaaabe": Number(0), "aaabaa": Number(0)}, "date": String("2026-06-13"), "minutes_used": Number(0)}], days = 2

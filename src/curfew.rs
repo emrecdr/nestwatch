@@ -520,13 +520,54 @@ fn parse_hm(s: &str) -> Option<NaiveTime> {
 /// a window matches when its `days` selector includes `today` and `now` is within its
 /// `[start, end)` range. Unparseable times in a window are treated as non-matching (fail-open).
 fn any_window_active(windows: &[Window], now: NaiveTime, today: Weekday) -> bool {
-    windows.iter().any(|w| {
-        w.days.includes(today)
-            && matches!(
-                (parse_hm(&w.start), parse_hm(&w.end)),
-                (Some(s), Some(e)) if is_within(now, s, e)
-            )
-    })
+    windows.iter().any(|w| window_active(w, now, today))
+}
+
+/// Whether one window is open at `now` on `today`.
+///
+/// # A window belongs to the day it OPENS on
+///
+/// This is the whole reason the function exists, and it used to be wrong. The day selector was
+/// applied to the *evaluation instant* — `w.days.includes(today) && is_within(..)` — which reads
+/// correctly and is not what a parent means for any window that crosses midnight.
+///
+/// Measured against the shipped code before this was written. A window of **Friday 22:00–07:00**,
+/// which every parent reads as "Friday night into Saturday morning", actually produced:
+///
+/// | instant | was | should be |
+/// |---|---|---|
+/// | Fri 03:00 | **active** | not active |
+/// | Fri 23:00 | active | active |
+/// | Sat 03:00 | **not active** | active |
+///
+/// So the machine shut down on **Friday morning**, before school, on a day nobody asked about —
+/// and stayed up through the small hours of Saturday, which is the night the parent was actually
+/// configuring. Both halves are wrong, and both are quiet: the enforcement log says a curfew fired,
+/// and it did, just not the one that was set.
+///
+/// The fix attributes each half of a wrapping window to the day it opened on: the evening part to
+/// `today`, the morning part to yesterday. A non-wrapping window is unaffected — it never leaves
+/// its day — and neither is the common "every day" selector, where `includes` answers `true` for
+/// both days by construction. So the behaviour change is confined to exactly the configuration
+/// that was broken: a specific weekday plus a window that crosses midnight.
+///
+/// `is_within` is still the authority for the same-day case and keeps its minute-by-minute oracle
+/// sweep. The wrapping arm inlines the two comparisons rather than calling it, because the point
+/// here is that the two halves answer to *different days* — which a single call cannot express.
+fn window_active(w: &Window, now: NaiveTime, today: Weekday) -> bool {
+    use std::cmp::Ordering;
+    let (Some(start), Some(end)) = (parse_hm(&w.start), parse_hm(&w.end)) else {
+        return false;
+    };
+    match start.cmp(&end) {
+        Ordering::Less => w.days.includes(today) && is_within(now, start, end),
+        Ordering::Greater => {
+            (now >= start && w.days.includes(today)) || (now < end && w.days.includes(today.pred()))
+        }
+        // An empty window is never active — the same rule `is_within` states, repeated here
+        // because this arm no longer reaches it.
+        Ordering::Equal => false,
+    }
 }
 
 /// Whether `now` falls in `[start, end)`, treating `start > end` as a window that wraps
@@ -562,6 +603,105 @@ mod tests {
 
     fn t(h: u32, m: u32) -> NaiveTime {
         NaiveTime::from_hms_opt(h, m, 0).unwrap()
+    }
+
+    /// A Friday bedtime covers Friday **night**, not Friday morning.
+    ///
+    /// The regression for a real defect, and the numbers in the table are what the shipped code
+    /// actually did. `any_window_active` applied the day selector to the evaluation instant, so a
+    /// window of "Friday 22:00–07:00" — which is how every parent reads "bedtime on Friday" —
+    /// shut the machine down at 03:00 on **Friday**, before school, and left the small hours of
+    /// **Saturday** free. Both halves wrong, and quiet: a curfew did fire, just not the one set.
+    ///
+    /// Swept across the whole weekend rather than probed at three points, because the failure was
+    /// an attribution error and an attribution error moves under a hand-picked fixture.
+    #[test]
+    fn a_bedtime_set_for_friday_covers_friday_night_and_not_friday_morning() {
+        let fri_night = Curfew {
+            enabled: true,
+            windows: vec![Window {
+                start: "22:00".into(),
+                end: "07:00".into(),
+                days: Days {
+                    fri: true,
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+
+        // 2026-06-05 is a Friday, 06 a Saturday, 07 a Sunday.
+        for (day, hour, want, why) in [
+            (
+                5,
+                3,
+                false,
+                "Friday 03:00 is a school morning nobody asked about",
+            ),
+            (5, 21, false, "before the window opens"),
+            (5, 22, true, "the window opens, inclusive"),
+            (5, 23, true, "Friday night"),
+            (
+                6,
+                0,
+                true,
+                "past midnight, still the window that opened on Friday",
+            ),
+            (
+                6,
+                3,
+                true,
+                "the small hours the parent was actually configuring",
+            ),
+            (6, 6, true, "still inside, up to the exclusive end"),
+            (6, 7, false, "the window closes, exclusive"),
+            (
+                6,
+                23,
+                false,
+                "Saturday night is a different day and was not selected",
+            ),
+            (
+                7,
+                3,
+                false,
+                "Sunday morning belongs to Saturday's window, which is not set",
+            ),
+        ] {
+            assert_eq!(
+                fri_night.is_active_at(at(2026, 6, day, hour, 0)),
+                want,
+                "2026-06-{day:02} {hour:02}:00 — {why}"
+            );
+        }
+    }
+
+    /// The every-day selector is unchanged, which is what bounds the blast radius of the fix.
+    ///
+    /// An all-false `Days` means "every day", so `includes` answers `true` for both the day a
+    /// wrapping window opens on and the day it closes on. The correction therefore cannot move the
+    /// common configuration — only a specific weekday plus a midnight crossing, which is exactly
+    /// the case that was broken.
+    #[test]
+    fn an_every_day_wrapping_window_is_unaffected_by_the_day_attribution() {
+        let nightly = Curfew {
+            enabled: true,
+            windows: vec![Window {
+                start: "22:00".into(),
+                end: "07:00".into(),
+                days: Days::default(), // all false = every day
+            }],
+            ..Default::default()
+        };
+        for day in 5..=7 {
+            for (hour, want) in [(3, true), (12, false), (21, false), (23, true)] {
+                assert_eq!(
+                    nightly.is_active_at(at(2026, 6, day, hour, 0)),
+                    want,
+                    "2026-06-{day:02} {hour:02}:00 on an every-day nightly window"
+                );
+            }
+        }
     }
 
     #[test]

@@ -763,12 +763,26 @@ would compile, pass a single-window test, and then report a different horizon fo
 asked for, because surfacing it only when it has already bitten leaves exactly the parent who has
 not hit it yet uninformed, which is the same silence written differently.
 
+**The loss is now recorded as well as previewed.** *History from …* is derived from what
+**survived**, so it answers "how far back can I see" and cannot distinguish a fresh install from
+one that quietly dropped a year. `jsonl::rotate_if_over_size` now writes a `rotated` row into the
+newly-emptied file whenever a rotation actually destroys a previous backup, carrying
+`discarded_bytes` and `discarded_through` — the newest timestamp in the backup being clobbered,
+i.e. the instant before which history no longer exists. It travels into `GET /api/export`, so a
+parent checking the tool against itself sees the gap rather than having to notice an absence.
+
+Deliberately not a full read of the doomed file: that would be up to 2 MiB on whichever thread
+called `record`, and for the audit log that is an axum handler on the async runtime. A `stat` for
+the size and an 8 KiB tail read for the last timestamp cost one short read per 2 MiB written. The
+line **count** is what that trade gives up. A *first* rotation destroys nothing and writes nothing,
+because a row reporting that no data was lost is noise in a file a parent reads.
+
 **What remains open is the deletion itself, which is untouched.** Rotation still keeps two
-generations and still clobbers the older one; nothing prunes, nothing is configurable, and the
-oldest days still leave without warning. The two costed-at-nothing options stand: a rollup-only
-prune that keeps N days regardless of bytes, or a larger `MAX_BYTES` for `screentime.jsonl`
-specifically, since its rows are the irreplaceable ones. What has changed is that the loss is now
-visible before it is discovered, so this is no longer silent — only unbounded.
+generations and still clobbers the older one; nothing prunes and nothing is configurable. The two
+costed-at-nothing options stand: a rollup-only prune that keeps N days regardless of bytes, or a
+larger `MAX_BYTES` for `screentime.jsonl` specifically, since its rows are the irreplaceable ones.
+What has changed is that the loss is now both visible in advance and recorded after the fact, so
+this is no longer silent — only unbounded.
 
 **Trigger.** Any decision to advertise a retention period, or the first parent who watches
 *History from* move forward and asks why.
@@ -950,10 +964,15 @@ reached the child.
 
 **Not a coverage gate** — see the row in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md), whose
 re-raise trigger this entry has now tripped. The remaining work is `tokio::time` pause/advance over
-a scripted config, asserting an ordered list of control calls. Half that harness exists:
-`FakeControl` records every `shutdown` as `(delay_secs, message)` in order, bounded at 64.
-`notify_user` is still only a `tracing::info!`, so the warnings — the half of the sequence that
-carries the ordering risk — cannot be asserted on at all until it records too.
+a scripted config, asserting an ordered list of control calls.
+
+**The harness is now whole.** `FakeControl` records every `shutdown` as `(delay_secs, message)` in
+order, bounded at 64, and — since the app-stopped work — every `notify_user` as `(title, body)`,
+bounded at 128, with `notification_bodies()` for the common assertion. This entry used to end by
+naming that gap: *"the warnings — the half of the sequence that carries the ordering risk — cannot
+be asserted on at all until it records too."* They can now, and
+`tests/enforcer_app_stopped.rs` is the first test to do it. What remains is only the scripted
+*sequence*; nothing is missing from the fake any more.
 
 **helper.rs is untouched by any of the above** and stands at 0%: capture, lock and watch are
 Windows shell-outs that no host test reaches. That row of the original measurement is unchanged,
@@ -1259,17 +1278,39 @@ Push needs an external push service, which "nothing leaves the house" forbids ou
 Badging API needs an installed app, which `MOBILE-APP.md` already refuted because an installed PWA
 does not inherit the browser's certificate exception.
 
-The third is not a rejection. It reads: *"The Notifications API needs a secure context, and whether
+The third was not a rejection. It read: *"The Notifications API needs a secure context, and whether
 a self-signed certificate accepted on a private IP counts as one is **unverified**"* — an honest
-note that has been standing in for a decision ever since.
+note that stood in for a decision.
 
-**It costs one line on the paired phone to settle**: read `isSecureContext` in the console, or from
-the address bar, on the device the QR actually paired. Nobody has.
+**Settled, and the lean recorded here was backwards.** This entry used to say the research leaned
+toward `false`. It leans toward `true`:
 
-The research leans toward `false`: the W3C definition of a potentially trustworthy origin exempts
-`localhost`, `file:` and `wss:` and says nothing about HTTPS-with-a-bypassed-chain on a private
-address, and MDN reads the network-channel requirement as excluding it. **That is a reading of a
-spec, not a measurement of a browser, and the two have diverged here before.**
+* W3C *Secure Contexts*, algorithm **Is origin potentially trustworthy?**, step 3 — *"If origin's
+  scheme is either `https` or `wss`, return Potentially Trustworthy."* The algorithm has **no step
+  that examines certificate validity**. The `localhost` / `file:` / `wss:` steps are additional
+  exemptions for origins that are *not* `https`, not a narrowing of it; reading them as a list of
+  the only trustworthy cases is the mistake this entry made.
+* Chromium's stated position, on the W3C webpayments list: once the user proceeds past the
+  interstitial the context **is** considered secure, and individual APIs are neutered case by case
+  (Payment Request is the worked example) rather than the context being downgraded.
+
+**The conclusion survives, for a reason nobody had named.** The API is unavailable on the devices
+this product is used from, and not because of the certificate:
+
+* `new Notification()` throws a `TypeError` in nearly all **mobile** browsers by design — MDN says
+  so outright and adds "this is unlikely to change", because pages on phones do not run in the
+  background. The phone path needs `ServiceWorkerRegistration.showNotification()`.
+* Chromium **refuses to register a service worker** on an origin whose certificate error was
+  bypassed (`crbug 40423989`) — which is every install of this tool.
+* iOS Safari needs an installed Home Screen web app, which `MOBILE-APP.md` already refutes: an
+  installed PWA does not inherit the certificate exception and cannot connect at all.
+
+So notifications work in a **desktop browser tab and nowhere else** — the surface this product
+cares least about, since the parent is on a phone. `app.js`'s `titleFor` comment has been corrected
+to say this; it stated the wrong reason.
+
+The `isSecureContext` check on the paired phone is still worth a console tap, but it is now a
+confirmation rather than the decision.
 
 **Which makes the fallback the more interesting half.** There is a permission-free option the
 comment does not consider: the dashboard already holds an SSE connection and already knows the
@@ -1311,6 +1352,96 @@ outside comments, `adopted` from a `use` naming any of the reflow-proof primitiv
 `tests/spawn_paths.rs` row from `KNOWN_SAFE`, whose stated reason — that its needle is matched with
 `match_indices` over the whole text — is stale as of this commit.
 
+
+### O81 · A connection that sends nothing is still held forever
+
+**The rest of this class is fixed; this is the piece that is not, and it is the cheapest variant
+for an attacker.** `server::install_connection_timeouts` now installs a `TokioTimer` on both
+protocols, which activates hyper's own documented 30s `header_read_timeout` (inert before, because
+`axum-server` never set a timer and `Time::check` returns `None` without one) and gives h2 a 30s
+keep-alive. Measured against the real binary, before and after:
+
+| connection | before | after |
+|---|---|---|
+| TLS handshake, then a partial header block | open at 65s | closed between 10s and 31s |
+| h2 preface + empty `SETTINGS`, then idle | open at 66s | closed at ~60s |
+| TLS handshake, then **zero bytes** | open at 66s | **open at 66s** |
+
+The cause of the last row is above hyper and no builder setting reaches it.
+`hyper-util`'s `auto::Builder::serve_connection` does not construct an h1 or h2 `Conn` until it
+knows which; until then it parks in `ReadVersion`, a future that polls for the 24 bytes of the h2
+preface **with no timeout of its own**. One byte that is not `P` resolves it instantly — which is
+why the partial-header row is now covered — and no bytes at all means neither protocol's timeout
+machinery is ever built.
+
+**Size, measured rather than assumed.** 300 stalled connections cost the process **12.5 MB of RSS
+(~42 KB each)** and 300 handles, opened at ~1,100/s from one client, and the dashboard still
+answered instantly throughout. So this is not the lock-out it first looks like: it is an unbounded
+leak that nothing reclaims. One machine's worth of ephemeral ports (~16k on Windows' default
+dynamic range) is roughly 690 MB, held for as long as the attacker cares to hold it. Enforcement is
+unaffected either way — both enforcers are separate tasks that touch no HTTP.
+
+**Two candidate fixes, neither taken.**
+
+* **A first-byte deadline on the accepted stream** — an `Accept` wrapper whose `AsyncRead` fails
+  the connection if no plaintext byte arrives within N seconds. Complete, and ~90 lines of
+  hand-written pinning in the TLS path of a service whose worst outcome is supposed to be a PC that
+  keeps working. A bug there costs the parent their dashboard, which is the same harm as the
+  attack.
+* **`http1_only()`** — one line, and **verified in `hyper-util` source** to skip `ReadVersion`
+  entirely: `version: Some(Version::H1)` takes the `serve_connection` arm directly, so the h1
+  header timeout arms on the first poll and the case closes completely. It costs HTTP/2, which is a
+  product decision rather than a cleanup: `/api/events` holds one connection open per tab and h1.1
+  browsers cap at six per origin, so a parent with several tabs is exactly who would pay for it.
+
+**Trigger.** Any decision on whether this install needs HTTP/2 at all. If the answer is no, the fix
+is one line and this entry closes.
+
+### O82 · The DST high-water mark does not survive a reboot, so tamper resistance loses an hour
+
+**The mechanism is right and its memory is too short.** `clock::decide` catches a substituted time
+zone by comparing the zone *identity* rather than the offset, which is correct and is the whole
+point of the module. What it falls back to when the identity differs is
+`high_water.max(anchor)` — and `HIGH_WATER_MINS` is a process-global `AtomicI32` that
+`set_anchor` overwrites with the config's install-time offset at every startup. Nothing persists it.
+
+**The order is what makes it reachable: change the zone, *then* reboot.** After the reboot the zone
+is still changed, so the identity never matches again, so the mark is never re-seeded from the OS
+and stays at the install-time anchor for the life of the install. Both steps are free — changing
+the time zone raises no UAC prompt (`SeTimeZonePrivilege` is granted to Users), and a child owns
+the console.
+
+Measured against the real decision table. Installed at `+60` in winter, true local `+120` in
+summer, child selects `UTC`:
+
+| | fallback offset | error vs true local |
+|---|---|---|
+| service kept running through the DST change | `+120` | 0 min |
+| after a reboot | `+60` | **60 min** |
+
+A trusted clock an hour *behind* true local makes a **21:00 curfew fire at 22:00**, every night of
+the half-year DST is in force. That is half of the two hours this module's own header says the
+identity check closed, and `HIGH_WATER_MINS`' doc claimed outright that the fallback was "correct
+rather than merely bounded" — corrected in place, because the claim was the more dangerous half.
+
+**Why it is not fixed here.** Three candidate fixes, and choosing between them is a design decision
+in the highest-consequence code in the project — the one that decides when a child's PC turns off:
+
+* **Persist the mark.** Honest and complete. `config.json` is the natural home beside
+  `tz_offset_mins`, but `clock::now()` is synchronous, has no `AppState`, and is called from pure
+  helpers — so the write has to happen somewhere else that already owns a safe path. The enforcer's
+  `usage_state.json` sidecar is written atomically every tick and is the one candidate that needs
+  no new lock, at the cost of putting clock state in the tally file.
+* **Assume maximum DST excursion on the tamper branch** (`anchor + MAX_DRIFT_MINS`). No persistence
+  at all, and never fails open. It over-enforces by an hour in winter, which is defensible against a
+  child who chose to tamper and is *not* defensible against a household that genuinely moved and has
+  not re-anchored — the case `POST /api/re-anchor` exists for.
+* **Ask Windows for the recorded zone's current offset** via `GetTimeZoneInformationForYear`. The
+  only one that is exactly right in both seasons, and the only one needing new FFI and a stored
+  `DYNAMIC_TIME_ZONE_INFORMATION` rather than an opaque key name.
+
+**Trigger.** Any work on `clock.rs`, or the first parent who reports bedtime drifting by exactly an
+hour in summer.
 
 ## Not covered by any of this
 

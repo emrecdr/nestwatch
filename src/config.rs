@@ -229,7 +229,122 @@ fn data_dir() -> PathBuf {
     }
 }
 
+/// The part of a [`Config`] that describes a **household** rather than a machine.
+///
+/// # What it is for
+///
+/// There was no way to back a setup up or move it. `GET /api/export` carries screen-time history
+/// and nothing else, `config.json` lives in an ACL-locked directory a parent reaches only from an
+/// elevated console on the child's PC, and `uninstall --purge` deletes it irreversibly. So
+/// rebuilding the PC — or setting up a second one — meant re-entering every curfew window, every
+/// per-app limit, every group and every routine by hand. Routines make that worse rather than
+/// better: they are the most laborious thing in the config and the most worth keeping.
+///
+/// # What is deliberately NOT in it
+///
+/// The exclusions are the design, not an oversight. Everything omitted describes *this machine*
+/// or *this moment*, and carrying it to another PC would be wrong in a way nobody would notice:
+///
+/// * `password_hash` — a secret. An exported file is meant to be copied about.
+/// * `port` — a property of the install, and `install --port N` is where it is chosen.
+/// * `cert_sans` — describes the certificate this machine actually holds.
+/// * `tz_offset_mins` / `tz_zone` — **the load-bearing one.** These are the trusted-clock anchor,
+///   recorded at install against the machine the child sits at. Importing another machine's anchor
+///   would leave the enforcer comparing against a zone this PC is not in, which is exactly the
+///   state a child gains two hours of evening from. A restore must never be able to weaken the
+///   clock; `POST /api/re-anchor` is the only way to move it, and it reads the machine.
+/// * `extra` — today's granted bonus minutes. Restoring a stale grant would hand back time that
+///   was already spent, or on another day entirely.
+///
+/// `Curfew::extra_until` needs the same treatment and cannot be excluded by leaving a field out,
+/// because it lives *inside* `Curfew`. [`Config::policy`] clears it on the way out and
+/// [`Config::apply_policy`] ignores whatever the file says on the way in. It suppresses bedtime
+/// until a given instant, so a hand-edited file carrying one far in the future would switch the
+/// curfew off — and it would look like a restore rather than like a bypass.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Policy {
+    #[serde(default)]
+    pub curfew: Curfew,
+    #[serde(default)]
+    pub rules: crate::rules::Rules,
+    #[serde(default)]
+    pub routines: Vec<Routine>,
+    #[serde(default)]
+    pub language: Language,
+}
+
+impl Policy {
+    /// Reject anything the live endpoints would reject, before any of it is applied.
+    ///
+    /// Routes through the **same** `validate` calls `POST /api/curfew`, `POST /api/rules` and
+    /// `POST /api/routines` use, rather than restating the rules. A second set of bounds here
+    /// would be a second thing to keep in step, and the direction it would drift is the dangerous
+    /// one: an import path that accepted a config the live editor refuses is a way to write a
+    /// value no form can produce.
+    ///
+    /// All-or-nothing on purpose. A partial restore leaves a household with some of yesterday's
+    /// settings and some of today's, which is a state nobody chose and nothing displays.
+    pub fn validate(&self) -> Result<(), String> {
+        self.curfew.validate().map_err(|e| format!("curfew: {e}"))?;
+        self.rules.validate().map_err(|e| format!("rules: {e}"))?;
+        if self.routines.len() > MAX_ROUTINES {
+            return Err(format!(
+                "too many routines: {} (limit {MAX_ROUTINES})",
+                self.routines.len()
+            ));
+        }
+        for r in &self.routines {
+            let name = r.name.trim();
+            if name.is_empty() || name.chars().count() > MAX_ROUTINE_NAME {
+                return Err(format!("invalid routine name: {:?}", r.name));
+            }
+            r.rules
+                .validate()
+                .map_err(|e| format!("routine {:?}: {e}", r.name))?;
+        }
+        Ok(())
+    }
+}
+
 impl Config {
+    /// This install's household settings, ready to hand to a parent as a file.
+    pub fn policy(&self) -> Policy {
+        let mut curfew = self.curfew.clone();
+        // Tonight's extension is not a setting. See [`Policy`].
+        curfew.extra_until = None;
+        Policy {
+            curfew,
+            rules: self.rules.clone(),
+            routines: self.routines.clone(),
+            language: self.language,
+        }
+    }
+
+    /// Overwrite the household settings from `policy`, preserving everything machine-local.
+    ///
+    /// Two fields are taken from the **live** config rather than from the document, and both are
+    /// the same kind of thing — state a person set a moment ago that a restore has no business
+    /// reaching:
+    ///
+    /// * `curfew.extra_until` — a bedtime extension the parent granted tonight. Also the field a
+    ///   crafted file would use to switch bedtime off, so it is ignored rather than merely
+    ///   preserved.
+    /// * `rules.enabled` — the pause toggle. `apply_routine` already decided this case: pausing is
+    ///   "a temporary override, not something a preset should flip", and a restore is the same
+    ///   shape. A parent who paused enforcement ten minutes ago does not expect a settings restore
+    ///   to resume it behind them.
+    pub fn apply_policy(&mut self, policy: Policy) {
+        let paused = !self.rules.enabled;
+        let extra_until = self.curfew.extra_until;
+
+        self.curfew = policy.curfew;
+        self.curfew.extra_until = extra_until;
+        self.rules = policy.rules;
+        self.rules.enabled = !paused;
+        self.routines = policy.routines;
+        self.language = policy.language;
+    }
+
     pub fn load() -> Result<Self> {
         let path = data_paths().config;
         let raw = std::fs::read_to_string(&path).with_context(|| {

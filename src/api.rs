@@ -758,10 +758,19 @@ pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, A
         let cfg = crate::state::recover_read(&state.config);
         (cfg.rules.clone(), cfg.extra.for_day(today))
     };
-    let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
+    // One hop to the blocking pool for both file reads, not two. The certificate check is a
+    // single `stat` (the mtime proxy `cert::days_until_expiry` uses), so pairing it with the tally
+    // load costs nothing extra and keeps the disk work off the runtime.
+    let (usage, cert_days_left) = spawn(move || {
+        (
+            crate::rules::Usage::load_for_today(today),
+            crate::cert::days_until_expiry(&crate::config::data_paths().cert),
+        )
+    })
+    .await?;
     // Read the enforcer heartbeat here rather than inside the summary: it touches process
     // globals and the system clock, and keeping it at the edge is what lets `today_summary`
-    // be tested in full.
+    // be tested in full. The certificate is at the edge for the same reason — it is a file.
     let enforcer_age_secs = crate::heartbeat::worst_age_secs();
     Ok(Json(crate::rules::today_summary(
         &rules,
@@ -769,6 +778,7 @@ pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, A
         extra,
         &usage,
         enforcer_age_secs,
+        cert_days_left,
     )))
 }
 
@@ -906,6 +916,110 @@ pub async fn set_rules(
     update_config(&state, |c| c.rules = new_rules).await?;
     state.audit.record("rules_change", audit_fields);
     Ok(Json(json!({ "ok": true })))
+}
+
+/// `GET /api/policy` → this install's household settings, as a downloadable file.
+///
+/// The companion to `GET /api/export`, and the half that was missing. That one takes the *history*
+/// off the machine; this takes the *setup*. Between them a parent can rebuild the PC, or set up a
+/// second one, without re-entering every curfew window and per-app limit by hand — which until now
+/// was the only option, because `config.json` sits in an ACL-locked directory reachable from an
+/// elevated console on the child's PC and nowhere else.
+///
+/// `Content-Disposition: attachment` and a plain `<a download>` link on the dashboard, exactly as
+/// `export` does: the session cookie rides along on a same-origin navigation, so there is no blob
+/// handling and no JavaScript that can fail silently.
+///
+/// What is left out — the password hash, the port, the certificate's names, today's granted bonus
+/// minutes, and both halves of the trusted-clock anchor — is documented on
+/// [`crate::config::Policy`], because the exclusions are the design rather than an oversight.
+pub async fn get_policy(State(state): State<AppState>) -> Result<Response, AppError> {
+    let policy = crate::state::recover_read(&state.config).policy();
+    let today = crate::config::today();
+
+    state.audit.record(
+        "policy_exported",
+        json!({ "routines": policy.routines.len() }),
+    );
+
+    let body = json!({
+        "nestwatch_version": crate::VERSION,
+        "exported_on": today.to_string(),
+        // Said in the file rather than only in the docs, because the file is what outlives both —
+        // the same reason `export`'s manifest carries its note.
+        "note": "Household settings only. Deliberately excludes the password, the port, the \
+    certificate, today's granted minutes and the trusted-clock anchor: those describe one machine, and \
+    restoring another machine's clock anchor would silently weaken curfew enforcement.",
+        "policy": policy,
+    });
+
+    let filename = format!("nestwatch-settings-{today}.json");
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/json".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        Json(body),
+    )
+        .into_response())
+}
+
+/// The uploaded document. Accepts what [`get_policy`] produced, and little else.
+///
+/// `policy` is required, so an unrelated JSON file is refused by serde with a message naming the
+/// missing field rather than being read as an empty policy — which would wipe the household's
+/// settings and report success. `nestwatch_version` is optional and advisory; see [`set_policy`].
+#[derive(Deserialize)]
+pub struct PolicyImport {
+    #[serde(default)]
+    nestwatch_version: Option<String>,
+    policy: crate::config::Policy,
+}
+
+/// `POST /api/policy` → replace the household settings from an exported document.
+///
+/// Validated as a whole before any of it is applied, through the **same** `validate` calls the
+/// live editors use — see [`crate::config::Policy::validate`]. All-or-nothing: a partial restore
+/// would leave a household with some of yesterday's settings and some of today's, which is a state
+/// nobody chose and no screen displays.
+///
+/// # The version is reported, not enforced
+///
+/// A document from a *newer* build may contain settings this one has no field for, and serde drops
+/// them silently — the quiet failure this codebase exists to avoid. The honest fix is not to refuse
+/// the import (a parent restoring a backup after a downgrade has a real problem and refusing does
+/// not solve it) but to say so: the response carries a `warning` naming both versions, and the
+/// dashboard shows it. Refusing outright would also mean this endpoint needed a semver comparison,
+/// which is a second implementation of something `app.js` already owns for the update check.
+pub async fn set_policy(
+    State(state): State<AppState>,
+    Json(body): Json<PolicyImport>,
+) -> Result<Json<Value>, AppError> {
+    body.policy.validate().map_err(AppError::BadRequest)?;
+
+    let warning = match body.nestwatch_version.as_deref() {
+        Some(v) if v != crate::VERSION => Some(format!(
+            "this file was exported by Nestwatch {v} and you are running {}. It was applied, but              any setting that version has and this one does not was not carried over.",
+            crate::VERSION
+        )),
+        _ => None,
+    };
+
+    let audit_fields = json!({
+        "from_version": body.nestwatch_version,
+        "routines": body.policy.routines.len(),
+        "curfew_enabled": body.policy.curfew.enabled,
+        "daily_budget_mins": body.policy.rules.daily_budget_mins,
+    });
+    update_config(&state, move |c| c.apply_policy(body.policy)).await?;
+    // One line for the whole restore rather than one per section: it is a single parent action,
+    // and four rows would say it happened four times.
+    state.audit.record("policy_imported", audit_fields);
+
+    Ok(Json(json!({ "ok": true, "warning": warning })))
 }
 
 #[derive(Deserialize)]

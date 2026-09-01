@@ -79,6 +79,55 @@ pub const MAX_APPS: usize = 200;
 /// 64 KiB would be the natural round number and is under the real figure by a factor of three.
 pub const MAX_LINE: u64 = 1024 * 1024;
 
+/// Longest key kept from a report, in characters.
+///
+/// **Matches `watcher::window_title`'s 512-unit buffer on purpose, so honest data is never
+/// touched.** `GetWindowTextW` fills at most 511 units before its terminator, and a UTF-16 unit is
+/// never more than one `char`, so a real title cannot reach this.
+///
+/// It exists because every other bound here is on a **count** or a **value** — `MAX_PAGES` and
+/// `MAX_APPS` cap how many keys there may be, [`clamp`] caps what the seconds may say — and none of
+/// them caps how *long* a key may be. The 512-unit limit that already existed lives inside the
+/// watcher, which runs as the child, so it binds an honest helper and nothing else. On this side
+/// the only remaining ceiling was [`MAX_LINE`], whose own doc records that one MiB leaves "about
+/// six times over" above the honest worst case. That headroom is the room a forged writer had.
+///
+/// Measured before this was written, with the real functions: a forged line inside the wire limit
+/// left **29 surviving page keys, the longest 31,715 bytes, for 919,913 bytes persisted from a
+/// single tick**. Those keys are not transient — they are written to `usage_state.json` every
+/// thirty seconds and folded into the daily rollup row in `screentime.jsonl`, which keeps two
+/// generations of 2 MiB. So it bought roughly **four days** of retained history in place of the
+/// years `O67` models, which is history eviction paced by whoever is knocking: exactly the class
+/// the audit-log partition already had to close on the other log.
+pub const MAX_KEY_CHARS: usize = 512;
+
+/// Cut every key to [`MAX_KEY_CHARS`], merging any that then collide.
+///
+/// Truncated rather than dropped: the first 512 characters of a title are the part a parent reads,
+/// and discarding the entry would let an over-long title erase its own measured time rather than
+/// merely shorten its label. Collisions **sum** rather than overwrite, for the reason
+/// `record_foreground` gives where `norm` does the same thing — two keys landing on one must merge,
+/// or the later silently replaces the earlier's minutes.
+///
+/// On a char boundary, never a byte one: these are display strings, and slicing mid-character
+/// would panic on exactly the multi-byte titles an adversary would reach for first.
+fn truncate_keys(map: BTreeMap<String, u64>) -> BTreeMap<String, u64> {
+    // The honest path allocates nothing: no key is over the cap, so this returns the map as it is.
+    if map.keys().all(|k| k.chars().count() <= MAX_KEY_CHARS) {
+        return map;
+    }
+    map.into_iter()
+        .fold(BTreeMap::new(), |mut acc, (name, secs)| {
+            let cut = name
+                .char_indices()
+                .nth(MAX_KEY_CHARS)
+                .map_or(name.as_str(), |(i, _)| &name[..i]);
+            let slot = acc.entry(cut.to_string()).or_insert(0);
+            *slot = slot.saturating_add(secs);
+            acc
+        })
+}
+
 /// Keep the `n` heaviest entries, dropping the rest. Ties break by name so the result is stable.
 ///
 /// Private: outside this module the count bound is reached only through [`accrue_capped`], which
@@ -138,6 +187,14 @@ pub fn write_sample<W: std::io::Write>(out: &mut W, sample: &Sample) -> std::io:
 /// Zero-valued entries are dropped: they carry no information and would otherwise let a forged
 /// report pad the map with thousands of app names.
 pub fn clamp(sample: Sample, elapsed_secs: u64) -> Sample {
+    // Key length first, before either count or value bound. Truncating merges collisions, so doing
+    // it first means `bound` sees the merged totals and `retain_top` ranks the merged entries —
+    // rather than both operating on keys that are about to become the same key. See
+    // [`MAX_KEY_CHARS`] for what an unbounded key was worth to an attacker.
+    let sample = Sample {
+        apps: truncate_keys(sample.apps),
+        pages: truncate_keys(sample.pages),
+    };
     let mut pages = bound(sample.pages, elapsed_secs);
     // Cap after bounding, so what survives is the heaviest *real* time rather than the heaviest
     // claim. Pages only, because this bounds one report and apps cannot exceed `elapsed_secs`
@@ -160,14 +217,28 @@ fn bound(map: BTreeMap<String, u64>, elapsed_secs: u64) -> BTreeMap<String, u64>
         return BTreeMap::new();
     }
 
-    // Saturating, because this total is computed from numbers the child could have chosen. A
-    // release build does not check overflow, so a plain sum could wrap to something small and
-    // turn the bound below into a no-op — the one outcome this function exists to prevent.
-    let claimed = map
-        .values()
-        .fold(0u64, |acc, secs| acc.saturating_add(*secs));
+    // Summed in `u128`, and the width is the whole point.
+    //
+    // This was a `u64` `saturating_add`, reasoned about correctly as far as it went: the values are
+    // attacker-chosen, a release build does not check overflow, and a wrapping sum could turn the
+    // bound below into a no-op. Saturating fixes the *wrap* and leaves the *saturation*, which
+    // breaks the same guarantee more quietly. Once the true total passes `u64::MAX`, `claimed`
+    // stops growing — so the scale factor `elapsed / claimed` is computed against a denominator
+    // that is too small, and every entry is scaled by too much.
+    //
+    // Measured, not theorised. With `elapsed_secs = 1`, N entries each claiming `u64::MAX` each
+    // scale to `MAX * 1 / MAX = 1`, so the map sums to **N seconds of a one-second interval** —
+    // 2 for two entries, 40 for forty. `MAX_PAGES` caps how many survive, so the inflation is
+    // bounded rather than unlimited, and it is still the one thing this function promises cannot
+    // happen. Found by `tests/foreground_properties.rs`; no hand-written case had reached it,
+    // because reaching it needs two entries at the top of the range at once.
+    //
+    // `u128` cannot saturate here for any map that can exist: it would take more than 2^64 entries
+    // at `u64::MAX` apiece, and the map is bounded by `MAX_PAGES` / `MAX_APPS` long before that.
+    let claimed: u128 = map.values().map(|secs| u128::from(*secs)).sum();
+    let elapsed = u128::from(elapsed_secs);
 
-    let mut bounded = if claimed > elapsed_secs {
+    let mut bounded = if claimed > elapsed {
         // Scale every entry by elapsed/claimed. `u128` because the numerator is a product of two
         // attacker-influenced `u64`s; the division floors, so the result understates.
         //
@@ -175,8 +246,7 @@ fn bound(map: BTreeMap<String, u64>, elapsed_secs: u64) -> BTreeMap<String, u64>
         // claiming 9,000s of a 30s tick is simply the case where it is the entire total.
         map.into_iter()
             .map(|(name, secs)| {
-                let scaled =
-                    u128::from(secs) * u128::from(elapsed_secs) / u128::from(claimed.max(1));
+                let scaled = u128::from(secs) * elapsed / claimed.max(1);
                 (name, u64::try_from(scaled).unwrap_or(elapsed_secs))
             })
             .collect()
@@ -566,6 +636,103 @@ impl Feed {
 
 #[cfg(test)]
 mod tests {
+
+    /// An over-long key is cut, and two that then collide merge rather than overwrite.
+    ///
+    /// The merge is the part worth pinning. `BTreeMap::insert` would have the later key silently
+    /// replace the earlier one's seconds — which is how a forged report could *erase* measured
+    /// time rather than merely inflate the log, by sending a long prefix that collides with a real
+    /// title. `record_foreground` already makes this argument where `norm` folds two casings of a
+    /// process name onto one key.
+    #[test]
+    fn over_long_keys_are_cut_and_collisions_merge_rather_than_overwrite() {
+        let long_a = format!("{}AAA", "T".repeat(MAX_KEY_CHARS));
+        let long_b = format!("{}BBB", "T".repeat(MAX_KEY_CHARS));
+        let map = BTreeMap::from([(long_a, 5u64), (long_b, 7u64), ("short".to_string(), 3)]);
+
+        let out = truncate_keys(map);
+
+        assert_eq!(
+            out.len(),
+            2,
+            "the two long keys share a prefix and must merge: {out:?}"
+        );
+        assert_eq!(out.get("short"), Some(&3), "a short key is untouched");
+        let merged = out
+            .keys()
+            .find(|k| k.starts_with('T'))
+            .expect("the truncated key survives");
+        assert_eq!(merged.chars().count(), MAX_KEY_CHARS);
+        assert_eq!(
+            out[merged], 12,
+            "5 + 7: a collision must SUM, or the later key erases the earlier one's minutes"
+        );
+    }
+
+    /// Truncation lands on a character boundary, not a byte one.
+    ///
+    /// Slicing a `String` mid-character panics, and a multi-byte title is the first thing an
+    /// adversary would reach for — so this is the difference between a bound and a crash in the
+    /// SYSTEM service that reads the pipe.
+    #[test]
+    fn cutting_a_multi_byte_title_does_not_split_a_character() {
+        // Four bytes per char, so every cut position is mid-character in byte terms.
+        let emoji = "\u{1FA7A}".repeat(MAX_KEY_CHARS + 50);
+        let out = truncate_keys(BTreeMap::from([(emoji, 9u64)]));
+        let key = out.keys().next().expect("the key survives");
+        assert_eq!(key.chars().count(), MAX_KEY_CHARS);
+        assert!(
+            key.starts_with('\u{1FA7A}'),
+            "the text was mangled: {key:?}"
+        );
+    }
+
+    /// An honest map is returned untouched.
+    ///
+    /// Asserted because the fast path is what keeps this free on every real tick — `clamp` runs
+    /// twice a minute for the life of the service, and the overwhelming majority of samples have no
+    /// key anywhere near the cap.
+    #[test]
+    fn an_honest_map_passes_through_unchanged() {
+        let map = BTreeMap::from([
+            ("chrome.exe".to_string(), 30u64),
+            ("Roblox - now.gg".to_string(), 12),
+        ]);
+        assert_eq!(truncate_keys(map.clone()), map);
+    }
+
+    /// Two entries at the top of the `u64` range must not sum past the interval.
+    ///
+    /// The regression for a real defect, kept as a named case beside the code rather than left to
+    /// `tests/foreground_properties.rs` alone: the property test is what *found* it, and a
+    /// deterministic test is what makes the failure legible to whoever breaks it next.
+    ///
+    /// `bound` summed the claimed seconds with a `u64` `saturating_add`. The reasoning behind that
+    /// was sound as far as it went — the values are attacker-chosen and a wrapping sum would turn
+    /// the bound into a no-op — but saturation is the same failure written quietly: once the true
+    /// total passes `u64::MAX` the denominator stops growing, so every entry is scaled by too much.
+    /// Two entries at `u64::MAX` against a one-second interval each scaled to 1, for a total of
+    /// two seconds of a one-second tick; forty entries gave forty.
+    ///
+    /// No hand-written test had reached it because reaching it needs *two* entries at the extreme
+    /// at once, which is exactly the shape a chosen fixture does not have.
+    #[test]
+    fn two_extreme_claims_cannot_outrun_the_interval_between_them() {
+        let sample = Sample {
+            apps: BTreeMap::new(),
+            pages: BTreeMap::from([
+                ("a.exe".to_string(), u64::MAX),
+                ("b.exe".to_string(), u64::MAX),
+            ]),
+        };
+        let out = clamp(sample, 1);
+        let total: u128 = out.pages.values().map(|v| u128::from(*v)).sum();
+        assert!(
+            total <= 1,
+            "two forged entries claimed {total}s of a 1s interval: {:?}",
+            out.pages
+        );
+    }
     use super::*;
 
     /// A sink that fails the way a pipe whose reader has gone away fails.

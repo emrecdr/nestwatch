@@ -4,7 +4,89 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ## [Unreleased]
 
+### Added
+
+- **Your child is now told which rule closed their app, and you can see that it fired.** A blocked
+  app, one over its own daily limit, and one in a group whose shared pool ran out were all closed
+  the same way: the window vanished on the next thirty-second check, with nothing said to the child
+  and nothing written to your usage history. From their side that is indistinguishable from a
+  crash — so the limit shaped no habit, and unsaved work went with it, while the *screen-time*
+  budget in the same install warned three times and gave a minute's grace. The notice names the app,
+  names the limit that fired (or the group, when it was a shared pool, since that is where the
+  setting actually lives), is translated like every other message they see, and carries the address
+  to ask for more time. Once per app per day: repeating "this app is blocked" says nothing new, and
+  announcing per launch would let a relaunch loop raise dialogs as fast as processes can start.
+  Your Usage history gains one `app_stopped` row per app per day, recording whether the notice
+  actually reached them — so "did my Roblox limit work?" is now answerable from the dashboard
+  instead of being invisible either way.
+- **The dashboard warns you before the certificate expires.** Nothing renews it, and after 825 days
+  browsers reject it outright — which means the dashboard is the thing that stops working, so a
+  warning that arrives afterwards has nowhere to appear. The only alarms were a line in a log file
+  you never open and `nestwatch doctor`, which needs an elevated console on the PC. The "at a
+  glance" row now says how many days are left for the final thirty of them, and what to do about it
+  (re-run `install`). The threshold stays on the server, so the dashboard holds no copy of it.
+
+### Fixed
+
+- **A bedtime set for one weekday covered the wrong night.** If you set a curfew window on
+  specific days and it ran past midnight — "Friday, 22:00 to 07:00", which is how a bedtime is
+  normally written — the tool applied your day choice to whatever day it happened to be checking.
+  So a Friday window shut the PC down at **3am on Friday**, a school morning nobody asked about,
+  and left the small hours of **Saturday** alone, which is the night you were actually setting.
+  Both halves were wrong and neither was visible: the log showed a curfew firing, and one had,
+  just not the one you set. A window now belongs to the night it opens on, and the line beside it
+  says so as you edit — "Applies: Fri night, ending Sat morning".
+  <br>**This changes behaviour if you use per-day windows that cross midnight**, which is the only
+  configuration that was affected: a window on every day, or one that starts and ends on the same
+  day, behaves exactly as before. Worth re-reading your curfew card once after upgrading.
+- **A forged report could have wiped out your screen-time history in a few days.** The figures the
+  focused-time columns are built from arrive from a helper running as your child, and the tool
+  bounds them carefully — how many apps may be listed, how many page titles, how many seconds each
+  may claim. What nothing bounded was how *long* a single app name or page title could be. The
+  512-character limit that exists lives inside the helper itself, so it constrained an honest one
+  and nothing else. Measured with the real code: a single forged report left 29 page titles
+  totalling **919,913 bytes**, which is then written to disk every thirty seconds and folded into
+  that day's stored row — enough to push your whole retained history out in about four days, where
+  it is normally years. Titles and app names are now cut to the same 512 characters an honest
+  helper produces, so real data is untouched, and two that become identical after cutting have
+  their minutes added together rather than one replacing the other.
+- **A forged report from the child's own machine could claim more time than had actually passed.**
+  Focused-time figures arrive from a helper that runs as your child — the design assumes it may be
+  hostile, and scales any report that claims more seconds than the interval it covers. The scaling
+  divided by a total that was itself capped, so once the claimed figures were large enough that
+  total stopped growing and every entry was scaled by too much: two forged entries could report two
+  seconds of a one-second interval, and forty could report forty. Only the *reported* focus columns
+  were affected — screen time, bedtime and every limit are measured separately and were never
+  involved — so the visible effect was a number in the report that was simply false. Found by a new
+  property-based test rather than by review, and it had survived every hand-written test because
+  reaching it needs two extreme values at once, which is exactly the shape a chosen example does
+  not have.
+- **`nestwatch doctor` and the service log disagreed about the certificate by exactly one day.**
+  The log warned at 30 days remaining and `doctor` — which a parent runs *because* of that line —
+  said everything was fine until 29. The constant was shared; the comparison against it was written
+  out twice, once with `<=` and once with `<`, which is the contradiction the constant was made
+  public to prevent. There is now one function both ask, and a test that sweeps every day of the
+  certificate's life against the original formula rather than against itself. (The first version of
+  that test compared the two new callers with each other, which was a tautology that stayed green
+  under the very change it was written to catch; found by mutating it.)
+
 ### Security
+
+- **A connection that stalls part-way through a request is now closed.** `hyper` documents a
+  30-second timeout for exactly this and it was doing nothing here: applying it requires a timer
+  that `axum-server` never installs, after which the documented default silently resolves to
+  "no timeout". So any device on your home network could open connections, send half a request, and
+  hold them — and the resources were never reclaimed. Both protocols are covered, which matters
+  because the server offers HTTP/2 as well: fixing only HTTP/1 is a fix an attacker steps around by
+  choosing the other one, and it would have *looked* closed. Measured against the real binary
+  before and after rather than reasoned about — a half-sent request that stayed open past 65 seconds
+  now closes within 31, and an idle HTTP/2 connection within about 60.
+  <br>**One case remains open and is recorded as `O81` rather than left to be discovered:** a
+  connection that sends *nothing at all* is still held, because the code that decides which protocol
+  is in use runs before either timeout exists. It is a leak rather than a lock-out — measured at
+  about 42 KB per connection, with the dashboard still responding normally under 300 of them — and
+  screen-time and bedtime enforcement are unaffected either way, since neither goes near the web
+  server.
 
 - **A guard against a Windows privilege-escalation route could not see part of what it guards.**
   Rust resolves a bare program name by searching the running executable's *own directory* before
@@ -24,6 +106,40 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   tokens through the shared helper rather than carrying private copies of the reflow rule, which is
   what let three guards drift into failing open on the same day. What is still open is recorded as
   `O79`, and is about how the meta-guard picks files to check rather than about any scan.
+
+### Changed
+
+- **You can now keep a copy of your settings, and put them back.** *Settings backup*, at the bottom
+  of the dashboard, downloads your curfew, daily limits, app rules, groups, routines and your
+  child's language as one file, and restores it. There was previously no way to do this at all:
+  the settings live in a locked folder reachable only from an elevated console on the PC, and
+  `uninstall --purge` deletes them for good — so rebuilding the machine, or setting up a second
+  one, meant re-entering everything by hand, routines included. The file deliberately contains no
+  password and nothing about the machine it came from: not the port, not the certificate, not
+  today's granted minutes, and **not the trusted-clock anchor**, because restoring another
+  machine's clock would quietly weaken curfew enforcement on this one. Restoring never resumes
+  enforcement you had paused, never revokes a bedtime extension you granted tonight, and is refused
+  outright if the file is incomplete rather than being applied in half.
+- **The tool now records what it deletes when the history file rolls over.** History is kept in two
+  generations and the older is overwritten; the report card already told you the oldest day it
+  could still show, but that describes what survived and cannot tell a new install from one that
+  has silently dropped a year. A line is now written at each rollover saying how much went and the
+  date it went up to, and it appears in your history download.
+- **The screen-time report is now checked against generated histories, not only chosen ones.** The
+  numbers on that card have to agree with each other — the total with the columns it is drawn from,
+  the average with the days it averaged, the comparison with its baseline — and a disagreement
+  between any two of them is invisible to a test that checks either alone. Eight properties now
+  hold across randomly generated stores including duplicated days, days in the future, malformed
+  rows and an empty history. **They found nothing**, which is the result worth reporting: the
+  arithmetic was already right, including the case where the previous period was measured and
+  totalled zero, where the percentage is genuinely undefined rather than infinite.
+- **Notifications to your child can now be tested.** Nothing in the test suite could observe a
+  single thing this product says to a child: every countdown, every warning, and the notice above
+  went to a log line the tests could not read. Two real defects had already been found on the one
+  message that *was* observable — it was English on every install, and it was the only one that
+  never told the child where to ask — and the same exposure sat unwatched on all the others. The
+  test double now records them, and the first end-to-end test of a child-facing message that is not
+  a shutdown ships with it.
 
 ## [0.5.1] — 2026-08-31
 

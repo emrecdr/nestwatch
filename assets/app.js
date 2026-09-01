@@ -268,6 +268,9 @@ function app() {
     loadingCodes: false,
     newCodeMins: 30,
     issuingCode: false,
+    policyFile: null,
+    policyMsg: "",
+    restoringPolicy: false,
     pwCurrent: "",
     pwNew: "",
     savingPw: false,
@@ -449,11 +452,39 @@ function app() {
     // It was disclosed in the faintest text on the card, below the whole set of windows, and it
     // never changed when a box was cleared. This says what the window will do, beside the window,
     // as it changes — state the parent can see instead of a rule they must recall.
+    // Whether this window runs past midnight, from the two times as typed.
+    //
+    // `HH:MM` strings compare lexicographically in the same order as the times they name, so this
+    // needs no parsing — the server's `is_within` makes the identical comparison on `NaiveTime`.
+    // An equal pair is an EMPTY window, never a 24-hour one, which is the server's rule too.
+    windowCrossesMidnight(w) {
+      return !!w && typeof w.start === "string" && typeof w.end === "string" && w.start > w.end;
+    },
+
+    // What this window will actually do, in words, updating as the boxes change.
+    //
+    // The "into the next morning" half is not decoration. A window of Friday 22:00–07:00 reads as
+    // "Friday night", and until it was fixed the enforcer applied the day selector to whatever day
+    // it happened to be evaluating — so it shut the machine down on Friday MORNING and left the
+    // small hours of Saturday alone. The fix attributes the window to the night it opens on; this
+    // line is what tells the parent that is what they are getting, at the moment they choose it,
+    // rather than leaving them to discover it from a shutdown.
     windowDayLabel(w) {
       const on = this.dayOptions.filter((d) => w.days && w.days[d.key]);
-      if (on.length === 0) return "Applies: every day";
-      if (on.length === this.dayOptions.length) return "Applies: every day";
-      return "Applies: " + on.map((d) => d.full.slice(0, 3)).join(", ");
+      const crosses = this.windowCrossesMidnight(w);
+      if (on.length === 0 || on.length === this.dayOptions.length) {
+        return crosses ? "Applies: every day, ending the next morning" : "Applies: every day";
+      }
+      const names = on.map((d) => d.full.slice(0, 3)).join(", ");
+      if (!crosses) return "Applies: " + names;
+      // Name the morning it ends on, but only when one day is selected — with several, "ending the
+      // next morning" is the honest summary and listing every pair would be a wall of text.
+      if (on.length === 1) {
+        const i = this.dayOptions.findIndex((d) => d.key === on[0].key);
+        const next = this.dayOptions[(i + 1) % this.dayOptions.length];
+        return "Applies: " + names + " night, ending " + next.full.slice(0, 3) + " morning";
+      }
+      return "Applies: " + names + ", each ending the next morning";
     },
 
     // True when the window applies daily *because nothing is ticked*, rather than because all seven
@@ -714,6 +745,10 @@ function app() {
     // `x-model` — blanking them would flash empty fields and then a saved-looking form built from
     // defaults, which is a worse lie than a stale one.
     resetSessionData() {
+      // Cleared with the rest: a chosen file outliving a sign-out would let the next person at
+      // this browser restore a document they never picked.
+      this.policyFile = null;
+      this.policyMsg = "";
       this.processes = [];
       this.today = null;
       this.todayAsked = false;
@@ -1328,6 +1363,9 @@ function app() {
     get killTargetPid() { return this.killTarget?.pid ?? ""; },
 
     todayUsedOrZero() { return this.today?.used_mins ?? 0; },
+    // Whether the glance row shows the certificate line at all. A getter beside its siblings
+    // rather than a `?.` chain in the attribute, for the reason this whole block exists.
+    get certExpiring() { return !!this.today?.cert_expiring; },
     bonusLabel() { return " (incl. +" + this.today.extra_mins + " bonus)"; },
     todayBarLabel() {
       return "Screen time: " + this.today.used_mins + " of " + this.today.budget_mins + " minutes used";
@@ -1414,6 +1452,76 @@ function app() {
     //
     // Pure and separately testable, because each has a state that is neither good nor bad but
     // *unknown*, and that is the one every earlier version of this page got wrong.
+    // --- Settings backup ------------------------------------------------------------------------
+
+    // Remember the chosen file; do not read it yet.
+    //
+    // Reading on change would mean a file sitting in memory from the moment it is picked, for a
+    // parent who may just have been browsing. It is read once, inside `restorePolicy`, after the
+    // confirmation — so the only copy exists for the duration of the request.
+    pickPolicyFile(event) {
+      const files = event && event.target ? event.target.files : null;
+      this.policyFile = files && files.length ? files[0] : null;
+      this.policyMsg = "";
+    },
+
+    // Read the chosen file and POST it.
+    //
+    // Confirmed first, and the confirmation names what is replaced rather than asking "are you
+    // sure?": this overwrites the curfew and every rule in one step, and a parent who picked the
+    // wrong file from their downloads folder has no undo. The server refuses a document with no
+    // `policy` key for the same reason — the *history* export sits right beside this one.
+    //
+    // The response's `warning` is surfaced rather than swallowed. It appears when the file came
+    // from a different version, and it is the only signal that a setting may not have carried
+    // over; discarding it would turn a partial restore into a silent one.
+    async restorePolicy() {
+      if (!this.policyFile) return;
+      if (!confirm(
+        "Restore settings from " + this.policyFile.name + "?\n\n" +
+        "This replaces your curfew, daily limits, app rules and routines. " +
+        "Your password, the port and the trusted clock are not touched."
+      )) return;
+
+      this.restoringPolicy = true;
+      this.policyMsg = "";
+      try {
+        const text = await this.policyFile.text();
+        let doc;
+        try {
+          doc = JSON.parse(text);
+        } catch {
+          // Distinguished from a server rejection on purpose: "that file is not JSON" is
+          // actionable ("you picked the wrong file"), and "the server said no" is not.
+          this.policyMsg = "That file isn't a settings file — it isn't valid JSON.";
+          return;
+        }
+        const r = await fetch("/api/policy", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(doc),
+        });
+        if (r.status === 401) { this.authed = false; return; }
+        if (!r.ok) {
+          const detail = await r.text();
+          this.policyMsg = "Not restored: " + (detail || r.status);
+          this.toast("Settings were not restored", "error");
+          return;
+        }
+        const out = await r.json();
+        this.policyMsg = out.warning || "Settings restored.";
+        this.toast("Settings restored", "success");
+        // Reload everything the document just replaced, so the page is not showing the old
+        // curfew and the old limits beside a message saying they changed.
+        this.loadAll();
+      } catch {
+        this.policyMsg = "Couldn't read that file.";
+        this.toast("Settings were not restored", "error");
+      } finally {
+        this.restoringPolicy = false;
+      }
+    },
+
     glanceEnforcement() {
       if (!this.todayAsked) return { text: "Enforcement: checking…", tone: "muted" };
       if (this.stEnforcementStale()) return { text: "Enforcement may not be running", tone: "bad" };
@@ -1441,6 +1549,32 @@ function app() {
       return { text: n === 1 ? "1 request waiting" : `${n} requests waiting`, tone: "warn" };
     },
 
+    // The certificate, but only once it is nearly out of time.
+    //
+    // Returns null the rest of the time so the row does not carry a permanent line about
+    // something that is fine for 795 of its 825 days — the glance row answers "what needs me",
+    // and a fact that never changes is not that.
+    //
+    // The threshold is NOT here. The server sends `cert_expiring` already decided, because
+    // `RENEW_WARN_DAYS` has three readers in the Rust crate and a fourth in the Android client
+    // reading it out of the source with `sed` (O72); a `30` written here would be a fifth copy in
+    // the one place nobody greps. This asks only whether the server said so.
+    //
+    // Why it earns a place at all: nothing renews the certificate, and when it lapses the browser
+    // hard-fails — so THIS PAGE is what breaks. The warning has to arrive before that, on the
+    // surface that is about to stop working, because afterwards there is nowhere left to put it.
+    glanceCert() {
+      const d = this.today ? this.today.cert_days_left : null;
+      // `null` is not zero, so an unknown number is never rendered as "expires in 0 days". The
+      // server only sets `cert_expiring` on a real reading, so this branch is belt-and-braces —
+      // kept because the alternative reads as a countdown that reached zero, which is a
+      // different and much more alarming claim than "nobody could measure it".
+      if (typeof d !== "number") return { text: "Certificate needs renewing — re-run install on the PC", tone: "warn" };
+      if (d === 0) return { text: "Certificate has expired — re-run install on the PC", tone: "bad" };
+      const days = d === 1 ? "1 day" : `${d} days`;
+      return { text: `Certificate expires in ${days} — re-run install on the PC`, tone: "warn" };
+    },
+
     // One place mapping a tone to its classes, so the three above stay free of styling and the
     // markup stays free of conditionals.
     glanceClass(tone) {
@@ -1458,10 +1592,33 @@ function app() {
     // house" forbids outright. The Badging API — `navigator.setAppBadge` — badges an *installed*
     // app's icon, and `docs/MOBILE-APP.md` already establishes that an installable page cannot work
     // for this product, because a home-screen app does not inherit the browser's certificate
-    // exception. The Notifications API needs a secure context, and whether a self-signed
-    // certificate accepted on a private IP counts as one is **unverified** — localhost is the
-    // documented exception, not private addresses generally. So: the title, which needs no
-    // permission, no service worker and no external anything.
+    // exception. The Notifications API was rejected here on the grounds that it "needs a secure
+    // context, and whether a self-signed certificate accepted on a private IP counts as one is
+    // unverified". **That reasoning was wrong, and the conclusion survives for a better reason.**
+    //
+    // It is a secure context. W3C Secure Contexts, "Is origin potentially trustworthy?", returns
+    // Potentially Trustworthy on step 3 — the `https` scheme, full stop — and the algorithm has no
+    // step that examines certificate validity at all. Chromium's own position, stated on the W3C
+    // webpayments list, is that once the user clicks through the interstitial the context IS
+    // considered secure, and individual APIs are neutered case by case rather than the context
+    // being downgraded. So `isSecureContext` is almost certainly true on the paired phone.
+    //
+    // What actually rules it out is the shape of the API on the devices this product runs on:
+    //
+    //   * `new Notification()` throws a TypeError in nearly all MOBILE browsers, by design — MDN
+    //     states it outright and adds "this is unlikely to change", because pages on phones do not
+    //     run in the background. The phone path therefore needs
+    //     `ServiceWorkerRegistration.showNotification()`.
+    //   * Chromium refuses to REGISTER a service worker on an origin whose certificate error was
+    //     bypassed (crbug 40423989), which is every install of this tool.
+    //   * iOS Safari needs an installed Home Screen web app, and `docs/MOBILE-APP.md` already
+    //     refutes that route: an installed PWA does not inherit the certificate exception, so it
+    //     cannot connect at all.
+    //
+    // Net: notifications are available in a DESKTOP browser tab and nowhere else — the surface
+    // this product cares least about, since the parent is on a phone. So: the title, which needs
+    // no permission, no service worker and no external anything. `O78` tracks the one thing still
+    // worth doing here, which is the audio cue on the SSE arrival — that needs none of the above.
     //
     // `null` is unknown, not zero. Titling the tab "(0)" for a service we could not reach is the
     // same false confidence the badge used to show.

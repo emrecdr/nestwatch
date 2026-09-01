@@ -147,6 +147,28 @@ fn etag_for(bytes: &[u8]) -> String {
 /// use, so nothing is ever served stale, `assets/app.css` stays safe to edit in a debug build, and
 /// an upgraded binary cannot be shadowed by a cached asset from the previous version. The bytes
 /// saved are the same; only the freshness guarantee differs, and this end of it costs nothing.
+///
+/// # Caching the compressed bytes was measured and declined
+///
+/// The obvious next step is that the encoder below runs per request over inputs that, in a release
+/// build, are `&'static` and cannot change — so compressing once into a map would remove the work
+/// entirely. It was measured before being written, and the numbers do not support it.
+///
+/// One cold load compresses all four assets. At the default level that is **~5.5 ms of total CPU**
+/// (index.html 1.3, app.js 2.3, app.css 0.8, alpine.min.js 1.1), and the `304` path above means a
+/// device pays it **once** — on its first visit, and again after an upgrade. There is no steady
+/// state in which this repeats.
+///
+/// Against that, a cache is not free here. Release assets are immutable but **debug assets are read
+/// from disk on every call**, which is what makes editing `assets/app.js` and refreshing work — so
+/// a path-keyed cache would serve stale bytes to whoever is developing the UI. Keying it on the
+/// ETag instead is correct but puts a lock on the request path; splitting it on
+/// `debug_assertions` is correct and means the shipped path is not the tested one. Both buy
+/// 5.5 ms per device, once.
+///
+/// Also measured, so it is not re-proposed as the cheap half: raising the level from
+/// `Compression::default()` (6) to 9 saves **0.5 KB across all four assets combined** — 22.0→21.7,
+/// 34.4→34.3, 15.2→15.1, 22.5→22.5 KB — for two to three times the CPU. The default stays.
 fn serve_asset(path: &str, headers: &HeaderMap) -> Response {
     let Some(file) = Assets::get(path) else {
         return (StatusCode::NOT_FOUND, "Not Found").into_response();

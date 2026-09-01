@@ -12,6 +12,10 @@ use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, S
 /// small enough that a dev server left running for weeks cannot grow a list out of it.
 const SHUTDOWN_LOG_CAP: usize = 64;
 
+/// Same bound, same reason, for [`FakeControl::notifications`]. Higher than shutdowns because a
+/// day's worth of countdown warnings is legitimately more numerous than a day's shutdowns.
+const NOTIFY_LOG_CAP: usize = 128;
+
 pub struct FakeControl {
     processes: Mutex<Vec<ProcessInfo>>,
     /// Every `(delay_secs, message)` this fake was asked to shut down with, in order.
@@ -23,9 +27,24 @@ pub struct FakeControl {
     /// carried the "where to ask for more time" address. A `tracing::warn!` cannot be asserted on,
     /// so nothing could reach the loop that builds it. `tests/enforcer_shutdown.rs` and
     /// `tests/curfew_enforcer.rs` now do, through this field; `docs/OPEN-FINDINGS.md` O70 tracks
-    /// what a driver test still cannot see, which is the *order* the loop does things in —
-    /// `notify_user` is still only a log line, so the warnings remain unassertable.
+    /// what a driver test still cannot see, which is the *order* the loop does things in.
     shutdowns: Mutex<Vec<(u32, Option<String>)>>,
+    /// Every `(title, body)` this fake was asked to show the child, in order.
+    ///
+    /// **Recorded for exactly the reason `shutdowns` above is, one argument later.** That field's
+    /// doc used to end by naming what was still invisible — *"`notify_user` is still only a log
+    /// line, so the warnings remain unassertable"* — and that sentence covered nearly everything
+    /// this product ever says to a child: every 15/5/1 countdown, the lock grace notice, the
+    /// limit-reached notice, and the app-stopped notice. A `tracing::info!` cannot be asserted on,
+    /// so no test anywhere could show that a warning was delivered, that it was in the child's
+    /// language, or that it carried the address to ask at.
+    ///
+    /// The two defects that made `shutdowns` observable — a hard-coded English string, and the one
+    /// child-facing message that never carried the "where to ask" hint — were both *found* on the
+    /// shutdown path, and both had a live twin on this one that nothing could reach.
+    /// `tests/translated_strings.rs` guards the shape of these messages statically; this is what
+    /// lets a test assert that one actually arrived, and with what in it.
+    notifications: Mutex<Vec<(String, String)>>,
 }
 
 impl FakeControl {
@@ -59,6 +78,7 @@ impl FakeControl {
                 },
             ]),
             shutdowns: Mutex::new(Vec::new()),
+            notifications: Mutex::new(Vec::new()),
         }
     }
 
@@ -68,6 +88,23 @@ impl FakeControl {
             .lock()
             .expect("fake shutdown log poisoned")
             .clone()
+    }
+
+    /// Every notification this fake was asked to show, as `(title, body)`, oldest first.
+    pub fn notifications(&self) -> Vec<(String, String)> {
+        self.notifications
+            .lock()
+            .expect("fake notification log poisoned")
+            .clone()
+    }
+
+    /// The bodies of those notifications, which is what every caller actually asserts on — the
+    /// title is a constant. Saves each test writing the same `.into_iter().map(|(_, b)| b)`.
+    pub fn notification_bodies(&self) -> Vec<String> {
+        self.notifications()
+            .into_iter()
+            .map(|(_, body)| body)
+            .collect()
     }
 }
 
@@ -174,6 +211,15 @@ impl SystemControl for FakeControl {
 
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
         tracing::info!(%title, %body, "[fake] notify_user (no-op on this platform)");
+        // Capped keeping the OLDEST, for the same reason `shutdown` above gives: assertions index
+        // from the front, so dropping from the front would silently renumber what a test reads.
+        let mut log = self
+            .notifications
+            .lock()
+            .expect("fake notification log poisoned");
+        if log.len() < NOTIFY_LOG_CAP {
+            log.push((title, body));
+        }
         Ok(())
     }
 }
@@ -239,6 +285,31 @@ mod tests {
     /// *newest* is the more usual shape, and it would leave every existing assertion still
     /// compiling while silently renumbering what `shutdowns()[0]` means — the first shutdown a
     /// test asserts on becomes whichever one happened to survive.
+    /// The notification log is bounded the same way, and for the same reason: a dev server left
+    /// running for weeks must not grow a list out of the fake. Separate from the shutdown test
+    /// because the two caps are separate constants, and a shared test would keep passing if one
+    /// of them were removed.
+    #[test]
+    fn the_notification_log_is_capped_and_keeps_the_oldest() {
+        let c = FakeControl::new();
+        for i in 0..(NOTIFY_LOG_CAP + 10) {
+            c.notify_user("Screen time".into(), format!("notice {i}"))
+                .unwrap();
+        }
+
+        let log = c.notification_bodies();
+        assert_eq!(log.len(), NOTIFY_LOG_CAP, "the log grew past its cap");
+        assert_eq!(
+            log[0], "notice 0",
+            "the front of the log moved — assertions that index from it now read a different call"
+        );
+        assert_eq!(
+            log[NOTIFY_LOG_CAP - 1],
+            format!("notice {}", NOTIFY_LOG_CAP - 1),
+            "the retained window is not the first {NOTIFY_LOG_CAP} calls"
+        );
+    }
+
     #[test]
     fn the_shutdown_log_is_capped_and_keeps_the_oldest() {
         let c = FakeControl::new();

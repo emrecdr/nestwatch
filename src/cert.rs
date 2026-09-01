@@ -76,9 +76,26 @@ const VALIDITY_DAYS: u64 = 825;
 /// would have the parent reading a diagnostic that contradicts the warning in their log file.
 pub const RENEW_WARN_DAYS: u64 = 30;
 
+/// Whether a certificate with `days_left` of validity is inside the renewal window.
+///
+/// **The one comparison against [`RENEW_WARN_DAYS`] in this crate**, which is what that constant's
+/// own doc asks for and did not get. There were two, and they disagreed by exactly one day:
+/// `is_expiring` below fired at `days_left <= 30`, while `doctor` wrote its own
+/// `d < RENEW_WARN_DAYS` and fired at `days_left < 30`. So on the single day where 30 remain, the
+/// service log said the certificate was about to lapse and `nestwatch doctor` — run by a parent
+/// *because* of that line — reported it fine. That is precisely the contradiction the constant was
+/// made `pub` to prevent, reintroduced by a second spelling of the test rather than by a second
+/// number.
+///
+/// Takes days *left* rather than age because that is what both callers now have, and because a
+/// threshold is easier to read forwards.
+pub fn renewal_due(days_left: u64) -> bool {
+    days_left <= RENEW_WARN_DAYS
+}
+
 /// Whether a cert `age_days` old is close enough to its [`VALIDITY_DAYS`] expiry to warn about.
 fn is_expiring(age_days: u64) -> bool {
-    age_days + RENEW_WARN_DAYS >= VALIDITY_DAYS
+    renewal_due(VALIDITY_DAYS.saturating_sub(age_days))
 }
 
 /// Best-effort startup check: warn loudly (to the service log) if the installed cert is nearing
@@ -202,6 +219,89 @@ fn primary_lan_ip() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The service log and `doctor` answer "is this about to lapse?" identically, on every day.
+    ///
+    /// Written after finding that they did not. `doctor` spelled the comparison itself as
+    /// `d < RENEW_WARN_DAYS` while `is_expiring` was `age + RENEW >= VALIDITY`, i.e. `<=` — so on
+    /// the one day with exactly `RENEW_WARN_DAYS` left, a parent who went to `doctor` *because*
+    /// the log warned was told nothing was wrong. Sweeping the whole range rather than the
+    /// boundary, because an off-by-one is exactly what a hand-picked fixture misses.
+    /// Nobody spells the threshold comparison for themselves a second time.
+    ///
+    /// The test above pins that the two answers *agree*; this pins the reason they cannot drift
+    /// apart again. `doctor` diverged by writing `d < RENEW_WARN_DAYS` next to a constant whose
+    /// own doc says it is `pub` precisely so that would not happen — so the constant being shared
+    /// was never the protection. Routing every asker through one function is.
+    ///
+    /// Scoped to `doctor.rs` deliberately rather than swept across the tree: it is the file that
+    /// actually did this, and a repo-wide rule would need an exemption for `cert.rs` itself,
+    /// which is the shape `O54` objects to.
+    #[test]
+    fn the_diagnostic_asks_the_shared_question_rather_than_spelling_its_own() {
+        let doctor = crate::srcscan::production_source(include_str!("doctor.rs"));
+        assert!(
+            !crate::srcscan::find_tokens(doctor, &["RENEW_WARN_DAYS"]).is_empty()
+                || !doctor.contains("RENEW_WARN_DAYS"),
+            "sanity: this assertion is about to check for absence, so it must be able to find a \
+             present one"
+        );
+        assert!(
+            !doctor.contains("RENEW_WARN_DAYS"),
+            "doctor.rs names RENEW_WARN_DAYS again. It should ask `cert::renewal_due(days_left)` \
+             instead: the last time it compared against the constant itself it used `<` where the \
+             service log used `<=`, so on the one day with exactly 30 left the log warned and the \
+             diagnostic a parent then ran said everything was fine."
+        );
+        assert!(
+            !crate::srcscan::find_tokens(doctor, &["renewal_due", "("]).is_empty(),
+            "doctor.rs no longer asks about the renewal window at all — the certificate check is \
+             the only warning a parent can reach from the machine"
+        );
+    }
+
+    #[test]
+    fn the_log_and_the_diagnostic_never_disagree_about_the_renewal_window() {
+        for age in 0..=VALIDITY_DAYS + 5 {
+            let days_left = VALIDITY_DAYS.saturating_sub(age);
+            // The shipped formula written out INDEPENDENTLY, not called.
+            //
+            // The first version of this test compared `is_expiring(age)` with
+            // `renewal_due(days_left)` — and since `is_expiring` now delegates to `renewal_due`,
+            // that was a tautology: flipping `<=` to `<` moved both sides together and the test
+            // stayed green. Caught by mutating it, which is the only way that class of test ever
+            // is. This third expression is the one the startup log promised before the extraction,
+            // so it is a real second opinion rather than a mirror.
+            let historical = age + RENEW_WARN_DAYS >= VALIDITY_DAYS;
+            assert_eq!(
+                is_expiring(age),
+                historical,
+                "age {age}: the startup warning changed meaning during a refactor that was \
+                 supposed to preserve it"
+            );
+            assert_eq!(
+                renewal_due(days_left),
+                historical,
+                "age {age} ({days_left} left): the diagnostic and the startup warning disagree, \
+                 which is the contradiction RENEW_WARN_DAYS is `pub` to prevent — and which they \
+                 really did, by one day, until `renewal_due` existed"
+            );
+        }
+        // Anti-tautology: the sweep is worthless if the predicate is constant across it.
+        assert!(
+            !renewal_due(VALIDITY_DAYS),
+            "a fresh cert is not due for renewal"
+        );
+        assert!(renewal_due(0), "an expired cert is due for renewal");
+        assert!(
+            renewal_due(RENEW_WARN_DAYS),
+            "the boundary day is inside the window"
+        );
+        assert!(
+            !renewal_due(RENEW_WARN_DAYS + 1),
+            "one day outside it is not"
+        );
+    }
 
     #[test]
     fn is_expiring_only_near_the_end() {

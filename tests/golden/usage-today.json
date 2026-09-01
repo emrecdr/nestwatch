@@ -1,5 +1,7 @@
 {
   "budget_mins": 135,
+  "cert_days_left": 700,
+  "cert_expiring": false,
   "day": "2026-08-26",
   "enabled": true,
   "enforcer_age_secs": 12,

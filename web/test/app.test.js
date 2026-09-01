@@ -778,6 +778,123 @@ test("syncTitle is a no-op without a document rather than a crash", () => {
 // is what every earlier version of this page got wrong: an unreachable service rendered as a healthy
 // enforcer, as zero minutes used, and as nothing waiting.
 
+// --- Curfew window labels -----------------------------------------------------------------------
+//
+// The label is the only thing that tells a parent which NIGHT a window covers, and that mattered:
+// the enforcer used to apply the day selector to whatever day it was evaluating, so "Friday
+// 22:00-07:00" shut the machine down on Friday morning and left Saturday's small hours alone.
+// Fixed server-side; this is what makes the corrected meaning visible where it is chosen.
+
+test("a window that crosses midnight names the morning it ends on", () => {
+  const a = loadApp();
+  const w = { start: "22:00", end: "07:00", days: { fri: true } };
+  assert.equal(a.windowCrossesMidnight(w), true);
+  assert.match(a.windowDayLabel(w), /Fri night/);
+  assert.match(a.windowDayLabel(w), /Sat morning/, "the parent must be told which night it is");
+});
+
+test("the week wraps, so a Sunday window ends on Monday morning", () => {
+  const a = loadApp();
+  const w = { start: "23:00", end: "06:00", days: { sun: true } };
+  assert.match(a.windowDayLabel(w), /Sun night/);
+  assert.match(a.windowDayLabel(w), /Mon morning/, "the day list must wrap round the week");
+});
+
+test("a same-day window says nothing about a next morning", () => {
+  const a = loadApp();
+  const w = { start: "09:00", end: "17:00", days: { fri: true } };
+  assert.equal(a.windowCrossesMidnight(w), false);
+  assert.equal(a.windowDayLabel(w), "Applies: Fri");
+});
+
+test("an equal pair is an empty window, not a 24-hour one", () => {
+  const a = loadApp();
+  assert.equal(
+    a.windowCrossesMidnight({ start: "22:00", end: "22:00", days: {} }),
+    false,
+    "start === end is empty on the server too, and must not read as crossing midnight",
+  );
+});
+
+test("several days that each cross midnight are summarised rather than listed", () => {
+  const a = loadApp();
+  const w = { start: "22:00", end: "07:00", days: { fri: true, sat: true } };
+  assert.match(a.windowDayLabel(w), /Fri, Sat/);
+  assert.match(a.windowDayLabel(w), /each ending the next morning/);
+});
+
+test("every day still reads as every day, and says where it ends", () => {
+  const a = loadApp();
+  assert.equal(
+    a.windowDayLabel({ start: "22:00", end: "07:00", days: {} }),
+    "Applies: every day, ending the next morning",
+    "clearing every box means every day — the opposite of what it looks like",
+  );
+  assert.equal(a.windowDayLabel({ start: "09:00", end: "17:00", days: {} }), "Applies: every day");
+});
+
+// The certificate line is a fourth answer, and unlike the other three it is usually ABSENT.
+// Nothing renews the certificate, so an install left alone reaches 825 days and the browser then
+// hard-fails — this page is what breaks. The notice has to land before that, here, because
+// afterwards there is no page left to put it on.
+
+test("the certificate line is absent while the certificate is fine", () => {
+  const a = loadApp();
+  a.today = { cert_days_left: 700, cert_expiring: false };
+  assert.equal(a.certExpiring, false, "795 of 825 days must not carry a permanent warning");
+});
+
+test("the certificate line is absent before the first answer, rather than reassuring", () => {
+  const a = loadApp();
+  assert.equal(a.certExpiring, false, "no reading yet is not a verdict either way");
+});
+
+test("the certificate line names the days left and what to do about them", () => {
+  const a = loadApp();
+  a.today = { cert_days_left: 12, cert_expiring: true };
+  assert.equal(a.certExpiring, true);
+  assert.equal(a.glanceCert().tone, "warn");
+  assert.match(a.glanceCert().text, /12 days/);
+  assert.match(a.glanceCert().text, /re-run install/, "a warning with no action is just alarm");
+});
+
+test("one day left is singular, because '1 days' reads as a bug in the tool", () => {
+  const a = loadApp();
+  a.today = { cert_days_left: 1, cert_expiring: true };
+  assert.match(a.glanceCert().text, /1 day\b/);
+  assert.doesNotMatch(a.glanceCert().text, /1 days/);
+});
+
+test("an already-expired certificate reads as broken, not as nearly-due", () => {
+  const a = loadApp();
+  a.today = { cert_days_left: 0, cert_expiring: true };
+  assert.equal(a.glanceCert().tone, "bad");
+  assert.match(a.glanceCert().text, /expired/);
+});
+
+// The `null`-is-not-zero rule, applied to the one place it would be most alarming to get wrong.
+test("an unreadable certificate never renders as a countdown that hit zero", () => {
+  const a = loadApp();
+  a.today = { cert_days_left: null, cert_expiring: true };
+  assert.doesNotMatch(
+    a.glanceCert().text,
+    /0 days|expired/,
+    "'nobody could measure it' and 'it has expired' are different claims, and only one of them " +
+      "should make a parent stop what they are doing",
+  );
+  assert.match(a.glanceCert().text, /re-run install/);
+});
+
+// The threshold lives on the server. A `30` appearing in this file would be a fifth copy of
+// RENEW_WARN_DAYS, in the one place nobody thinks to grep (O72 records the fourth).
+test("the client owns no renewal threshold of its own", () => {
+  const a = loadApp();
+  a.today = { cert_days_left: 31, cert_expiring: false };
+  assert.equal(a.certExpiring, false);
+  a.today = { cert_days_left: 31, cert_expiring: true };
+  assert.equal(a.certExpiring, true, "the server's verdict decides, not the number beside it");
+});
+
 test("enforcement reads as unknown before the first check, not as healthy", () => {
   const a = loadApp();
   assert.equal(a.glanceEnforcement().tone, "muted");

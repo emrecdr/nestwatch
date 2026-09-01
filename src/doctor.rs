@@ -403,7 +403,7 @@ pub fn run() -> Result<()> {
                     "Run `nestwatch install` to issue a fresh one (the fingerprint changes,\n\
                      so you'll accept the browser warning once more).",
                 )),
-                Some(d) if d < crate::cert::RENEW_WARN_DAYS => checks.push(warn(
+                Some(d) if crate::cert::renewal_due(d) => checks.push(warn(
                     format!("expires in about {d} days"),
                     "Run `nestwatch install` to refresh it before it lapses.",
                 )),

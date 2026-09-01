@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c8d6a2235a4b1596d85e6be547b68d2bf9cae2b364c34b997fa1e059fd9debe4 # shrinks to lens = [21], max = 4
+cc 8ac497923a449e9650bb20f8267071b42162d4b01c3f2feb5940ce9ce74567ff # shrinks to s = Sample { apps: {}, pages: {"a.exe": 18446744073709551615, "b.exe": 18446744073709551615} }, elapsed = 1
+cc a327c03e9731fe5560fdfca38942ca303dac9ca457291353ed70891b8e6d9de9 # shrinks to lens = [22], max = 23

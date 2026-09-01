@@ -1,5 +1,7 @@
 {
   "budget_mins": 0,
+  "cert_days_left": null,
+  "cert_expiring": false,
   "day": null,
   "enabled": true,
   "enforcer_age_secs": null,

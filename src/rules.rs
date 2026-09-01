@@ -542,6 +542,7 @@ pub fn today_summary(
     extra: u32,
     usage: &Usage,
     enforcer_age_secs: Option<i64>,
+    cert_days_left: Option<u64>,
 ) -> serde_json::Value {
     let budget = rules.effective_budget_mins(today, extra);
     let used_mins = usage.total_secs / 60;
@@ -575,6 +576,23 @@ pub fn today_summary(
         // "enforcement may not be running" — the only signal that distinguishes a dead enforcer
         // from a quiet day, since both otherwise show zero minutes used.
         "enforcer_age_secs": enforcer_age_secs,
+        // Roughly how many days the TLS certificate has left, and whether that is inside the
+        // renewal window. Both, because the client must not own the threshold: `RENEW_WARN_DAYS`
+        // already has three readers (this, the startup log, `doctor`) and `O72` records a fourth
+        // in another repository reading it out of this crate's source with `sed`. Sending the
+        // verdict as well as the number means the dashboard adds no fifth copy.
+        //
+        // **Why the dashboard needs this at all.** Nothing renews the certificate — `ensure_cert`
+        // returns early whenever the files exist — so an install left alone reaches 825 days and
+        // browsers then hard-fail. The only two warnings were a `tracing::warn!` in a log the
+        // parent never opens and `doctor`, which needs an elevated console on the child's PC. The
+        // surface that could have carried the notice is the one that breaks, and it broke without
+        // ever mentioning it was going to.
+        //
+        // `null` when the certificate cannot be read, never a number: an unreadable cert is not a
+        // fresh one, and the client renders nothing rather than a reassuring figure it invented.
+        "cert_days_left": cert_days_left,
+        "cert_expiring": cert_days_left.is_some_and(crate::cert::renewal_due),
         "enabled": rules.enabled,
         "budget_mins": budget,
         "used_mins": used_mins,
@@ -629,10 +647,89 @@ pub struct Tick {
 /// decision about the whole episode, not something a single tick can decide from its own actions.
 /// It lives in [`maybe_abort_budget_shutdown`], which is also where the coordination with curfew
 /// over the single OS pending-shutdown slot is enforced. Don't add one here.
+/// Why an app was stopped — carried into both the notice the child reads and the line the
+/// parent's usage history keeps.
+///
+/// Three variants rather than one "stopped" flag because the three are not the same event to
+/// either audience. "Blocked" is a standing rule the child can plan around; "used its 40 minutes"
+/// is a budget they spent and could ask to extend; "Games has used its pool" names a limit that
+/// lives on a *group*, so the app they were in is not where the setting is. A parent debugging
+/// "why did this close?" needs to be sent to the right control, and a single tag sends them to
+/// guess between three.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopReason {
+    /// On the blocklist — killed on sight, with no time involved.
+    Blocked,
+    /// Over its own per-app daily limit.
+    AppLimit { limit_mins: u32 },
+    /// A member of a group whose shared pool is spent. Carries the group, because the limit that
+    /// fired is not on this app and the parent will otherwise look for it there.
+    GroupPool { group: String, limit_mins: u32 },
+}
+
+impl StopReason {
+    /// The stable tag written to the usage log. Deliberately not `Debug`: a log a parent's
+    /// dashboard renders, and a future client may parse, must not change shape because someone
+    /// renamed a variant.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::Blocked => "blocklist",
+            Self::AppLimit { .. } => "app_limit",
+            Self::GroupPool { .. } => "group_pool",
+        }
+    }
+
+    /// The limit that fired, in minutes — `None` for the blocklist, which has no time in it.
+    /// `None` rather than `0`, for the reason this codebase applies everywhere: a zero limit is a
+    /// real and different thing (an app switched off), and rendering "absent" as "0" is the
+    /// failure `focus_missing` and `DayRow::measured` already exist to prevent.
+    pub fn limit_mins(&self) -> Option<u32> {
+        match self {
+            Self::Blocked => None,
+            Self::AppLimit { limit_mins } | Self::GroupPool { limit_mins, .. } => Some(*limit_mins),
+        }
+    }
+
+    /// The group whose pool was spent, when that is what happened.
+    pub fn group(&self) -> Option<&str> {
+        match self {
+            Self::GroupPool { group, .. } => Some(group),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum RuleAction {
     /// Terminate this PID (blocklisted, or an app over its per-app limit).
     Kill(u32),
+    /// Tell the child that a rule closed `app`, and record it for the parent. Emitted **once per
+    /// app per day**, on the first tick that kills it.
+    ///
+    /// # Why this exists
+    ///
+    /// The budget path is warned three times (15/5/1), given a grace period, and handed the
+    /// address to ask at. The blocklist, the per-app limits and the group pools had none of it:
+    /// `Kill(pid)` went out on the next 30-second tick and nothing else happened — no notice, and
+    /// no line in the usage log either. Three costs, all quiet. The child reads a vanished window
+    /// as a crash rather than as a rule. Unsaved work dies with none of the grace the budget path
+    /// gives. And the parent cannot answer "did my Roblox limit actually fire?" from the
+    /// dashboard at all, because nothing recorded that it did.
+    ///
+    /// # Once per app per day, and why that is the right period
+    ///
+    /// The fact being announced — *this app is blocked*, *this app has spent its 40 minutes* —
+    /// does not change again until the day rolls over, so repeating it says nothing new. The
+    /// alternative, announcing per launch, hands a child with a relaunch loop a way to make
+    /// `WTSSendMessage` dialogs appear as fast as they can start processes.
+    ///
+    /// Bounded by construction: `MAX_RULE_ENTRIES` caps the blocklist and the per-app limits at
+    /// 200 each, so a day's announcements cannot outgrow the rules that produce them.
+    ///
+    /// Emitted by the state machine rather than reconstructed by the loop, for the reason
+    /// [`RuleAction::LockWarning`] gives below — the loop cannot see `announced`, and a fourth
+    /// kill reason added later inherits the notice by construction instead of by memory.
+    AppStopped { app: String, reason: StopReason },
     /// Lock the screen (budget spent, action = Lock).
     LockScreen,
     /// Issue the first, warned shutdown of this over-budget episode (action = Shutdown).
@@ -696,6 +793,12 @@ pub struct RulesEnforcer {
     episode_warned: bool,
     /// Advance warnings ("15 minutes left"), announced on the way down. See [`crate::countdown`].
     countdown: Countdown,
+    /// Normalised names of apps already announced as stopped today. See
+    /// [`RuleAction::AppStopped`] for why the period is a day.
+    ///
+    /// Keyed on the **normalised** name while the notice carries the process's real one, so two
+    /// casings of the same executable cannot each earn their own announcement.
+    announced: BTreeSet<String>,
 }
 
 /// Minimum monotonic time between two honoured day rollovers. A real day is 24h; 12h leaves room
@@ -738,6 +841,7 @@ impl RulesEnforcer {
             last_reset: None,
             episode_warned: false,
             countdown: Countdown::default(),
+            announced: BTreeSet::new(),
         }
     }
 
@@ -843,13 +947,31 @@ impl RulesEnforcer {
         // no seconds — so overnight idle time and the budget-lock's own locked screen don't
         // count against the budget.
         let delta = if t.active { t.interval.as_secs() } else { 0 };
+        // Retire yesterday's announcements with yesterday's tally. Checked BEFORE `accrue`, which
+        // is what performs the rollover and sets `day` — reading it afterwards would compare
+        // today against today and never clear, so every app would be announced exactly once per
+        // process lifetime instead of once per day.
+        if self.usage.day != Some(t.today) {
+            self.announced.clear();
+        }
         self.usage.accrue(t.today, delta, &running, &targets);
 
         // Members of any group whose shared pool is spent → killed on sight.
-        let mut group_over: BTreeSet<String> = BTreeSet::new();
+        //
+        // Maps member → the group that spent, rather than a bare set, because the child's notice
+        // has to name *which* pool ran out: the limit is not on the app they were using, so
+        // "Minecraft was closed" would send a parent looking for a Minecraft limit that does not
+        // exist. `or_insert` keeps the FIRST spent group in configuration order when an app
+        // belongs to several, which is arbitrary but stable — a `HashMap` here would let the same
+        // machine give two different explanations for the same kill on two different days.
+        let mut group_over: BTreeMap<String, (String, u32)> = BTreeMap::new();
         for (name, members, limit) in &targets.groups {
             if self.usage.per_group_secs.get(name).copied().unwrap_or(0) >= *limit as u64 * 60 {
-                group_over.extend(members.iter().cloned());
+                for m in members {
+                    group_over
+                        .entry(m.clone())
+                        .or_insert_with(|| (name.clone(), *limit));
+                }
             }
         }
 
@@ -865,16 +987,40 @@ impl RulesEnforcer {
             let n = norm(&p.name);
             if blocked.contains(&n) {
                 actions.push(RuleAction::Kill(p.pid));
+                announce_once(
+                    &mut self.announced,
+                    &mut actions,
+                    &n,
+                    p,
+                    StopReason::Blocked,
+                );
                 continue;
             }
             if let Some(&lim) = targets.app_limits.get(&n)
                 && self.usage.per_app_secs.get(&n).copied().unwrap_or(0) >= lim as u64 * 60
             {
                 actions.push(RuleAction::Kill(p.pid));
+                announce_once(
+                    &mut self.announced,
+                    &mut actions,
+                    &n,
+                    p,
+                    StopReason::AppLimit { limit_mins: lim },
+                );
                 continue;
             }
-            if group_over.contains(&n) {
+            if let Some((group, limit)) = group_over.get(&n) {
                 actions.push(RuleAction::Kill(p.pid));
+                announce_once(
+                    &mut self.announced,
+                    &mut actions,
+                    &n,
+                    p,
+                    StopReason::GroupPool {
+                        group: group.clone(),
+                        limit_mins: *limit,
+                    },
+                );
             }
         }
 
@@ -964,6 +1110,31 @@ pub(crate) fn norm(name: &str) -> String {
 /// A card, not a report: the daily rollup keeps everything, and this is the "what has he been on
 /// this afternoon" glance. Ten rows is more than a parent reads standing in a kitchen, and it bounds
 /// a payload polled every sixty seconds by every open dashboard.
+/// Queue an [`AppStopped`](RuleAction::AppStopped) the first time `key` is stopped today.
+///
+/// Split out rather than inlined at the three kill sites so the once-per-day rule has one home.
+/// It had to be applied identically in three places that already differ in how they *decide* to
+/// kill, and three copies of a de-duplication check is how two of them end up subtly different —
+/// which here would mean a child nagged twice for one app, or told nothing for another.
+///
+/// `key` is the normalised name (what the rules match on) and `proc` supplies the display name
+/// (what the child recognises); mixing those up would either announce `Minecraft.exe` and
+/// `minecraft.exe` separately, or show the child a lowercased name they never typed.
+fn announce_once(
+    announced: &mut BTreeSet<String>,
+    actions: &mut Vec<RuleAction>,
+    key: &str,
+    proc: &RunningProcess,
+    reason: StopReason,
+) {
+    if announced.insert(key.to_string()) {
+        actions.push(RuleAction::AppStopped {
+            app: proc.name.clone(),
+            reason,
+        });
+    }
+}
+
 const TOP_TODAY: usize = 10;
 
 /// How much accrued use makes "no focus data at all" evidence of a dead watcher rather than a quiet
@@ -1359,6 +1530,30 @@ pub async fn run_rules_enforcer(
                         Err(e) => tracing::error!(error = %e, "budget shutdown task panicked"),
                     }
                 }
+                RuleAction::AppStopped { app, reason } => {
+                    let msg = with_hint(app_stopped_message(&app, &reason, lang), hint.as_deref());
+                    let notified = notify_child(&control, &msg, lang).await;
+                    // Recorded whether or not the notice was delivered, and that is the one place
+                    // this deliberately differs from `TimeWarning` above.
+                    //
+                    // A countdown the OS refused is a countdown that did not happen — logging it
+                    // would tell a parent the child was warned when they were not, which is why
+                    // that arm records only on delivery. An app being *killed* happened either
+                    // way: the window closed, the child saw it close, and the parent's question
+                    // is "did my rule fire", not "was a popup shown". So the line goes in
+                    // regardless and carries `notified`, which answers the second question
+                    // without letting it swallow the first.
+                    usage_log.record(
+                        "app_stopped",
+                        serde_json::json!({
+                            "app": app,
+                            "reason": reason.tag(),
+                            "limit_mins": reason.limit_mins(),
+                            "group": reason.group(),
+                            "notified": notified,
+                        }),
+                    );
+                }
                 RuleAction::Warn => has_warn = true,
                 RuleAction::LockWarning => {
                     notify_child(
@@ -1589,6 +1784,36 @@ fn limit_reached_message(lang: Language) -> &'static str {
     }
 }
 
+/// What the child is told when a rule closes an app. Child-facing.
+///
+/// Names the app in every variant, because the whole defect this closes is a window disappearing
+/// with nothing to attach the cause to. The `GroupPool` wording leads with the **group** and
+/// mentions the app second, mirroring where the limit actually lives.
+///
+/// A function per the convention `tests/translated_strings.rs` enforces: the two strings that were
+/// never translated in this crate were the two built as bare literals, so the function is not
+/// ceremony — it is the thing that makes the Dutch version exist and stay tested.
+fn app_stopped_message(app: &str, reason: &StopReason, lang: Language) -> String {
+    match (lang, reason) {
+        (Language::En, StopReason::Blocked) => format!("{app} is blocked, so it was closed."),
+        (Language::En, StopReason::AppLimit { limit_mins }) => {
+            format!("{app} has used its {limit_mins} minutes for today, so it was closed.")
+        }
+        (Language::En, StopReason::GroupPool { group, limit_mins }) => {
+            format!("{group} has used its {limit_mins} minutes for today, so {app} was closed.")
+        }
+        (Language::Nl, StopReason::Blocked) => {
+            format!("{app} is geblokkeerd en is daarom gesloten.")
+        }
+        (Language::Nl, StopReason::AppLimit { limit_mins }) => {
+            format!("{app} heeft de {limit_mins} minuten voor vandaag opgebruikt en is gesloten.")
+        }
+        (Language::Nl, StopReason::GroupPool { group, limit_mins }) => format!(
+            "{group} heeft de {limit_mins} minuten voor vandaag opgebruikt, dus {app} is gesloten."
+        ),
+    }
+}
+
 /// The reason Windows shows in its own shutdown dialog when the budget runs out. Child-facing.
 ///
 /// A function rather than the literal it replaced, which is the whole point: every other string
@@ -1646,6 +1871,15 @@ mod tests {
         RunningProcess {
             pid,
             name: name.into(),
+        }
+    }
+
+    /// The announcement that now accompanies a kill. Spelled once so the five call sites below
+    /// read as "kill, and tell them why" rather than as struct literals.
+    fn stopped(app: &str, reason: StopReason) -> RuleAction {
+        RuleAction::AppStopped {
+            app: app.into(),
+            reason,
         }
     }
 
@@ -2183,7 +2417,7 @@ mod tests {
             for (name, secs) in focus {
                 usage.foreground_secs.insert((*name).to_string(), *secs);
             }
-            today_summary(&rules, day, 0, &usage, Some(1))
+            today_summary(&rules, day, 0, &usage, Some(1), None)
         };
 
         assert_eq!(
@@ -2221,7 +2455,7 @@ mod tests {
         usage.foreground_secs.insert("roblox.exe".into(), 1_800);
         usage.page_secs.insert("Roblox".into(), 900);
 
-        let s = today_summary(&rules, day, 0, &usage, Some(1));
+        let s = today_summary(&rules, day, 0, &usage, Some(1), None);
 
         assert_eq!(s["focused"][0]["name"], "roblox.exe");
         assert_eq!(s["focused"][0]["minutes"], 30);
@@ -2661,11 +2895,30 @@ mod tests {
         assert!(e.decide(&rules, &procs, tk(now, 0)).is_empty());
         // Second 30s tick reaches the 60s pool → both members killed.
         let a = e.decide(&rules, &procs, tk(now, 0));
-        assert_eq!(a, vec![RuleAction::Kill(10), RuleAction::Kill(11)]);
+        let pool = || StopReason::GroupPool {
+            group: "Games".into(),
+            limit_mins: 1,
+        };
+        assert_eq!(
+            a,
+            vec![
+                RuleAction::Kill(10),
+                stopped("minecraft.exe", pool()),
+                RuleAction::Kill(11),
+                stopped("roblox.exe", pool()),
+            ],
+            "each member is closed and each is told, naming the GROUP whose pool ran out — the \
+             limit is not on either app, so naming the app would send a parent looking for a \
+             setting that does not exist"
+        );
         // A non-member is untouched.
         let with_other = [proc(10, "minecraft.exe"), proc(12, "notepad.exe")];
         let a2 = e.decide(&rules, &with_other, tk(now, 0));
-        assert_eq!(a2, vec![RuleAction::Kill(10)]);
+        assert_eq!(
+            a2,
+            vec![RuleAction::Kill(10)],
+            "minecraft was announced on the previous tick, so it is not announced again today"
+        );
     }
 
     #[test]
@@ -2683,7 +2936,19 @@ mod tests {
         let now = Instant::now();
         e.decide(&rules, &[proc(1, "a.exe")], tk(now, 0)); // 30s on a
         let a = e.decide(&rules, &[proc(2, "b.exe")], tk(now, 0)); // 30s on b → pool spent
-        assert_eq!(a, vec![RuleAction::Kill(2)]);
+        assert_eq!(
+            a,
+            vec![
+                RuleAction::Kill(2),
+                stopped(
+                    "b.exe",
+                    StopReason::GroupPool {
+                        group: "Games".into(),
+                        limit_mins: 1
+                    }
+                )
+            ]
+        );
     }
 
     /// Everything `has_targets` calls "nothing configured" must also be unable to act.
@@ -2850,7 +3115,14 @@ mod tests {
         let mut e = RulesEnforcer::new(Usage::default());
         let procs = [proc(10, "game.exe"), proc(11, "notepad.exe")];
         let actions = e.decide(&rules, &procs, tk(Instant::now(), 0));
-        assert_eq!(actions, vec![RuleAction::Kill(10)]);
+        assert_eq!(
+            actions,
+            vec![
+                RuleAction::Kill(10),
+                stopped("game.exe", StopReason::Blocked)
+            ],
+            "a blocked app is closed AND the child is told which app and why"
+        );
     }
 
     #[test]
@@ -2866,7 +3138,23 @@ mod tests {
         let a1 = e.decide(&rules, &procs, tk(now, 0));
         assert!(a1.is_empty(), "30s in, under the limit");
         let a2 = e.decide(&rules, &procs, tk(now, 0));
-        assert_eq!(a2, vec![RuleAction::Kill(10)]);
+        assert_eq!(
+            a2,
+            vec![
+                RuleAction::Kill(10),
+                stopped("game.exe", StopReason::AppLimit { limit_mins: 1 })
+            ],
+            "the notice carries the limit that fired, so the child is told a number they can \
+             recognise rather than only that something closed"
+        );
+
+        // The third tick still kills — the app is still over — but says nothing more.
+        let a3 = e.decide(&rules, &procs, tk(now, 0));
+        assert_eq!(
+            a3,
+            vec![RuleAction::Kill(10)],
+            "announced once per day: a relaunch loop must not be a way to raise dialogs"
+        );
     }
 
     /// Collect the advance warnings emitted over `ticks` ticks of `rules`.
@@ -2957,6 +3245,173 @@ mod tests {
                 "{lang:?}: asking cannot help once the curfew window is open"
             );
         }
+    }
+
+    /// The dashboard is told the verdict, not just the number — and the verdict is the server's.
+    ///
+    /// The client must not own the threshold. `RENEW_WARN_DAYS` already has three readers in this
+    /// crate and `O72` records a fourth in another repository reading it out of this source with
+    /// `sed`; a hard-coded `30` in `app.js` would be a fifth, in the one place nobody would think
+    /// to grep. Sending `cert_expiring` means the browser compares nothing.
+    ///
+    /// The boundary is asserted rather than a comfortable middle value, because the off-by-one
+    /// between `doctor` and the startup log — the defect `cert::renewal_due` was extracted to fix
+    /// — lived on exactly this day and nowhere else.
+    #[test]
+    fn the_dashboard_is_told_whether_the_certificate_is_due_for_renewal() {
+        let rules = Rules::default();
+        let usage = Usage::default();
+        let verdict = |days: Option<u64>| {
+            let s = today_summary(&rules, day(), 0, &usage, None, days);
+            (s["cert_days_left"].clone(), s["cert_expiring"].clone())
+        };
+
+        let warn_days = crate::cert::RENEW_WARN_DAYS;
+        assert_eq!(verdict(Some(warn_days + 1)).1, serde_json::json!(false));
+        assert_eq!(
+            verdict(Some(warn_days)).1,
+            serde_json::json!(true),
+            "the boundary day is inside the window — this is the exact day on which `doctor` and \
+             the service log used to disagree"
+        );
+        assert_eq!(
+            verdict(Some(0)).1,
+            serde_json::json!(true),
+            "already expired"
+        );
+
+        let (days, expiring) = verdict(None);
+        assert_eq!(
+            days,
+            serde_json::json!(null),
+            "an unreadable certificate is `null`, never a number — a client cannot be allowed to \
+             render an invented figure as reassurance"
+        );
+        assert_eq!(
+            expiring,
+            serde_json::json!(false),
+            "and unknown is not an alarm: a missing cert file is `doctor`'s problem to report, \
+             not a banner telling a parent their certificate is lapsing when nobody measured it"
+        );
+    }
+
+    /// Every reason an app can be stopped for says something, in every language, and names the
+    /// thing the child needs in order to act on it.
+    ///
+    /// Walks `Language::ALL` and all three variants, so the matrix cannot be added to on one axis
+    /// without the other — a fourth `StopReason` fails here on the day it lands, and so does a
+    /// third language. That is the whole reason this crate builds child-facing text in functions
+    /// rather than inline: the two strings it ever shipped untranslated were the two written as
+    /// bare literals, because a literal has nothing to walk.
+    ///
+    /// Pins what survives rewording rather than the wording: the app is named, the number is
+    /// named where there is one, the group leads where a group is what ran out, and no two
+    /// languages agree — a copy-pasted English arm being the likely mistake and an invisible one.
+    #[test]
+    fn every_reason_an_app_was_closed_is_explained_in_every_language() {
+        let reasons = [
+            StopReason::Blocked,
+            StopReason::AppLimit { limit_mins: 40 },
+            StopReason::GroupPool {
+                group: "Games".into(),
+                limit_mins: 90,
+            },
+        ];
+
+        for reason in &reasons {
+            let said: Vec<String> = Language::ALL
+                .iter()
+                .map(|&l| app_stopped_message("Minecraft.exe", reason, l))
+                .collect();
+
+            for (lang, text) in Language::ALL.iter().zip(&said) {
+                assert!(
+                    text.contains("Minecraft.exe"),
+                    "{lang:?}/{reason:?}: the notice must name the app, or it explains nothing \
+                     about the window that just vanished: {text}"
+                );
+                if let Some(mins) = reason.limit_mins() {
+                    assert!(
+                        text.contains(&mins.to_string()),
+                        "{lang:?}/{reason:?}: the limit that fired is the number the child can \
+                         recognise and ask about: {text}"
+                    );
+                }
+                if let Some(group) = reason.group() {
+                    assert!(
+                        text.starts_with(group),
+                        "{lang:?}/{reason:?}: a spent POOL is not a property of the app — leading \
+                         with the app sends a parent looking for a per-app limit that does not \
+                         exist: {text}"
+                    );
+                }
+            }
+
+            let mut unique = said.clone();
+            unique.sort();
+            unique.dedup();
+            assert_eq!(
+                unique.len(),
+                said.len(),
+                "{reason:?}: two languages produced the same sentence, so one was never \
+                 translated: {said:?}"
+            );
+        }
+
+        // Anti-tautology: the loop above is vacuous if the variant list ever shrinks to one, and
+        // the three-variant shape is the thing `StopReason` exists for.
+        assert_eq!(
+            reasons.len(),
+            3,
+            "a StopReason variant was added or removed without this"
+        );
+    }
+
+    /// The announcement retires with the day, not with the process.
+    ///
+    /// The once-per-day rule is keyed on a set that `decide` clears, and the clear has to happen
+    /// **before** `accrue` — which is what performs the rollover and stamps the new day. Read it
+    /// afterwards and the comparison is today-against-today, which never fires: every app would
+    /// then be announced once per *service lifetime*, so a child who hit a limit on Monday would
+    /// be silently killed for the rest of the week.
+    #[test]
+    fn a_new_day_earns_a_fresh_explanation() {
+        let rules = Rules {
+            blocklist: vec!["game.exe".into()],
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "game.exe")];
+        let now = Instant::now();
+
+        let mut t = tk(now, 0);
+        t.today = day();
+        assert_eq!(
+            e.decide(&rules, &procs, t),
+            vec![
+                RuleAction::Kill(10),
+                stopped("game.exe", StopReason::Blocked)
+            ]
+        );
+
+        let mut same_day = tk(now, 0);
+        same_day.today = day();
+        assert_eq!(
+            e.decide(&rules, &procs, same_day),
+            vec![RuleAction::Kill(10)],
+            "still the same day: no second notice"
+        );
+
+        let mut tomorrow = tk(now, 0);
+        tomorrow.today = day().succ_opt().unwrap();
+        assert_eq!(
+            e.decide(&rules, &procs, tomorrow),
+            vec![
+                RuleAction::Kill(10),
+                stopped("game.exe", StopReason::Blocked)
+            ],
+            "a new day explains itself again — the rule still applies and they are owed the reason"
+        );
     }
 
     /// The other half of that rule, and the reason it is scoped to "window open" rather than
@@ -3292,7 +3747,13 @@ mod tests {
         let mut e = RulesEnforcer::new(Usage::default());
         let procs = [proc(10, "game.exe")];
         let actions = e.decide(&rules, &procs, tk_active(Instant::now(), 0, false));
-        assert_eq!(actions, vec![RuleAction::Kill(10)]);
+        assert_eq!(
+            actions,
+            vec![
+                RuleAction::Kill(10),
+                stopped("game.exe", StopReason::Blocked)
+            ]
+        );
     }
 
     #[test]
@@ -3334,7 +3795,7 @@ mod tests {
             ..Default::default()
         };
 
-        let s = today_summary(&rules, day(), 0, &usage, Some(1));
+        let s = today_summary(&rules, day(), 0, &usage, Some(1), None);
         let per_app = s["per_app"].as_array().unwrap();
 
         assert_eq!(
@@ -3362,7 +3823,7 @@ mod tests {
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
-        let s = today_summary(&rules, day(), 30, &usage, Some(12));
+        let s = today_summary(&rules, day(), 30, &usage, Some(12), None);
         assert_eq!(s["budget_mins"], 150);
         assert_eq!(s["used_mins"], 47);
         assert_eq!(s["remaining_mins"], 103);
@@ -3387,7 +3848,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(12));
+        let s = today_summary(&rules, day(), 0, &usage, Some(12), None);
         assert_eq!(s["budget_mins"], 0);
         assert_eq!(s["used_mins"], 90);
         assert!(s["remaining_mins"].is_null());
@@ -3406,7 +3867,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
         };
-        let s = today_summary(&rules, day(), 30, &usage, Some(12)); // 30 granted, but base is 0
+        let s = today_summary(&rules, day(), 30, &usage, Some(12), None); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
         assert!(s["remaining_mins"].is_null());
     }
@@ -3426,7 +3887,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(12));
+        let s = today_summary(&rules, day(), 0, &usage, Some(12), None);
         assert_eq!(s["budget_mins"], 90);
         assert_eq!(s["remaining_mins"], 60);
     }
@@ -3450,13 +3911,13 @@ mod tests {
             page_secs: Default::default(),
         };
 
-        let fresh = today_summary(&rules, day(), 0, &usage, Some(7));
+        let fresh = today_summary(&rules, day(), 0, &usage, Some(7), None);
         assert_eq!(fresh["enforcer_age_secs"], 7);
 
-        let stale = today_summary(&rules, day(), 0, &usage, Some(3600));
+        let stale = today_summary(&rules, day(), 0, &usage, Some(3600), None);
         assert_eq!(stale["enforcer_age_secs"], 3600);
 
-        let never = today_summary(&rules, day(), 0, &usage, None);
+        let never = today_summary(&rules, day(), 0, &usage, None, None);
         assert!(
             never["enforcer_age_secs"].is_null(),
             "a never-reported enforcer must surface as null, not as a healthy-looking zero"

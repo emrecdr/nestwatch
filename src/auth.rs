@@ -231,6 +231,28 @@ pub fn describe_mismatch(first: &str, second: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Hash a plaintext password into a PHC string for storage (used at install time).
+/// Hash a password with Argon2id at the library defaults.
+///
+/// # The defaults are the policy, and that was checked rather than assumed
+///
+/// `Argon2::default()` is Argon2id, `m = 19456 KiB (19 MiB)`, `t = 2`, `p = 1`, 32-byte output —
+/// read out of `argon2 0.5.3`'s `Params::DEFAULT` rather than inferred. That is **exactly** OWASP's
+/// current minimum configuration in the Password Storage Cheat Sheet, whose two sanctioned options
+/// are `m=19456, t=2, p=1` and `m=47104, t=1, p=1`. So this needs no tuning today; what it needs is
+/// for the next person to know it is a deliberate match and not an untouched default.
+///
+/// # Raising it later is safe, and this is the non-obvious part
+///
+/// Verification does **not** use these parameters. `password-hash`'s blanket `PasswordVerifier`
+/// impl calls `T::Params::try_from(hash)`, so it re-derives from the parameters stored in the PHC
+/// string itself. Raising the cost here therefore cannot lock out an existing install — old hashes
+/// keep verifying at the strength they were made with.
+///
+/// The flip side is the thing to remember: there is **no rehash-on-login**, so an install created
+/// today would keep a 19 MiB hash forever after a future bump, with nothing on screen saying so.
+/// Not implemented, deliberately — it would put a config write on the login path to buy nothing
+/// while the parameters sit at policy. If they are ever raised, that is the moment to add it, and
+/// this paragraph is why.
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
     use argon2::password_hash::SaltString;
     use argon2::password_hash::rand_core::OsRng;

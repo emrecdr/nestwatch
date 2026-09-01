@@ -198,6 +198,13 @@
                 <span :class="glanceClass(glanceEnforcement().tone)" x-text="glanceEnforcement().text"></span>
                 <span :class="glanceClass(glanceToday().tone)" x-text="glanceToday().text"></span>
                 <span :class="glanceClass(glanceRequests().tone)" x-text="glanceRequests().text"></span>
+                <!-- Absent until the certificate is actually near lapsing, so this row keeps
+                     answering "what needs me" rather than growing a permanent fourth fact that is
+                     true for 795 of the certificate's 825 days.
+                     The threshold is the SERVER's: `cert_expiring` arrives already decided, so no
+                     copy of `RENEW_WARN_DAYS` lives in this file. -->
+                <span x-show="certExpiring" x-cloak
+                      :class="glanceClass(glanceCert().tone)" x-text="glanceCert().text"></span>
               </div>
             </div>
           </section>
@@ -1414,6 +1421,48 @@
               <p class="mt-2 text-xs opacity-60" x-show="childLanguage === null">
                 Couldn't read the current setting.
               </p>
+            </div>
+          </details>
+
+          <!-- Settings backup & restore.
+               Last in the settings tail and collapsed, because it is a once-a-year action. It is
+               here at all because until now there was NO way to keep a setup: /api/export carries
+               history only, config.json sits in an ACL-locked folder reachable from an elevated
+               console on the PC, and `uninstall --purge` deletes it for good. Rebuilding the PC
+               meant re-entering every window, limit, group and routine by hand. -->
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Settings backup</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <p class="text-sm opacity-70">
+                Your curfew, limits, app rules, routines and your child's language, as a file you
+                can keep. It holds no password and nothing about this machine, so restoring it onto
+                a different PC is safe.
+              </p>
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <!-- A plain link, like the history download: the response carries
+                     `Content-Disposition: attachment`, so the cookie rides along on a same-origin
+                     navigation and there is no JavaScript that can fail silently. -->
+                <a class="btn btn-sm btn-ghost" href="/api/policy" download
+                   title="Download your curfew, limits, rules and routines as a JSON file">Download settings</a>
+                <input type="file" accept="application/json,.json"
+                       class="file-input file-input-sm"
+                       aria-label="Choose a settings file to restore"
+                       @change="pickPolicyFile($event)" />
+                <button class="btn btn-sm" :disabled="!policyFile || restoringPolicy"
+                        @click="restorePolicy()">
+                  <span x-show="restoringPolicy" class="loading loading-spinner loading-xs"></span>
+                  Restore
+                </button>
+              </div>
+              <p class="mt-2 text-xs opacity-70">
+                Restoring replaces your curfew, limits, rules and routines. It never changes your
+                password, the port, or the trusted clock.
+              </p>
+              <p class="mt-1 text-sm" role="status" aria-live="polite" aria-atomic="true"
+                 x-show="policyMsg" x-cloak x-text="policyMsg"></p>
             </div>
           </details>
 
