@@ -257,6 +257,15 @@ pub async fn serve_with_handle(
 /// constructs its builder as `Builder::new(TokioExecutor::new())` and never calls `.timer(..)`,
 /// so the default resolved to nothing and every connection had **no read timeout at all**.
 ///
+/// **Why it survived is the asymmetry one arm further down `Time::check`.** A `Dur::Default` with
+/// no timer warns and returns `None`; a `Dur::Configured` with no timer **panics**. So a maintainer
+/// who had ever written the value out explicitly would have crashed on the first connection and
+/// found this immediately. Inheriting it silently is the only way to hold this bug. Verified in
+/// `hyper 1.10.1`, the version this lockfile pins — and it is the **only** `Dur::Default` in
+/// hyper's server code, so nothing else was ever going to close these connections either.
+/// (Both facts from an independent read by the concurrent session on this repo, which reached the
+/// same conclusion from the dependency sources while this was being measured over a socket.)
+///
 /// Measured before writing this, against the real binary on a scratch data dir rather than
 /// reasoned about. A connection that completed the TLS handshake and then sent **zero bytes**,
 /// and one that sent `GET / HTTP/1.1\r\nHost: …\r\n` and then stopped mid-header, were both still

@@ -1381,6 +1381,25 @@ leak that nothing reclaims. One machine's worth of ephemeral ports (~16k on Wind
 dynamic range) is roughly 690 MB, held for as long as the attacker cares to hold it. Enforcement is
 unaffected either way — both enforcers are separate tasks that touch no HTTP.
 
+**Independently confirmed, and two facts worth keeping.** The concurrent session on this repo read
+the dependency sources while the above was being measured over a socket, and reached the same
+conclusion. Two things it added:
+
+* `Time::check` **panics** for a `Dur::Configured` with no timer, and merely warns for a
+  `Dur::Default`. So anyone who had ever written the value out explicitly would have crashed on the
+  first connection. Inheriting it silently is the only way to hold this bug — which is why it
+  survived in a crate whose defaults are otherwise well travelled.
+* It is the **only** `Dur::Default` in hyper's server code, so there was no idle or keep-alive
+  default hiding behind it. Nothing else was ever going to close these connections.
+* `hyper` emits `timeout header_read_timeout has default, but no timer set` at WARN on the affected
+  path. If the service's `tracing` filter admits hyper at WARN, that string in a real log is a
+  zero-cost confirmation that the condition is live in a shipped binary.
+
+**And the hole is two holes, not one.** `axum-server`'s accept loop spawns a task per connection
+with no semaphore, permit or limit of any kind. So a first-byte deadline alone is a slower
+exhaustion rather than a closed door, and a connection cap alone is a permanent one — current
+practice bounds both, because either alone is bypassable.
+
 **Two candidate fixes, neither taken.**
 
 * **A first-byte deadline on the accepted stream** — an `Accept` wrapper whose `AsyncRead` fails
