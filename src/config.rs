@@ -88,6 +88,16 @@ pub struct Config {
     /// Extra minutes granted to *today's* budget (via an approved time request).
     #[serde(default)]
     pub extra: DailyGrant,
+    /// The local day each non-`parent` grant source last granted, so an earned
+    /// bonus (a phone pushing "practice done") lands **once per source per
+    /// day** — judged against *this* machine's trusted clock, never a day the
+    /// pushing device computed, for the same reason [`crate::clock`] exists.
+    ///
+    /// Self-pruning: the grant handler drops entries for other days before
+    /// inserting, so the map never outgrows one day's sources. `parent` is
+    /// deliberately absent — a human pressing the button twice means it twice.
+    #[serde(default)]
+    pub earned: std::collections::BTreeMap<String, NaiveDate>,
     /// Saved rule presets the parent can switch between (Homework / Bedtime / Weekend …).
     #[serde(default)]
     pub routines: Vec<Routine>,

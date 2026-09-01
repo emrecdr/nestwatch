@@ -6,6 +6,19 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ### Added
 
+- **Another app can now grant earned bonus time — once a day, honestly labelled.** "Add bonus
+  time today" grants exactly as it always did, and pressing it twice still means it twice. What is
+  new is that a *named* caller — a companion app pushing "today's practice is done" over the same
+  authenticated LAN API the dashboard uses — is treated as what it is: a robot whose reason for
+  granting is true all day once it is true at all. Its grant lands **once per source per day**,
+  judged by this machine's own tamper-anchored clock rather than any day the pushing device
+  claims, and the latch survives a service restart. The audit line names the source instead of
+  recording a robot as `"parent"`, so your log stays a record of who actually did what. A retried
+  push whose reply was lost (phone schedulers are killed mid-flight routinely) can carry an
+  `Idempotency-Key` and receive its original answer instead of a second grant — the standard
+  header, doing the standard thing. Nothing here knows what "practice" is: the next source (a
+  chores app, a reading log) is a name, not a server change. Nothing new listens, nothing dials
+  out, and a household that never points an app at this endpoint sees no change at all.
 - **Your child is now told which rule closed their app, and you can see that it fired.** A blocked
   app, one over its own daily limit, and one in a group whose shared pool ran out were all closed
   the same way: the window vanished on the next thirty-second check, with nothing said to the child

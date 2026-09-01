@@ -569,6 +569,33 @@ pub async fn export(State(state): State<AppState>) -> Result<Response, AppError>
 #[derive(Deserialize)]
 pub struct ExtraTimeBody {
     minutes: u32,
+    /// Who is granting. Absent means the parent pressed the dashboard button;
+    /// a robot names itself (`studygo`) so the audit log stays honest.
+    #[serde(default)]
+    source: Option<String>,
+}
+
+/// Longest accepted `source` token.
+const MAX_SOURCE_LEN: usize = 32;
+
+/// Most distinct non-`parent` sources that may grant on one day. Bounds
+/// [`Config::earned`], which lives in the persisted config: a compromised
+/// parent session must not be able to grow that file without limit.
+const MAX_EARNED_SOURCES: usize = 16;
+
+/// Is `source` an acceptable grant-source token?
+///
+/// A bounded lowercase token rather than an enum, so the server stays ignorant
+/// of what pushes to it — the next signal source (a chores app, a reading log)
+/// costs no server change. The charset matters because the value is written
+/// verbatim into the audit log: nothing here can fake a line break, a quote,
+/// or a look-alike of another event's fields.
+fn valid_source(source: &str) -> bool {
+    !source.is_empty()
+        && source.len() <= MAX_SOURCE_LEN
+        && source
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
 }
 
 /// `POST /api/curfew/extend` → push tonight's bedtime back by `minutes`, once.
@@ -723,30 +750,118 @@ async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<
     })
 }
 
-/// `POST /api/extra-time` → grant bonus minutes to today's budget directly, parent-initiated
-/// (no child request needed). Uses the exact same `DailyGrant` mechanism as approving a time
-/// request, so a mid-day reboot keeps the grant and it resets tomorrow.
+/// `POST /api/extra-time` → grant bonus minutes to today's budget directly (no child request
+/// needed). Uses the exact same `DailyGrant` mechanism as approving a time request, so a mid-day
+/// reboot keeps the grant and it resets tomorrow.
+///
+/// Two callers, told apart by `source`. Absent (the dashboard) means the parent pressed the
+/// button, and pressing it twice means it twice — no dedup. A named source (`studygo`) is a
+/// robot pushing an *earned* grant after a practice sync, and a robot's decision input —
+/// "the threshold was crossed today" — is true all day once it is true at all, so its grant
+/// lands **once per source per day**, latched against this machine's trusted clock. The day
+/// the phone believes in is never consulted: the *Change the time zone* right is a
+/// standard-user privilege, which is the whole reason [`crate::clock`] exists.
+///
+/// An `Idempotency-Key` header (IETF HTTPAPI draft semantics) additionally lets a retry whose
+/// response was lost — a phone scheduler killed between the write and the reply — receive its
+/// original outcome. The header is the courtesy; the day latch is the authority. See
+/// [`crate::idempotency`].
 pub async fn extra_time(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<ExtraTimeBody>,
 ) -> Result<Json<Value>, AppError> {
     require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
+    let source = body.source.unwrap_or_else(|| "parent".into());
+    if !valid_source(&source) {
+        return Err(AppError::BadRequest(
+            "source must be 1-32 characters of a-z, 0-9, _ or -".into(),
+        ));
+    }
+    let replay_key = match headers.get("idempotency-key") {
+        None => None,
+        Some(value) => {
+            let key = value
+                .to_str()
+                .map_err(|_| AppError::BadRequest("idempotency key is not ASCII".into()))?;
+            if key.is_empty() || key.len() > crate::idempotency::MAX_KEY_LEN {
+                return Err(AppError::BadRequest(
+                    "idempotency key must be 1-128 characters".into(),
+                ));
+            }
+            Some(key.to_owned())
+        }
+    };
+    if let Some(key) = &replay_key {
+        let stored = recover_lock(&state.grant_replays).replay(key, std::time::Instant::now());
+        if let Some(response) = stored {
+            // The retry of a request that already ran: hand back what it got, do nothing again.
+            return Ok(Json(response));
+        }
+    }
+
     let today = crate::config::today();
     let minutes = body.minutes;
-    update_config(&state, |c| c.extra.add(today, minutes)).await?;
-    state.audit.record(
-        "extra_time_granted",
-        json!({ "minutes": minutes, "source": "parent" }),
-    );
-    state.usage.record(
-        "extra_time_granted",
-        json!({ "minutes": minutes, "source": "parent" }),
-    );
-    // A second dashboard, or the same parent's other device, is showing a budget that just moved.
-    notify(&state, "usage");
-    Ok(Json(
-        json!({ "ok": true, "minutes": minutes, "curfew_note": grant_shadowed_by_curfew(&state, minutes) }),
-    ))
+    let robot = source != "parent";
+    // Checked and latched inside the one place config is mutated, so two concurrent grants from
+    // the same source serialize on `config_save_lock` and the second sees the first's latch.
+    let mut granted = true;
+    {
+        let source = source.clone();
+        try_update_config(&state, |c| {
+            if robot {
+                if c.earned.get(&source) == Some(&today) {
+                    granted = false;
+                    return Ok(());
+                }
+                if c.earned.values().filter(|day| **day == today).count() >= MAX_EARNED_SOURCES {
+                    return Err(AppError::BadRequest(
+                        "too many earned-time sources today".into(),
+                    ));
+                }
+                c.earned.retain(|_, day| *day == today);
+                c.earned.insert(source, today);
+            }
+            c.extra.add(today, minutes);
+            Ok(())
+        })
+        .await?;
+    }
+
+    let response = if granted {
+        state.audit.record(
+            "extra_time_granted",
+            json!({ "minutes": minutes, "source": source }),
+        );
+        state.usage.record(
+            "extra_time_granted",
+            json!({ "minutes": minutes, "source": source }),
+        );
+        // A second dashboard, or the same parent's other device, is showing a budget that just
+        // moved.
+        notify(&state, "usage");
+        json!({ "ok": true, "minutes": minutes, "curfew_note": grant_shadowed_by_curfew(&state, minutes) })
+    } else {
+        // Not audited: with a valid session this outcome is free to trigger repeatedly, and it
+        // records nothing a reader of the *grant* line does not already know. Same reasoning as
+        // the rate-limited branch of `login` — the fifth site of that defect class.
+        json!({ "ok": false, "reason": "already_granted_today" })
+    };
+    if let Some(key) = replay_key {
+        recover_lock(&state.grant_replays).record(key, response.clone(), std::time::Instant::now());
+    }
+    Ok(Json(response))
+}
+
+/// Lock a std mutex, recovering from a poisoned one.
+///
+/// The same posture as [`crate::state::recover_read`]: a panic in another handler must not
+/// permanently disable grants, and the cache's worst corrupt state costs a replay, never a
+/// double grant — the persisted day latch holds regardless.
+fn recover_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the

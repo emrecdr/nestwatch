@@ -47,6 +47,7 @@ pub mod error;
 pub mod foreground;
 pub mod heartbeat;
 pub mod helper;
+pub mod idempotency;
 pub mod install;
 pub mod jsonl;
 pub mod pairing;

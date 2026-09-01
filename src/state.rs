@@ -29,6 +29,11 @@ pub struct AppState {
     /// Serializes login attempts so limiter check + verify + record is atomic, and only one
     /// (memory-hard) Argon2 verification runs at a time.
     pub login_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Replay cache for `Idempotency-Key` on the bonus-time grant, so a phone
+    /// retrying a lost response gets its original outcome instead of granting
+    /// twice. A std mutex, not tokio: every hold is a map lookup or insert,
+    /// never across an await.
+    pub grant_replays: Arc<std::sync::Mutex<crate::idempotency::IdempotencyCache>>,
     /// Serializes `api::update_config` so mutate-then-persist is one critical section.
     ///
     /// The `config` lock above cannot do this job: it is a std `RwLock`, so it must be released
@@ -106,6 +111,9 @@ impl AppState {
             config: Arc::new(RwLock::new(config)),
             limiter: Arc::new(LoginLimiter::default()),
             login_lock: Arc::new(tokio::sync::Mutex::new(())),
+            grant_replays: Arc::new(std::sync::Mutex::new(
+                crate::idempotency::IdempotencyCache::default(),
+            )),
             config_save_lock: Arc::new(tokio::sync::Mutex::new(())),
             audit,
             live_audit: Arc::new(crate::audit::LiveViewAudit::default()),
