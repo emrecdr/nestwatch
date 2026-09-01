@@ -324,6 +324,14 @@ open the door on its own.
 the parent can reach the dashboard from a phone without typing an IP address or a passphrase.
 This is deliberately a **password bypass**, so it's bounded tightly:
 
+- **Drawn from the OS.** `token::random` fills its bytes with `getrandom`, which on Windows 10 and
+  later is `ProcessPrng` — Microsoft's documented primary interface to the user-mode per-processor
+  PRNGs. Named here because every bound below is only as good as this: the 80-bit claim, the
+  single-use rule and the rate limit all assume the token was unguessable to begin with. Failure of
+  that source is treated as fatal rather than fallen back from, since the fallback would be a
+  predictable token. (Until the `argon2 0.6` upgrade this came through
+  `argon2::password_hash::rand_core` — the same OS generator, reached via the deprecated
+  `RtlGenRandom` wrapper, three crates from anything that documented a backend.)
 - **Single-use.** Redeeming unlinks the token file; `remove_file` is the atomic step, so of two
   concurrent scans exactly one can win.
 - **Short-lived.** 15 minutes, then it's refused *and* deleted.

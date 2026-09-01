@@ -13,10 +13,30 @@
 pub(crate) const ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 /// A fresh cryptographically-random token of `len` characters (5 bits of entropy each).
+///
+/// **Panics if the OS random source fails**, which is deliberate and is what the previous
+/// `OsRng::fill_bytes` did too. The two callers mint a pairing token that authenticates a device
+/// and a time code that buys screen time; carrying on with predictable bytes would hand the child
+/// both. There is no safe fallback here, so there is no fallback.
+///
+/// # What this actually calls on Windows, and why the change was an upgrade
+///
+/// `getrandom` is named directly rather than reached through `argon2::password_hash::rand_core`,
+/// which is how the secrets on the managed PC used to be drawn — a re-export of a re-export of a
+/// password-hashing crate, three crates away from anything that documents a backend.
+///
+/// On Windows 10 and later, `getrandom 0.4` calls **`ProcessPrng`**, which Microsoft's own RNG
+/// whitepaper calls the primary interface to the user-mode per-processor PRNGs, and which needs
+/// only `bcryptprimitives.dll`. The old path (`rand_core 0.6` → `getrandom 0.2`) used
+/// `RtlGenRandom` — deprecated, reached through `advapi32.dll` under the undecorated name
+/// `SystemFunction036`, and itself a thin wrapper around `ProcessPrng`. So this is one fewer DLL,
+/// one fewer deprecated entry point, and the same bytes from the same generator.
+///
+/// The floor is Windows 10, and this crate's floor is 1903 (see `preflight`), so nothing is lost
+/// on any machine this tool supports.
 pub fn random(len: usize) -> String {
-    use argon2::password_hash::rand_core::{OsRng, RngCore};
     let mut bytes = vec![0u8; len];
-    OsRng.fill_bytes(&mut bytes);
+    getrandom::fill(&mut bytes).expect("the OS random source must be available");
     bytes
         .iter()
         .map(|b| ALPHABET[*b as usize % ALPHABET.len()] as char)

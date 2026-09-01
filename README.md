@@ -227,6 +227,26 @@ machine. It opens with seven checks that take about fifteen minutes and are wort
 rest of the list combined — several things here (the screen helper, the ACLs, the firewall rule,
 the origin check in a real browser) can only be verified there.
 
+### If you forget the password
+
+There is no reset link and no recovery email — there is no account and no vendor, which is the
+point. **The way back in is to run `install` again** from an elevated console on the child's PC:
+
+```powershell
+.\nestwatch.exe install     # sets a new password; keeps everything else
+```
+
+Your curfew, screen-time rules, app limits, routines and granted extra time are all preserved
+(`install` merges over the existing settings), and the TLS certificate is reused as long as it
+still covers the machine — so **devices you have already paired will not warn again**, and you do
+not need to re-pair them. Only the password changes.
+
+Two things worth knowing before you need this. It requires being **at the PC, with an
+administrator account** — so it is not something you can do from a hotel. And you will hardly ever
+type this password, because signed-in devices stay signed in for 30 days of inactivity: that is
+convenient, and it is exactly why the password is easy to forget. Put it in a password manager at
+install time.
+
 ## Command reference
 
 ```powershell
@@ -246,6 +266,11 @@ nestwatch.exe remote-setup # print a script that enables remote admin (--off to 
 #                     where nobody is at the console to answer the prompt)
 #   --reset-config    replace an unreadable config.json (install refuses otherwise, rather
 #                     than silently resetting your curfew, rules and routines)
+#   --new-cert        reissue the TLS certificate. Normally unnecessary: install reuses the
+#                     existing one whenever it still covers this machine, precisely so a
+#                     routine upgrade does NOT make every paired device warn again. Reach
+#                     for this when the PC's addresses have changed, or when you want a
+#                     fresh key — and expect to accept the warning once more on each device.
 ```
 
 - **`install` checks everything first.** Before it changes anything — and before it asks for a
@@ -391,8 +416,19 @@ weighed and declined — so neither has to be rediscovered.
   exactly like a child who used no browser, rather than like a feature that did not start. Nothing
   else is affected. Screen-time totals, curfew, and every limit work as they always have; this part
   only measures.
-- **A phone app** — not built. The dashboard is a web page, and on a phone it stays one.
-  **[docs/MOBILE-APP.md](docs/MOBILE-APP.md)** records what a native app would and wouldn't buy:
-  it would remove the certificate warning, it could not notify you while you're away from home
-  (that needs a cloud service this design refuses), and it would mean a second interface to keep
-  in step with the first, forever.
+- **Notifications while you're away from home** — not possible here, and structurally rather than
+  for want of work: a notification that reaches you outside the house needs a server outside the
+  house, which is the one thing this design refuses. The dashboard is a web page and on a phone it
+  stays one.
+  <br>**A native client does exist**, and this section used to say it didn't.
+  [nestwatch-mobile](https://github.com/emrecdr/nestwatch-mobile) is a Flutter app for Android and
+  iOS that **pins this install's certificate** rather than asking you to click through a browser
+  warning. Calibrate it honestly: it is a completed walking skeleton, each step proven against a
+  live server, with an installable APK and a CI job that runs this repo's golden-file contract
+  against it — but **no tagged release**. Buildable, not shipped. What a native client buys and
+  what it cannot is **[docs/MOBILE-APP.md](docs/MOBILE-APP.md)**; the cost it does carry is a
+  second interface to keep in step with this one, forever.
+  <br>Worth knowing before reading the security model, because one decision there depends on it:
+  `security::require_same_origin` deliberately declines OWASP's recommendation to fail closed when
+  a request carries neither `Origin` nor fetch metadata — **that client is one of those requests**.
+  Read as "there is no app", the exemption looks like it protects nothing but `curl`.

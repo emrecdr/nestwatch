@@ -555,6 +555,27 @@ fn offer_fixes(findings: &[crate::preflight::Finding], assume_yes: bool) -> Resu
 /// rule cannot resolve that, and a message carrying the count resolves it immediately.
 fn prompt_for_password() -> Result<String> {
     const TRIES: u32 = 5;
+
+    // Said *before* the prompt, not after, because it changes how the password is chosen.
+    //
+    // There is no reset link, no recovery email and no vendor to ring — those all need an account
+    // and a cloud, which this tool does not have. That is the intended trade, but it interacts
+    // badly with something the parent will not notice for a month: sessions persist for 30 days of
+    // inactivity, so after this install they will essentially never type this again. A secret you
+    // choose once and then never rehearse is a secret you forget, and the first time you find out
+    // is when you are holding a phone that no longer has the cookie.
+    //
+    // The way back exists and is cheap — this same command, which preserves curfew, rules,
+    // routines and the certificate — but it needs an elevated console *on this PC*, which is
+    // exactly what a parent away from home does not have. Better to spend three lines here.
+    println!(
+        "\nThis password cannot be reset remotely. There is no account behind it and no recovery\n\
+         email. If it is lost, the way back in is to run `install` again from an elevated console\n\
+         on this PC — your curfew, rules, routines and certificate all survive that.\n\
+         You will rarely type it (signed-in devices stay signed in), so put it in a password\n\
+         manager now rather than trusting memory.\n"
+    );
+
     for attempt in 1..=TRIES {
         let pw = rpassword::prompt_password("Set a control password: ")?;
         let confirm = rpassword::prompt_password("Confirm password:      ")?;

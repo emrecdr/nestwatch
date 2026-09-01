@@ -236,7 +236,7 @@ pub fn describe_mismatch(first: &str, second: &str) -> String {
 /// # The defaults are the policy, and that was checked rather than assumed
 ///
 /// `Argon2::default()` is Argon2id, `m = 19456 KiB (19 MiB)`, `t = 2`, `p = 1`, 32-byte output —
-/// read out of `argon2 0.5.3`'s `Params::DEFAULT` rather than inferred. That is **exactly** OWASP's
+/// read out of `argon2 0.6.0`'s `Params::DEFAULT` rather than inferred. That is **exactly** OWASP's
 /// current minimum configuration in the Password Storage Cheat Sheet, whose two sanctioned options
 /// are `m=19456, t=2, p=1` and `m=47104, t=1, p=1`. So this needs no tuning today; what it needs is
 /// for the next person to know it is a deliberate match and not an untouched default.
@@ -253,14 +253,22 @@ pub fn describe_mismatch(first: &str, second: &str) -> String {
 /// Not implemented, deliberately — it would put a config write on the login path to buy nothing
 /// while the parameters sit at policy. If they are ever raised, that is the moment to add it, and
 /// this paragraph is why.
+///
+/// # The salt is no longer this function's business
+///
+/// `password-hash 0.6` moved salt generation inside `hash_password`, which now draws
+/// `RECOMMENDED_SALT_LEN` bytes straight from `getrandom` and returns an error if the OS random
+/// source fails. That is **16 bytes — byte-for-byte what the old `SaltString::generate(&mut
+/// OsRng)` produced**, checked rather than assumed, so nothing about the stored hash got weaker
+/// when the two lines above it disappeared.
+///
+/// It is also one less thing to hold right: a caller can no longer pass a reused, short, or
+/// non-random salt, because there is nowhere left to pass one.
 pub fn hash_password(password: &str) -> anyhow::Result<String> {
-    use argon2::password_hash::SaltString;
-    use argon2::password_hash::rand_core::OsRng;
     use argon2::{Argon2, PasswordHasher};
 
-    let salt = SaltString::generate(&mut OsRng);
     let hash = Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password(password.as_bytes())
         .map_err(|e| anyhow::anyhow!("failed to hash password: {e}"))?;
     Ok(hash.to_string())
 }
@@ -704,6 +712,47 @@ mod tests {
         let hash = hash_password("s3cret-pw").unwrap();
         assert!(verify_password("s3cret-pw", &hash));
         assert!(!verify_password("wrong", &hash));
+    }
+
+    /// A password hashed by the **previous** Argon2 release still opens the dashboard.
+    ///
+    /// This is the one test in the crate whose absence would have been catastrophic rather than
+    /// merely bad. `password_hash` is written once, at `install`, and never rewritten — there is
+    /// no rehash-on-login (see [`hash_password`]) and, more to the point, **no password reset that
+    /// does not require elevated physical access to the child's PC**. A verifier that quietly
+    /// stopped accepting existing hashes would lock every parent out of their own install, and the
+    /// round-trip test above cannot see it: that one hashes and verifies with the same build, so it
+    /// passes just as happily if both halves changed together.
+    ///
+    /// The literal below is therefore not a fixture to regenerate. It was produced by
+    /// `argon2 0.5.3` — the version shipped through v0.5.1 — and must keep verifying under every
+    /// version after it. If a future bump breaks this, the bump is wrong, not the constant.
+    ///
+    /// The parameters embedded in it are also the assertion that OWASP's floor did not move
+    /// underneath us: `m=19456,t=2,p=1` is what [`hash_password`]'s docs claim, read out of the
+    /// string a real install would hold.
+    #[test]
+    fn a_password_hashed_by_the_previous_argon2_release_still_verifies() {
+        const FROM_0_5_3: &str = "$argon2id$v=19$m=19456,t=2,p=1$\
+             7Itvk+mWceKLAFADi8WW3Q$cNMAgu1uAtY8lx2dXmbutZxoqWyhiIuNbn06lvqUdZI";
+
+        assert!(
+            verify_password("correct horse battery staple", FROM_0_5_3),
+            "a hash written by argon2 0.5.3 no longer verifies — every existing install is \
+             locked out, and the only way back in is an elevated console on the managed PC"
+        );
+        assert!(
+            !verify_password("wrong", FROM_0_5_3),
+            "the legacy hash accepted a password it should have refused"
+        );
+
+        // The current build must still *write* what it claims to write, or the constant above
+        // stops describing new installs and this test slowly becomes archaeology.
+        let fresh = hash_password("correct horse battery staple").unwrap();
+        assert!(
+            fresh.contains("$argon2id$v=19$m=19456,t=2,p=1$"),
+            "fresh hashes no longer carry OWASP's minimum parameters: {fresh}"
+        );
     }
 
     #[test]

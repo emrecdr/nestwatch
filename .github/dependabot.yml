@@ -30,15 +30,40 @@ updates:
       prefix: "ci"
 
   # Rust. Grouped: this is a single-maintainer tool, and one PR per patch bump across ~40 crates
-  # is noise that trains you to merge without reading. Majors stay separate — those are the ones
-  # worth reading, and axum/rustls/tokio majors have real migration cost here.
+  # is noise that trains you to merge without reading.
+  #
+  # **Two groups, not one, because cargo and Dependabot disagree about what "minor" means.**
+  # Dependabot classifies `update-types` on the literal version number with no special rule for
+  # `0.x`, so `0.5.3 -> 0.6.0` is a *minor* update. In cargo it is a **breaking** one: `"0.5"`
+  # resolves `>=0.5.0, <0.6.0`. That matters more here than in most repos — 24 of the ~28 direct
+  # dependencies are `0.x`, including every crate holding the security boundary. A single
+  # `minor-and-patch` group therefore swallowed rustls 0.23->0.24, axum 0.8->0.9, argon2 0.5->0.6
+  # and tower-sessions 0.15->0.16 into the PR whose whole purpose is being safe to skim. The three
+  # crates the old comment named as needing real reading — axum, rustls, tokio — were two-thirds
+  # unprotected by the rule written to protect them.
+  #
+  # Splitting on the axis Dependabot *can* express gets the risk classes apart without bringing
+  # back one-PR-per-crate:
+  #
+  #   patch  -> genuinely safe to skim; a 0.x patch is a patch in cargo too.
+  #   minor  -> its own PR, because for a 0.x crate this is the breaking one. Still grouped, so
+  #             it stays a single weekly PR, but it arrives labelled as the one to actually read.
+  #   major  -> ungrouped, individual PRs, as before.
+  #
+  # CI is the backstop for anything that fails to compile. It is not a backstop for a bump that
+  # compiles and changes behaviour — rustls cipher-suite defaults, tower-sessions cookie
+  # attributes, sysinfo refresh semantics — which is exactly the shape a 0.x minor takes.
   - package-ecosystem: cargo
     directory: "/"
     schedule:
       interval: weekly
     groups:
-      minor-and-patch:
-        update-types: [minor, patch]
+      patch:
+        update-types: [patch]
+      # "may be" rather than "is": a minor bump of a 1.x crate (tokio, serde, anyhow) really is
+      # non-breaking. The name has to cover both, because it lands in the branch and PR title.
+      minor-may-be-breaking:
+        update-types: [minor]
     commit-message:
       prefix: "deps"
 

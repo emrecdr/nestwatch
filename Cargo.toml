@@ -47,7 +47,17 @@ dbg_macro = "deny"
 
 [dependencies]
 anyhow = "1.0.103"
-argon2 = "0.5"
+# Argon2id for the parent's password. On 0.6 rather than 0.5 so this crate sits on ONE generation
+# of RustCrypto: 0.5 pulls `password-hash 0.5` → `digest 0.10`, while `sha2` is already on
+# `digest 0.11`, so both were compiled in — along with two `block-buffer`s and two
+# `crypto-common`s. 0.6 pulls `blake2 0.11` → `digest 0.11` and the duplicates collapse.
+#
+# The migration was verified before it was made, because getting it wrong locks every parent out
+# of their own dashboard and there is no reset: a PHC string produced by 0.5.3 was verified under
+# 0.6.0 (accepts the right password, rejects the wrong one), and 0.6's `Params::DEFAULT` is still
+# `m=19456, t=2, p=1` — the OWASP floor `auth::hash_password` documents. `auth.rs` carries the
+# regression test that keeps that true.
+argon2 = "0.6"
 # tower-sessions declares `SessionStore` with `#[async_trait]`, so our file-backed store has to
 # be annotated the same way. Already in the graph via tower-sessions — no new crate.
 async-trait = "0.1"
@@ -108,10 +118,15 @@ pem = "4"
 # transitive dependencies — we only use the built-in unicode half-block renderer.
 qrcode = { version = "0.14", default-features = false }
 rpassword = "7.5.4"
-# Not imported directly (we reach it via `argon2::password_hash::rand_core`) — this entry exists
-# to turn ON its `getrandom` feature, which is what makes `OsRng` available at all. Removing it
-# breaks password hashing and time-code generation. `cargo machete` flags it as unused; it isn't.
-rand_core = { version = "0.6", features = ["getrandom"] }
+# The OS random source for `token::random` — pairing tokens and redeemable time codes.
+#
+# This replaces a `rand_core = "0.6"` entry that was never imported directly: the crate reached
+# `OsRng` through `argon2::password_hash::rand_core`, so raw randomness for the two secrets a
+# child could otherwise guess arrived as a re-export of a re-export of a password-hashing crate.
+# `argon2 0.6` does not enable `rand_core` by default and moved to `rand_core 0.10`, which ends
+# that path — and naming the source directly is the better answer anyway. Already in the graph
+# via `password-hash`, so this declaration adds no package.
+getrandom = "0.4"
 rust-embed = { version = "8", features = ["mime-guess"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.228", features = ["derive"] }

@@ -25,6 +25,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   you never open and `nestwatch doctor`, which needs an elevated console on the PC. The "at a
   glance" row now says how many days are left for the final thirty of them, and what to do about it
   (re-run `install`). The threshold stays on the server, so the dashboard holds no copy of it.
+- **What to do if you forget the control password.** There is no reset link and no recovery email —
+  there is no account and no vendor, which is the point — and until now there was nowhere that said
+  what to do instead. The README has a section, and `install` says it before asking you to choose:
+  the way back in is to run `install` again from an elevated console on the child's PC, which keeps
+  your curfew, rules, app limits, routines and granted extra time, and reuses the certificate so
+  **devices you have already paired do not warn again**. Only the password changes. The reason this
+  needed saying is a consequence of something otherwise good: signed-in devices stay signed in for
+  30 days of inactivity, so you will hardly ever type this password — which is exactly what makes
+  it easy to forget, and it is not a thing you can fix from a hotel.
 
 ### Fixed
 
@@ -69,6 +78,23 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   certificate's life against the original formula rather than against itself. (The first version of
   that test compared the two new callers with each other, which was a tautology that stayed green
   under the very change it was written to catch; found by mutating it.)
+- **The README said there was no phone app. There is one.** Under "Not included" it read "A phone
+  app — not built", while `docs/MOBILE-APP.md` — linked from the sentence immediately after —
+  records that an Android client exists and pins this install's certificate. It is not only a stale
+  sentence: `security::require_same_origin` deliberately declines OWASP's advice to fail closed
+  when a request carries neither `Origin` nor fetch metadata, **because that client sends neither**,
+  and read against "there is no app" that exemption looks like it protects nothing but `curl`. The
+  section now describes what exists and calibrates it honestly — a completed walking skeleton for
+  Android and iOS with an installable APK and no tagged release, so buildable rather than shipped —
+  and says plainly that notifications reaching you away from home remain impossible here, because
+  they need a server outside the house.
+- **`install --new-cert` worked but was documented nowhere a person looks.** It reissues the TLS
+  certificate, which is what you need after the PC's addresses change; `install` mentioned it only
+  in passing, on one branch, and it appeared in neither `nestwatch --help` nor the README. For a
+  command-line tool the usage message is the last hop outward, so a flag missing from it does not
+  exist as far as anyone is concerned. It is now in both, with the cost stated (every paired device
+  warns once more). A new test ties the option table to the printed usage so the next flag cannot
+  repeat this — two sides of that triangle were already guarded and this was the unguarded one.
 
 ### Security
 
@@ -106,6 +132,25 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   tokens through the shared helper rather than carrying private copies of the reflow rule, which is
   what let three guards drift into failing open on the same day. What is still open is recorded as
   `O79`, and is about how the meta-guard picks files to check rather than about any scan.
+- **The password hasher moved to one generation of its cryptography, and the secrets on the managed
+  PC now name their own random source.** `argon2` was pinned at 0.5, which held an older RustCrypto
+  stack in the binary alongside the current one — two copies each of `digest`, `block-buffer` and
+  `crypto-common`, because `sha2` had already moved on. Upgrading collapses them: duplicate crates
+  drop from 20 to 16 and the graph from 398 to 395.
+  <br>**Verified before it was made, because getting it wrong locks every parent out of their own
+  dashboard** — the hash is written once at `install`, there is no rehash-on-login, and there is no
+  remote reset. A PHC string produced by the previously shipped `argon2 0.5.3` was checked against
+  the new build: it still verifies the right password and still rejects the wrong one, and the
+  defaults are unchanged at `m=19456, t=2, p=1`, OWASP's current minimum. That check now ships as a
+  test carrying the real 0.5.3 hash as a constant, so a future bump that breaks compatibility fails
+  in CI rather than on a locked-out household.
+  <br>Pairing tokens and redeemable time codes previously drew their randomness through
+  `argon2::password_hash::rand_core` — a re-export of a re-export of a password-hashing crate. They
+  now call `getrandom` directly, which on Windows 10 and later means **`ProcessPrng`**, Microsoft's
+  documented primary interface to the per-processor PRNGs. The old path reached the deprecated
+  `RtlGenRandom` through `advapi32.dll`, which is itself a thin wrapper around `ProcessPrng` — so
+  this is the same bytes from the same generator, with one fewer DLL and one fewer deprecated entry
+  point between the child's PC and its secrets.
 
 ### Changed
 
@@ -140,6 +185,25 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   never told the child where to ask — and the same exposure sat unwatched on all the others. The
   test double now records them, and the first end-to-end test of a child-facing message that is not
   a shutdown ships with it.
+- **The weekly build now actually checks the code against today's compiler.** Its comment claimed
+  it already did — that `fmt` and `clippy` ran on a moving `stable`, so a new release's lints would
+  surface on a quiet Monday. They never have. `rust-toolchain.toml` pins 1.96.0, and rustup ranks a
+  toolchain *file* above `rustup default`, which is the only thing the toolchain action sets; the
+  repo's own `build.rs` already said as much ("CI uses 1.96.0"), so two files disagreed and the
+  comment was the wrong one. A separate `stable-lints` job now runs `cargo +stable clippy` — the
+  one override that beats the pin — on the schedule and on demand, blocking, and nowhere else, so a
+  lint shipped this morning cannot fail an unrelated pull request. Measured before adding it:
+  current stable (1.98.0, two releases past the pin) reports zero warnings on this tree, so the
+  gate starts green and earns its keep on the *next* release.
+- **Dependency updates are now grouped by what cargo thinks is breaking, not by what the version
+  number says.** Dependabot classifies `0.5.3 → 0.6.0` as a *minor* update; in cargo it is a
+  breaking one, and **24 of this crate's ~28 direct dependencies are `0.x`**. So the single
+  "minor-and-patch" group — whose entire purpose was to be safe to skim — was swallowing exactly
+  the upgrades worth reading, including rustls, axum, argon2 and tower-sessions. The three crates
+  the old rule named as needing care were two-thirds unprotected by it. Patch updates keep their
+  grouped, skimmable pull request; minor ones now get their own, so the breaking-for-`0.x` class
+  arrives labelled. CI catches what fails to compile; it does not catch a cookie default or a
+  cipher-suite list that changes quietly, which is the shape these take.
 
 ## [0.5.1] — 2026-08-31
 

@@ -386,6 +386,7 @@ USAGE:
                           --port N        listen on a port other than 8443
                           --fix           apply pre-flight fixes without asking
                           --reset-config  replace an unreadable config.json
+                          --new-cert      reissue the TLS cert (devices re-warn)
   nestwatch uninstall     remove the service, firewall rule and files; fails if any
                           remain, naming them (--purge also removes settings + history)
   nestwatch doctor        check the install and report anything wrong
@@ -527,6 +528,79 @@ mod tests {
                  way to discover it is to read the source"
             );
         }
+    }
+
+    /// Every option the table accepts is named in the usage message that `--help` prints.
+    ///
+    /// The third side of a triangle whose other two were already guarded, and the one a flag
+    /// actually fell through. `every_flag_the_code_reads_is_listed_in_the_table` ties the call
+    /// sites to [`accepts`]; `every_helper_flag_is_named_in_the_usage_it_prints` ties `helper`'s
+    /// flags to its own message. Nothing tied [`accepts`] to [`print_usage`] — so a flag could be
+    /// read, accepted, and documented nowhere a person looks.
+    ///
+    /// **`--new-cert` was exactly that.** It reissues the TLS certificate, which is what a parent
+    /// needs after the PC's addresses change; `install` advertises it in passing ("Use
+    /// `--new-cert` to reissue") but only on the branch that reuses an existing certificate. It
+    /// appeared in neither `--help` nor the README. For a CLI the usage message is the last hop
+    /// outward: a flag missing from it does not exist as far as the user is concerned, however
+    /// carefully the table accepts it.
+    #[test]
+    fn every_accepted_option_is_named_in_the_usage_message() {
+        // Read the printed text out of the source, the same way the `run_helper` guard above does
+        // and for the same reason: `print_usage` writes to stdout, which a unit test cannot
+        // capture, and the raw string is the artefact a person actually sees.
+        let text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .expect("reading src/lib.rs")
+        // LF-normalised for the CRLF-checkout reason spelled out on the guard above.
+        .replace("\r\n", "\n");
+        let usage = text
+            .split_once("\nfn print_usage(")
+            .expect("print_usage must exist")
+            .1;
+        let usage = usage
+            .split_once("\n}\n")
+            .expect("print_usage must end")
+            .0
+            // The doc/comment lines inside the function mention flag names in prose. Only the
+            // printed raw string counts, so start at the literal that opens it — otherwise a flag
+            // named solely in a comment would satisfy this test while printing nothing.
+            .split_once("r#\"")
+            .expect("print_usage must print a raw string")
+            .1;
+
+        let mut checked = 0usize;
+        for cmd in [
+            "install",
+            "uninstall",
+            "remote-setup",
+            "run",
+            "doctor",
+            "status",
+            "pair",
+            "fingerprint",
+            "version",
+            "help",
+        ] {
+            let a = accepts(cmd).expect("every user-facing command must be in the table");
+            for flag in a.bare.iter().chain(a.valued) {
+                checked += 1;
+                assert!(
+                    usage.contains(flag),
+                    "`{cmd} {flag}` is accepted but appears nowhere in the usage message, so the \
+                     only way to discover it is to read the source"
+                );
+            }
+        }
+
+        // The scan must actually have found the table. Without this the test passes just as
+        // happily against a `print_usage` that prints nothing and an `accepts` that returns
+        // empty lists — which is the failure mode `O79` records three scanners dying of.
+        assert!(
+            checked >= 6,
+            "only {checked} options were checked — the table scan drifted and proves nothing"
+        );
     }
 
     /// Commands whose arguments this table must not police.

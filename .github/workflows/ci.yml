@@ -13,8 +13,14 @@ on:
   # This is a tool installed on a family PC and left alone for months at a time; without this
   # line the detection window is however long the maintainer goes without pushing.
   #
-  # It also re-runs `fmt` and `clippy`, which use `dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05` — a moving
-  # target. A new stable's lints then surface on a quiet Monday instead of inside an unrelated PR.
+  # It also runs the `stable-lints` job below. That used to be claimed of the ordinary `fmt` and
+  # `clippy` steps, on the grounds that `dtolnay/rust-toolchain` installs a moving `stable` — and
+  # it was false. `rust-toolchain.toml` pins 1.96.0, and rustup ranks a toolchain *file* above
+  # `rustup default`, which is the only thing that action sets (checked against the pinned SHA's
+  # own action.yml: it never sets RUSTUP_TOOLCHAIN and never touches the file). So every cargo
+  # invocation here has always run on 1.96.0, and a new stable's lints have never once surfaced.
+  # `build.rs::warn_on_toolchain_mismatch` already said so — "CI uses 1.96.0" — which means two
+  # files in this repo disagreed and the comment was the wrong one.
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   # So the same checks can be demanded on the spot, without pushing an empty commit.
@@ -111,6 +117,53 @@ jobs:
         env:
           RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
         run: cargo doc --no-deps --document-private-items
+
+  # The moving-target lint check the schedule comment above used to claim for free.
+  #
+  # `cargo +stable` is the one override that beats `rust-toolchain.toml` — rustup ranks an explicit
+  # `+toolchain` above the file — so this is the only way to ask "what does *today's* compiler think
+  # of this code" without unpinning the build everything else depends on.
+  #
+  # **Scheduled and manual only, and BLOCKING when it runs.** Both halves are deliberate. Running it
+  # on every PR would let an unrelated change go red because a new stable shipped a lint that
+  # morning, which is exactly what the pin exists to prevent. Making it advisory would repeat the
+  # mistake this file already records for `cargo audit`: a job that is allowed to fail is a job
+  # nobody reads. On a Monday there is nothing else in flight, so red means "go and look".
+  #
+  # Safe to add as blocking because it was measured first, not assumed: `cargo +1.98.0 clippy
+  # --all-targets` (1.98.0 being current stable, 2026-08-18, two releases past the pin) reports
+  # **zero** warnings on this tree as of 2026-09-01. The pin has cost no lint debt so far; this is
+  # what stops the next two releases' worth from accumulating unseen.
+  #
+  # Linux only. The Windows leg would need NASM and the frontend build to say anything new about
+  # lints, and `test (windows-latest)` already covers the `#[cfg(windows)]` half on the pinned
+  # toolchain. If a stable lint ever fires only on Windows code, this misses it — accepted, because
+  # the alternative is doubling a job that exists to read a warning list.
+  stable-lints:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # `build.rs` fails the build if assets/app.css is missing, so the CSS has to exist even for
+      # a lint-only run.
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      # Not `--locked`: this asks about the compiler, not the dependency graph, and the pinned
+      # jobs above are what hold the lockfile honest.
+      - name: Clippy on today's stable
+        run: cargo +stable clippy --all-targets -- -D warnings
 
   # Supply-chain gate. BLOCKING, with no ignore list.
   #
