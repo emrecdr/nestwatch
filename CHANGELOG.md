@@ -6,6 +6,25 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ### Added
 
+- **A routine can now run itself, so "no games during homework" is a setting instead of a chore.**
+  Routines have always been presets you press. One can now carry a schedule — *16:00 to 18:00,
+  Monday to Friday* — and apply itself while that window is open, handing back to your normal
+  settings when it closes. This is the gap between the two limits that already existed: the daily
+  budget knows *how much* and the curfew knows *when*, but the curfew's only move is to power the
+  PC off, so there was no way to say "block the games for an hour and leave the machine on" without
+  standing over it and pressing Apply twice a day, every day.
+  <br>**Your settings are not overwritten.** A schedule *chooses* which rules are in force at each
+  moment rather than writing over the ones you saved — so your normal rules are still there when
+  the window closes, an edit you make mid-window is not reverted thirty seconds later, and nothing
+  is rewriting `config.json` on a timer. **Pause still beats everything**: an install you paused
+  stays paused inside a scheduled window, because pausing is a promise about the whole enforcer and
+  a schedule is not allowed to break it. Where two windows overlap the routine higher in the list
+  wins, which is the order you see on the card.
+  <br>**Nothing changes for the routines you already have.** They load with no schedule, which
+  means manual-only — exactly what they do today. The card, the child's page and the dashboard all
+  read the same answer to "which rules are in force right now", so the budget shown is always the
+  budget being enforced, and the Today card names the routine that put it there rather than letting
+  a number change at 16:00 for no stated reason.
 - **Integrations: apps that earn screen time, which you install and switch off from the
   dashboard.** The earned-time grant added earlier is now a first-class *provider* — StudyGo is the
   first, and a new Integrations card lists each one with an on/off toggle and the minutes it grants.

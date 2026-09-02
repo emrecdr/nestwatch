@@ -220,17 +220,32 @@ impl Curfew {
                 return Err(format!("invalid end time: {}", self.end));
             }
         } else {
-            for (i, w) in self.windows.iter().enumerate() {
-                if parse_hm(&w.start).is_none() {
-                    return Err(format!("window {}: invalid start time: {}", i + 1, w.start));
-                }
-                if parse_hm(&w.end).is_none() {
-                    return Err(format!("window {}: invalid end time: {}", i + 1, w.end));
-                }
-            }
+            validate_windows(&self.windows)?;
         }
         Ok(())
     }
+}
+
+/// Every window in `windows` names two times this crate can parse.
+///
+/// Extracted from [`Curfew::validate`] when routine schedules gained the same field, so the two
+/// paths that accept a window list from a parent check it the same way. A second copy would be a
+/// second place for "what counts as a valid window" to drift from
+/// [`window_active`], which is the function that has to answer at 22:00 on a Friday.
+///
+/// Note what this does **not** reject: a window whose start equals its end. That is never active
+/// (see [`is_within`]) rather than malformed, and refusing it here would turn a harmless no-op
+/// into an error message on a form the parent is still filling in.
+pub(crate) fn validate_windows(windows: &[Window]) -> Result<(), String> {
+    for (i, w) in windows.iter().enumerate() {
+        if parse_hm(&w.start).is_none() {
+            return Err(format!("window {}: invalid start time: {}", i + 1, w.start));
+        }
+        if parse_hm(&w.end).is_none() {
+            return Err(format!("window {}: invalid end time: {}", i + 1, w.end));
+        }
+    }
+    Ok(())
 }
 
 /// What the enforcer decides to do on a given tick.
@@ -525,7 +540,13 @@ fn parse_hm(s: &str) -> Option<NaiveTime> {
 /// Whether any window covers `now` on `today` — the multi-window evaluator. Pure/testable:
 /// a window matches when its `days` selector includes `today` and `now` is within its
 /// `[start, end)` range. Unparseable times in a window are treated as non-matching (fail-open).
-fn any_window_active(windows: &[Window], now: NaiveTime, today: Weekday) -> bool {
+///
+/// `pub(crate)` for [`crate::config::Config::rules_at`], which asks the same question of a
+/// routine's schedule. Shared rather than reimplemented on purpose: the day-attribution rule in
+/// [`window_active`] took a measured bug to get right, and a second copy would be a second chance
+/// to get it wrong — the objection `O54` raises about duplicated scanners, applied to the one
+/// predicate in this crate a parent's evening actually depends on.
+pub(crate) fn any_window_active(windows: &[Window], now: NaiveTime, today: Weekday) -> bool {
     windows.iter().any(|w| window_active(w, now, today))
 }
 

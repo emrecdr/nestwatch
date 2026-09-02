@@ -1421,6 +1421,32 @@ in the highest-consequence code in the project — the one that decides when a c
 **Trigger.** Any work on `clock.rs`, or the first parent who reports bedtime drifting by exactly an
 hour in summer.
 
+### O83 · The phone app cannot say which routine is running
+
+> **Cross-repo** · pairs with `nestwatch-mobile`
+
+`GET /api/usage/today` now carries `active_routine` — the name of the scheduled routine whose rules
+are in force, or `null` when the base rules are. The dashboard renders it under the budget, because
+a budget that changes at 16:00 with nothing to explain it reads as a defect rather than as a
+setting working.
+
+`nestwatch-mobile` shows the same budget and does not read the field. `UsageToday.fromJson` in
+`lib/src/api/models.dart` takes keys one at a time with null-safe defaults and there is no
+`json_serializable` anywhere, so the addition **cannot break it** — verified by reading, before the
+golden files were regenerated. The gap is display, not compatibility: a parent on the phone sees the
+number change and is told nothing, which is the same quiet failure the dashboard line exists to
+close, on the surface more likely to be checked in a hurry.
+
+Not filed on the other side, and deliberately: that repository was read-only for the session that
+made this change. Whoever picks it up should file the counterpart there and turn this into a proper
+`pairs with <repo>#<ID>` pair.
+
+**Fix.** One nullable field on `UsageToday`, and one line under the figures on the home screen.
+
+**Trigger.** The next change to `nestwatch-mobile`'s home screen, or the first parent who asks why
+the app and the dashboard disagree about how much time is left.
+
+
 ## Not covered by any of this
 
 **None of the above has run on the target machine.** Everything here was found by reading, tests,

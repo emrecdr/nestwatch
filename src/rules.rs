@@ -560,6 +560,7 @@ pub fn today_summary(
     usage: &Usage,
     enforcer_age_secs: Option<i64>,
     cert_days_left: Option<u64>,
+    active_routine: Option<&str>,
 ) -> serde_json::Value {
     let budget = rules.effective_budget_mins(today, extra);
     let used_mins = usage.total_secs / 60;
@@ -611,6 +612,13 @@ pub fn today_summary(
         "cert_days_left": cert_days_left,
         "cert_expiring": cert_days_left.is_some_and(crate::cert::renewal_due),
         "enabled": rules.enabled,
+        // Which scheduled routine put these numbers in force, or `null` when the base rules did.
+        //
+        // Without it the card is a budget that changes at 16:00 for no stated reason, which reads
+        // as a bug in exactly the way an unexplained number always does here. Named rather than
+        // merely flagged, because "a routine is active" does not tell the parent *which* one when
+        // they have Homework and Weekend both scheduled.
+        "active_routine": active_routine,
         "budget_mins": budget,
         "used_mins": used_mins,
         "remaining_mins": remaining_mins,
@@ -1361,8 +1369,13 @@ pub async fn run_rules_enforcer(
         // than a second acquisition later — they feed `ask_hint`, which needs both.
         let (rules, extra, lang, port, curfew_now) = {
             let guard = crate::state::recover_read(&config);
+            // `rules_at`, not `rules`: a routine whose schedule covers this instant is the policy
+            // in force, and this is the tick that enforces it. The trusted clock rather than
+            // `Local::now`, for the reason `Curfew::is_active_now` gives — a schedule is exactly
+            // what shifting the time zone would be used to step outside of.
+            let at = crate::clock::now();
             (
-                guard.rules.clone(),
+                guard.rules_at(at).clone(),
                 guard.extra.for_day(today),
                 guard.language,
                 guard.port,
@@ -2487,7 +2500,7 @@ mod tests {
             for (name, secs) in focus {
                 usage.foreground_secs.insert((*name).to_string(), *secs);
             }
-            today_summary(&rules, day, 0, &usage, Some(1), None)
+            today_summary(&rules, day, 0, &usage, Some(1), None, None)
         };
 
         assert_eq!(
@@ -2525,7 +2538,7 @@ mod tests {
         usage.foreground_secs.insert("roblox.exe".into(), 1_800);
         usage.page_secs.insert("Roblox".into(), 900);
 
-        let s = today_summary(&rules, day, 0, &usage, Some(1), None);
+        let s = today_summary(&rules, day, 0, &usage, Some(1), None, None);
 
         assert_eq!(s["focused"][0]["name"], "roblox.exe");
         assert_eq!(s["focused"][0]["minutes"], 30);
@@ -2928,14 +2941,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(5), None);
+        let s = today_summary(&rules, day(), 0, &usage, Some(5), None, None);
         assert_eq!(s["refused"]["clock_changes"], 2);
         assert_eq!(s["refused"]["shutdown_cancels"], 5);
         // Summed on the server so the client holds no second copy of the arithmetic — the same
         // argument `cert_expiring` makes for shipping the verdict beside the number.
         assert_eq!(s["refused_total"], 7);
 
-        let quiet = today_summary(&rules, day(), 0, &Usage::default(), Some(5), None);
+        let quiet = today_summary(&rules, day(), 0, &Usage::default(), Some(5), None, None);
         assert_eq!(
             quiet["refused_total"], 0,
             "a quiet day must still report the field, as zero"
@@ -3435,7 +3448,7 @@ mod tests {
         let rules = Rules::default();
         let usage = Usage::default();
         let verdict = |days: Option<u64>| {
-            let s = today_summary(&rules, day(), 0, &usage, None, days);
+            let s = today_summary(&rules, day(), 0, &usage, None, days, None);
             (s["cert_days_left"].clone(), s["cert_expiring"].clone())
         };
 
@@ -3968,7 +3981,7 @@ mod tests {
             ..Default::default()
         };
 
-        let s = today_summary(&rules, day(), 0, &usage, Some(1), None);
+        let s = today_summary(&rules, day(), 0, &usage, Some(1), None, None);
         let per_app = s["per_app"].as_array().unwrap();
 
         assert_eq!(
@@ -3997,7 +4010,7 @@ mod tests {
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
-        let s = today_summary(&rules, day(), 30, &usage, Some(12), None);
+        let s = today_summary(&rules, day(), 30, &usage, Some(12), None, None);
         assert_eq!(s["budget_mins"], 150);
         assert_eq!(s["used_mins"], 47);
         assert_eq!(s["remaining_mins"], 103);
@@ -4023,7 +4036,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(12), None);
+        let s = today_summary(&rules, day(), 0, &usage, Some(12), None, None);
         assert_eq!(s["budget_mins"], 0);
         assert_eq!(s["used_mins"], 90);
         assert!(s["remaining_mins"].is_null());
@@ -4043,7 +4056,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
         };
-        let s = today_summary(&rules, day(), 30, &usage, Some(12), None); // 30 granted, but base is 0
+        let s = today_summary(&rules, day(), 30, &usage, Some(12), None, None); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
         assert!(s["remaining_mins"].is_null());
     }
@@ -4064,7 +4077,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(12), None);
+        let s = today_summary(&rules, day(), 0, &usage, Some(12), None, None);
         assert_eq!(s["budget_mins"], 90);
         assert_eq!(s["remaining_mins"], 60);
     }
@@ -4089,13 +4102,13 @@ mod tests {
             refused: Default::default(),
         };
 
-        let fresh = today_summary(&rules, day(), 0, &usage, Some(7), None);
+        let fresh = today_summary(&rules, day(), 0, &usage, Some(7), None, None);
         assert_eq!(fresh["enforcer_age_secs"], 7);
 
-        let stale = today_summary(&rules, day(), 0, &usage, Some(3600), None);
+        let stale = today_summary(&rules, day(), 0, &usage, Some(3600), None, None);
         assert_eq!(stale["enforcer_age_secs"], 3600);
 
-        let never = today_summary(&rules, day(), 0, &usage, None, None);
+        let never = today_summary(&rules, day(), 0, &usage, None, None, None);
         assert!(
             never["enforcer_age_secs"].is_null(),
             "a never-reported enforcer must surface as null, not as a healthy-looking zero"

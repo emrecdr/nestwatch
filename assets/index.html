@@ -531,16 +531,31 @@
                        used, 48 min left") rather than as two orphaned numbers. The progress bar
                        below carries the same summary as an aria-label, but a changed label on a
                        non-live element is not announced — it is read only if focus lands there. -->
-                  <div class="flex justify-between text-sm" aria-live="polite" aria-atomic="true">
-                    <span><span class="font-semibold" x-text="today.used_mins"></span> of
-                      <span x-text="today.budget_mins"></span> min used</span>
-                    <span class="opacity-70"><span x-text="today.remaining_mins"></span> min left<span
-                      x-show="today.extra_mins > 0" x-text="bonusLabel()"></span></span>
+                  <!-- The live region wraps the numbers AND the reason for them.
+                       A scheduled routine changes these figures at 16:00, and with nothing to say
+                       so it reads as a bug in exactly the way an unexplained number always does
+                       here. Sighted parents get the sentence under the bar; putting it inside the
+                       same `aria-atomic` region means a screen reader hears the change and its
+                       cause as one announcement — "30 of 30 min used, 0 min left. Routine Homework
+                       is running now" — instead of a budget that silently halved.
+                       Named rather than merely flagged, because "a routine is running" does not
+                       say *which* when the parent has two scheduled. -->
+                  <div aria-live="polite" aria-atomic="true">
+                    <div class="flex justify-between text-sm">
+                      <span><span class="font-semibold" x-text="today.used_mins"></span> of
+                        <span x-text="today.budget_mins"></span> min used</span>
+                      <span class="opacity-70"><span x-text="today.remaining_mins"></span> min left<span
+                        x-show="today.extra_mins > 0" x-text="bonusLabel()"></span></span>
+                    </div>
+                    <progress class="progress w-full mt-1"
+                              :aria-label="todayBarLabel()"
+                              :class="'progress-' + budgetTone(today.remaining_mins)"
+                              :value="today.used_mins" :max="today.budget_mins"></progress>
+                    <p class="mt-1 text-xs opacity-70" x-show="today.active_routine" x-cloak>
+                      Routine <span class="font-semibold" x-text="today.active_routine"></span> is
+                      running now — these are its settings, not your usual ones.
+                    </p>
                   </div>
-                  <progress class="progress w-full mt-1"
-                            :aria-label="todayBarLabel()"
-                            :class="'progress-' + budgetTone(today.remaining_mins)"
-                            :value="today.used_mins" :max="today.budget_mins"></progress>
                 </div>
               </template>
 
@@ -849,6 +864,14 @@
                 Save the current screen-time settings above as a named preset, then switch with one
                 click (e.g. Homework, Weekend). Applying a routine replaces the live settings.
               </p>
+              <p class="text-sm opacity-70">
+                Give it times and it runs <strong>by itself</strong> while that window is open —
+                "no games 16:00–18:00, Mon–Fri" — then hands back to your normal settings when it
+                closes. Your settings are not overwritten, so they are still there afterwards. A
+                pause always wins, even inside a window, and if two windows overlap the routine
+                higher in this list is the one that applies. Leave the times empty to keep a
+                routine manual, which is what every routine you already have does.
+              </p>
               <div class="mt-1 flex flex-wrap items-end gap-2">
                 <input type="text" x-model="newRoutineName" maxlength="40" placeholder="Homework"
                        aria-label="Name for this routine" class="input input-sm w-48" />
@@ -857,12 +880,41 @@
                   Save current as routine
                 </button>
               </div>
+              <!-- The schedule for the routine being saved. Same controls, same widths and the same
+                   24px day-checkbox target as the curfew windows above — one pattern for "a window
+                   with days", so a parent who has set a bedtime already knows how to read this. -->
+              <div class="mt-2 flex flex-wrap items-end gap-2 rounded-lg bg-base-200 p-2">
+                <label class="flex flex-col">
+                  <span class="mb-1 text-xs">Runs from</span>
+                  <input type="time" x-model="newRoutineWindow.start" class="input input-sm w-24" />
+                </label>
+                <label class="flex flex-col">
+                  <span class="mb-1 text-xs">Until</span>
+                  <input type="time" x-model="newRoutineWindow.end" class="input input-sm w-24" />
+                </label>
+                <div class="flex items-end gap-1">
+                  <template x-for="d in dayOptions" :key="d.key">
+                    <label class="flex w-6 flex-col items-center text-xs">
+                      <span class="opacity-70" x-text="d.short"></span>
+                      <input type="checkbox" class="checkbox checkbox-xs"
+                             :aria-label="d.full" x-model="newRoutineWindow.days[d.key]" />
+                    </label>
+                  </template>
+                </div>
+                <p class="w-full text-xs opacity-60"
+                   x-text="newRoutineWindow.start && newRoutineWindow.end ? windowDayLabel(newRoutineWindow) : 'No times set — this routine stays manual.'"></p>
+              </div>
               <div class="mt-2 flex flex-col gap-1" x-show="routines.length > 0">
-                <template x-for="name in routines" :key="name">
-                  <div class="flex items-center gap-2">
-                    <span class="flex-1 truncate" x-text="name"></span>
-                    <button class="btn btn-success btn-xs" @click="applyRoutine(name)">Apply</button>
-                    <button class="btn btn-ghost btn-xs" @click="deleteRoutine(name)">Delete</button>
+                <template x-for="r in routines" :key="r.name">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="flex-1 truncate" x-text="r.name"></span>
+                    <!-- Which routine is running, decided by the server at one instant, so this
+                         badge and the budget on the Today card cannot disagree at 18:00:00. -->
+                    <span class="badge badge-success badge-sm" x-show="r.active_now">Running now</span>
+                    <span class="text-xs opacity-60" x-show="r.schedule && r.schedule.length > 0"
+                          x-text="routineScheduleLabel(r)"></span>
+                    <button class="btn btn-success btn-xs" @click="applyRoutine(r.name)">Apply</button>
+                    <button class="btn btn-ghost btn-xs" @click="deleteRoutine(r.name)">Delete</button>
                   </div>
                 </template>
               </div>

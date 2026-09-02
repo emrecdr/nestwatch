@@ -213,7 +213,7 @@ fn usage_today() {
         // A certificate with plenty of life left: the client gets the number and a `false`
         // verdict. The threshold itself stays on the server — see `today_summary` on why the
         // verdict is sent rather than the constant.
-        &today_summary(&rules, day, 15, &usage, Some(12), Some(700)),
+        &today_summary(&rules, day, 15, &usage, Some(12), Some(700), None),
     );
 
     // Unlimited budget, no enforcer heartbeat, and long enough use that an empty focus map
@@ -237,7 +237,7 @@ fn usage_today() {
         // …and an unreadable certificate, which is `null` rather than a number, for the same
         // reason this fixture exists at all: absent is not zero, and a client that rendered an
         // invented figure would be reassuring about something nobody measured.
-        &today_summary(&unlimited, day, 0, &unwatched, None, None),
+        &today_summary(&unlimited, day, 0, &unwatched, None, None, None),
     );
 }
 

@@ -2252,3 +2252,82 @@ test("the rows state what the tool did, never what the child intended", () => {
   assert.match(text, /stood/);
   assert.match(text, /re-issued/);
 });
+
+// --- routine schedules -----------------------------------------------------
+//
+// A routine that carries times applies itself while they are open, so these two functions decide
+// what gets sent to the server and what the parent reads back. The half-filled case is the one
+// worth pinning: a parent who types a start and then goes to find the end time must not have a
+// window saved on their behalf.
+
+test("routineScheduleToSave sends nothing until both times are set", () => {
+  // Lengths, not `deepEqual` against a literal built here — `app.js` is evaluated in a `vm` realm,
+  // so an array it creates has a different `Object` and strict deep-equality rejects it however
+  // identical the contents. Same reason as the span tests further down.
+  const win = (start, end) => ({ start, end, days: {} });
+  assert.equal(withState({ newRoutineWindow: win("", "") }).routineScheduleToSave().length, 0);
+  assert.equal(
+    withState({ newRoutineWindow: win("16:00", "") }).routineScheduleToSave().length,
+    0,
+    "a start alone is a parent mid-typing, not a schedule",
+  );
+  assert.equal(
+    withState({ newRoutineWindow: win("", "18:00") }).routineScheduleToSave().length,
+    0,
+    "and neither is an end alone",
+  );
+});
+
+test("routineScheduleToSave sends one window when both times are set", () => {
+  const app = withState({ newRoutineWindow: { start: "16:00", end: "18:00", days: { mon: true } } });
+  const out = app.routineScheduleToSave();
+  assert.equal(out.length, 1);
+  // Spread across the realm boundary before comparing, as the span tests do.
+  assert.deepEqual({ ...out[0], days: { ...out[0].days } }, {
+    start: "16:00",
+    end: "18:00",
+    days: { mon: true },
+  });
+});
+
+test("routineScheduleLabel is empty for a manual routine", () => {
+  const app = withState({});
+  assert.equal(app.routineScheduleLabel({ name: "Weekend" }), "");
+  assert.equal(app.routineScheduleLabel({ name: "Weekend", schedule: [] }), "");
+});
+
+test("routineScheduleLabel names the times and the days", () => {
+  const app = withState({});
+  const label = app.routineScheduleLabel({
+    name: "Homework",
+    schedule: [{ start: "16:00", end: "18:00", days: { mon: true, tue: true } }],
+  });
+  assert.match(label, /16:00–18:00/, "the window is shown as typed");
+  assert.match(label, /Mon, Tue/, "and the days it applies on");
+  assert.doesNotMatch(label, /Applies:/, "the row is a summary, not the editor's sentence");
+});
+
+test("routineScheduleLabel says every day when no day is ticked", () => {
+  // An empty selector means every day on the server (`Days::includes`), so the summary has to say
+  // so — a blank list would read as "no days", which is the opposite of what it does.
+  const app = withState({});
+  const label = app.routineScheduleLabel({
+    name: "Quiet",
+    schedule: [{ start: "20:00", end: "21:00", days: {} }],
+  });
+  assert.match(label, /every day/);
+});
+
+test("routineScheduleLabel accounts for windows the editor cannot show", () => {
+  // The card edits one window; a hand-written config may hold several, and `Config::rules_at`
+  // honours all of them. Reporting only the first would understate what is enforced.
+  const app = withState({});
+  const label = app.routineScheduleLabel({
+    name: "Split",
+    schedule: [
+      { start: "09:00", end: "10:00", days: {} },
+      { start: "16:00", end: "18:00", days: {} },
+    ],
+  });
+  assert.match(label, /\+1 more/);
+});

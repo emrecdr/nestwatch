@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
-use chrono::NaiveDate;
+// `Datelike` is for `at.weekday()` in `scheduled_routine_at`; `Timelike` is not needed because
+// `at.time()` comes from `DateTime` itself.
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::curfew::Curfew;
@@ -63,6 +65,12 @@ impl DailyGrant {
 
 /// Largest number of saved routines we keep (bounds the config).
 pub const MAX_ROUTINES: usize = 20;
+/// Largest number of scheduled windows one routine may carry.
+///
+/// Exists for the same reason [`MAX_ROUTINES`] does — to bound the config file — and the two
+/// multiply, so this is the factor that decides the ceiling. Eight covers a different window on
+/// every weekday with a spare, which is more shape than any real "homework hour" needs.
+pub const MAX_SCHEDULE_WINDOWS: usize = 8;
 /// Longest routine name we accept.
 pub const MAX_ROUTINE_NAME: usize = 40;
 
@@ -72,6 +80,29 @@ pub const MAX_ROUTINE_NAME: usize = 40;
 pub struct Routine {
     pub name: String,
     pub rules: crate::rules::Rules,
+    /// When this routine applies **by itself**, as `[start, end)` windows with a day selector —
+    /// the same [`Window`](crate::curfew::Window) the curfew uses, evaluated by the same
+    /// predicate.
+    ///
+    /// Empty is the default and is what every routine saved before this existed loads as, so a
+    /// routine with no schedule behaves exactly as routines always have: it does nothing until a
+    /// parent presses **Apply**.
+    ///
+    /// # Why a schedule selects rules instead of writing them
+    ///
+    /// The obvious implementation is a timer that calls the same code path as the Apply button.
+    /// It is wrong here in three ways, and all three are quiet. It would overwrite whatever the
+    /// parent had just edited by hand, every thirty seconds, with no way to tell an automatic
+    /// write from a deliberate one. It would write `config.json` and an audit line on a timer,
+    /// which is the property `screenshot_taken` needed a coalescer to fix. And it would destroy
+    /// the base rules, so there would be nothing to go back to when the window closed.
+    ///
+    /// So nothing is written. [`Config::rules_at`] *chooses* which `Rules` are in force at an
+    /// instant, exactly as [`Curfew::is_active_at`](crate::curfew::Curfew::is_active_at) chooses
+    /// whether a window is closed, and `rules` on this struct stays the parent's off-schedule
+    /// default.
+    #[serde(default)]
+    pub schedule: Vec<crate::curfew::Window>,
 }
 
 /// An installed integration that may push earned bonus time.
@@ -347,6 +378,71 @@ impl Policy {
 }
 
 impl Config {
+    /// The rules actually in force at `at` — the base rules, unless a scheduled routine covers
+    /// that instant.
+    ///
+    /// This is the single definition of "which rules apply right now". Every surface that reports
+    /// a limit goes through it, because a dashboard showing the base budget while the enforcer
+    /// counts down a routine's is the failure this codebase keeps meeting: not a wrong number, but
+    /// a true number measuring something other than what the reader assumes.
+    ///
+    /// # Pause wins, and it wins first
+    ///
+    /// A paused install returns the base rules — which carry `enabled = false` — before any
+    /// schedule is consulted, so a window opening cannot quietly restart enforcement the parent
+    /// switched off for the evening. That ordering matches the button's promise ("pause the whole
+    /// rules enforcer with one toggle"), matches [`crate::api::apply_routine`], which has always
+    /// carried the pause state across an Apply rather than letting the routine set it, and matches
+    /// what the parental-control tools families already use do with their own pause controls.
+    ///
+    /// # First match wins
+    ///
+    /// Windows may overlap; the earliest routine in `routines` order wins, which is the order the
+    /// parent sees and controls in the dashboard. A "last match" or "most specific match" rule
+    /// would both need the parent to model something they cannot see on the page.
+    ///
+    /// # Why the borrow is sound
+    ///
+    /// The returned rules are used whole, `enabled` included, so a scheduled routine carrying
+    /// `enabled = false` would silently stand enforcement down. It cannot: `save_routine`
+    /// normalises the flag to `true` on the way in, and a routine's stored `enabled` has never
+    /// meant anything anyway — `apply_routine` overwrites it on every Apply. Routines written
+    /// before that normalisation existed cannot reach this path either, because they have no
+    /// schedule and an empty schedule never matches.
+    pub fn rules_at(&self, at: DateTime<FixedOffset>) -> &crate::rules::Rules {
+        self.scheduled_routine_at(at)
+            .map_or(&self.rules, |r| &r.rules)
+    }
+
+    /// The name of the scheduled routine in force at `at`, if one is.
+    ///
+    /// Split from [`Config::rules_at`] rather than returned alongside it because the enforcer
+    /// wants only the rules and would have to ignore half a tuple on every tick. Both delegate to
+    /// [`Config::scheduled_routine_at`], so they cannot disagree about which routine is active —
+    /// a disagreement that would put a routine's name on the dashboard beside a different
+    /// routine's budget.
+    ///
+    /// Read by `usage_today`, so the card that shows a budget also says what put it there.
+    pub fn active_routine_at(&self, at: DateTime<FixedOffset>) -> Option<&str> {
+        self.scheduled_routine_at(at).map(|r| r.name.as_str())
+    }
+
+    /// The one place a schedule is evaluated. See [`Config::rules_at`] for the two rules it
+    /// encodes — pause first, then first match wins.
+    fn scheduled_routine_at(&self, at: DateTime<FixedOffset>) -> Option<&Routine> {
+        if !self.rules.enabled {
+            return None;
+        }
+        self.routines.iter().find(|r| {
+            // An empty schedule is "manual only" and must never match — `any_window_active` would
+            // already answer `false` for an empty slice, but saying so here is what makes the
+            // legacy-routine argument in `rules_at` true by construction rather than by a
+            // property of another function.
+            !r.schedule.is_empty()
+                && crate::curfew::any_window_active(&r.schedule, at.time(), at.weekday())
+        })
+    }
+
     /// This install's household settings, ready to hand to a parent as a file.
     pub fn policy(&self) -> Policy {
         let mut curfew = self.curfew.clone();
@@ -596,6 +692,173 @@ mod tests {
         assert!(cfg.routines.is_empty());
     }
 
+    /// An instant to ask `rules_at` about. RFC3339 so the offset is explicit — these are
+    /// selection tests, and a test whose answer depended on the machine's zone would be testing
+    /// the wrong thing.
+    fn at(s: &str) -> DateTime<FixedOffset> {
+        DateTime::parse_from_rfc3339(s).expect("test timestamp")
+    }
+
+    /// A routine that applies between `start` and `end` on **every** day.
+    ///
+    /// The day selector is left empty on purpose: `window_active` and its day-attribution rule
+    /// already have a thorough sweep in `curfew.rs`, and repeating it here would test that
+    /// function twice while testing *selection* — which is what these tests are about — once.
+    fn scheduled(name: &str, budget: u32, start: &str, end: &str) -> Routine {
+        Routine {
+            name: name.into(),
+            rules: crate::rules::Rules {
+                daily_budget_mins: budget,
+                ..Default::default()
+            },
+            schedule: vec![crate::curfew::Window {
+                start: start.into(),
+                end: end.into(),
+                days: Default::default(),
+            }],
+        }
+    }
+
+    /// A config whose base budget is 120, plus whatever routines are given.
+    fn with_routines(routines: Vec<Routine>) -> Config {
+        Config {
+            rules: crate::rules::Rules {
+                daily_budget_mins: 120,
+                ..Default::default()
+            },
+            routines,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_scheduled_routine_is_in_force_inside_its_window_and_not_outside_it() {
+        let cfg = with_routines(vec![scheduled("Homework", 30, "16:00", "18:00")]);
+
+        assert_eq!(
+            cfg.rules_at(at("2026-09-02T17:00:00+02:00"))
+                .daily_budget_mins,
+            30,
+            "inside the window the routine's budget is the one in force"
+        );
+        assert_eq!(
+            cfg.active_routine_at(at("2026-09-02T17:00:00+02:00")),
+            Some("Homework")
+        );
+
+        assert_eq!(
+            cfg.rules_at(at("2026-09-02T19:00:00+02:00"))
+                .daily_budget_mins,
+            120,
+            "outside it the base rules are, and nothing has been overwritten to get there"
+        );
+        assert_eq!(cfg.active_routine_at(at("2026-09-02T19:00:00+02:00")), None);
+        // The end is exclusive, like every other window in this crate.
+        assert_eq!(
+            cfg.rules_at(at("2026-09-02T18:00:00+02:00"))
+                .daily_budget_mins,
+            120
+        );
+    }
+
+    /// Pausing is a promise about the whole enforcer, so a window opening must not undo it.
+    ///
+    /// The failure this pins is quiet in the worst way: the parent switches enforcement off for the
+    /// evening, and at 16:00 a schedule switches it back on with a 30-minute budget the child then
+    /// runs out of.
+    #[test]
+    fn pause_beats_a_schedule() {
+        let mut cfg = with_routines(vec![scheduled("Homework", 30, "16:00", "18:00")]);
+        cfg.rules.enabled = false;
+
+        let inside = at("2026-09-02T17:00:00+02:00");
+        assert!(
+            !cfg.rules_at(inside).enabled,
+            "a paused install stays paused inside a scheduled window"
+        );
+        assert_eq!(cfg.rules_at(inside).daily_budget_mins, 120);
+        assert_eq!(
+            cfg.active_routine_at(inside),
+            None,
+            "and the dashboard is not told a routine is running while nothing is enforced"
+        );
+    }
+
+    /// Overlap resolves by list order, which is the order the parent sees on the page.
+    #[test]
+    fn the_first_matching_routine_wins_when_windows_overlap() {
+        let cfg = with_routines(vec![
+            scheduled("Homework", 30, "16:00", "18:00"),
+            scheduled("Quiet", 10, "17:00", "19:00"),
+        ]);
+        let both = at("2026-09-02T17:30:00+02:00");
+        assert_eq!(cfg.rules_at(both).daily_budget_mins, 30);
+        assert_eq!(cfg.active_routine_at(both), Some("Homework"));
+        // …and the second still applies where the first does not reach.
+        let only_second = at("2026-09-02T18:30:00+02:00");
+        assert_eq!(cfg.rules_at(only_second).daily_budget_mins, 10);
+        assert_eq!(cfg.active_routine_at(only_second), Some("Quiet"));
+    }
+
+    /// Every routine saved before schedules existed loads with an empty one, and an empty schedule
+    /// must never match — otherwise upgrading the binary would silently automate presets the
+    /// parent had only ever pressed by hand.
+    #[test]
+    fn a_routine_with_no_schedule_is_never_selected_automatically() {
+        let cfg = with_routines(vec![Routine {
+            name: "Weekend".into(),
+            rules: crate::rules::Rules {
+                daily_budget_mins: 240,
+                ..Default::default()
+            },
+            schedule: Vec::new(),
+        }]);
+        for t in [
+            "2026-09-02T00:00:00+02:00",
+            "2026-09-02T12:00:00+02:00",
+            "2026-09-02T23:59:00+02:00",
+        ] {
+            assert_eq!(cfg.rules_at(at(t)).daily_budget_mins, 120, "at {t}");
+            assert_eq!(cfg.active_routine_at(at(t)), None, "at {t}");
+        }
+    }
+
+    /// The name on the dashboard and the budget being enforced come from the same routine.
+    ///
+    /// They are two public functions, so nothing but this stops them drifting into naming one
+    /// routine while enforcing another — which would be a worse dashboard than showing no name.
+    #[test]
+    fn the_named_routine_is_the_one_whose_rules_are_in_force() {
+        let cfg = with_routines(vec![
+            scheduled("Homework", 30, "16:00", "18:00"),
+            scheduled("Wind down", 45, "20:00", "22:00"),
+        ]);
+        for t in [
+            "2026-09-02T15:00:00+02:00",
+            "2026-09-02T17:00:00+02:00",
+            "2026-09-02T19:00:00+02:00",
+            "2026-09-02T21:00:00+02:00",
+        ] {
+            let instant = at(t);
+            let expected = match cfg.active_routine_at(instant) {
+                Some(name) => {
+                    cfg.routines
+                        .iter()
+                        .find(|r| r.name == name)
+                        .expect("named routine exists")
+                        .rules
+                        .daily_budget_mins
+                }
+                None => cfg.rules.daily_budget_mins,
+            };
+            assert_eq!(
+                cfg.rules_at(instant).daily_budget_mins,
+                expected,
+                "at {t} the named routine and the enforced budget disagree"
+            );
+        }
+    }
+
     #[test]
     fn routines_round_trip_through_json() {
         let cfg = Config {
@@ -605,6 +868,11 @@ mod tests {
                     daily_budget_mins: 30,
                     ..Default::default()
                 },
+                schedule: vec![crate::curfew::Window {
+                    start: "16:00".into(),
+                    end: "18:00".into(),
+                    days: Default::default(),
+                }],
             }],
             ..Default::default()
         };
@@ -613,5 +881,33 @@ mod tests {
         assert_eq!(back.routines.len(), 1);
         assert_eq!(back.routines[0].name, "Homework");
         assert_eq!(back.routines[0].rules.daily_budget_mins, 30);
+        // The schedule has to survive the file, or the automation silently reverts to manual on
+        // the next service restart — which looks exactly like a parent misremembering setting it.
+        assert_eq!(back.routines[0].schedule.len(), 1);
+        assert_eq!(back.routines[0].schedule[0].start, "16:00");
+        assert_eq!(back.routines[0].schedule[0].end, "18:00");
+        assert!(
+            back.rules_at(at("2026-09-02T17:00:00+02:00"))
+                .daily_budget_mins
+                == 30,
+            "a routine reloaded from disk still applies on its schedule"
+        );
+    }
+
+    /// A `config.json` written before schedules existed still loads, with its routines manual.
+    #[test]
+    fn a_routine_without_a_schedule_field_still_loads() {
+        let json = r#"{
+            "port": 8443,
+            "password_hash": "",
+            "routines": [{ "name": "Weekend", "rules": { "daily_budget_mins": 240 } }]
+        }"#;
+        let cfg: Config = serde_json::from_str(json).expect("legacy config must still parse");
+        assert_eq!(cfg.routines.len(), 1);
+        assert!(
+            cfg.routines[0].schedule.is_empty(),
+            "a missing schedule field means manual-only, not a parse error"
+        );
+        assert_eq!(cfg.active_routine_at(at("2026-09-02T17:00:00+02:00")), None);
     }
 }

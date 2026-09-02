@@ -717,13 +717,12 @@ async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<
         .ok()?;
     let (left, budget_action) = {
         let cfg = crate::state::recover_read(&state.config);
-        let left = cfg.rules.budget_cuts_extension_short(
-            today,
-            cfg.extra.for_day(today),
-            &usage,
-            minutes,
-        )?;
-        (left, cfg.rules.budget_action)
+        // Whether a later bedtime is worth granting depends on the budget in force, which a
+        // scheduled routine may have replaced.
+        let rules = cfg.rules_at(crate::clock::now());
+        let left =
+            rules.budget_cuts_extension_short(today, cfg.extra.for_day(today), &usage, minutes)?;
+        (left, rules.budget_action)
     };
     // Exhaustive rather than a `_` fallback. `Warn` cannot reach here — it interrupts nobody, so
     // `budget_cuts_extension_short` filters it — but a wildcard would have silently told a
@@ -953,9 +952,17 @@ pub async fn set_provider(
 /// numbers come from the enforcer's persisted sidecar (up to one 30s tick behind live).
 pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let today = crate::config::today();
-    let (rules, extra) = {
+    // `rules_at`, not `rules`: while a scheduled routine is in force it is that routine's budget
+    // the enforcer counts against, so showing the base one here would put a number on the
+    // dashboard that nothing is enforcing.
+    let (rules, extra, active_routine) = {
         let cfg = crate::state::recover_read(&state.config);
-        (cfg.rules.clone(), cfg.extra.for_day(today))
+        let at = crate::clock::now();
+        (
+            cfg.rules_at(at).clone(),
+            cfg.extra.for_day(today),
+            cfg.active_routine_at(at).map(str::to_string),
+        )
     };
     // One hop to the blocking pool for both file reads, not two. The certificate check is a
     // single `stat` (the mtime proxy `cert::days_until_expiry` uses), so pairing it with the tally
@@ -978,6 +985,7 @@ pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, A
         &usage,
         enforcer_age_secs,
         cert_days_left,
+        active_routine.as_deref(),
     )))
 }
 
@@ -1011,9 +1019,13 @@ pub async fn child_status(
     let (enabled, budget, language) = {
         let cfg = crate::state::recover_read(&state.config);
         let extra = cfg.extra.for_day(today);
+        // The child is told the limit that is actually being enforced right now, for the same
+        // reason the dashboard is. `rules_at` borrows, so this still reads two numbers off the
+        // config without deep-copying the blocklist and app limits.
+        let rules = cfg.rules_at(crate::clock::now());
         (
-            cfg.rules.enabled,
-            cfg.rules.effective_budget_mins(today, extra),
+            rules.enabled,
+            rules.effective_budget_mins(today, extra),
             cfg.language,
         )
     };
@@ -1225,16 +1237,39 @@ pub async fn set_policy(
 pub struct SaveRoutineBody {
     name: String,
     rules: crate::rules::Rules,
+    /// When this routine applies by itself. Absent on requests from any client that predates
+    /// schedules, which `#[serde(default)]` turns into "manual only" — the behaviour those
+    /// clients already expect — rather than a deserialisation error.
+    #[serde(default)]
+    schedule: Vec<crate::curfew::Window>,
 }
 
-/// `GET /api/routines` → the saved routine names (newest-last, as stored).
-pub async fn list_routines(State(state): State<AppState>) -> Json<Vec<String>> {
-    let names = crate::state::recover_read(&state.config)
+/// `GET /api/routines` → the saved routines (newest-last, as stored): name, schedule, and
+/// whether that schedule is what is running right now.
+///
+/// This returned bare names until routines gained schedules. Widening it is safe in a way that
+/// widening `usage/today` was not: the Android client deliberately does not read this endpoint —
+/// `nestwatch-mobile`'s `PLAN.md` §5 keeps rules, routines and curfew in the browser because they
+/// are configuration — and no golden file pins it. The dashboard is the only consumer.
+///
+/// `active_now` is computed here rather than left to the client so that the badge on the card and
+/// the budget on the Today card are answers from the same [`Config::active_routine_at`] call at
+/// the same instant, instead of two clocks that disagree at 18:00:00.
+pub async fn list_routines(State(state): State<AppState>) -> Json<Vec<Value>> {
+    let cfg = crate::state::recover_read(&state.config);
+    let active = cfg.active_routine_at(crate::clock::now());
+    let out = cfg
         .routines
         .iter()
-        .map(|r| r.name.clone())
+        .map(|r| {
+            json!({
+                "name": r.name,
+                "schedule": r.schedule,
+                "active_now": active == Some(r.name.as_str()),
+            })
+        })
         .collect();
-    Json(names)
+    Json(out)
 }
 
 /// `POST /api/routines` → save (upsert) a named preset of the given rules.
@@ -1247,7 +1282,21 @@ pub async fn save_routine(
         return Err(AppError::BadRequest("invalid routine name".into()));
     }
     body.rules.validate().map_err(AppError::BadRequest)?;
-    let rules = body.rules;
+    if body.schedule.len() > crate::config::MAX_SCHEDULE_WINDOWS {
+        return Err(AppError::BadRequest(format!(
+            "a routine may have at most {} scheduled windows",
+            crate::config::MAX_SCHEDULE_WINDOWS
+        )));
+    }
+    crate::curfew::validate_windows(&body.schedule).map_err(AppError::BadRequest)?;
+    let schedule = body.schedule;
+    let mut rules = body.rules;
+    // The pause toggle is never a property of a routine. `apply_routine` has always overwritten
+    // this flag with the live pause state, so whatever a client sends here has never meant
+    // anything — but `Config::rules_at` now hands a scheduled routine's rules straight to the
+    // enforcer, where a stored `false` would stand enforcement down every time the window opened.
+    // Normalising on the way in is what lets that function return a borrow and still be correct.
+    rules.enabled = true;
 
     // Cap check + upsert under a single write guard (no TOCTOU between checking the count and
     // pushing). Updating an existing routine is always allowed; only a brand-new one can hit the
@@ -1255,7 +1304,10 @@ pub async fn save_routine(
     // untouched as `try_update_config` requires.
     try_update_config(&state, |cfg| {
         match cfg.routines.iter_mut().find(|r| r.name == name) {
-            Some(existing) => existing.rules = rules,
+            Some(existing) => {
+                existing.rules = rules;
+                existing.schedule = schedule;
+            }
             None => {
                 if cfg.routines.len() >= crate::config::MAX_ROUTINES {
                     return Err(AppError::BadRequest("too many routines".into()));
@@ -1263,6 +1315,7 @@ pub async fn save_routine(
                 cfg.routines.push(crate::config::Routine {
                     name: name.clone(),
                     rules,
+                    schedule,
                 });
             }
         }

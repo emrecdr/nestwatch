@@ -369,6 +369,13 @@ async fn a_download_and_restore_round_trip_keeps_the_setup() {
             daily_budget_mins: 30,
             ..Default::default()
         },
+        // A scheduled routine, so the backup is proven to carry the schedule too. A restore that
+        // dropped it would rebuild the rules and silently un-automate them.
+        schedule: vec![nestwatch::curfew::Window {
+            start: "16:00".into(),
+            end: "18:00".into(),
+            days: Default::default(),
+        }],
     }];
     let state = state_with(cfg);
     let app = common::app_with(state.clone());
