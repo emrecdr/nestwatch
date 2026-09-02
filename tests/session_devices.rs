@@ -83,6 +83,60 @@ async fn revoke(app: &axum::Router, cookie: &str, handle: &str) -> (StatusCode, 
     )
 }
 
+/// A session stops working once it is old, however much it has been used.
+///
+/// **The idle window cannot express this.** `Expiry::OnInactivity` slides — `require_auth`
+/// refreshes it on activity — so a device opened daily held a session that never expired. OWASP
+/// asks for an absolute timeout alongside the idle one for exactly that reason, and NIST SP
+/// 800-63B caps a single-factor session at 30 days.
+///
+/// The record is aged by hand because the alternative is a test that takes a month. That is also
+/// the honest shape of the thing under test: what `require_auth` reads is a stored `first_seen`,
+/// so a stored `first_seen` is what this moves.
+#[tokio::test]
+async fn a_session_expires_on_age_even_if_it_is_used_every_day() {
+    let tmp = ScratchDir::new("sessage");
+    // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
+    unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
+
+    let state = state_with(test_config());
+    let sessions = state.sessions.clone();
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    // Fresh: works, and would go on working under the idle window alone for as long as it is used.
+    let (status, _) = get_json(&app, &cookie, "/api/sessions").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Age the session past the cap, leaving the *expiry* untouched — an actively used session
+    // always has a future expiry, which is the whole point: only the absolute rule can catch it.
+    let mut record = sessions.snapshot().into_iter().next().expect("one session");
+    let old = tower_sessions::cookie::time::OffsetDateTime::now_utc().unix_timestamp()
+        - (nestwatch::auth::SESSION_MAX_DAYS * 86_400 + 60);
+    let device = record.data.get_mut("device").expect("device record");
+    device["first_seen"] = json!(old);
+    assert!(
+        record.expiry_date > tower_sessions::cookie::time::OffsetDateTime::now_utc(),
+        "the idle window must still be in the future, or this proves nothing"
+    );
+    tower_sessions::SessionStore::save(&sessions, &record)
+        .await
+        .expect("ageing the session");
+
+    let (status, _) = get_json(&app, &cookie, "/api/sessions").await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a session past its absolute age must stop working even though its idle window is still \
+         open — the idle window slides, so on a daily-used device it never closes"
+    );
+    assert!(
+        sessions.snapshot().is_empty(),
+        "and the dead record is dropped, so it stops being re-rejected on every later request \
+         and stops appearing in the Signed-in devices card"
+    );
+}
+
 #[tokio::test]
 async fn devices_are_listed_and_revoked_one_at_a_time() {
     let tmp = ScratchDir::new("sessdev");
