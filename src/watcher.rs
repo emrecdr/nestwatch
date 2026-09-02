@@ -89,17 +89,37 @@ unsafe extern "system" fn on_foreground_change(
     _thread: u32,
     _time: u32,
 ) {
-    // `extern "system"` is a non-unwinding ABI: a panic crossing this boundary aborts the process.
-    // This process is the only thing measuring screen time, and it runs unattended on a child's
-    // PC, so it must not die because a channel misbehaved. None of komorebi, glazewm, screenpipe
-    // or Cobalt guards this; it is cheap and the failure mode is total.
-    let _ = std::panic::catch_unwind(|| {
-        if let Some(tx) = WAKE.get() {
-            // `try_send`, never `send`: the worker may be mid-resolution, and a full channel
-            // already means "there is an unprocessed wake-up", which is all a second one would say.
-            let _ = tx.try_send(());
-        }
-    });
+    // `extern "system"` is a non-unwinding ABI, so a panic reaching this boundary aborts the
+    // process. **The protection is that the body below cannot panic**, not a guard around it.
+    //
+    // This used to wrap the body in `std::panic::catch_unwind`, on the reasoning that this process
+    // is the only thing measuring screen time and must not die because a channel misbehaved. The
+    // intent was right and the mechanism could not deliver it, in two independent ways — both
+    // measured on 2026-09-02 rather than argued:
+    //
+    //  * `[profile.release] panic = "abort"` means there is no unwinding in the shipped binary at
+    //    all, and `catch_unwind` "only catches unwinding panics, not those that abort the process"
+    //    (std docs). Probe: the same closure survives under the dev profile and aborts under
+    //    `--release`. So the guard was inert in the exact build whose failure mode the old comment
+    //    called "total".
+    //  * Worse, it was not inert under `cargo test`, which unwinds. Its one real effect was to let
+    //    the *test* build survive a panic the *shipped* build aborts on — so a panic introduced
+    //    here would have been swallowed by the suite and killed the watcher in the field. A guard
+    //    that suppresses detection where you look and does nothing where it matters is worse than
+    //    no guard.
+    //
+    // What actually makes this survivable is one layer up and works under any panic strategy:
+    // `session::run_watcher_supervisor` respawns the helper with a 5s–30s backoff, and the module
+    // docs above already note that a crash costs at most one `EMIT` interval. Resilience belongs
+    // there, not here.
+    //
+    // Keep this body panic-free. `OnceLock::get` returns `Option` and `SyncSender::try_send`
+    // returns `Result`; neither panics, and nothing that can panic may be added.
+    if let Some(tx) = WAKE.get() {
+        // `try_send`, never `send`: the worker may be mid-resolution, and a full channel
+        // already means "there is an unprocessed wake-up", which is all a second one would say.
+        let _ = tx.try_send(());
+    }
 }
 
 /// Run the watcher until the process is killed. Never returns in normal operation.
