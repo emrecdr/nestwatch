@@ -2,7 +2,7 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
-## [Unreleased]
+## [0.6.0] — 2026-09-02
 
 ### Added
 
