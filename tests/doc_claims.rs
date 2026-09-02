@@ -257,3 +257,59 @@ fn cited_number_before(entry: &str, anchor: &str) -> Option<usize> {
     }
     digits.chars().rev().collect::<String>().parse().ok()
 }
+
+/// The session mutations inside `src/auth.rs`'s `pub async fn name`, in source order.
+///
+/// Bounded by the first line that is exactly `}`, which is the function's own closing brace —
+/// every line of a body is indented, so nothing inside can end the scan early.
+fn session_writes(auth: &str, name: &str) -> Vec<String> {
+    let head = format!("pub async fn {name}(");
+    let start = auth
+        .find(&head)
+        .unwrap_or_else(|| panic!("`{name}` is no longer a `pub async fn` in src/auth.rs"));
+    let body = &auth[start..];
+    let end = body
+        .find("\n}")
+        .unwrap_or_else(|| panic!("`{name}` has no closing brace at column 0"));
+    body[..end]
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("session."))
+        .map(|line| line.split(".await").next().unwrap_or(line).to_owned())
+        .collect()
+}
+
+/// Four documents say a paired device holds exactly the parent's authority. This holds that
+/// sentence to `src/auth.rs` instead of to four people's memories.
+///
+/// `pair`'s own comment calls itself "the same privilege transition as a password login", and
+/// `O89` is filed on the consequence: the phone app that pushes earned time stores the cookie
+/// pairing minted, so the principal that pushes and the principal that configures the registry
+/// are one. That claim is now restated at code-symbol precision in `re_anchor`'s doc comment,
+/// `docs/SECURITY.md`, `docs/PLUGIN-SYSTEM.md` and `O89` — four hand-maintained copies of a fact
+/// about two functions, which is the exact shape this file exists to stop drifting.
+///
+/// **It is written to fire when `O89` is fixed, and that is the point.** Marking a paired session
+/// — `O89`'s candidate 2 — means writing something in `pair` that `login` does not, so this test
+/// goes red on the commit that repairs the finding rather than on some later one. Red here is not
+/// a defect; it is the signal that four documents describing the old behaviour are now stale, and
+/// the message names them.
+#[test]
+fn a_paired_session_still_carries_exactly_what_a_password_login_carries() {
+    let auth = repo("src/auth.rs");
+    let login = session_writes(&auth, "login");
+    let pair = session_writes(&auth, "pair");
+
+    assert!(
+        !login.is_empty(),
+        "no session writes found in `login` — this guard has gone blind rather than passed"
+    );
+    assert_eq!(
+        pair, login,
+        "`pair` and `login` no longer leave the same session state, so a paired device and a \
+         password login are no longer the same principal.\n\nIf this is `O89` being fixed, this \
+         is the commit that has to update the four places stating they are identical: \
+         `api::re_anchor`'s doc comment, the paragraph under `docs/SECURITY.md`'s blast-radius \
+         table, the correction in `docs/PLUGIN-SYSTEM.md`, and `O89` itself."
+    );
+}

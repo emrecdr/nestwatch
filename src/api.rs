@@ -441,12 +441,13 @@ pub async fn set_language(
 /// when a curfew starts behaving oddly a month later.
 ///
 /// **This section was headed "Why it is safe to expose" and said reaching it "costs the parent's
-/// password". Neither is true any more.** It sits behind `require_auth`, which reads exactly one
-/// boolean — `AUTH_KEY` — and `auth::pair` sets that boolean with the same two lines `auth::login`
-/// does. A session is a session; there is no scope on it. Since `0.6.0` a third-party application
-/// holds one: the phone app that pushes earned time keeps the cookie `GET /p/{token}` minted and
-/// replays it, and that device is the child's. So the cost is the parent's password **or** any
-/// paired keychain.
+/// password". Neither is true any more.** A session made by pairing is indistinguishable from one
+/// made by a password; `docs/SECURITY.md` states that mechanism, and
+/// `doc_claims::a_paired_session_still_carries_exactly_what_a_password_login_carries` holds it to
+/// `auth.rs` so this sentence cannot quietly go stale. Since `0.6.0` a third-party application
+/// holds such a session: the phone app that pushes earned time keeps the cookie `GET /p/{token}`
+/// minted and replays it, and that device is the child's. So the cost is the parent's password
+/// **or** any paired keychain.
 ///
 /// "The child's unauthenticated surfaces are a separate router" remains true and was never the
 /// point — their *authenticated* surface is the one that grew. `O89` records the whole shape.

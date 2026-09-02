@@ -154,11 +154,11 @@ the parent set.
 
 **This paragraph used to end "so a phone that is lost, spoofed, or simply buggy cannot choose
 its own reward", and that was wrong.** It is true of the *push*. It is not true of the
-*phone*, because the phone does not have to push. Pairing mints an ordinary session —
-`auth::pair` performs the same two steps as `auth::login`, and `require_auth` reads one
-boolean with no scope on it — so the client holding the pairing cookie can reconfigure the
-provider it is governed by, or grant directly as `source=parent`, which skips the registry
-and the day latch together. Measured: five such requests granted 1200 minutes.
+*phone*, because the phone does not have to push. Pairing mints an ordinary session — the
+mechanism, and what it reaches, are in `docs/SECURITY.md` — so the client holding the pairing
+cookie can reconfigure the provider it is governed by, or grant directly as `source=parent`,
+which skips the registry and the day latch together. Measured: five such requests granted
+1200 minutes.
 
 **The analysis above is the reason the gap existed, and it is worth naming precisely.** Every
 architecture here was weighed on *what a provider runs* — syscalls, egress, in-process

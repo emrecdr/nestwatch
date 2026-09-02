@@ -1659,7 +1659,9 @@ That is also the cheapest available answer to `O23`, which currently has no numb
 
 ### O89 · A paired device holds the parent's whole authority, so the provider registry bounds nothing that matters
 
-> **Cross-repo** · pairs with `studygo` · needs a decision here
+> **Cross-repo** · needs a decision here · counterpart work is in `studygo`, which keeps no
+> findings file — so deliberately no `pairs with` address, which could never resolve and would
+> read to `check_findings.sh` as the other side having shipped
 
 `PLUGIN-SYSTEM.md` chose a declarative provider over a WASM sandbox because a plugin here needs no
 code execution — only a name, a switch and a minutes value. That reasoning is sound and the
@@ -1696,17 +1698,19 @@ and `robot = source != "parent"`, so a client naming itself `parent` skips the r
 `enabled` check, the latch and `MAX_EARNED_SOURCES` together. `MAX_REQUEST_MINUTES` caps one
 request at 240; nothing caps the day.
 
-**Three consequences worth stating separately.**
+**Two consequences worth stating separately.**
 
 - **The audit record fails in the wrong direction.** `83f0ce3` exists to make the audit line name
   the granting source instead of recording a robot as `parent`. A grant sent as `source=parent`
   is written as `{"minutes":240,"source":"parent"}` — so the one record that would reveal this
   says the parent did it themselves.
-- **`re_anchor`'s safety argument was false.** Its doc called reaching it "fatal" if the child
-  could, and rested on `require_auth` meaning "costs the parent's password". Corrected in place.
-- **`SECURITY.md`'s blast-radius row was false.** It said integration minutes are "set here and
-  never by the caller" — true of the endpoint, false of the principal, once the caller and the
-  session holder are one device. Corrected, with the general statement added under the table.
+- **The prose this falsified is already corrected** — `re_anchor`'s "costs the parent's password",
+  `SECURITY.md`'s "never by the caller", and the parent-facing claim in `README.md`,
+  `CHANGELOG.md` and `PLUGIN-SYSTEM.md`. Named only so a triager does not re-check them;
+  `CHANGELOG.md`'s `Unreleased` entry carries that story, and this file does not repeat it.
+  `doc_claims.rs::a_paired_session_still_carries_exactly_what_a_password_login_carries` now holds
+  the remaining claim to `auth.rs`, and **goes red on the commit that fixes this finding** — which
+  is the moment those documents need rewriting.
 
 **Distinct from `O77`.** That entry is about *revoking* a session that leaked; this is about what a
 session **is** — an unscoped grant of everything, issued deliberately to software. `O77`'s

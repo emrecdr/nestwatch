@@ -2,6 +2,11 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+A released entry is normally left alone; `git` holds what it said. The one exception is a
+**safety claim discovered to be false** — that gets corrected in place, quoting the sentence it
+replaces, because a reader meeting it under a released heading has no way to know a later entry
+retracts it. `0.6.0`'s integration note is the first and so far only case.
+
 ## [Unreleased]
 
 ### Security
@@ -14,7 +19,7 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   cookie is not confined to pushing. It can reconfigure what it earns, grant directly, or change
   settings, exactly as you could from the dashboard.
   <br>**Nothing changed in the program here.** This release corrects the claim in three places that
-  a parent reads — the README feature table, the 0.6.0 notes above, and `docs/SECURITY.md`, whose
+  a parent reads — the README feature table, the 0.6.0 notes below, and `docs/SECURITY.md`, whose
   blast-radius table now states plainly that every capability in it is reachable by any paired
   device. `POST /api/re-anchor`'s own note that "reaching it costs the parent's password" is
   corrected too; it costs the password *or* any paired keychain.
@@ -52,7 +57,7 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   Two things matter about where the numbers live. A provider push says only *that* its threshold was
   met; **how many minutes that earns is set here, on this PC, per provider** — so a push claiming 999
   minutes still grants exactly what you configured. (This entry originally said such a phone "cannot
-  choose its own reward". That was too broad and is corrected under *Unreleased* below: it is true of
+  choose its own reward". That was too broad and is corrected under *Unreleased* above: it is true of
   the push, and a paired device has other ways to ask.) And an integration you turn off cannot grant at all, in one
   switch, without unpairing anything. A provider is data you toggle, never code this machine runs or
   a server it reaches out to — the reasoning, and the plugin architectures deliberately *not* taken,

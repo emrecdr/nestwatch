@@ -613,13 +613,18 @@ async fn earned_grants_latch_replay_and_validate() {
         );
         assert_eq!(refused["reason"], json!("already_granted_today"));
 
-        // `ok` and `reason` must not be able to disagree, which is a stronger property than
-        // either field's value on its own. The key set above already catches a *dropped* `ok`.
-        // What it does not catch is the likelier edit — making both bodies `ok: true` on the
-        // reasoning that a 200 did succeed. Nothing would fail, and a client branching on `ok`
-        // would then read every latched day as a fresh grant. One did until `studygo` 1e4d1a5.
-        assert_eq!(granted["ok"], json!(true), "a grant has to say so in `ok`");
-        assert_eq!(refused["ok"], json!(false), "a refusal has to say so in `ok`");
+        // **The `ok` values are deliberately not re-asserted here**, and the reason is worth
+        // keeping. A first version of this block did assert them, on the argument that `ok` and
+        // `reason` must never disagree — a client branching on `ok` would otherwise read every
+        // latched day as a fresh grant, which is a mistake `studygo` really made until `1e4d1a5`.
+        // The argument is sound and the assertions were still worthless: the latch section at the
+        // top of this test already pins both values, it runs first, and `assert_eq!` panics, so
+        // the copies here could never be reached by a failure. Proven rather than reasoned —
+        // forcing the refused body to `ok: true` dies at line 163 with the copies deleted.
+        //
+        // The general form, since it cost a wrong claim to learn: a mutation that goes red proves
+        // *the suite* catches the edit, not that the assertion you just wrote catches it. Read
+        // which assertion fired, or delete yours and re-run.
     }
 
     // --- `minutes` is the parent's to give and the registry's to decide. -----------------
