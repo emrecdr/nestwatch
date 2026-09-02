@@ -14,14 +14,43 @@ use axum::middleware::Next;
 use axum::response::Response;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tower_sessions::Session;
 use tower_sessions::cookie::time::OffsetDateTime;
+use tower_sessions::session::{Id, Record};
 
 use crate::error::AppError;
 use crate::state::AppState;
 
 /// Session key holding the "logged in" flag.
 const AUTH_KEY: &str = "authenticated";
+
+/// How long a session survives without use, in days.
+///
+/// Owned here rather than written inline where the session layer is built, because
+/// [`describe_session`] *derives* last activity by subtracting it from the stored expiry. Two
+/// copies of this number would not fail a test — they would quietly shift every "last seen" in
+/// the parent's dashboard by the difference, which is a wrong answer that looks like a right one.
+///
+/// Thirty days is at NIST SP 800-63B's ceiling for a single-factor (AAL1) session, which is what
+/// a password-only login is. It was chosen when a stolen cookie meant somebody already inside the
+/// house; `docs/REMOTE-ACCESS.md` records that this premise is what remote access changes, and
+/// per-device revocation is the compensation that made keeping it defensible.
+pub const SESSION_IDLE_DAYS: i64 = 30;
+
+/// Session key holding how this device announced itself, for the *Signed-in devices* card.
+///
+/// A JSON object: `first_seen` (unix seconds) and `user_agent`. Written where the session is
+/// created, so it describes the device that signed in rather than whichever one asked last.
+///
+/// **Not the source IP, and that is not an oversight.** `docs/REMOTE-ACCESS.md` records that a
+/// router which masquerades tunnel traffic collapses every remote visitor into one address — so
+/// under exactly the deployment this identity exists to serve, an IP identifies the router and
+/// not the device. OWASP's session guidance says the same thing from the other direction:
+/// binding a session to client properties is a detection layer, "a skilled attacker can bypass
+/// these controls" through NAT, and it is not a primary defence. The identity here is therefore
+/// *minted with the session* and carried in it, never inferred from the packet.
+const DEVICE_KEY: &str = "device";
 
 /// Session key holding what this session is *allowed to do* — see [`crate::pairing::Scope`].
 ///
@@ -451,6 +480,7 @@ pub async fn login(
         session
             .insert(SCOPE_KEY, crate::pairing::Scope::Dashboard)
             .await?;
+        remember_device(&session, &headers).await?;
         Ok(Json(json!({ "ok": true })))
     } else {
         let locked_out = state.limiter.record_failure(ip);
@@ -494,6 +524,7 @@ pub async fn pair(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     session: Session,
+    headers: HeaderMap,
     axum::extract::Path(token): axum::extract::Path<String>,
 ) -> Result<Response, AppError> {
     use axum::response::IntoResponse;
@@ -536,6 +567,7 @@ pub async fn pair(
     session.cycle_id().await?;
     session.insert(AUTH_KEY, true).await?;
     session.insert(SCOPE_KEY, scope.clone()).await?;
+    remember_device(&session, &headers).await?;
     // The audit says which kind, because "a device paired" and "an integration was installed on
     // a device" are different events to meet in a log a month later.
     let kind = match &scope {
@@ -654,6 +686,124 @@ const SLIDING_REFRESH_SECS: i64 = 5 * 86_400;
 /// alone behaves as a hard 30-day cutoff from login, even for someone using the dashboard daily.
 /// Touching a timestamp here marks the session modified, which refreshes both the stored expiry
 /// and the browser cookie. Stepped coarsely so this isn't a write per request.
+/// Record who just signed in, on the session itself.
+///
+/// Called from both authentication paths, next to the `AUTH_KEY` and `SCOPE_KEY` writes, so a
+/// session cannot exist without a description of the device that made it.
+///
+/// **The user agent is attacker-influenced text**, and `O77` flagged it before this was written:
+/// it arrives in a request header, is stored, and is later rendered in the parent's dashboard.
+/// Two bounds apply. It is truncated to [`MAX_USER_AGENT`] here, so a caller cannot grow the
+/// session file — the same reasoning as every other cap in `config.rs`, and it matters more here
+/// because the store is rewritten whole on each save. And it is rendered through Alpine's text
+/// binding, never a markup sink, so the string is displayed rather than interpreted.
+async fn remember_device(session: &Session, headers: &HeaderMap) -> Result<(), AppError> {
+    let user_agent: String = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .chars()
+        .take(MAX_USER_AGENT)
+        .collect();
+    session
+        .insert(
+            DEVICE_KEY,
+            json!({
+                "first_seen": OffsetDateTime::now_utc().unix_timestamp(),
+                "user_agent": user_agent,
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+/// Longest user-agent string kept. Real ones are under 200 characters; this is generous and
+/// still bounds what one request can add to a file that is rewritten in full on every save.
+const MAX_USER_AGENT: usize = 256;
+
+/// A stable, public name for a session that is **not** the session id.
+///
+/// The *Signed-in devices* card has to give the parent something to click "revoke" on, and the
+/// obvious handle — the session id — is a live credential: putting it in an API response and
+/// then into the DOM would hand a working cookie to anything that can read the page, in the one
+/// feature whose entire purpose is containing a leaked cookie.
+///
+/// So this is a salted SHA-256 of the id, which is what OWASP's session guidance recommends for
+/// exactly this ("use a salted-hash of the session ID instead of the session ID itself in order
+/// to allow for session-specific log correlation"). Twelve hex characters is 48 bits — far more
+/// than enough to tell apart the handful of devices one household signs in, and useless as a
+/// credential.
+///
+/// **The salt is per-process and random**, so handles change when the service restarts. That is
+/// harmless — a handle is only ever used between one render of the card and the click that
+/// follows it — and it means a handle observed once cannot be replayed against a later run.
+fn session_handle(id: &Id) -> String {
+    static SALT: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    let salt = SALT.get_or_init(|| {
+        let mut bytes = [0u8; 32];
+        getrandom::fill(&mut bytes).expect("the OS random source must work");
+        bytes
+    });
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(id.to_string().as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// What the *Signed-in devices* card shows for one session.
+///
+/// `handle` is [`session_handle`], never the id. `current` lets the card warn a parent that they
+/// are about to sign themselves out, which is the one revocation they will regret.
+pub fn describe_session(record: &Record, current: Option<&Id>) -> Value {
+    let device = record.data.get(DEVICE_KEY);
+    let first_seen = device
+        .and_then(|d| d.get("first_seen"))
+        .and_then(Value::as_i64);
+    // Truncated on the way in (see `remember_device`), so this is a bounded string by
+    // construction. It is still attacker-influenced text on its way to the parent's dashboard,
+    // and the card renders it through Alpine's text binding rather than any HTML sink.
+    let user_agent = device
+        .and_then(|d| d.get("user_agent"))
+        .and_then(Value::as_str);
+    // Last activity is *derived* rather than stored: `expiry_date` is recomputed on every save,
+    // so it is last-save plus the inactivity window. Coarse — `SLIDING_REFRESH_SECS` means saves
+    // are days apart — and deliberately not tightened, because making it precise would turn a
+    // read-only dashboard visit into a disk write per session per request, which is the property
+    // this store's module doc exists to protect. "Active this week" is what the card can honestly
+    // say, and it is enough to tell a live phone from one retired in August.
+    let last_seen = record.expiry_date.unix_timestamp() - SESSION_IDLE_DAYS * 86_400;
+    json!({
+        "handle": session_handle(&record.id),
+        "current": current == Some(&record.id),
+        "scope": record.data.get(SCOPE_KEY).cloned().unwrap_or(Value::Null),
+        "first_seen": first_seen,
+        "last_seen": last_seen,
+        "expires": record.expiry_date.unix_timestamp(),
+        "user_agent": user_agent,
+    })
+}
+
+/// Find the session whose [`session_handle`] is `handle`.
+///
+/// Linear over a household's sessions, which is a handful. Compared on the *derived* handle so
+/// the caller never sees an id, and so a caller guessing handles learns nothing: a miss and a
+/// hit are the same lookup.
+pub fn session_by_handle(
+    store: &crate::sessionstore::FileSessionStore,
+    handle: &str,
+) -> Option<Id> {
+    store
+        .snapshot()
+        .into_iter()
+        .find(|r| session_handle(&r.id) == handle)
+        .map(|r| r.id)
+}
+
 /// May a scoped integration reach this request?
 ///
 /// **The allowlist is three routes and the third is the one that gets forgotten.** An integration

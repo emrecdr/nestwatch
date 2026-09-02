@@ -45,6 +45,25 @@ authenticated session*:
 `POST /api/password` keeps the parent logged in (rotating their session id) and **does** revoke
 every other session (see §4).
 
+**One device can now be signed out on its own.** `GET /api/sessions` lists every signed-in device —
+what it is, when it first appeared, and what its pairing is worth — and
+`POST /api/sessions/{handle}/revoke` ends exactly one. Until this existed, rotating the password was
+the only revocation there was, so a phone left in a taxi cost every other device a re-pair; a remedy
+that expensive is one people postpone, which is the worst property a revocation lever can have.
+
+Two properties of that list are load-bearing:
+
+- **It hands out a handle, never a session id.** The handle is a salted SHA-256 of the id, with a
+  per-process salt, so it identifies a row and authenticates nothing. Putting the id in the response
+  would have written a live credential into the parent's dashboard — in the one feature whose whole
+  purpose is containing a leaked cookie. This is what OWASP's session guidance recommends for
+  exactly this case.
+- **A device is described by what it announced, not by where the packet came from.** Source IP is
+  not an identity here: a router that masquerades a VPN tunnel collapses every remote device into
+  one address, which is precisely the deployment this feature exists to serve. The user agent it
+  reports is truncated on the way in and rendered through a text binding, never a markup sink,
+  because it is attacker-influenced text on its way to the parent's screen.
+
 **Every row above needs a session whose scope is `Dashboard`.** A pairing token records what it is
 worth when it is *minted*, and redeeming it carries that across: `nestwatch pair` mints a dashboard
 token, which is what a person scanning it needs and what the Android app needs;

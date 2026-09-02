@@ -924,6 +924,53 @@
             </div>
           </details>
 
+          <!-- Signed-in devices (O77): see which devices hold a session, and end one of them -->
+          <details class="card bg-base-100 shadow md:col-span-2" @toggle="loadSessionsOnce()">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">&#9654;</span>
+              <h2 class="card-title text-base">Signed-in devices</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <div class="flex items-center justify-end">
+                <button class="btn btn-ghost btn-sm" @click="loadSessions()" :disabled="loadingSessions">
+                  <span x-show="loadingSessions" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Every phone, tablet and computer currently signed in here, plus any app you have
+                paired. Signing one out affects only that device &mdash; the others stay signed in.
+                Use this if a device is lost or you no longer want an app connected.
+              </p>
+              <div class="mt-2 flex flex-col gap-2" x-show="sessions.length > 0">
+                <template x-for="row in sessions" :key="row.handle">
+                  <div class="flex items-center gap-3">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2">
+                        <span class="truncate font-medium" x-text="deviceLabel(row.user_agent)"></span>
+                        <span class="badge badge-sm" x-show="row.current">This device</span>
+                      </div>
+                      <div class="text-xs opacity-60" x-text="scopeLabel(row.scope)"></div>
+                      <!-- The raw string the device sent. Shown because `deviceLabel` is an
+                           acknowledged guess and revoking the wrong device is the cost of a wrong
+                           one; `x-text` escapes, which matters because this is attacker-influenced
+                           text arriving in a request header. -->
+                      <div class="truncate text-xs opacity-40" x-text="row.user_agent"></div>
+                    </div>
+                    <div class="hidden text-right text-xs opacity-60 sm:block">
+                      <div>First seen <span x-text="fmtWhen(row.first_seen)"></span></div>
+                      <div>Active <span x-text="fmtWhen(row.last_seen)"></span></div>
+                    </div>
+                    <button class="btn btn-ghost btn-xs" @click="revokeSession(row)">Sign out</button>
+                  </div>
+                </template>
+              </div>
+              <p class="text-sm opacity-50" x-show="sessions.length === 0 && !loadingSessions">
+                No signed-in devices to show.
+              </p>
+            </div>
+          </details>
+
           <!-- Integrations (earned-time providers) -->
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">

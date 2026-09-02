@@ -119,6 +119,46 @@ impl FileSessionStore {
             "some devices may stay signed in until the next restart",
         );
     }
+
+    /// Every live session, copied out.
+    ///
+    /// A read, so by this module's own rule it never touches the disk — and it is a *copy*
+    /// rather than a guard, so the parent's *Signed-in devices* card cannot hold the store's
+    /// mutex across the rendering of a response.
+    ///
+    /// Expired records are filtered here as well as at load, because the map is only pruned on
+    /// write: a store that has not been written to since a session lapsed still holds it, and
+    /// listing a dead session as revocable would be a lie the parent could act on.
+    pub fn snapshot(&self) -> Vec<Record> {
+        let now = OffsetDateTime::now_utc();
+        self.map()
+            .values()
+            .filter(|r| r.expiry_date > now)
+            .cloned()
+            .collect()
+    }
+
+    /// Sign **one** device out, leaving every other session alone.
+    ///
+    /// The counterpart to [`clear_all`](Self::clear_all), and the reason `O77` was filed: until
+    /// this existed, a cookie left in a taxi could only be revoked by rotating the password,
+    /// which signs out every device the household owns and forces a re-pair of each. That is a
+    /// remedy expensive enough that a parent puts it off, which is the worst property a
+    /// revocation lever can have.
+    ///
+    /// Returns whether anything was actually removed, so a caller can tell "revoked" from
+    /// "already gone" rather than reporting success for a session that was never there.
+    pub fn revoke(&self, id: &Id) -> bool {
+        let mut map = self.map();
+        let existed = map.remove(id).is_some();
+        if existed {
+            self.persist(
+                &mut map,
+                "that device may stay signed in until the next restart",
+            );
+        }
+        existed
+    }
 }
 
 #[async_trait::async_trait]

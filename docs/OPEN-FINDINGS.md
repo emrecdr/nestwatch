@@ -1268,30 +1268,6 @@ other option and is worse: it hands back exactly the remembering that the choke 
 **Trigger.** Worth doing when something makes a wake expensive — a heavier tick, a slower
 `running_processes`, or a config-writing endpoint that stops being human-paced.
 
-### O77 · A leaked session can only be revoked by signing every device out
-
-Sessions persist 30 days across restarts, which is right: a parent on a phone behind a certificate
-warning should not be signed out by every service restart. The consequence is that a cookie is
-valid for 30 days and the **only** way to end one early is `api::change_password`, which calls
-`sessions.clear_all()` and signs out *everything*.
-
-So "I left my phone in a taxi" costs a password rotation plus re-pairing every other device, on a
-service where signing in already costs a certificate click-through. There is no way to see which
-devices hold a session, and no way to drop one.
-
-The information already exists on both sides and is simply not joined: the audit log records every
-`auth_success` with source IP and user-agent, and `tower_sessions::Record` carries the id and
-expiry. The dashboard already shows *Recent access*, which answers the neighbouring question.
-
-**Fix.** A *Signed-in devices* card — first seen, last seen, source IP, user-agent — with per-row
-revoke. One route, one card, no schema migration.
-
-**Weigh first:** `FileSessionStore` deliberately keeps reads off the disk and writes only on
-mutation, and a revoke list is a read of the map on a parent action, which is fine. What is not
-obviously fine is putting user-agent strings in the store — they are attacker-influenced text
-rendered in the parent's dashboard, so this lands next to the escaping rules rather than beside
-them.
-
 ### O78 · The notification decision rests on an assumption nobody has spent a minute testing
 
 `app.js::titleFor` reasons through the options for telling a parent that their child is waiting,

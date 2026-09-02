@@ -11,6 +11,20 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Security
 
+- **You can now see every signed-in device, and sign out just one.** A *Signed-in devices* card
+  lists each phone, tablet, computer and paired app that currently holds a session — what it is,
+  when it first signed in, and whether it is a full dashboard login or an app that can only add
+  earned time. Each row has its own *Sign out*.
+  <br>**Why it matters more than it sounds.** Until now, changing your control password was the
+  only way to end a session, and it signs out *everything* — so a phone left in a taxi cost you a
+  password change plus re-pairing every other device in the house. That is expensive enough that
+  people put it off, which is exactly backwards for the one thing you want to do quickly. Now it is
+  one click on one row, and nothing else is disturbed.
+  <br>The card also shows what each device announced itself as, so you can tell the phone in your
+  pocket from the one you are looking for. That name is a best guess from what the device reported,
+  so the raw text is shown beside it rather than hidden — revoking the wrong device is the mistake
+  worth guarding against.
+
 - **An app you pair for earned time can now only do that.** Until this release, pairing a phone
   was the same privilege step as typing your password — the QR link minted an ordinary session,
   and nothing on it recorded that it belonged to an app rather than to you. A companion app that

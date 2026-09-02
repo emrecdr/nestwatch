@@ -18,6 +18,14 @@ pub enum AppError {
     #[error("too many failed attempts, try again shortly")]
     TooManyAttempts,
 
+    /// The thing named in the path does not exist.
+    ///
+    /// Distinct from answering `200` with nothing: a parent revoking a device needs to be told
+    /// when the handle matched no session, because "done" and "there was nothing to do" are
+    /// different facts about whether their phone is still signed in.
+    #[error("{0}")]
+    NotFound(String),
+
     /// Authenticated, but this credential is not allowed to do this.
     ///
     /// Distinct from [`AppError::Unauthorized`] on purpose, and the distinction is the useful
@@ -60,6 +68,7 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::TooManyAttempts => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
+            AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Control(ControlError::ProcessNotFound(_)) => {
                 (StatusCode::NOT_FOUND, self.to_string())

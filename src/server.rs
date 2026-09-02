@@ -37,6 +37,8 @@
 //!     GET  /api/time-requests
 //!     POST /api/time-requests/{id}/approve  POST /api/time-requests/{id}/deny
 //!     GET  POST /api/time-codes
+//!     GET  /api/sessions      (signed-in devices; handles, never session ids)
+//!     POST /api/sessions/{handle}/revoke
 //!     POST /api/password
 //!   *                           embedded static assets (fallback)
 //! ```
@@ -86,7 +88,9 @@ pub fn build_router(state: AppState) -> Router {
         .with_secure(true)
         .with_http_only(true)
         .with_same_site(SameSite::Strict)
-        .with_expiry(Expiry::OnInactivity(CookieDuration::days(30)))
+        .with_expiry(Expiry::OnInactivity(CookieDuration::days(
+            auth::SESSION_IDLE_DAYS,
+        )))
         .with_name("hh_session");
 
     let api = Router::new()
@@ -124,6 +128,8 @@ pub fn build_router(state: AppState) -> Router {
             "/time-codes",
             get(api::list_time_codes).post(api::issue_time_code),
         )
+        .route("/sessions", get(api::list_sessions))
+        .route("/sessions/{handle}/revoke", post(api::revoke_session))
         .route("/password", post(api::change_password))
         .route_layer(middleware::from_fn(auth::require_auth));
 

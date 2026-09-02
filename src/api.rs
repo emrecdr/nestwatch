@@ -969,6 +969,68 @@ pub async fn extra_time(
     Ok(Json(response))
 }
 
+/// `GET /api/sessions` → every signed-in device, for the *Signed-in devices* card.
+///
+/// The read half of `O77`. Until this existed there was no way to see which devices held a
+/// session, and the only way to end one was `change_password`, which signs out all of them — so
+/// "I left my phone in a taxi" cost a password rotation plus a re-pair of every other device.
+/// OWASP's session guidance asks for exactly this pair of features: let a user "check the details
+/// of active sessions at any time" and "remotely terminate sessions manually".
+///
+/// **Carries a handle, never a session id.** See `auth::session_handle`: the id is a live
+/// credential, and this response is rendered into the parent's dashboard.
+///
+/// Sorted newest-first by first use, so a device that just appeared — the one a parent is most
+/// likely to be looking for after a scare — is at the top rather than wherever a hash map put it.
+pub async fn list_sessions(State(state): State<AppState>, session: Session) -> Json<Value> {
+    let current = session.id();
+    let mut rows: Vec<Value> = state
+        .sessions
+        .snapshot()
+        .iter()
+        .map(|record| crate::auth::describe_session(record, current.as_ref()))
+        .collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row["first_seen"].as_i64().unwrap_or(0)));
+    Json(json!(rows))
+}
+
+/// `POST /api/sessions/{handle}/revoke` → sign one device out, leaving the others alone.
+///
+/// The write half of `O77`, and the point of the whole card: a revocation cheap enough that a
+/// parent actually performs it. The expensive remedy — rotate the password, sign everyone out,
+/// re-pair every device — is one people postpone, which is the worst property a revocation lever
+/// can have.
+///
+/// **Revoking your own session is allowed.** It is a sensible thing to want (signing this browser
+/// out from this browser), the dashboard marks the row `current` so it cannot be a surprise, and
+/// refusing it would mean the one device a parent is definitely holding is the one they cannot
+/// clear. The response says which it was, so the page can send itself to the login screen instead
+/// of re-rendering a dashboard it no longer has a session for.
+///
+/// A handle that matches nothing answers `404`, not `200`: reporting success for a session that
+/// was not there would tell a parent they had revoked a device they had not.
+pub async fn revoke_session(
+    State(state): State<AppState>,
+    session: Session,
+    Path(handle): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let Some(id) = crate::auth::session_by_handle(&state.sessions, &handle) else {
+        return Err(AppError::NotFound("no such signed-in device".into()));
+    };
+    let was_current = session.id() == Some(id);
+    if !state.sessions.revoke(&id) {
+        return Err(AppError::NotFound("no such signed-in device".into()));
+    }
+    // Audited because it is a security-relevant state change a parent made deliberately, and
+    // because OWASP asks for session lifecycle events in the log. The handle is recorded rather
+    // than the id — the audit file is readable by anyone who can read the data dir, and writing
+    // a session id there would put a credential in a log.
+    state
+        .audit
+        .record("session_revoked", json!({ "handle": handle }));
+    Ok(Json(json!({ "ok": true, "was_current": was_current })))
+}
+
 /// Lock a std mutex, recovering from a poisoned one.
 ///
 /// The same posture as [`crate::state::recover_read`]: a panic in another handler must not

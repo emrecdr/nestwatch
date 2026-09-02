@@ -249,6 +249,11 @@ function app() {
     providerRows: [],
     loadingProviders: false,
     savingProvider: false,
+    // Signed-in devices (O77). An array straight from the server, already sorted newest-first, so
+    // unlike `providers` there is no second `*Rows` projection to keep in step — nothing in this
+    // card is bound two ways.
+    sessions: [],
+    loadingSessions: false,
     // `null` until figures actually arrive — the card is gated on that, so there is no second flag
     // to keep in sync with this one. A zeroed literal here would be a lie the markup reads out as
     // measurement: "0 min used today" on a dashboard that may never have reached the service.
@@ -742,6 +747,89 @@ function app() {
           this.loadRoutines();
         } else {
           this.toast("Could not delete routine", "error");
+        }
+      } catch {
+        this.toast("Request failed", "error");
+      }
+    },
+
+    // --- Signed-in devices (O77) -------------------------------------------------------
+    //
+    // The card exists so a lost phone costs one revocation instead of a password rotation that
+    // signs out every device in the house. The server sends a *handle*, never a session id: the
+    // id is a live credential and this list is rendered into the page.
+    async loadSessions() {
+      await this.loadList("/api/sessions", "sessions", "loadingSessions", "Failed to load devices");
+    },
+
+    // Load the first time the card is opened, not on page load.
+    //
+    // `O88` records that `loadAll` already fires twelve requests before the parent has scrolled
+    // anywhere, and names deferring collapsed cards as the fix it could not justify without a DOM
+    // test. This card is the one place that argument is free: it is collapsed by default, nothing
+    // else reads `sessions`, and it is consulted only when a parent has a reason to. Adding it to
+    // `loadAll` would have made the storm a thirteenth request for a card most visits never open.
+    loadSessionsOnce() {
+      if (this.sessions.length > 0 || this.loadingSessions) return;
+      this.loadSessions();
+    },
+
+    // A short, best-effort name for a device, from the user agent it announced.
+    //
+    // **Deliberately shallow, and the raw string is always shown beside it.** User-agent sniffing
+    // is unreliable by nature, and the cost of a wrong guess here is a parent revoking the wrong
+    // device — so the guess is a convenience and the truth stays visible. Anything unrecognised
+    // says so rather than inventing a name.
+    deviceLabel(ua) {
+      if (!ua) return "Unknown device";
+      const platform =
+        ua.indexOf("iPhone") >= 0 ? "iPhone" :
+        ua.indexOf("iPad") >= 0 ? "iPad" :
+        ua.indexOf("Android") >= 0 ? "Android" :
+        ua.indexOf("Macintosh") >= 0 ? "Mac" :
+        ua.indexOf("Windows") >= 0 ? "Windows PC" :
+        ua.indexOf("Linux") >= 0 ? "Linux" : "";
+      // Order matters: Edge and Chrome both contain "Chrome", and Safari appears in both.
+      const browser =
+        ua.indexOf("Edg/") >= 0 ? "Edge" :
+        ua.indexOf("Firefox/") >= 0 ? "Firefox" :
+        ua.indexOf("Chrome/") >= 0 ? "Chrome" :
+        ua.indexOf("Safari/") >= 0 ? "Safari" : "";
+      if (platform && browser) return browser + " on " + platform;
+      if (platform) return platform;
+      if (browser) return browser;
+      return "Unknown device";
+    },
+
+    // What this credential may do, in the parent's words rather than the wire's.
+    scopeLabel(scope) {
+      if (!scope) return "Older sign-in \u2014 sign in again";
+      if (scope.kind === "integration") return "App: " + scope.source;
+      return "Full dashboard access";
+    },
+
+    // Revoke one device. The confirm names what is being signed out and, when it is this browser,
+    // says so plainly — that is the one revocation a parent would regret doing by accident.
+    async revokeSession(row) {
+      const who = this.deviceLabel(row.user_agent);
+      const warning = row.current
+        ? "This is the device you are using now. You will be signed out and sent back to the login page."
+        : "That device will need to sign in again, or be re-paired if it is an app.";
+      if (!confirm("Sign out " + who + "?\n\n" + warning)) return;
+      try {
+        const r = await fetch("/api/sessions/" + encodeURIComponent(row.handle) + "/revoke", { method: "POST" });
+        if (r.ok) {
+          const body = await r.json().catch(() => ({}));
+          if (body.was_current) {
+            // Signed ourselves out: the dashboard has no session left, so send the page to the
+            // login screen rather than re-rendering cards that will all 401.
+            location.reload();
+            return;
+          }
+          this.toast("Signed out " + who, "success");
+          this.loadSessions();
+        } else {
+          this.toast(await this.rejection(r, "Could not sign that device out"), "error");
         }
       } catch {
         this.toast("Request failed", "error");
@@ -2482,6 +2570,15 @@ function app() {
       if (age === undefined) return "The dashboard could not reach the service to ask.";
       if (age === null) return "The background checks haven't reported yet.";
       return `No check-in for ${Math.round(age / 60)} min.`;
+    },
+
+    // Unix *seconds* as a short, human date. Distinct from `fmtTime`, which takes milliseconds:
+    // the sessions API speaks seconds because that is what the session store records, and feeding
+    // those to `fmtTime` silently renders every date in January 1970 rather than failing.
+    fmtWhen(secs) {
+      if (!secs) return "\u2014";
+      const d = new Date(secs * 1000);
+      return isNaN(d.getTime()) ? "\u2014" : d.toLocaleDateString();
     },
 
     fmtTime(ts) {
