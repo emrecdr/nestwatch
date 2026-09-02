@@ -555,6 +555,64 @@ async fn earned_grants_latch_replay_and_validate() {
         );
     }
 
+    // --- The response shape is a cross-repo contract, so pin it here. --------------------
+    //
+    // `O86`: Voortgang (in the `studygo` repository) parses `ok`, `reason` and `minutes` out of
+    // this endpoint, and until now **nothing on this side noticed if they moved**. Renaming
+    // `reason`, or dropping `minutes` from the success body, breaks that client with every test in
+    // both repositories green — which is precisely the failure `tests/golden.rs` exists to prevent,
+    // one repository over.
+    //
+    // Deliberately asserted here rather than as a file in `tests/golden/`. That directory is a
+    // contract with `nestwatch-mobile` specifically: its `tool/check_golden.sh` walks
+    // `tests/golden/*.json` and counts every file it does not itself carry as drift, so a fixture
+    // for a *different* consumer would fail a repo that has no parser for it. Where the shared
+    // fixtures should live is a real design question and it belongs to both repositories' owners;
+    // this test does not answer it. It closes the hole that does not need it answered.
+    //
+    // The key set is asserted exactly, not field-by-field. A field-by-field check passes when a
+    // field is *added*, and an added field is the change most likely to be made without thinking
+    // about who else reads this — the same reason `golden()` compares whole documents.
+    {
+        let (app, cookie, _config) = fresh_app().await;
+
+        let (_, granted) = grant(&app, &cookie, json!({ "minutes": 10 }), None).await;
+        let mut keys: Vec<&str> = granted
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["curfew_note", "minutes", "ok"],
+            "the granted response shape changed; `studygo` reads ok and minutes from it \
+             (its side is pinned in 5518f97). Changing this is allowed — doing it without \
+             telling that repository is not."
+        );
+
+        // The refused body is the other half of the contract and carries no `minutes` at all,
+        // which is why that client reads it as nullable rather than defaulting it to zero.
+        let (_, refused) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(refused["ok"], json!(true), "first push of the day grants");
+        let (_, refused) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        let mut keys: Vec<&str> = refused
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["ok", "reason"],
+            "the refused response shape changed; `studygo` switches on \
+             reason == already_granted_today"
+        );
+        assert_eq!(refused["reason"], json!("already_granted_today"));
+    }
+
     // --- `minutes` is the parent's to give and the registry's to decide. -----------------
     {
         let (app, cookie, config) = fresh_app().await;

@@ -1530,30 +1530,44 @@ it belongs to, letting the client decide.
 **Trigger.** A second pushing client that does not read its grant back, or a report of bonus time
 that the parent can see was never added.
 
-### O86 · `/api/extra-time`'s response is a cross-repo contract with nothing pinning it
+### O86 · The golden-file mechanism is addressed to one consumer, and there are two
 
-> **Cross-repo** · a second consumer now exists
+> **Cross-repo** · needs a decision in both repositories
 
 `tests/golden/` pins every JSON shape `nestwatch-mobile` parses, and its own first line says so.
-`POST /api/extra-time` is now parsed by a *different* repository — Voortgang, in `studygo`, reads
-`ok`, `reason` and `minutes` out of that response in `lib/nestwatch/nestwatch_client.dart` — and
-nothing on either side pins it. Renaming `reason`, or dropping `minutes` from the success body,
-breaks that client with every test in both repositories green. That is precisely the failure
-`tests/golden.rs` was built to prevent, one repository over.
+A second consumer now exists: Voortgang, in the `studygo` repository, parses `ok`, `reason` and
+`minutes` out of `POST /api/extra-time`, and `extra_mins` out of `GET /api/usage/today`.
 
-It cannot be fixed by adding a golden file. `nestwatch-mobile/tool/check_golden.sh` walks
-`nestwatch/tests/golden/*.json` and counts `MISSING HERE` as drift for every file that repo does not
-also carry, so a new fixture there fails a repo that has no parser for it and never will. The
-mechanism is hardwired to one consumer, and there are now two.
+**The silent-break half is fixed.** `earned_grant.rs` now asserts the exact key set of both
+`/api/extra-time` response bodies — granted and refused — so renaming `reason` or dropping
+`minutes` fails here rather than in another repository at runtime. Verified by mutation: adding a
+field to the granted body and renaming `reason` both fail that assertion. `extra_mins` needed
+nothing; `tests/golden/usage-today.json` already pins it, because the Android client reads that
+endpoint too.
 
-**Fix.** Decide what `tests/golden/` is for before adding to it. Either it is "shapes the Android
-client parses" — in which case a second, separately-checked directory covers other consumers — or it
-becomes "shapes any client parses", and `check_golden.sh` on the other side has to learn which files
-are addressed to it. The second is better and needs a change in a repository that was read-only to
-the session that found this.
+**What is still open is where shared fixtures live.** The producer-side check above is a test, not
+a file, so it gives the other repository nothing to diff against. A fixture cannot simply be added
+to `tests/golden/`: `nestwatch-mobile/tool/check_golden.sh` walks `tests/golden/*.json`
+non-recursively and counts every file it does not itself carry as `MISSING HERE` drift, so a
+fixture for a different consumer fails a repository that has no parser for it and never will.
 
-**Trigger.** The next change to `extra_time`'s response body, or a third consumer.
+Note the glob is non-recursive, which means a subdirectory would be invisible to it *today* — that
+is a property of one line of shell, not an agreement, and building on it would be exactly the kind
+of undocumented coupling this entry exists to remove.
 
+**Fix.** Decide what `tests/golden/` is for, in both repositories rather than one. Either it stays
+"shapes the Android client parses" and a separate, separately-checked location covers other
+consumers, or it becomes "shapes any client parses" and `check_golden.sh` learns which files are
+addressed to it — a manifest naming the consumer per file is the smaller change and the one that
+survives a third consumer. The second is better and needs a change in a repository that is
+read-only to the session that found this.
+
+`studygo` `5518f97` has done the consumer half: two pure parse functions, an enumeration test that
+reads its own client source rather than restating it, and fixtures captured verbatim from
+`de7083a`. That list and those fixtures are what a unified check would point at.
+
+**Trigger.** A third consumer, or the next deliberate change to `/api/extra-time`'s response body —
+at which point somebody has to re-vendor bytes that no mechanism currently hands them.
 
 ## Not covered by any of this
 
