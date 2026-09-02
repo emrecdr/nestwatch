@@ -851,6 +851,44 @@
             </div>
           </details>
 
+          <!-- Integrations (earned-time providers) -->
+          <details class="card bg-base-100 shadow md:col-span-2">
+            <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
+              <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
+              <h2 class="card-title text-base">Integrations</h2>
+            </summary>
+            <div class="card-body pt-0">
+              <div class="flex items-center justify-end">
+                <button class="btn btn-ghost btn-sm" @click="loadProviders()" :disabled="loadingProviders">
+                  <span x-show="loadingProviders" class="loading loading-spinner loading-xs"></span>
+                  Refresh
+                </button>
+              </div>
+              <p class="text-sm opacity-70">
+                Apps that can add bonus screen time when your child has done something — StudyGo adds
+                minutes after enough practice. The app on your phone does the checking and sends the
+                result here; nothing on this PC reaches out. You choose whether each is on and how
+                many minutes it grants.
+              </p>
+              <div class="mt-2 flex flex-col gap-2" x-show="providerRows.length > 0">
+                <template x-for="row in providerRows" :key="row.name">
+                  <div class="flex items-center gap-3">
+                    <input type="checkbox" class="toggle toggle-sm" x-model="row.enabled"
+                           :aria-label="row.name" @change="saveProvider(row)" />
+                    <span class="flex-1 truncate" x-text="row.name"></span>
+                    <input type="number" min="1" max="240" class="input input-sm w-20"
+                           x-model.number="row.minutes" :aria-label="row.name"
+                           @change="saveProvider(row)" />
+                    <span class="text-sm opacity-60">min</span>
+                  </div>
+                </template>
+              </div>
+              <p class="text-sm opacity-50" x-show="providerRows.length === 0 && !loadingProviders">
+                No integrations installed yet.
+              </p>
+            </div>
+          </details>
+
           <!-- More-time requests -->
           <section class="card bg-base-100 shadow md:col-span-2" x-show="showRequests()">
             <div class="card-body">

@@ -49,8 +49,37 @@ async fn grant(
     (status, parsed)
 }
 
+/// Install or reconfigure a provider via `POST /api/providers/{name}`.
+async fn configure_provider(
+    app: &axum::Router,
+    cookie: &str,
+    name: &str,
+    enabled: bool,
+    minutes: u32,
+) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/providers/{name}"))
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "enabled": enabled, "minutes": minutes }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
 /// A fresh signed-in app over its own state, so one section's day latch cannot leak into the
 /// next section's assertions.
+///
+/// Installs `studygo` worth 30 minutes and `chores` worth 10, because a provider grant now
+/// requires an enabled provider — the reward is the parent's policy on this machine, not a
+/// number the push chose.
 async fn fresh_app() -> (
     axum::Router,
     String,
@@ -60,6 +89,14 @@ async fn fresh_app() -> (
     let config = state.config.clone();
     let app = app_with(state);
     let cookie = login(&app, PASSWORD).await.unwrap();
+    assert_eq!(
+        configure_provider(&app, &cookie, "studygo", true, 30).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        configure_provider(&app, &cookie, "chores", true, 10).await,
+        StatusCode::OK
+    );
     (app, cookie, config)
 }
 
@@ -218,16 +255,20 @@ async fn earned_grants_latch_replay_and_validate() {
         let (app, cookie, _config) = fresh_app().await;
 
         for i in 0..16 {
-            let (status, body) = grant(
-                &app,
-                &cookie,
-                json!({ "minutes": 1, "source": format!("s{i}") }),
-                None,
-            )
-            .await;
+            let name = format!("s{i}");
+            assert_eq!(
+                configure_provider(&app, &cookie, &name, true, 1).await,
+                StatusCode::OK
+            );
+            let (status, body) =
+                grant(&app, &cookie, json!({ "minutes": 1, "source": name }), None).await;
             assert_eq!(status, StatusCode::OK);
             assert_eq!(body["ok"], json!(true), "source s{i} within the cap grants");
         }
+        assert_eq!(
+            configure_provider(&app, &cookie, "s16", true, 1).await,
+            StatusCode::OK
+        );
         let (status, body) = grant(
             &app,
             &cookie,
@@ -239,6 +280,97 @@ async fn earned_grants_latch_replay_and_validate() {
             status,
             StatusCode::BAD_REQUEST,
             "the seventeenth source of the day is refused; got {body}"
+        );
+    }
+
+    // --- The registry governs whether a provider may grant, and for how much. ------------
+    {
+        let (app, cookie, config) = fresh_app().await; // studygo(30), chores(10) installed
+
+        // An unknown provider is refused — nothing installed by that name.
+        let (status, _) = grant(
+            &app,
+            &cookie,
+            json!({ "minutes": 30, "source": "duolingo" }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "no such integration");
+
+        // Turn studygo off; its push is now refused even though it is installed.
+        assert_eq!(
+            configure_provider(&app, &cookie, "studygo", false, 30).await,
+            StatusCode::OK
+        );
+        let (status, _) = grant(
+            &app,
+            &cookie,
+            json!({ "minutes": 30, "source": "studygo" }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a disabled provider cannot grant"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            0,
+            "nothing granted while off"
+        );
+
+        // The reward is the provider's config, not the number the push sent.
+        assert_eq!(
+            configure_provider(&app, &cookie, "studygo", true, 45).await,
+            StatusCode::OK
+        );
+        let (status, body) = grant(
+            &app,
+            &cookie,
+            json!({ "minutes": 999, "source": "studygo" }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], json!(true));
+        assert_eq!(
+            body["minutes"],
+            json!(45),
+            "the PC's policy wins over the push's claim"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            45,
+        );
+    }
+
+    // --- The registry lists what is installed, and rejects a bad name. -------------------
+    {
+        let (app, cookie, _config) = fresh_app().await;
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/providers")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let listed: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(listed["studygo"]["enabled"], json!(true));
+        assert_eq!(listed["studygo"]["minutes"], json!(30));
+        assert_eq!(listed["chores"]["minutes"], json!(10));
+
+        // 'parent' is reserved — it is the human's own grant, not an integration.
+        assert_eq!(
+            configure_provider(&app, &cookie, "parent", true, 30).await,
+            StatusCode::BAD_REQUEST,
         );
     }
 }

@@ -611,6 +611,12 @@ mod tests {
                 "an app-group limit",
             ),
             (
+                "index.html",
+                "x-model.number=\"row.minutes\"",
+                MAX_REQUEST_MINUTES,
+                "an integration's earned reward",
+            ),
+            (
                 "ask.html",
                 "id=\"minutes\"",
                 MAX_REQUEST_MINUTES,

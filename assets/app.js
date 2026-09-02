@@ -222,6 +222,13 @@ function app() {
     loadingRoutines: false,
     newRoutineName: "",
     savingRoutine: false,
+    // Installed integrations, as { name: { enabled, minutes } }. An integration is a provider
+    // that may push earned bonus time — StudyGo is the first. See docs/PLUGIN-SYSTEM.md for why
+    // this is data the parent toggles rather than code the service loads.
+    providers: {},
+    providerRows: [],
+    loadingProviders: false,
+    savingProvider: false,
     // `null` until figures actually arrive — the card is gated on that, so there is no second flag
     // to keep in sync with this one. A zeroed literal here would be a lie the markup reads out as
     // measurement: "0 min used today" on a dashboard that may never have reached the service.
@@ -304,6 +311,7 @@ function app() {
       this.loadLanguage();
       this.loadRules();
       this.loadRoutines();
+      this.loadProviders();
       this.loadToday();
       this.loadAudit();
       this.loadUsage();
@@ -688,6 +696,44 @@ function app() {
         }
       } catch {
         this.toast("Request failed", "error");
+      }
+    },
+
+    async loadProviders() {
+      await this.loadList("/api/providers", "providers", "loadingProviders", "Failed to load integrations");
+      // The API returns an object keyed by name; the template iterates an array so each row is a
+      // stable value `x-model` can bind two ways. Rebuilt on every load, the same shape and reason
+      // as `appLimitRows`. Sorted so the order is the parent's to predict, not the map's.
+      this.providerRows = Object.keys(this.providers || {}).sort().map((name) => ({
+        name,
+        enabled: this.providers[name].enabled,
+        minutes: this.providers[name].minutes,
+      }));
+    },
+
+    // Persist one integration's on/off and reward. The upsert endpoint needs both fields, so a
+    // change to either sends the whole row; `minutes` is read from the row `x-model.number` keeps
+    // in step with the field.
+    async saveProvider(row) {
+      const mins = Number(row.minutes);
+      if (!Number.isInteger(mins) || mins < 1 || mins > 240) {
+        this.toast("Minutes must be between 1 and 240", "error");
+        this.loadProviders();
+        return;
+      }
+      this.savingProvider = true;
+      try {
+        const r = await this.postJSON(`/api/providers/${encodeURIComponent(row.name)}`, { enabled: row.enabled, minutes: mins });
+        if (r.ok) {
+          this.toast(row.enabled ? `${row.name} is on` : `${row.name} is off`, "success");
+          this.loadProviders();
+        } else {
+          this.toast(await this.rejection(r, "Could not save integration"), "error");
+        }
+      } catch {
+        this.toast("Request failed", "error");
+      } finally {
+        this.savingProvider = false;
       }
     },
 

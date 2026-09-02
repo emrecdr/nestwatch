@@ -771,12 +771,17 @@ pub async fn extra_time(
     headers: axum::http::HeaderMap,
     Json(body): Json<ExtraTimeBody>,
 ) -> Result<Json<Value>, AppError> {
-    require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
     let source = body.source.unwrap_or_else(|| "parent".into());
     if !valid_source(&source) {
         return Err(AppError::BadRequest(
             "source must be 1-32 characters of a-z, 0-9, _ or -".into(),
         ));
+    }
+    // Only the parent's own grant is worth what the request said. A provider's reward is read
+    // from the registry below, so the body's `minutes` is vestigial there and must not be
+    // validated as if it mattered — a push may send anything or nothing.
+    if source == "parent" {
+        require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
     }
     let replay_key = match headers.get("idempotency-key") {
         None => None,
@@ -801,8 +806,13 @@ pub async fn extra_time(
     }
 
     let today = crate::config::today();
-    let minutes = body.minutes;
     let robot = source != "parent";
+    // The reward: a parent's own grant is worth what they asked for; a provider's is worth what
+    // the parent configured for that provider *on this machine*, never what the push claimed — so
+    // a spoofed or compromised client cannot choose its own minutes. Resolved inside the config
+    // critical section for the robot case, so the provider it is read from is the same one the
+    // latch is written against.
+    let mut minutes = body.minutes;
     // Checked and latched inside the one place config is mutated, so two concurrent grants from
     // the same source serialize on `config_save_lock` and the second sees the first's latch.
     let mut granted = true;
@@ -810,6 +820,21 @@ pub async fn extra_time(
         let source = source.clone();
         try_update_config(&state, |c| {
             if robot {
+                // A provider grant is governed by the registry: it must name an enabled provider,
+                // and the reward is that provider's configured minutes.
+                match c.providers.get(&source) {
+                    Some(p) if p.enabled => minutes = p.minutes,
+                    Some(_) => {
+                        return Err(AppError::BadRequest(format!(
+                            "the '{source}' integration is turned off"
+                        )));
+                    }
+                    None => {
+                        return Err(AppError::BadRequest(format!(
+                            "no '{source}' integration is installed"
+                        )));
+                    }
+                }
                 if c.earned.get(&source) == Some(&today) {
                     granted = false;
                     return Ok(());
@@ -862,6 +887,65 @@ fn recover_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Longest provider name accepted, and the same charset the grant `source` uses, because a
+/// provider's name *is* the source a push names — the two must agree or an installed provider
+/// could never be granted against.
+const MAX_PROVIDER_NAME: usize = 32;
+
+#[derive(Deserialize)]
+pub struct ProviderBody {
+    enabled: bool,
+    minutes: u32,
+}
+
+/// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes } }`.
+///
+/// The registry behind the dashboard's Integrations panel. Read-only and carries no secret — a
+/// provider holds no credential and no endpoint, only a switch and a reward — so it needs nothing
+/// the usage endpoint does not.
+pub async fn list_providers(State(state): State<AppState>) -> Json<Value> {
+    let providers = crate::state::recover_read(&state.config).providers.clone();
+    Json(json!(providers))
+}
+
+/// `POST /api/providers/{name}` → install or reconfigure an integration.
+///
+/// Upsert by name: `{ "enabled": true, "minutes": 30 }` installs StudyGo worth thirty minutes, or
+/// flips an existing one on or off. The name is validated to the same charset the grant `source`
+/// is, so an installed provider is always one a push can actually name. The reward is bounded by
+/// the same cap parent grants are, because it *becomes* a grant.
+pub async fn set_provider(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<ProviderBody>,
+) -> Result<Json<Value>, AppError> {
+    if name.is_empty()
+        || name.len() > MAX_PROVIDER_NAME
+        || name == "parent"
+        || !name
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+    {
+        return Err(AppError::BadRequest(
+            "provider name must be 1-32 characters of a-z, 0-9, _ or - (and not 'parent')".into(),
+        ));
+    }
+    require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
+    let provider = crate::config::Provider {
+        enabled: body.enabled,
+        minutes: body.minutes,
+    };
+    update_config(&state, |c| {
+        c.providers.insert(name.clone(), provider.clone());
+    })
+    .await?;
+    state.audit.record(
+        "provider_configured",
+        json!({ "name": name, "enabled": body.enabled, "minutes": body.minutes }),
+    );
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the

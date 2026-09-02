@@ -6,6 +6,16 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ### Added
 
+- **Integrations: apps that earn screen time, which you install and switch off from the
+  dashboard.** The earned-time grant added earlier is now a first-class *provider* — StudyGo is the
+  first, and a new Integrations card lists each one with an on/off toggle and the minutes it grants.
+  Two things matter about where the numbers live. A provider push says only *that* its threshold was
+  met; **how many minutes that earns is set here, on this PC, per provider** — so a phone that is
+  lost, spoofed, or simply buggy cannot choose its own reward, and a push claiming 999 minutes still
+  grants exactly what you configured. And an integration you turn off cannot grant at all, in one
+  switch, without unpairing anything. A provider is data you toggle, never code this machine runs or
+  a server it reaches out to — the reasoning, and the plugin architectures deliberately *not* taken,
+  are in `docs/PLUGIN-SYSTEM.md`.
 - **Another app can now grant earned bonus time — once a day, honestly labelled.** "Add bonus
   time today" grants exactly as it always did, and pressing it twice still means it twice. What is
   new is that a *named* caller — a companion app pushing "today's practice is done" over the same

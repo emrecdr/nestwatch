@@ -104,6 +104,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/re-anchor", post(api::re_anchor))
         .route("/language", get(api::get_language).post(api::set_language))
         .route("/extra-time", post(api::extra_time))
+        .route("/providers", get(api::list_providers))
+        .route("/providers/{name}", post(api::set_provider))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/policy", get(api::get_policy).post(api::set_policy))
         .route("/routines", get(api::list_routines).post(api::save_routine))

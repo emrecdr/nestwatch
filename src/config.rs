@@ -74,6 +74,25 @@ pub struct Routine {
     pub rules: crate::rules::Rules,
 }
 
+/// An installed integration that may push earned bonus time.
+///
+/// Deliberately tiny: an integration is enable/disable plus the reward its
+/// signal earns. It carries no endpoint, no credential, and no code — the
+/// gathering happens off this machine (on the parent's phone) and arrives as
+/// an authenticated push, which is what keeps the monitored PC from ever
+/// dialing out. See `docs/PLUGIN-SYSTEM.md` for why this shape and not a
+/// loaded module.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provider {
+    /// Whether this provider may currently grant. A disabled provider's push
+    /// is refused, so turning an integration off is one switch, not a
+    /// re-pairing.
+    pub enabled: bool,
+    /// Minutes one met-threshold push is worth. The parent's policy, applied
+    /// on this machine rather than trusted from the client.
+    pub minutes: u32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub port: u16,
@@ -98,6 +117,17 @@ pub struct Config {
     /// deliberately absent — a human pressing the button twice means it twice.
     #[serde(default)]
     pub earned: std::collections::BTreeMap<String, NaiveDate>,
+    /// Installed integrations that may push earned bonus time. A provider is
+    /// *data*, not code: a name, an on/off switch, and the reward its signal
+    /// is worth — the "declarative plugin" of `docs/PLUGIN-SYSTEM.md`.
+    ///
+    /// **The reward lives here, on the trusted machine, not in the push.**
+    /// A pushing client says only *that* its threshold was met; how many
+    /// minutes that earns is the parent's policy, set once per provider and
+    /// read here — so a compromised or spoofed client cannot choose its own
+    /// reward. A `source` with no enabled provider grants nothing.
+    #[serde(default)]
+    pub providers: std::collections::BTreeMap<String, Provider>,
     /// Saved rule presets the parent can switch between (Homework / Bedtime / Weekend …).
     #[serde(default)]
     pub routines: Vec<Routine>,
