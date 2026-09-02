@@ -94,7 +94,7 @@ open the door on its own.
   `RustlsConfig::from_pem_file` ends up — and its `http1_only()` does not touch it. Restricting the
   server without narrowing ALPN would advertise h2, let every current browser negotiate it, and
   then feed an h2 preface to an HTTP/1.1 parser: a blank dashboard for everyone, shipped as a
-  one-line cleanup. `server.rs::serve_http1_only` narrows ALPN, and
+  one-line cleanup. `server.rs::alpn_http1_only` narrows ALPN, and
   `serving_one_protocol_and_advertising_it_cannot_drift_apart` fails if either call is removed
   without the other.
   <br>Measured over a socket against the real binary: a client offering `h2,http/1.1` negotiates
