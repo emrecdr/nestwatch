@@ -1589,6 +1589,74 @@ reads its own client source rather than restating it, and fixtures captured verb
 **Trigger.** A third consumer, or the next deliberate change to `/api/extra-time`'s response body —
 at which point somebody has to re-vendor bytes that no mechanism currently hands them.
 
+---
+
+### O87 · `0.6.0`'s two headline features are not in the Windows checklist at all
+
+The release state above says the checklist is "the only method here with a track record", and every
+other entry that defers to hardware defers to it. Scheduled routines and the integrations registry
+are not in it.
+
+**Measured 2026-09-02** by counting matches in `WINDOWS-TESTING.md`: `integration` **0**, `provider`
+**0**, `StudyGo` **0**, `earned` **0**, `idempot` **0**. The word `routine` appears three times and
+`schedule` twice, and none of those is the new behaviour — the only Routines item (§E2) is *"Save
+current as routine… then Apply → the settings revert"*, which is the manual press-a-preset path that
+predates the release. Section H, where new work goes, is titled **"New in 0.5.0"** and scoped to it.
+
+**Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
+opens by saying 32 things have never executed, so the gap has a size and a reader can weigh it. A
+feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
+is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and
+left unchecked, 0.6.0's were never written down. The two together are the tier-3 surface, and only
+one of them is visible.
+
+**Not a documentation problem.** The features carry real Windows-side behaviour that nothing here
+has exercised: a schedule that opens and closes against `clock`'s tamper-anchored local time and
+must hand back on close; the `once per source per day` latch surviving a service restart; a provider
+toggle that must stop a grant without unpairing. Each is the kind of wiring that
+`O70`/`O75` record as the class where this project's real defects live.
+
+**Fix.** A section I for 0.6.0, written to section H's standard — each item saying *what it proves*,
+because H's own preamble warns that several checks pass trivially when the underlying call is
+failing. Worth writing with someone who can run them: an item authored from the code alone risks
+being the tautological fixture `tests/spawn_paths.rs` exists to prevent.
+
+**Trigger.** Already fired — the release is on the download page. Until then, do not read "tier 3
+unrun" as covering 0.6.0; it covers 0.5.0 and is silent about 0.6.0.
+
+---
+
+### O88 · The dashboard fires twelve requests on load, before the parent has scrolled anywhere
+
+`app.js::loadAll` issues twelve fetches with no staggering, on `init()` and again on every
+`login()`. The first time it runs is immediately after the pairing QR is scanned, against a SYSTEM
+service on a family PC of unknown vintage — the tool's first impression, and its heaviest moment.
+
+**The obvious fix is half a fix, and the half it misses is the expensive half.** Six of the twelve
+feed cards that are collapsed `<details>` and could load on first `toggle` instead: `loadRoutines`,
+`loadProviders`, `loadCodes`, `loadAudit`, `loadUsage`, `loadLanguage`. Verified on 2026-09-02 that
+each writes only state its own card renders, so deferring them is safe — `todayAsked`, the one piece
+of shared state that looked like a counter-example, belongs to `loadToday` and gates the
+enforcement banner.
+
+But the two costly loaders are **always-open cards and cannot be deferred this way**:
+`loadScreentime` feeds *Screen time* (`index.html:1115`) and pays the whole-history cost `O56`
+records; `loadProcesses` feeds *Running apps* (`index.html:334`) and drives the `sysinfo`
+enumeration `DECLINED-OPTIONS.md` calls "the largest remaining win without new FFI". So the
+collapsed-card change halves the request **count** and leaves the **cost** concentration exactly
+where it is. Anyone proposing it should say which of the two they are buying.
+
+**Why this is filed rather than fixed.** The change lives entirely in the DOM-and-network half of
+`app.js`, which `O71` correctly identifies as the untested half — `web/test/` reaches the pure
+methods, and a deferred-load path is not one. It would ship on reasoning alone, which is the
+failure mode this file exists to record rather than repeat. `O56` is the better first move: it
+attacks the cost instead of the count, and it is testable.
+
+**Fix, when taken.** Either defer the six (small, local, per-card, needs a DOM test to be worth
+doing) or stagger the twelve so the always-open cards resolve before the collapsed ones compete
+with them. Measuring first is cheap and nobody has: open the dashboard, read the network panel.
+That is also the cheapest available answer to `O23`, which currently has no number at all.
+
 ## Not covered by any of this
 
 **None of the above has run on the target machine.** Everything here was found by reading, tests,
