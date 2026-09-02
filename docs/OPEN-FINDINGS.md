@@ -1657,6 +1657,93 @@ doing) or stagger the twelve so the always-open cards resolve before the collaps
 with them. Measuring first is cheap and nobody has: open the dashboard, read the network panel.
 That is also the cheapest available answer to `O23`, which currently has no number at all.
 
+### O89 · A paired device holds the parent's whole authority, so the provider registry bounds nothing that matters
+
+> **Cross-repo** · pairs with `studygo` · needs a decision here
+
+`PLUGIN-SYSTEM.md` chose a declarative provider over a WASM sandbox because a plugin here needs no
+code execution — only a name, a switch and a minutes value. That reasoning is sound and the
+conclusion still holds. It answered *what a provider runs*. Nobody asked **what a provider is
+authenticated as**, and the registry's careful bounds read as though that question had been settled
+too.
+
+`auth::pair` ends with the same two steps as `auth::login` — `session.cycle_id()`, then
+`session.insert(AUTH_KEY, true)` — and its own comment says so: *"Same privilege transition as a
+password login"*. `auth::require_auth` reads that one boolean and nothing else; `AUTH_KEY` is the
+only session key in the crate. There is no role, no scope, no client identity. All of `/api/*` sits
+behind a single `route_layer(require_auth)`.
+
+Voortgang, the earned-time client in the `studygo` repository, stores the cookie `GET /p/{token}`
+minted and replays it on every push. Its own store says *"It is a bearer credential — replaying it
+drives the parent dashboard"*. So **the principal that pushes practice results and the principal
+that configures the registry are the same principal**, and every control in the provider design
+constrains a caller who can delete the control.
+
+**Measured 2026-09-02**, by a probe against the real router rather than by reading it:
+
+```
+provider push #1 -> {"minutes":30,"ok":true}                      registry works as designed
+provider push #2 -> {"ok":false,"reason":"already_granted_today"}  latch works as designed
+parent grant #0..#4 -> 200 {"minutes":240,"ok":true}  x5
+total from `source=parent`: 1200 minutes
+repriced own provider 30 -> 240: 200 OK
+deleted own registry entry: 200 OK
+ledger: DailyGrant { minutes: 1230 }
+```
+
+Twenty and a half hours of screen time in six requests. The day latch lives inside `if robot { … }`
+and `robot = source != "parent"`, so a client naming itself `parent` skips the registry lookup, the
+`enabled` check, the latch and `MAX_EARNED_SOURCES` together. `MAX_REQUEST_MINUTES` caps one
+request at 240; nothing caps the day.
+
+**Three consequences worth stating separately.**
+
+- **The audit record fails in the wrong direction.** `83f0ce3` exists to make the audit line name
+  the granting source instead of recording a robot as `parent`. A grant sent as `source=parent`
+  is written as `{"minutes":240,"source":"parent"}` — so the one record that would reveal this
+  says the parent did it themselves.
+- **`re_anchor`'s safety argument was false.** Its doc called reaching it "fatal" if the child
+  could, and rested on `require_auth` meaning "costs the parent's password". Corrected in place.
+- **`SECURITY.md`'s blast-radius row was false.** It said integration minutes are "set here and
+  never by the caller" — true of the endpoint, false of the principal, once the caller and the
+  session holder are one device. Corrected, with the general statement added under the table.
+
+**Distinct from `O77`.** That entry is about *revoking* a session that leaked; this is about what a
+session **is** — an unscoped grant of everything, issued deliberately to software. `O77`'s
+*Signed-in devices* card would make this visible and revocable, which is worth having either way,
+but it does not narrow what a paired device may do while it holds a valid cookie.
+
+**Why it is filed rather than fixed.** The repair changes the pairing contract in both repositories
+and is a security-posture decision for the people whose child and PC these are — not a patch either
+session should land alone. The same rule `O86` is filed under.
+
+**The two candidate fixes, and what each needs.**
+
+1. *A scoped credential.* Pairing mints a token authorising exactly `POST /api/extra-time` for
+   exactly one `source`. This makes the registry the boundary the design already believes it is,
+   and it is the honest fix. Largest change; new credential type on both sides.
+2. *A marked session.* Pairing records what kind of principal it created, and a marked session is
+   refused `source=parent` and the parent-dashboard routes. Smaller, reuses the session store.
+   The `studygo` side reports its owner has chosen this one; **the decision on this side has not
+   been made**, and the two repositories have to agree before either moves.
+
+If (2) is taken, three things are already known about it and one is a trap:
+
+- **The allowlist is three routes, not one.** Voortgang calls `GET /p/{token}`, `POST
+  /api/extra-time` **and `GET /api/usage/today`** — the grant read-back that `O85` depends on. An
+  allowlist built from the sentence "the phone pushes grants" contains only the middle one, would
+  silently disable the read-back, and **every test in both repositories would stay green**.
+  `/api/usage/today` is also `nestwatch-mobile`'s, so narrowing it for paired sessions must not
+  narrow it for the Android client.
+- **Existing paired sessions are a migration with no safe default.** A session paired before the
+  mark exists carries no mark. "Refuse when marked" fails **open** — the hole survives the fix in
+  the only install that exists. "Allow only when marked as a password login" fails closed and
+  breaks the phone until it re-pairs, which costs one link. Decide it deliberately rather than by
+  whichever boolean was easier to add.
+- **The other repo's fixtures are captured bytes.** If refusing a route changes any status or body
+  the client sees, `nestwatch_contract_test.dart` needs a re-capture.
+
+
 ## Not covered by any of this
 
 **None of the above has run on the target machine.** Everything here was found by reading, tests,

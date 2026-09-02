@@ -433,14 +433,23 @@ pub async fn set_language(
 /// The service is already SYSTEM, so asking *it* to re-record needs no elevation at all — only the
 /// session the child cannot obtain.
 ///
-/// # Why it is safe to expose
+/// # What reaching it costs
 ///
 /// This is the one operation where "the child could reach it" would be fatal, since re-anchoring to
-/// a zone they just chose would launder the tamper into the trusted state. It sits behind
-/// `require_auth` with everything else, so reaching it costs the parent's password; the child's
-/// unauthenticated surfaces are a separate router. It is audited, and it records what it moved from
-/// and to, because "the anchor changed" is exactly the line you want when a curfew starts behaving
-/// oddly a month later.
+/// a zone they just chose would launder the tamper into the trusted state. It is audited, and it
+/// records what it moved from and to, because "the anchor changed" is exactly the line you want
+/// when a curfew starts behaving oddly a month later.
+///
+/// **This section was headed "Why it is safe to expose" and said reaching it "costs the parent's
+/// password". Neither is true any more.** It sits behind `require_auth`, which reads exactly one
+/// boolean — `AUTH_KEY` — and `auth::pair` sets that boolean with the same two lines `auth::login`
+/// does. A session is a session; there is no scope on it. Since `0.6.0` a third-party application
+/// holds one: the phone app that pushes earned time keeps the cookie `GET /p/{token}` minted and
+/// replays it, and that device is the child's. So the cost is the parent's password **or** any
+/// paired keychain.
+///
+/// "The child's unauthenticated surfaces are a separate router" remains true and was never the
+/// point — their *authenticated* surface is the one that grew. `O89` records the whole shape.
 pub async fn re_anchor(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let offset = crate::clock::current_offset_mins();
     let zone = crate::clock::current_zone_identity();

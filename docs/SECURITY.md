@@ -36,7 +36,7 @@ authenticated session*:
 | Approve / deny a time request (grants screen time) | `POST /api/time-requests/{id}/approve`·`deny` |
 | Grant screen time directly, without a request | `POST /api/extra-time` |
 | **Issue single-use offline codes** that grant screen time with no network and no login | `GET`·`POST /api/time-codes` |
-| **Install, configure and remove integrations** that let a named outside caller grant screen time — including how many minutes each one earns, which is set here and never by the caller | `GET /api/providers`, `POST /api/providers/{name}`·`{name}/delete` |
+| **Install, configure and remove integrations** that let a named outside caller grant screen time — including how many minutes each one earns, which `POST /api/extra-time` never reads from the push | `GET /api/providers`, `POST /api/providers/{name}`·`{name}/delete` |
 | Save, apply and delete routines — one click replaces the whole rule set, and a routine given a **schedule** applies itself while its window is open | `GET`·`POST /api/routines`, `POST /api/routines/{name}/apply`·`delete` |
 | **Re-anchor the trusted clock** | `POST /api/re-anchor` |
 | Set the language of everything the child is shown | `GET`·`POST /api/language` |
@@ -45,6 +45,18 @@ authenticated session*:
 `POST /api/password` keeps the parent logged in (rotating their session id) and **does** revoke
 every other session (see §4).
 
+**Every row above is reachable by any paired device, including one running software the parent did
+not write.** `GET /p/{token}` mints an *ordinary* session: `auth::pair` performs the same two steps
+as `auth::login` (`cycle_id`, then `insert(AUTH_KEY, true)`), and `require_auth` reads that one
+boolean and nothing else. There is no scope, no role and no client identity anywhere in the session.
+So a client that keeps the cookie holds this entire table.
+
+Since `0.6.0`, one does. The earned-time integration's phone app stores what pairing minted and
+replays it on every push. The registry row's "never reads from the push" is a property of
+`POST /api/extra-time` — it is not a bound on that device, which can equally rewrite the registry
+row it is governed by, grant directly as `source=parent` with no day latch and no daily ceiling, or
+re-anchor the trusted clock. Tracked as `O89`.
+
 ## Who might try to reach it (adversaries in scope)
 
 - **A stranger on the Wi-Fi** — a guest, a visiting friend of the child, a neighbour who
@@ -52,6 +64,9 @@ every other session (see §4).
   primary adversary.
 - **The child (a standard, non-admin user of the PC).** Handled mainly by the *tamper
   resistance* model (SYSTEM service + ACLs) documented in the README; not repeated here.
+  **Not** handled: a child holding a paired device. Pairing grants the parent's authority, so any
+  phone the child controls that has been paired — or whose keychain they can reach — is inside every
+  control this document describes rather than outside it. See `O89`.
 - **Whoever could substitute the binary before it is installed** — a tampered release asset, a
   swapped download. Every other control in this document assumes the program being run is this
   program, so that assumption is worth an explicit check rather than an implicit one. See

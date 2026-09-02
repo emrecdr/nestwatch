@@ -607,10 +607,19 @@ async fn earned_grants_latch_replay_and_validate() {
         assert_eq!(
             keys,
             ["ok", "reason"],
-            "the refused response shape changed; `studygo` switches on \
-             reason == already_granted_today"
+            "the refused response shape changed; Voortgang (in the `studygo` repository) tells \
+             this body from a grant by reading `reason`. Changing this is allowed — doing it \
+             without telling that repository is not."
         );
         assert_eq!(refused["reason"], json!("already_granted_today"));
+
+        // `ok` and `reason` must not be able to disagree, which is a stronger property than
+        // either field's value on its own. The key set above already catches a *dropped* `ok`.
+        // What it does not catch is the likelier edit — making both bodies `ok: true` on the
+        // reasoning that a 200 did succeed. Nothing would fail, and a client branching on `ok`
+        // would then read every latched day as a fresh grant. One did until `studygo` 1e4d1a5.
+        assert_eq!(granted["ok"], json!(true), "a grant has to say so in `ok`");
+        assert_eq!(refused["ok"], json!(false), "a refusal has to say so in `ok`");
     }
 
     // --- `minutes` is the parent's to give and the registry's to decide. -----------------
