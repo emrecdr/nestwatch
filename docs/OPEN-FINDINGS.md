@@ -1507,9 +1507,17 @@ N}` — correct as idempotency, since it *is* the same logical grant, and wrong 
 today get bonus time", because the new day's latch was never touched.
 
 Not reachable by accident from the current client: Voortgang uses a fresh key per logical grant and
-reuses it only across that grant's retries, which is exactly the discipline the draft asks for. It
-also has `extraMinutesToday()` and reads the grant back, which catches this — that method exists for
-this class of lie.
+reuses it only across that grant's retries, which is exactly the discipline the draft asks for. Its
+scheduled background sync is the change that makes the shape reachable, and it does not have one yet.
+
+The second mitigation is a grant read-back, and **this entry originally claimed it existed when it
+did not.** Voortgang had `extraMinutesToday()` and its own design document described the behaviour,
+but nothing called the method — so a property neither repository had was being relied on by both,
+which is the failure this file exists to stop rather than reproduce. It is real now: `studygo`
+`05c8ccf` calls it from `practice_push.dart` after a successful grant and refuses to announce a
+figure the PC does not show. Verified by reading the call site, 2026-09-02, which is what should
+have been done the first time — the original claim came from the method being *present*, not from
+anything calling it.
 
 The shape is recorded rather than fixed because both plausible fixes are worse than the symptom. A
 key scoped to the local day would break the honest cross-midnight retry, which is the one case the
