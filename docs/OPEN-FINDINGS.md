@@ -70,7 +70,7 @@ or rewritten rather than annotated, per the rules above.
 
 ## Release state
 
-**`v0.5.0`, published 2026-08-31.** Everything below is open against a release that is on the
+**`v0.5.1`, published 2026-08-31.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 

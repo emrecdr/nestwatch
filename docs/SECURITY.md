@@ -36,6 +36,7 @@ authenticated session*:
 | Approve / deny a time request (grants screen time) | `POST /api/time-requests/{id}/approve`·`deny` |
 | Grant screen time directly, without a request | `POST /api/extra-time` |
 | **Issue single-use offline codes** that grant screen time with no network and no login | `GET`·`POST /api/time-codes` |
+| **Install, configure and remove integrations** that let a named outside caller grant screen time — including how many minutes each one earns, which is set here and never by the caller | `GET /api/providers`, `POST /api/providers/{name}`·`{name}/delete` |
 | Save, apply and delete routines — one click replaces the whole rule set, and a routine given a **schedule** applies itself while its window is open | `GET`·`POST /api/routines`, `POST /api/routines/{name}/apply`·`delete` |
 | **Re-anchor the trusted clock** | `POST /api/re-anchor` |
 | Set the language of everything the child is shown | `GET`·`POST /api/language` |
