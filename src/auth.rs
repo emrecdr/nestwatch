@@ -882,7 +882,9 @@ pub async fn require_auth(
         .and_then(|d| d.get("first_seen"))
         .and_then(Value::as_i64)
     {
-        let age = OffsetDateTime::now_utc().unix_timestamp().saturating_sub(started);
+        let age = OffsetDateTime::now_utc()
+            .unix_timestamp()
+            .saturating_sub(started);
         if age >= SESSION_MAX_DAYS * 86_400 {
             // Flushed rather than merely refused, so the store does not keep serving a record
             // every later request has to re-reject — and so the *Signed-in devices* card stops
