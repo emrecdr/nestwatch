@@ -1353,68 +1353,52 @@ outside comments, `adopted` from a `use` naming any of the reflow-proof primitiv
 `match_indices` over the whole text — is stale as of this commit.
 
 
-### O81 · A connection that sends nothing is still held forever
+### O81 · Nothing bounds the number of connections
 
-**The rest of this class is fixed; this is the piece that is not, and it is the cheapest variant
-for an attacker.** `server::install_connection_timeouts` now installs a `TokioTimer` on both
-protocols, which activates hyper's own documented 30s `header_read_timeout` (inert before, because
-`axum-server` never set a timer and `Time::check` returns `None` without one) and gives h2 a 30s
-keep-alive. Measured against the real binary, before and after:
+**The stalled-connection half of this is fixed; what is left is the count.** The entry used to
+describe two holes — no first-byte deadline and no connection cap. The first is closed:
+`server.rs` now serves **HTTP/1.1 only** and narrows ALPN to match, which skips `hyper-util`'s
+`ReadVersion` state entirely and arms the h1 header timeout on the first poll. Measured over a
+socket against the real binary on 2026-09-02:
 
-| connection | before | after |
+| connection | before | now |
 |---|---|---|
-| TLS handshake, then a partial header block | open at 65s | closed between 10s and 31s |
-| h2 preface + empty `SETTINGS`, then idle | open at 66s | closed at ~60s |
-| TLS handshake, then **zero bytes** | open at 66s | **open at 66s** |
+| TLS handshake, then a partial header block | open at 65 s | closed at 30.0 s |
+| TLS handshake, then **zero bytes** | **open at 66 s** | **closed at 30.0 s** |
+| ALPN offering `h2,http/1.1` | negotiated h2 | negotiates `http/1.1`, `200 OK` |
+| ALPN offering `h2` only | — | refused at handshake, TLS alert 120 |
 
-The cause of the last row is above hyper and no builder setting reaches it.
-`hyper-util`'s `auto::Builder::serve_connection` does not construct an h1 or h2 `Conn` until it
-knows which; until then it parks in `ReadVersion`, a future that polls for the 24 bytes of the h2
-preface **with no timeout of its own**. One byte that is not `P` resolves it instantly — which is
-why the partial-header row is now covered — and no bytes at all means neither protocol's timeout
-machinery is ever built.
+**A trap this entry previously recommended walking into, recorded so nobody repeats it.** The old
+text called `http1_only()` "one line, and verified in `hyper-util` source". The `hyper-util` half
+was right and the layer above it was not: `axum-server` hard-codes
+`alpn_protocols = ["h2", "http/1.1"]` in `config_from_der`, which is where
+`RustlsConfig::from_pem_file` ends up, and `Server::http1_only()` does not touch it. That one line
+alone would have advertised h2, let every current browser negotiate it, and then fed an h2 preface
+to an HTTP/1.1 parser — a blank dashboard for everyone, shipped as a cleanup. The fix needs the
+ALPN narrowing too (`serve_http1_only`), and
+`serving_one_protocol_and_advertising_it_cannot_drift_apart` fails if either call is removed
+without the other.
 
-**Size, measured rather than assumed.** 300 stalled connections cost the process **12.5 MB of RSS
-(~42 KB each)** and 300 handles, opened at ~1,100/s from one client, and the dashboard still
-answered instantly throughout. So this is not the lock-out it first looks like: it is an unbounded
-leak that nothing reclaims. One machine's worth of ephemeral ports (~16k on Windows' default
-dynamic range) is roughly 690 MB, held for as long as the attacker cares to hold it. Enforcement is
-unaffected either way — both enforcers are separate tasks that touch no HTTP.
+**What remains.** `axum-server`'s accept loop spawns a task per connection with no semaphore,
+permit or limit of any kind. Nothing caps how many may be open at once.
 
-**Independently confirmed, and two facts worth keeping.** The concurrent session on this repo read
-the dependency sources while the above was being measured over a socket, and reached the same
-conclusion. Two things it added:
+**Severity is lower than it was, and the change is worth stating precisely.** Before, a stalled
+connection was held *forever*, so the leak was permanent and grew until the attacker stopped
+caring. Now every one of them dies after 30 s, so holding N connections costs the attacker a
+sustained re-connect rate rather than a one-off cost. The peak is unchanged — one machine's
+ephemeral range (~16 k on Windows' default) at the measured ~42 KB and one handle each is roughly
+690 MB — but it now drains within 30 s of the attack stopping instead of persisting. Enforcement is
+unaffected either way: both enforcers are separate tasks that touch no HTTP.
 
-* `Time::check` **panics** for a `Dur::Configured` with no timer, and merely warns for a
-  `Dur::Default`. So anyone who had ever written the value out explicitly would have crashed on the
-  first connection. Inheriting it silently is the only way to hold this bug — which is why it
-  survived in a crate whose defaults are otherwise well travelled.
-* It is the **only** `Dur::Default` in hyper's server code, so there was no idle or keep-alive
-  default hiding behind it. Nothing else was ever going to close these connections.
-* `hyper` emits `timeout header_read_timeout has default, but no timer set` at WARN on the affected
-  path. If the service's `tracing` filter admits hyper at WARN, that string in a real log is a
-  zero-cost confirmation that the condition is live in a shipped binary.
+**Why a cap was not added at the same time.** It is a different shape of change. A deadline is a
+property of one connection and could be bought by choosing a protocol; a cap is a property of the
+listener, needs a `Semaphore` threaded through an accept loop this crate does not own, and has its
+own failure mode — a cap reached by an attacker refuses the *parent* as readily as the child, which
+is the harm the cap exists to prevent. That trade wants deciding on its own evidence rather than
+bundled into a protocol decision.
 
-**And the hole is two holes, not one.** `axum-server`'s accept loop spawns a task per connection
-with no semaphore, permit or limit of any kind. So a first-byte deadline alone is a slower
-exhaustion rather than a closed door, and a connection cap alone is a permanent one — current
-practice bounds both, because either alone is bypassable.
-
-**Two candidate fixes, neither taken.**
-
-* **A first-byte deadline on the accepted stream** — an `Accept` wrapper whose `AsyncRead` fails
-  the connection if no plaintext byte arrives within N seconds. Complete, and ~90 lines of
-  hand-written pinning in the TLS path of a service whose worst outcome is supposed to be a PC that
-  keeps working. A bug there costs the parent their dashboard, which is the same harm as the
-  attack.
-* **`http1_only()`** — one line, and **verified in `hyper-util` source** to skip `ReadVersion`
-  entirely: `version: Some(Version::H1)` takes the `serve_connection` arm directly, so the h1
-  header timeout arms on the first poll and the case closes completely. It costs HTTP/2, which is a
-  product decision rather than a cleanup: `/api/events` holds one connection open per tab and h1.1
-  browsers cap at six per origin, so a parent with several tabs is exactly who would pay for it.
-
-**Trigger.** Any decision on whether this install needs HTTP/2 at all. If the answer is no, the fix
-is one line and this entry closes.
+**Trigger.** Any report of the dashboard becoming slow or unreachable while the PC is otherwise
+healthy, or any work that puts this service anywhere other than a home LAN.
 
 ### O82 · The DST high-water mark does not survive a reboot, so tamper resistance loses an hour
 

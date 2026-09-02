@@ -234,7 +234,8 @@ pub async fn serve_with_handle(
     let router = build_router(state);
 
     tracing::info!("listening on https://0.0.0.0:{port} (reach it at https://<this-pc>:{port})");
-    let mut server = axum_server::bind_rustls(addr, tls);
+    serve_http1_only(&tls);
+    let mut server = axum_server::bind_rustls(addr, tls).http1_only();
     install_connection_timeouts(server.http_builder());
     server
         .handle(handle)
@@ -244,6 +245,33 @@ pub async fn serve_with_handle(
         .serve(router.into_make_service_with_connect_info::<SocketAddr>())
         .await?;
     Ok(())
+}
+
+/// Stop advertising HTTP/2 in the TLS handshake, because this server no longer speaks it.
+///
+/// # This is not optional decoration on `http1_only()` — without it the dashboard breaks
+///
+/// `axum-server` hard-codes `alpn_protocols = ["h2", "http/1.1"]` inside `config_from_der`, which
+/// is where `RustlsConfig::from_pem_file` ends up, and its `Server::http1_only()` changes only
+/// which hyper builder is used. **Nothing connects the two.** So `http1_only()` on its own leaves
+/// the handshake offering h2 first, every current browser takes it, and the connection is then
+/// served by an HTTP/1.1 parser that receives an h2 preface. That is not a degraded experience, it
+/// is a blank page for everyone — shipped as a one-line cleanup.
+///
+/// `O81` recommended that one line, having verified the `hyper-util` half. The ALPN layer sits
+/// above what was verified.
+///
+/// # Why this can be four lines rather than a rebuilt config
+///
+/// `rustls::ServerConfig` derives `Clone`, and `axum-server` exposes `get_inner` /
+/// `reload_from_config` for exactly this kind of swap. So the certificate loading, the key
+/// parsing and the process-wide `ring` provider selection all stay where they are, and the only
+/// thing that changes is the one field that has to change. Rebuilding the config by hand would
+/// duplicate all three for no benefit and one more place to get the provider wrong.
+fn serve_http1_only(tls: &RustlsConfig) {
+    let mut config = (*tls.get_inner()).clone();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    tls.reload_from_config(std::sync::Arc::new(config));
 }
 
 /// Give a stalled connection a way to die.
@@ -413,6 +441,54 @@ mod tests {
                 "{tokens:?} is gone from server.rs — {why}"
             );
         }
+    }
+
+    /// Serving only HTTP/1.1 and advertising only HTTP/1.1 must stay one decision.
+    ///
+    /// These are two calls into two different crates and nothing but this test connects them.
+    /// Removing either one alone is silent at compile time and catastrophic at runtime, in
+    /// opposite directions:
+    ///
+    /// * `.http1_only()` without [`serve_http1_only`] — the handshake still offers `h2`, every
+    ///   current browser takes it, and an HTTP/1.1 parser then receives an h2 preface. **The
+    ///   dashboard is blank for everyone.** This is the shape `O81` recommended, having verified
+    ///   the `hyper-util` half; the ALPN layer sits above what was verified.
+    /// * [`serve_http1_only`] without `.http1_only()` — the handshake correctly offers only
+    ///   `http/1.1`, but `hyper-util` is back in `auto` mode, so it parks in `ReadVersion`
+    ///   waiting for an h2 preface that ALPN has guaranteed will never arrive. Neither protocol's
+    ///   timeout machinery is built and the connection that sends nothing is held forever again —
+    ///   the exact leak this pair was written to close.
+    ///
+    /// Verified over a socket against the real binary rather than argued: with both calls in
+    /// place, a client offering `h2,http/1.1` negotiates `http/1.1` and gets `200 OK`, a
+    /// connection that sends zero bytes is closed after **30.0 s** (it was open at 66 s), and an
+    /// `h2`-only client is refused at the handshake with TLS alert 120 rather than hung.
+    #[test]
+    fn serving_one_protocol_and_advertising_it_cannot_drift_apart() {
+        let src = production_source(SERVER_RS);
+
+        assert!(
+            !find_tokens(
+                src,
+                &["bind_rustls", "(", "addr", ",", "tls", ")", ".http1_only"]
+            )
+            .is_empty(),
+            "the server no longer restricts itself to HTTP/1.1, but `serve_http1_only` still \
+             narrows ALPN to it — so hyper is back in `auto` mode waiting for an h2 preface that \
+             can never arrive, and a connection sending nothing is held forever again"
+        );
+        assert!(
+            !find_tokens(src, &["serve_http1_only", "(", "&", "tls", ")"]).is_empty(),
+            "ALPN is no longer narrowed to http/1.1 while the server still serves only HTTP/1.1. \
+             The handshake offers h2, every current browser takes it, and an h1 parser then gets \
+             an h2 preface — the dashboard is blank for everyone"
+        );
+        assert!(
+            !find_tokens(src, &["alpn_protocols", "=", "vec", "!"]).is_empty(),
+            "`serve_http1_only` no longer sets `alpn_protocols`, so it does nothing at all — \
+             `axum-server` hard-codes `[h2, http/1.1]` in `config_from_der` and only an explicit \
+             overwrite removes h2"
+        );
     }
 
     /// Every route reachable **without a session**, exactly.

@@ -171,6 +171,26 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   tokens through the shared helper rather than carrying private copies of the reflow rule, which is
   what let three guards drift into failing open on the same day. What is still open is recorded as
   `O79`, and is about how the meta-guard picks files to check rather than about any scan.
+- **A connection that connects and then says nothing is no longer held forever.** Both network gates
+  in front of this service act per *request*, so neither ever saw a client that completed the TLS
+  handshake and then sent no bytes at all. Those connections were held indefinitely — measured at
+  ~42 KB and one handle each, so not a lock-out, but an unbounded leak that nothing reclaimed and
+  that anyone on the LAN could grow at will. The cause sat above every timeout setting: the server
+  sniffed each connection to decide HTTP/1.1 versus HTTP/2, and until it knew, it had built neither
+  protocol's timeout machinery.
+  <br>**The service now speaks HTTP/1.1 only**, which removes the sniffing step and lets the
+  30-second header timeout arm immediately. Measured over a socket against the real binary: a
+  connection that sends nothing is now **closed after 30.0 seconds**, where it stayed open past 66;
+  a half-sent request is closed the same way.
+  <br>What HTTP/2 was doing here was multiplexing the live-update stream, which the dashboard treats
+  as optional — it already falls back to its 60-second refresh, and that is what happens now if you
+  keep a great many tabs open at once. Nothing else changes: the dashboard, the child's page and the
+  phone client all speak HTTP/1.1 and always could.
+  <br>**Recorded because it nearly went wrong:** the obvious one-line version of this fix is
+  actively dangerous. Restricting the server without also narrowing what the TLS handshake
+  advertises leaves it offering HTTP/2, which every current browser then chooses — and the browser's
+  HTTP/2 opening bytes are gibberish to an HTTP/1.1 parser, so the dashboard would have gone blank
+  for everyone. Both halves ship together and a test fails if either is removed alone.
 - **The password hasher moved to one generation of its cryptography, and the secrets on the managed
   PC now name their own random source.** `argon2` was pinned at 0.5, which held an older RustCrypto
   stack in the binary alongside the current one — two copies each of `digest`, `block-buffer` and

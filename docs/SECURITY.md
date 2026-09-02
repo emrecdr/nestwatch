@@ -81,14 +81,34 @@ open the door on its own.
   above act **per request**, so neither sees a client that opens a connection and then never sends
   one. `hyper` documents a 30-second `header_read_timeout` for exactly that, and it was **inert**
   here: applying it needs a `Timer`, `axum-server` never installs one, and the default then
-  resolves to `None` silently. The timer is now installed, and `h2` — which `axum-server` offers in
-  ALPN, so an attacker can simply choose it — gets a matching 30-second keep-alive. Verified by
-  probe against the real binary in both directions, not by reading.
-  <br>**One case is still open and is written down rather than glossed:** a connection that sends
-  *zero* bytes is held indefinitely, because the protocol sniffing that decides h1-vs-h2 happens
-  before either timeout exists. It is a resource leak, not a lock-out — measured at ~42 KB and one
-  handle per connection, with the dashboard still answering normally under 300 of them. See `O81`
-  for the measurements and the two candidate fixes.
+  resolves to `None` silently. The timer is now installed. Verified by probe against the real
+  binary in both directions, not by reading.
+  <br>**The zero-byte case is now closed too, by serving one protocol instead of sniffing for
+  two.** A connection that completed the TLS handshake and then sent nothing used to be held
+  indefinitely: `hyper-util`'s `auto` builder parks in `ReadVersion` waiting for the 24-byte h2
+  preface, and until it knows which protocol it is speaking it has built neither one's timeout
+  machinery. `server.rs` now serves **HTTP/1.1 only**, which skips that state entirely and arms the
+  h1 header timeout on the first poll.
+  <br>**Both halves of that are required, and the second is the trap.** `axum-server` hard-codes
+  `alpn_protocols = ["h2", "http/1.1"]` inside `config_from_der` — which is where
+  `RustlsConfig::from_pem_file` ends up — and its `http1_only()` does not touch it. Restricting the
+  server without narrowing ALPN would advertise h2, let every current browser negotiate it, and
+  then feed an h2 preface to an HTTP/1.1 parser: a blank dashboard for everyone, shipped as a
+  one-line cleanup. `server.rs::serve_http1_only` narrows ALPN, and
+  `serving_one_protocol_and_advertising_it_cannot_drift_apart` fails if either call is removed
+  without the other.
+  <br>Measured over a socket against the real binary: a client offering `h2,http/1.1` negotiates
+  `http/1.1` and gets `200 OK`; a connection that sends **zero bytes is closed after 30.0 s**,
+  where it was open at 66 s; a partial header block is closed after 30.0 s; and an `h2`-only client
+  is refused at the handshake with TLS alert 120 (`no_application_protocol`) rather than hung.
+  <br>**What HTTP/2 cost, and why it was affordable here.** `/api/events` is one long-lived
+  connection per tab, and HTTP/1.1 browsers cap at six per origin — so a parent with many tabs open
+  can run out. That degrades rather than breaks: the stream is explicitly optional
+  (`assets/app.js` returns early when `EventSource` is unavailable) and everything behind it is
+  refetched by the 60-second poll, which is the arrangement the client was written for.
+  <br>**Still open:** nothing bounds the *number* of connections. `axum-server`'s accept loop
+  spawns a task per connection with no semaphore, so the leak is now self-healing (30 s after the
+  attack stops) rather than permanent, but its peak is unchanged. See `O81`.
 
 ### 2. Transport — TLS with a verifiable identity
 - All traffic is HTTPS (rustls, TLS 1.2+). The password and screenshots never travel in clear.
@@ -180,6 +200,10 @@ open the door on its own.
     all**. Reading only `Host` would have produced a guard that passes every test over HTTP/1.1 and
     admits the attack over the transport browsers actually negotiate; `tests/origin.rs` runs both
     shapes for that reason.
+    <br>This server now serves **HTTP/1.1 only** (see §1), so the `:authority` branch is currently
+    unreachable in production. It stays, and so do both shapes in `tests/origin.rs`: the h1-only
+    decision was taken to close a connection leak, not because this guard stopped needing to handle
+    h2, and re-enabling HTTP/2 must not silently re-open a hole that was already found once.
   - Still allowed through: a caller sending **neither** header — `curl`, a health probe, the
     Android client. OWASP recommends blocking there and this declines it, on a property of this
     product rather than of the web: the header-less caller here is a shipped phone app, and every
