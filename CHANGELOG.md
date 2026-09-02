@@ -105,6 +105,28 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ### Fixed
 
+- **You can now remove an integration, not just switch it off.** Turning one off stopped it
+  granting, but there was no way to get rid of it: an integration you had finished with stayed on
+  the card forever, still listed with its name and its reward. There is now a *Remove* button, and
+  the registry is capped at twelve so a runaway or buggy client cannot grow the settings file
+  without limit. The two arrived together deliberately — a cap with no way to remove anything is a
+  trap rather than a limit, and reconfiguring an integration you already have is never blocked by
+  the cap, so filling the list can never leave you unable to switch something off.
+  <br>**Removing does not hand back today's bonus.** If an integration already granted today, the
+  once-a-day record survives it being removed, so taking it out and putting it back cannot be used
+  to collect twice — by a child who got hold of the dashboard, or by a phone retrying a sync it
+  should not. The confirmation box says so, because the obvious way to troubleshoot an integration
+  is to remove it and add it again, and doing that silently would look broken.
+- **Two integrations could collide on a retry, and the second one would silently grant nothing.**
+  A retried push carries an `Idempotency-Key` so a lost reply cannot cause a double grant. Those
+  keys were stored without recording *which* integration sent them — so if two apps happened to
+  choose the same key, and picking today's date is the obvious thing for an app to choose, the
+  second push was handed the first one's answer. It reported success, and no time was added. Keys
+  are now filed per integration, so two apps cannot see each other's.
+  <br>The same fix closes the other half: one key reused for two genuinely different grants is now
+  refused outright rather than answered with the earlier grant's result, which is what a client
+  that reuses a key by mistake needs to be told. See `src/idempotency.rs` for why that answers 400
+  rather than the 422 the (now expired) IETF draft suggests.
 - **A parent using a screen reader was read a stopwatch instead of being told the live view had
   stopped.** The line under the screenshot — "updated 4s ago" — was marked as a region a screen
   reader should announce whenever it changes, and it changes **every second** for as long as a
@@ -278,6 +300,15 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ### Changed
 
+- **`POST /api/extra-time` now says what is actually true about `minutes`.** The field was required
+  on every request, but it is only ever read when *you* press the button — an integration's reward
+  comes from its entry on this PC, never from the push. So a companion app had to send a number it
+  knew would be ignored, and the only reason sending `0` worked is that the range check happened to
+  sit on the other side of the branch. `minutes` is now optional, required only for a parent's own
+  grant and refused with a message naming the missing field rather than complaining that zero is
+  out of range. Integrations may send it, send zero, or leave it out; all three behave the same.
+  `POST /api/curfew/extend` no longer silently accepts (and discards) a `source` field it shares no
+  meaning with.
 - **You can now keep a copy of your settings, and put them back.** *Settings backup*, at the bottom
   of the dashboard, downloads your curfew, daily limits, app rules, groups, routines and your
   child's language as one file, and restores it. There was previously no way to do this at all:

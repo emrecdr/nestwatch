@@ -568,11 +568,34 @@ pub async fn export(State(state): State<AppState>) -> Result<Response, AppError>
 
 #[derive(Deserialize)]
 pub struct ExtraTimeBody {
-    minutes: u32,
+    /// Minutes to grant, and **only meaningful when the parent is granting**. A provider's reward
+    /// is read from its registry entry on this machine, never from the push, so a robot grant may
+    /// omit this — and one that sends a number does not receive it.
+    ///
+    /// `Option<u32>` rather than `u32` so the wire format says what is true. As a required field
+    /// it was load-bearing in a way nothing recorded: a push had to send *something*, the phone
+    /// sent `0` as an explicit non-guess, and `0` is precisely the value `require_minutes`
+    /// rejects. That worked only because the validation sits under an `if source == "parent"`.
+    /// Hoisting that check — the obvious tidy-up, and one no test would have caught — would have
+    /// broken every push, with nothing in the type to warn whoever did it.
+    #[serde(default)]
+    minutes: Option<u32>,
     /// Who is granting. Absent means the parent pressed the dashboard button;
     /// a robot names itself (`studygo`) so the audit log stays honest.
     #[serde(default)]
     source: Option<String>,
+}
+
+/// Body of `POST /api/curfew/extend`.
+///
+/// Its own type rather than a second user of [`ExtraTimeBody`]. Bedtime has no notion of a grant
+/// source, and while the two shared a struct this endpoint accepted a `source` field and silently
+/// discarded it — a caller could push `{"minutes":30,"source":"studygo"}` here and be told `ok`
+/// with nothing about the extension attributed to anyone. `minutes` stays required because there
+/// is no registry to read a default from.
+#[derive(Deserialize)]
+pub struct CurfewExtendBody {
+    minutes: u32,
 }
 
 /// Longest accepted `source` token.
@@ -616,7 +639,7 @@ fn valid_source(source: &str) -> bool {
 /// not reveal an extension either. They simply notice the machine did not shut down.
 pub async fn extend_curfew(
     State(state): State<AppState>,
-    Json(body): Json<ExtraTimeBody>,
+    Json(body): Json<CurfewExtendBody>,
 ) -> Result<Json<Value>, AppError> {
     require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
     let minutes = body.minutes;
@@ -776,12 +799,20 @@ pub async fn extra_time(
             "source must be 1-32 characters of a-z, 0-9, _ or -".into(),
         ));
     }
-    // Only the parent's own grant is worth what the request said. A provider's reward is read
-    // from the registry below, so the body's `minutes` is vestigial there and must not be
-    // validated as if it mattered — a push may send anything or nothing.
-    if source == "parent" {
-        require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
-    }
+    // Only the parent's own grant is worth what the request said, so only the parent has to say
+    // it. A provider's reward is read from the registry inside the critical section below, so its
+    // `minutes` is vestigial: a push may send a number, send zero, or omit the field, and none of
+    // the three is read.
+    let asked = if source == "parent" {
+        let asked = body.minutes.ok_or_else(|| {
+            AppError::BadRequest("minutes is required when the parent is granting".into())
+        })?;
+        require_minutes(asked, MAX_REQUEST_MINUTES)?;
+        asked
+    } else {
+        // Overwritten from the provider registry before it is used. Never the pushed value.
+        0
+    };
     let replay_key = match headers.get("idempotency-key") {
         None => None,
         Some(value) => {
@@ -793,14 +824,43 @@ pub async fn extra_time(
                     "idempotency key must be 1-128 characters".into(),
                 ));
             }
-            Some(key.to_owned())
+            // Namespaced by source rather than stored bare. The header is chosen by the
+            // client, and two integrations that both key by day — "2026-09-02" is the obvious
+            // choice — would otherwise collide: the second push would be handed the first's
+            // response, grant nothing, and report success to its caller. The draft scopes a key
+            // to one client; the only client identity on this wire is `source`, so that is the
+            // scope. `:` cannot appear in a `source` (see `valid_source`), so the join is
+            // unambiguous.
+            Some(format!("{source}:{key}"))
         }
     };
+    // The inputs that decide this request's outcome, which a retry under the same key must match.
+    // `source` is already the cache's namespace, and a provider's `minutes` is never read — so a
+    // robot's fingerprint is `null` and two pushes under one key always agree, which is exactly
+    // what makes an honest retry replay rather than trip the check below. For the parent,
+    // `minutes` *is* the request.
+    let fingerprint = if source == "parent" {
+        json!(asked)
+    } else {
+        Value::Null
+    };
     if let Some(key) = &replay_key {
-        let stored = recover_lock(&state.grant_replays).replay(key, std::time::Instant::now());
-        if let Some(response) = stored {
+        // Bound rather than matched in place, so the mutex guard is released before the arms run.
+        let outcome =
+            recover_lock(&state.grant_replays).replay(key, &fingerprint, std::time::Instant::now());
+        match outcome {
             // The retry of a request that already ran: hand back what it got, do nothing again.
-            return Ok(Json(response));
+            crate::idempotency::Replay::Stored(response) => return Ok(Json(response)),
+            // One key across two different grants. Replaying would answer this request with the
+            // other one's outcome and never perform it — a success the parent never received.
+            crate::idempotency::Replay::Mismatch => {
+                return Err(AppError::BadRequest(
+                    "this Idempotency-Key was already used with different values; one key belongs \
+                     to one grant, so send a fresh key"
+                        .into(),
+                ));
+            }
+            crate::idempotency::Replay::Fresh => {}
         }
     }
 
@@ -811,7 +871,7 @@ pub async fn extra_time(
     // a spoofed or compromised client cannot choose its own minutes. Resolved inside the config
     // critical section for the robot case, so the provider it is read from is the same one the
     // latch is written against.
-    let mut minutes = body.minutes;
+    let mut minutes = asked;
     // Checked and latched inside the one place config is mutated, so two concurrent grants from
     // the same source serialize on `config_save_lock` and the second sees the first's latch.
     let mut granted = true;
@@ -872,7 +932,12 @@ pub async fn extra_time(
         json!({ "ok": false, "reason": "already_granted_today" })
     };
     if let Some(key) = replay_key {
-        recover_lock(&state.grant_replays).record(key, response.clone(), std::time::Instant::now());
+        recover_lock(&state.grant_replays).record(
+            key,
+            fingerprint,
+            response.clone(),
+            std::time::Instant::now(),
+        );
     }
     Ok(Json(response))
 }
@@ -888,10 +953,20 @@ fn recover_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Longest provider name accepted, and the same charset the grant `source` uses, because a
-/// provider's name *is* the source a push names — the two must agree or an installed provider
-/// could never be granted against.
-const MAX_PROVIDER_NAME: usize = 32;
+/// Is `name` an acceptable provider name?
+///
+/// A provider's name **is** the `source` a push names, so this delegates to [`valid_source`]
+/// rather than restating its length and charset. That was previously two rules with a comment
+/// promising they agreed — the kind of pair that drifts silently, and where drifting either way
+/// is a bug: a name the registry accepts but a grant cannot name is an integration that can never
+/// fire, and the reverse is a source that grants with nothing installed.
+///
+/// `parent` is excluded because it is the reserved name for a human pressing the button, and a
+/// provider called `parent` would sit in the registry unable to ever be reached — `extra_time`
+/// routes that source down the un-latched path before it looks anything up.
+fn valid_provider_name(name: &str) -> bool {
+    name != "parent" && valid_source(name)
+}
 
 #[derive(Deserialize)]
 pub struct ProviderBody {
@@ -920,30 +995,73 @@ pub async fn set_provider(
     Path(name): Path<String>,
     Json(body): Json<ProviderBody>,
 ) -> Result<Json<Value>, AppError> {
-    if name.is_empty()
-        || name.len() > MAX_PROVIDER_NAME
-        || name == "parent"
-        || !name
-            .bytes()
-            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
-    {
-        return Err(AppError::BadRequest(
-            "provider name must be 1-32 characters of a-z, 0-9, _ or - (and not 'parent')".into(),
-        ));
+    if !valid_provider_name(&name) {
+        return Err(AppError::BadRequest(format!(
+            "provider name must be 1-{MAX_SOURCE_LEN} characters of a-z, 0-9, _ or - \
+             (and not 'parent')"
+        )));
     }
     require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
     let provider = crate::config::Provider {
         enabled: body.enabled,
         minutes: body.minutes,
     };
-    update_config(&state, |c| {
-        c.providers.insert(name.clone(), provider.clone());
+    // Cap check + upsert under one write guard, the shape `save_routine` uses and for the same
+    // reason. **Reconfiguring a provider that already exists is always allowed** — only a new
+    // name can hit the cap. Without that, a parent sitting at the ceiling could not turn an
+    // integration off, and the cap meant to bound the file would instead freeze it.
+    try_update_config(&state, |c| {
+        if !c.providers.contains_key(&name) && c.providers.len() >= crate::config::MAX_PROVIDERS {
+            return Err(AppError::BadRequest(format!(
+                "too many integrations (limit {}); remove one first",
+                crate::config::MAX_PROVIDERS
+            )));
+        }
+        c.providers.insert(name.clone(), provider);
+        Ok(())
     })
     .await?;
     state.audit.record(
         "provider_configured",
         json!({ "name": name, "enabled": body.enabled, "minutes": body.minutes }),
     );
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `POST /api/providers/{name}/delete` → uninstall an integration.
+///
+/// The counterpart routines have had all along, and not optional once a cap exists: with a
+/// ceiling and no removal the twelfth install is permanent. Disabling was the only lever before
+/// this, and a disabled provider still occupies a slot and still ships its name and its reward to
+/// every dashboard that reads the registry.
+///
+/// **The day latch deliberately survives.** `config.earned` is not touched here. Clearing it
+/// would make delete-then-reinstall a two-request bypass of the once-per-source-per-day rule that
+/// [`extra_time`] exists to hold — and the caller who can reach this route is exactly the caller
+/// who would push the second grant. The orphaned entry is harmless: it is only ever compared
+/// against today, and the next successful grant from any source prunes every entry from another
+/// day.
+///
+/// Idempotent, like `delete_routine`: removing a name that is not installed answers `ok`. Two
+/// dashboards racing, or a parent pressing twice, is not a condition worth reporting. The name is
+/// still validated, so this cannot write an arbitrary path segment into the audit log.
+pub async fn delete_provider(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    if !valid_provider_name(&name) {
+        return Err(AppError::BadRequest(format!(
+            "provider name must be 1-{MAX_SOURCE_LEN} characters of a-z, 0-9, _ or - \
+             (and not 'parent')"
+        )));
+    }
+    update_config(&state, |c| {
+        c.providers.remove(&name);
+    })
+    .await?;
+    state
+        .audit
+        .record("provider_removed", json!({ "name": name }));
     Ok(Json(json!({ "ok": true })))
 }
 

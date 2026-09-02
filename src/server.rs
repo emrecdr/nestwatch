@@ -28,6 +28,8 @@
 //!     POST /api/re-anchor
 //!     GET  POST /api/language
 //!     POST /api/extra-time
+//!     GET  /api/providers
+//!     POST /api/providers/{name}  POST /api/providers/{name}/delete
 //!     GET  POST /api/rules
 //!     GET  POST /api/policy   (household settings: download / restore)
 //!     GET  POST /api/routines
@@ -106,6 +108,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/extra-time", post(api::extra_time))
         .route("/providers", get(api::list_providers))
         .route("/providers/{name}", post(api::set_provider))
+        .route("/providers/{name}/delete", post(api::delete_provider))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/policy", get(api::get_policy).post(api::set_policy))
         .route("/routines", get(api::list_routines).post(api::save_routine))

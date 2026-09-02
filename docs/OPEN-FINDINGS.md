@@ -1447,6 +1447,79 @@ made this change. Whoever picks it up should file the counterpart there and turn
 the app and the dashboard disagree about how much time is left.
 
 
+### O84 · A refused earned grant still rewrites the config and wakes the enforcer
+
+`api::extra_time` decides the day latch **inside** `try_update_config`, which is correct — that is
+what serialises two concurrent pushes from one source so the second sees the first's latch. But the
+already-granted branch sets `granted = false` and returns `Ok(())`, and `try_update_config` saves on
+every `Ok`. So a push that grants nothing still serialises the whole `Config`, writes `config.json`,
+and calls `heartbeat::wake`.
+
+Bounded and not a security issue: the caller is authenticated, and an authenticated caller has far
+larger levers than this (`POST /api/shutdown`). The cost is a pointless disk write and an enforcer
+tick per refused retry, which for a phone scheduler retrying through the day is a handful.
+
+**Not fixed deliberately.** The clean fix is a "no change, do not save" signal out of the mutate
+closure, and `try_update_config` is the single choke point every config write in the service passes
+through — the one place where an extra branch is most expensive to get wrong. That is not a trade
+worth making for a few writes a day, but it should be made if a second caller ever needs the same
+signal, because then it stops being a special case.
+
+**Fix.** Either a third closure outcome distinguishing "changed" from "correct, but nothing to
+persist", or hoist the latch read — which cannot be done without losing the serialisation the
+current shape exists to provide, so it is the first one or nothing.
+
+**Trigger.** A second handler wanting to mutate-or-not under the same lock, or evidence that config
+writes are actually costing something on the target hardware.
+
+### O85 · An idempotency replay can cross midnight and report a grant for a day that got none
+
+`idempotency::RETENTION` is 48 hours and the cache does not know about days. A scheduler that grants
+at 23:59 and retries the same logical grant at 00:01 is handed the stored `{"ok": true, "minutes":
+N}` — correct as idempotency, since it *is* the same logical grant, and wrong as an answer to "did
+today get bonus time", because the new day's latch was never touched.
+
+Not reachable by accident from the current client: Voortgang uses a fresh key per logical grant and
+reuses it only across that grant's retries, which is exactly the discipline the draft asks for. It
+also has `extraMinutesToday()` and reads the grant back, which catches this — that method exists for
+this class of lie.
+
+The shape is recorded rather than fixed because both plausible fixes are worse than the symptom. A
+key scoped to the local day would break the honest cross-midnight retry, which is the one case the
+header exists for. Expiring the cache at midnight does the same thing with extra machinery.
+
+**Fix.** Probably none. If it is ever worth closing, the honest form is to store the day alongside
+the response and answer a cross-day replay with the *stored* outcome plus a field saying which day
+it belongs to, letting the client decide.
+
+**Trigger.** A second pushing client that does not read its grant back, or a report of bonus time
+that the parent can see was never added.
+
+### O86 · `/api/extra-time`'s response is a cross-repo contract with nothing pinning it
+
+> **Cross-repo** · a second consumer now exists
+
+`tests/golden/` pins every JSON shape `nestwatch-mobile` parses, and its own first line says so.
+`POST /api/extra-time` is now parsed by a *different* repository — Voortgang, in `studygo`, reads
+`ok`, `reason` and `minutes` out of that response in `lib/nestwatch/nestwatch_client.dart` — and
+nothing on either side pins it. Renaming `reason`, or dropping `minutes` from the success body,
+breaks that client with every test in both repositories green. That is precisely the failure
+`tests/golden.rs` was built to prevent, one repository over.
+
+It cannot be fixed by adding a golden file. `nestwatch-mobile/tool/check_golden.sh` walks
+`nestwatch/tests/golden/*.json` and counts `MISSING HERE` as drift for every file that repo does not
+also carry, so a new fixture there fails a repo that has no parser for it and never will. The
+mechanism is hardwired to one consumer, and there are now two.
+
+**Fix.** Decide what `tests/golden/` is for before adding to it. Either it is "shapes the Android
+client parses" — in which case a second, separately-checked directory covers other consumers — or it
+becomes "shapes any client parses", and `check_golden.sh` on the other side has to learn which files
+are addressed to it. The second is better and needs a change in a repository that was read-only to
+the session that found this.
+
+**Trigger.** The next change to `extra_time`'s response body, or a third consumer.
+
+
 ## Not covered by any of this
 
 **None of the above has run on the target machine.** Everything here was found by reading, tests,

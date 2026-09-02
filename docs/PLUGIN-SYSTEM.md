@@ -162,3 +162,50 @@ neither C1 nor C2, and most of it exists. Record architecture **2 (WASM)** as th
 sanctioned path *if and when* third-party provider logic is ever wanted, with the
 explicit note that it solves code-safety and not network egress. Leave **1** and **3**
 rejected.
+
+---
+
+## Review of the shipped registry — 2026-09-02
+
+A second pass over `83f0ce3` and `a258b26`, asked for by the session that built them.
+The registry holds. What follows is what changed as a result, and one thing that was
+asked for and deliberately *not* done.
+
+### Fixed
+
+- **The registry was unbounded, and had no way to remove anything.** Both, together:
+  `MAX_PROVIDERS = 12` plus `POST /api/providers/{name}/delete`. These are one change,
+  not two. A cap with no delete is a trap — the twelfth install would be permanent — and
+  a delete with no cap leaves the file growable. Reconfiguring a provider that already
+  exists is never capped, or a full registry could not be switched off.
+- **Removing a provider deliberately leaves `config.earned` alone.** Clearing it would
+  make delete-then-reinstall a two-request bypass of the once-per-source-per-day latch,
+  available to exactly the caller who would want the second grant. This is now the
+  property a test pins rather than an accident of what `remove` happens to touch.
+- **`Idempotency-Key` was stored bare.** Two providers picking the same key — and a date
+  string is the obvious pick — collided, and the loser was handed the winner's response,
+  granted nothing, and reported success. Keys are now namespaced by `source`. A key
+  reused across two genuinely different grants is refused rather than replayed.
+- **`ExtraTimeBody.minutes` was required and ignored.** It is now `Option<u32>`, required
+  only for a parent grant. `POST /api/curfew/extend` got its own body type; while the two
+  shared one it accepted a `source` field and silently discarded it.
+
+### Not done, on purpose: a golden file for `/api/providers`
+
+Asked for on the grounds that it is "part of the client contract nestwatch-mobile's CI
+checks". It is not, and adding it would **break** that repo.
+
+`nestwatch-mobile/tool/check_golden.sh` loops over `nestwatch/tests/golden/*.json` and
+reports `MISSING HERE` — counting it as drift — for every file the phone repo does not
+also carry. The Android client never calls `/api/providers`; its paths are `/api/events`,
+`/api/time-requests`, `/api/time-codes`, `/api/usage/today` and `/api/screenshot`. So the
+golden file would guarantee a drift failure over there, clearable only by vendoring a
+fixture that repo has no parser for. `tests/golden.rs` says what belongs in it in its
+first line: *every JSON shape the Android client parses.* This is not one.
+
+**The real gap that question points at** is `/api/extra-time`'s *response*, which
+Voortgang parses (`ok`, `reason`, `minutes`) and nothing pins. It cannot go in
+`tests/golden/` either, for the same reason — that directory is a contract with one
+specific repo. A second consumer now exists and the mechanism does not have a place for
+it. Worth solving deliberately rather than by dropping a file into a directory whose
+checker will reject it.

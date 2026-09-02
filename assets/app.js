@@ -786,6 +786,35 @@ function app() {
       }
     },
 
+    // Remove an integration outright, which the on/off toggle does not do: a disabled provider
+    // still holds one of the registry's twelve slots and still sits in this list.
+    //
+    // The confirm is here for the non-obvious half, not the destructive half. Removing is
+    // recoverable in one click, so by itself it would not warrant asking — `deleteRoutine` does
+    // not. What warrants asking is that removing does NOT hand back today's bonus: the
+    // once-per-day latch is deliberately kept when a provider is uninstalled, so that
+    // remove-then-reinstall cannot be used to collect twice. A parent troubleshooting the
+    // obvious way — take it out, put it back — would otherwise meet silence and no explanation.
+    async removeProvider(name) {
+      if (!confirm(
+        `Remove "${name}"?\n\n` +
+        "It stops being able to add time and disappears from this list. You can install it " +
+        "again whenever you like \u2014 but if it has already granted today, reinstalling does " +
+        "not give today's bonus a second time."
+      )) return;
+      try {
+        const r = await fetch(`/api/providers/${encodeURIComponent(name)}/delete`, { method: "POST" });
+        if (r.ok) {
+          this.toast(`Removed "${name}"`, "success");
+          this.loadProviders();
+        } else {
+          this.toast(await this.rejection(r, "Could not remove integration"), "error");
+        }
+      } catch {
+        this.toast("Request failed", "error");
+      }
+    },
+
     async login() {
       this.busy = true;
       this.loginError = "";

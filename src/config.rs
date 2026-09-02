@@ -74,6 +74,28 @@ pub const MAX_SCHEDULE_WINDOWS: usize = 8;
 /// Longest routine name we accept.
 pub const MAX_ROUTINE_NAME: usize = 40;
 
+/// Largest number of installed integrations we keep (bounds the config).
+///
+/// The same job [`MAX_ROUTINES`] does, for the same reason: `providers` is written by an
+/// authenticated request and lives in the persisted config, so without a ceiling a caller with
+/// the parent's session can grow `config.json` without limit — and every save rewrites the whole
+/// file. Twelve is far above any real household: an integration is one homework or chores signal,
+/// and `api::MAX_EARNED_SOURCES` already refuses to let more than sixteen distinct sources grant
+/// on one day, so a registry larger than that could not all be used anyway.
+///
+/// Paired with the delete route by necessity, not by taste. A cap with no way to remove an entry
+/// is a trap: the twelfth install would be permanent, and turning an integration off would be the
+/// only thing a parent could still do to it.
+///
+/// **Enforced in one place, unlike [`MAX_ROUTINES`], and that asymmetry is deliberate.** Routines
+/// are checked again in [`Policy::validate`] because they ride the policy export/restore, so an
+/// import is a second way to write them. Integrations do not: [`Policy`] carries `curfew`,
+/// `rules`, `routines` and `language` and nothing else, so `api::set_provider` is the *whole*
+/// write path and a second check would guard a door that is not there. Should `providers` ever
+/// join `Policy`, this cap has to be restated there — that is the moment the asymmetry becomes a
+/// hole.
+pub const MAX_PROVIDERS: usize = 12;
+
 /// A saved, named preset of usage [`Rules`](crate::rules::Rules) — e.g. "Homework", "Weekend" —
 /// that the parent can apply to the live rules with one click.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

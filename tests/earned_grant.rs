@@ -18,7 +18,7 @@ use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use nestwatch::config::data_paths;
+use nestwatch::config::{MAX_PROVIDERS, data_paths};
 
 mod common;
 use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
@@ -67,6 +67,22 @@ async fn configure_provider(
                 .body(Body::from(
                     json!({ "enabled": enabled, "minutes": minutes }).to_string(),
                 ))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+/// Uninstall a provider via `POST /api/providers/{name}/delete`.
+async fn delete_provider(app: &axum::Router, cookie: &str, name: &str) -> StatusCode {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/providers/{name}/delete"))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -250,7 +266,13 @@ async fn earned_grants_latch_replay_and_validate() {
         );
     }
 
-    // --- The earned-source population is bounded. -----------------------------------------
+    // --- The earned-source population is bounded, and it can outgrow the registry. --------
+    //
+    // Sixteen latched sources against a twelve-slot registry, which is only reachable because
+    // uninstalling a provider deliberately leaves `earned` alone. "Sources that granted today"
+    // and "providers installed right now" are therefore different counts, and that is what keeps
+    // MAX_EARNED_SOURCES a live bound instead of dead code sitting behind the smaller
+    // MAX_PROVIDERS. Install, grant, uninstall, repeat.
     {
         let (app, cookie, _config) = fresh_app().await;
 
@@ -264,6 +286,8 @@ async fn earned_grants_latch_replay_and_validate() {
                 grant(&app, &cookie, json!({ "minutes": 1, "source": name }), None).await;
             assert_eq!(status, StatusCode::OK);
             assert_eq!(body["ok"], json!(true), "source s{i} within the cap grants");
+            // Frees the registry slot; the day latch stays behind, which is the point.
+            assert_eq!(delete_provider(&app, &cookie, &name).await, StatusCode::OK);
         }
         assert_eq!(
             configure_provider(&app, &cookie, "s16", true, 1).await,
@@ -371,6 +395,215 @@ async fn earned_grants_latch_replay_and_validate() {
         assert_eq!(
             configure_provider(&app, &cookie, "parent", true, 30).await,
             StatusCode::BAD_REQUEST,
+        );
+        // The same reservation on the way out, so the two handlers cannot disagree about what
+        // a provider name is.
+        assert_eq!(
+            delete_provider(&app, &cookie, "parent").await,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    // --- The registry is bounded, and the bound does not freeze it. ----------------------
+    {
+        let (app, cookie, _config) = fresh_app().await; // studygo + chores hold 2 of the slots
+
+        for i in 0..(MAX_PROVIDERS - 2) {
+            assert_eq!(
+                configure_provider(&app, &cookie, &format!("p{i}"), true, 1).await,
+                StatusCode::OK,
+                "install {i} is within the cap"
+            );
+        }
+        assert_eq!(
+            configure_provider(&app, &cookie, "one_too_many", true, 1).await,
+            StatusCode::BAD_REQUEST,
+            "a brand-new name past the cap is refused"
+        );
+        // The half that matters: an integration that already exists can still be reconfigured
+        // at the cap. Without this a parent who filled the registry could not turn anything
+        // off, and a bound meant to keep the file small would instead freeze it.
+        assert_eq!(
+            configure_provider(&app, &cookie, "studygo", false, 30).await,
+            StatusCode::OK,
+            "reconfiguring an installed provider is never capped"
+        );
+        // And removing one frees the slot, which is what stops the cap from being a trap.
+        assert_eq!(
+            delete_provider(&app, &cookie, "chores").await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            configure_provider(&app, &cookie, "one_too_many", true, 1).await,
+            StatusCode::OK,
+            "a freed slot is usable"
+        );
+    }
+
+    // --- Uninstalling stops the grant, and does NOT hand back the day. -------------------
+    {
+        let (app, cookie, config) = fresh_app().await;
+
+        let (_, body) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(body["ok"], json!(true));
+
+        assert_eq!(
+            delete_provider(&app, &cookie, "studygo").await,
+            StatusCode::OK
+        );
+        let (status, _) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "an uninstalled provider is refused, not silently ignored"
+        );
+
+        // THE SECURITY PROPERTY. Reinstalling must not clear the latch, or delete-then-install
+        // is a two-request bypass of the once-per-source-per-day rule — available to exactly the
+        // caller who would want to push the second grant.
+        assert_eq!(
+            configure_provider(&app, &cookie, "studygo", true, 30).await,
+            StatusCode::OK
+        );
+        let (status, body) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["ok"],
+            json!(false),
+            "reinstalling a provider must not clear its day latch"
+        );
+        assert_eq!(body["reason"], json!("already_granted_today"));
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            30,
+            "still exactly one grant's worth of minutes"
+        );
+
+        // Removing something that is not installed is not an error, matching routines.
+        assert_eq!(
+            delete_provider(&app, &cookie, "never_installed").await,
+            StatusCode::OK
+        );
+    }
+
+    // --- An idempotency key belongs to one source. ---------------------------------------
+    {
+        let (app, cookie, config) = fresh_app().await;
+
+        // Two integrations that both key by the day. It is the obvious thing for a client to
+        // choose, and while keys were stored bare the second push was handed the first's answer,
+        // granted nothing, and reported success.
+        let (_, first) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "studygo" }),
+            Some("2026-09-02"),
+        )
+        .await;
+        assert_eq!(first["ok"], json!(true));
+        assert_eq!(first["minutes"], json!(30));
+
+        let (status, second) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "chores" }),
+            Some("2026-09-02"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            second["ok"],
+            json!(true),
+            "a key another source used must not replay onto this one"
+        );
+        assert_eq!(
+            second["minutes"],
+            json!(10),
+            "and it earns its own provider's reward"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            40,
+            "both grants landed"
+        );
+    }
+
+    // --- One key, one grant: reuse carrying different values is refused. -----------------
+    {
+        let (app, cookie, config) = fresh_app().await;
+
+        let (_, first) = grant(&app, &cookie, json!({ "minutes": 10 }), Some("dup")).await;
+        assert_eq!(first["ok"], json!(true));
+
+        // Same key, same value: the honest retry a lost response produces. Still a replay.
+        let (status, again) = grant(&app, &cookie, json!({ "minutes": 10 }), Some("dup")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(again, first, "an unchanged retry still replays");
+
+        // Same key, different value: a client bug, not a retry. Replaying would answer this
+        // request with the other one's outcome and report a 20-minute grant that never happened.
+        let (status, _) = grant(&app, &cookie, json!({ "minutes": 20 }), Some("dup")).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a key reused across two different grants is refused, not replayed"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            10,
+            "only the first grant landed"
+        );
+    }
+
+    // --- `minutes` is the parent's to give and the registry's to decide. -----------------
+    {
+        let (app, cookie, config) = fresh_app().await;
+
+        // A push may omit the field entirely; the reward comes from the registry.
+        let (status, body) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["minutes"],
+            json!(30),
+            "the registry's number, with nothing in the body to read"
+        );
+
+        // Zero is what the phone sends as an explicit non-guess, and it is still ignored —
+        // `require_minutes` would reject it if a provider grant ever consulted it.
+        let (status, body) = grant(
+            &app,
+            &cookie,
+            json!({ "minutes": 0, "source": "chores" }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["minutes"], json!(10));
+
+        // The parent has no registry entry to fall back on, so an omitted `minutes` is refused
+        // rather than silently read as zero.
+        let (status, body) = grant(&app, &cookie, json!({}), None).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a parent grant must say how many minutes"
+        );
+        // Refused as a *missing field*, not as a number out of range. Both are a 400 — dropping
+        // the field and defaulting it to zero would land on `require_minutes` and produce one
+        // too — so the status alone cannot tell them apart, and the message is the whole reason
+        // `minutes` became an `Option`: a client that omitted the field should be told that,
+        // rather than told its zero was too small.
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("required"),
+            "the refusal should name the missing field: {body}"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            40,
+            "the two pushes landed and the malformed parent grant did not"
         );
     }
 }
