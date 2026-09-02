@@ -1064,6 +1064,33 @@ retired channel failed by going blind; a cross-repo golden fails by drifting, wh
 *(That last paragraph came from a review by a concurrent session in this repository, which verified
 the one-line fix independently and pointed out the gap. Recorded because the entry is better for it.)*
 
+**Three of this entry's premises stopped being true on 2026-08-31, filed by `nestwatch-mobile`.**
+It says, measured 2026-08-27, that the client repository has *"no CI of any kind — no `.github/`, no
+runner config of any flavour"*; that *"this repository's CI never runs the client's suite; the
+client's never runs this one"*; and that drift *"needs both checkouts on one machine and a person
+choosing to run it"*, making the `sed` a reader that *"only speaks when somebody runs it."*
+
+That repository now has `.github/workflows/ci.yml`. Because both repositories are public, one of its
+six jobs checks out `emrecdr/nestwatch` and runs `tool/check_golden.sh` against it on every push and
+pull request — no token, no person. **Observed, not planned:** run `33398694722`, job `contract
+against nestwatch`, reported `11 checks, nothing drifted` in 0.1 minutes against this repository's
+pushed `main`.
+
+**This does not close O72, and its argument is untouched.** The case made above is explicitly
+*"consolidation, not automation"* — one bespoke reader of this repository's Rust replaced by a gate
+already covering five other values — and a `sed` matching `pub const RENEW_WARN_DAYS: u64 = <n>;` is
+a reader of this repository's source whether a robot runs it or a person does. The one-line fix in
+`tests/golden.rs` is still the right one. What changed is only the *cost of leaving it*, which this
+entry gives as a reader that speaks only when somebody runs it; it now speaks on every push. So
+`nestwatch-mobile#M6` stays blocked here rather than becoming urgent.
+
+**One thing the new CI does confirm, which this entry predicted.** Its closing worry was that a
+cross-repo golden *"fails by drifting, which is quieter still"*, with both copies pinned in opposite
+repositories and no shared gate. Half of that is now answered — the client's CI is the shared gate,
+and it reads this repository's `tests/golden` directly rather than a vendored copy's word for it.
+The other half stands: this repository's CI still does not run the client's suite, so drift is caught
+on one side only, and only for as long as that side keeps looking.
+
 ### O73 · One CSS rule is all that keeps `unsafe-inline` in `style-src`
 
 `security.rs` gives two reasons `style-src` still admits `'unsafe-inline'`: the `[x-cloak]` rule is
