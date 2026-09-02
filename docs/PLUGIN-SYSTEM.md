@@ -139,7 +139,21 @@ PC. Reach for it when there is a third-party rule to run, not before.
 
 ---
 
-## Recommendation
+## Recommendation — **built, 2026-09-02**
+
+Architecture **4** shipped: `Config::providers`, `GET/POST /api/providers`, and an
+Integrations card listing each installed provider with an on/off toggle and its reward.
+StudyGo is provider #1, pushing from Voortgang over the authenticated LAN API.
+
+One thing the build added that this analysis did not call for, and it is the security
+half worth recording: **the reward moved to this machine.** A push names its provider and
+asserts its threshold was met; the minutes come from that provider's config here. So a
+phone that is lost, spoofed, or simply buggy cannot choose its own reward — verified live,
+a push claiming 999 minutes granted the configured 25. The original design had the client
+send the number, which would have made the phone's integrity load-bearing for a limit the
+parent set.
+
+The recommendation as originally written follows.
 
 Build architecture **4**: promote the shipped grant endpoint into a real provider
 registry (enable/disable + per-provider config + an Integrations dashboard panel), with
