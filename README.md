@@ -382,14 +382,15 @@ weighed and declined — so neither has to be rediscovered.
 ## Not included
 
 - **Keylogging / covert monitoring** — never. This is overt parental control, not spyware.
-- **Off-LAN access** — by design you must be on the home network. Want remote reach? Bring your
-  own VPN: unsupported, and only *partly* compatible, because the app-layer allowlist admits
-  RFC1918 (`10/8`, `172.16/12`, `192.168/16`) plus loopback and nothing else. A VPN that puts you
-  on the home subnet works; a tunnel that gives you an address outside those ranges gets a `403`
-  even though the tunnel itself is fine — the allowlist failing closed, not a bug.
-  **[docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)** covers which arrangements work, which ones
-  quietly don't, and what each costs. Short version: give yourself a way in, never give the
-  monitored PC a way out.
+- **Off-LAN access** — **nothing is built yet**, so today you must be on the home network. The
+  supported shape has been decided: a VPN terminated on your *router*, which puts your phone on
+  the home subnet so the app-layer allowlist sees an ordinary LAN client. That allowlist admits
+  RFC1918 (`10/8`, `172.16/12`, `192.168/16`) plus loopback and nothing else, so a tunnel that
+  gives you an address outside those ranges still gets a `403` even though the tunnel itself is
+  fine — the allowlist failing closed, not a bug. **[docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)**
+  covers the two prerequisites that can rule it out before you start, which arrangements work,
+  which ones quietly don't, and what each costs. Short version: give yourself a way in, never give
+  the monitored PC a way out.
 - **Live screen streaming** and a **multi-machine hub** — not built. The `SystemControl` trait
   leaves room to add streaming later without touching the web layer.
 - **More than one child on the same PC** — not supported, and this is a shape rather than a gap.
