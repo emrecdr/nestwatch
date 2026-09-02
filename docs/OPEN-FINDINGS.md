@@ -787,31 +787,6 @@ this is no longer silent — only unbounded.
 **Trigger.** Any decision to advertise a retention period, or the first parent who watches
 *History from* move forward and asks why.
 
-### O68 · The dashboard's own accessibility is behind the child's page
-
-`assets/index.html` has **three `<form>` elements with no accessible name** and **five `aria-live`
-regions of which three are `aria-atomic`**. `assets/ask.html` — one tenth the size — has two forms,
-both named, and every live region atomic, pinned by
-`web::tests::the_childs_page_keeps_its_accessible_names_and_atomic_live_regions`.
-
-That guard is deliberately scoped to the child's page, and **the scope is this finding**: a
-page-agnostic version could only exist today with a standing exemption for `index.html`, which is
-the shape O54 objects to. So the property is enforced where it holds and recorded here where it
-does not, rather than being written as a rule with an exception nobody re-reads.
-
-The `aria-atomic` half is not cosmetic. Those regions are rewritten whole — "12 of 60 min used"
-becomes "13 of 60 min used" — and without it a screen reader may announce only the changed
-fragment, which is a number stripped of what it counts. The Today card's own markup argues this
-case in a comment; two regions simply do not follow it.
-
-**Fix.** Name the three forms with `aria-labelledby` against headings they already have, add
-`aria-atomic` to the two regions missing it, then widen the guard to iterate `PAGES` and delete the
-per-page version.
-
-**Trigger.** The next change that touches `index.html`'s forms or its live regions — the work is
-small enough that doing it alongside is cheaper than scheduling it, and doing it alone means
-touching a 1,300-line file for four attributes.
-
 ### O56 · The screen-time report pays for every day ever recorded, not the window asked for
 
 `build_report` parses the whole retained history, then does work on rows it will never render:

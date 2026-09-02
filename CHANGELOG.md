@@ -86,6 +86,22 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
 
 ### Fixed
 
+- **A parent using a screen reader was read a stopwatch instead of being told the live view had
+  stopped.** The line under the screenshot — "updated 4s ago" — was marked as a region a screen
+  reader should announce whenever it changes, and it changes **every second** for as long as a
+  frame is on screen, not only while Live is on. So the one thing worth interrupting for, the view
+  going stale, arrived as the 61st announcement in a minute of counting rather than as news. The
+  counting line is now left to be read; a separate line, present only for screen readers, says
+  "Live view stopped updating" and changes **only** when that becomes true. Nothing moves on the
+  page, and a sighted parent still sees the same red timer.
+  <br>This is the opposite of the fix the known-limits list had recorded for it, which was to mark
+  the counting line as read-in-full — that would have announced the whole sentence every second
+  instead of part of one. The entry was written from a count of attributes rather than from what
+  the attribute did at runtime.
+- **The dashboard's two forms were announced as just "form".** Signing in and changing your
+  password are now named, as the child's page already named its own. The guard that had held the
+  child's page to this now holds every served page, and the exemption the dashboard had is gone.
+
 - **A bedtime set for one weekday covered the wrong night.** If you set a curfew window on
   specific days and it ran past midnight — "Friday, 22:00 to 07:00", which is how a bedtime is
   normally written — the tool applied your day choice to whatever day it happened to be checking.

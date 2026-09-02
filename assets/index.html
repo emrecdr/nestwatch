@@ -29,7 +29,12 @@
     <template x-if="authed === false">
       <div class="flex min-h-screen items-center justify-center p-4">
         <div class="card w-full max-w-sm bg-base-100 shadow-xl">
-          <form class="card-body" @submit.prevent="login()">
+          <!-- `aria-label` rather than `aria-labelledby` against the <h1> below it, which is the
+               shape the child's page uses. The heading here is the product name — and a
+               deliberately low-profile one — so pointing at it names this form "Host Health",
+               which says what the page is and not what the form does. "Sign in" is the accessible
+               name a screen reader should read out before the password field. -->
+          <form class="card-body" aria-label="Sign in" @submit.prevent="login()">
             <h1 class="card-title justify-center text-2xl">🩺 Host Health</h1>
             <p class="text-center text-sm opacity-70">Sign in to continue</p>
 
@@ -297,12 +302,28 @@
                        @click="openShotFull()" />
                 </template>
               </div>
-              <!-- How old the picture is, and whether it is still arriving.
-                   `aria-live="polite"` so a screen reader hears the view stop rather than only a
-                   sighted parent noticing the colour change. Without this line a frozen live view
-                   and a motionless child are the same picture. -->
-              <p x-show="shotAt" x-cloak class="mt-1 text-xs" aria-live="polite"
+              <!-- How old the picture is, and whether it is still arriving. Two elements, because
+                   what a sighted parent wants from this line and what a screen reader should say
+                   are opposites.
+
+                   The visible one counts up. `shotAge()` reads `now`, which `startShotClock` ticks
+                   at 1 Hz for as long as a frame is on screen — not only while Live is on. It is
+                   therefore **not** a live region: announcing it would read a new string every
+                   second, indefinitely, burying the one transition that matters under a stopwatch.
+                   It used to carry `aria-live="polite"`, which is where that came from.
+
+                   The announced one is the transition itself. Its text is empty while frames are
+                   arriving and changes only when `shotStale` flips, so the region updates once per
+                   stall rather than once per second — a screen reader hears the view stop, and
+                   hears nothing while it is healthy. `aria-atomic` because the sentence is
+                   rewritten whole; `sr-only` because the colour change already carries it for
+                   anyone who can see it. Without some form of this line a frozen live view and a
+                   motionless child are the same picture, which is the failure the original comment
+                   was right about even though the markup under it announced the clock instead. -->
+              <p x-show="shotAt" x-cloak class="mt-1 text-xs"
                  :class="shotAgeClass()" x-text="shotAge()"></p>
+              <p class="sr-only" role="status" aria-live="polite" aria-atomic="true"
+                 x-text="shotStale ? 'Live view stopped updating.' : ''"></p>
             </div>
           </section>
 
@@ -1536,7 +1557,7 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Change password</h2>
+              <h2 id="changePwHeading" class="card-title text-base">Change password</h2>
             </summary>
             <div class="card-body pt-0">
               <p class="text-sm opacity-70">Update the control password without reinstalling.</p>
@@ -1548,7 +1569,8 @@
                    than a memorable password, the page should be legible to one. Submitting via
                    the form rather than @click also makes Enter work, as it already does on the
                    sign-in screen. -->
-              <form class="mt-2 flex flex-wrap items-end gap-3" @submit.prevent="changePassword()">
+              <form class="mt-2 flex flex-wrap items-end gap-3" aria-labelledby="changePwHeading"
+                    @submit.prevent="changePassword()">
                 <label class="flex flex-col">
                   <span class="text-sm mb-1">Current</span>
                   <input type="password" x-model="pwCurrent" autocomplete="current-password"

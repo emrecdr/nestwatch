@@ -401,49 +401,147 @@ mod tests {
         );
     }
 
-    /// The child's page keeps its accessible names and atomic live regions.
+    /// Every opening tag on a page, quote-aware.
     ///
-    /// # Why this one page and not both
+    /// The obvious implementation — `find('<')` then `find('>')` — is correct on `ask.html` and
+    /// wrong on `index.html`, which is the worst of the two combinations: the guard below used to
+    /// read only the child's page, so widening it to both would have gone on passing while
+    /// silently truncating tags on the larger one. Eleven attribute values there contain a `>`,
+    /// including `x-if="today && today.budget_mins > 0"` and the Tailwind arbitrary variant
+    /// `[&>*]:min-w-0`. Cutting the tag at the first of those ends it early, so any attribute
+    /// written after one — an `aria-labelledby` following an `x-if`, say — stops being seen and
+    /// the element is judged on half its markup.
     ///
-    /// Scoped deliberately, and the scope is the finding. `index.html` would fail both halves today
-    /// — three forms with no accessible name, and five `aria-live` regions of which three are
-    /// atomic — so a page-agnostic guard could only exist with a standing exemption for the larger
-    /// page, which is the shape this project already dislikes.
+    /// So this tracks quoting: a `>` inside a `"…"` or `'…'` value is text, not the end of the
+    /// tag. Both quote styles, for the reason [`alpine_directives`] gives — matching only double
+    /// quotes works today and would quietly cover less the day someone writes `aria-label='…'`.
     ///
-    /// The asymmetry is also real rather than convenient. A parent who cannot use the dashboard has
-    /// a phone, a laptop and the `doctor` command; the child has this page and nothing else, and it
-    /// is the surface that tells them how much time they have and carries the disclosure about what
-    /// is being watched. If only one page is held to this, it is this one.
-    ///
-    /// `aria-atomic` matters here specifically because every one of these regions is rewritten
-    /// wholesale — "23 minutes left today" becomes "22 minutes left today" — and without it a
-    /// screen reader may announce only the changed fragment, which is the number stripped of what
-    /// it counts.
-    #[test]
-    fn the_childs_page_keeps_its_accessible_names_and_atomic_live_regions() {
-        let page = strip_html_comments(include_str!("../assets/ask.html"));
+    /// Closing tags are skipped: nothing here asks about them, and the attributes this guard reads
+    /// only ever appear on an opening tag. Comments are assumed already gone via
+    /// [`strip_html_comments`], so a `<` inside prose is not a case this has to survive.
+    fn opening_tags(html: &str) -> Vec<&str> {
+        let bytes = html.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0usize;
 
-        for (at, _) in page.match_indices("<form") {
-            let tag_end = page[at..].find('>').expect("unterminated <form>") + at;
-            let tag = &page[at..tag_end];
-            assert!(
-                tag.contains("aria-labelledby=") || tag.contains("aria-label="),
-                "a form on the child's page has no accessible name, so a screen reader announces \
-                 only \"form\": {tag}"
-            );
+        while i < bytes.len() {
+            if bytes[i] != b'<' || bytes.get(i + 1) == Some(&b'/') {
+                i += 1;
+                continue;
+            }
+            let mut j = i + 1;
+            let mut quote: Option<u8> = None;
+            while j < bytes.len() {
+                let c = bytes[j];
+                match quote {
+                    Some(q) if c == q => quote = None,
+                    Some(_) => {}
+                    None if c == b'"' || c == b'\'' => quote = Some(c),
+                    None if c == b'>' => break,
+                    None => {}
+                }
+                j += 1;
+            }
+            // An unterminated tag cannot compile into a page anyone serves; stop rather than emit
+            // a partial one that would be judged as if it were whole.
+            if j >= bytes.len() {
+                break;
+            }
+            // `i` and `j` both index an ASCII byte (`<` and `>`), so this cuts on char boundaries
+            // however much UTF-8 sits between them.
+            out.push(&html[i..=j]);
+            i = j + 1;
         }
 
-        let live = page.matches("aria-live=").count();
-        let atomic = page.matches("aria-atomic=").count();
-        assert!(
-            live > 0,
-            "the time-remaining region must stay a live region — it is the whole point of the page"
+        out
+    }
+
+    /// What the tag scan does and does not pick up, pinned.
+    ///
+    /// Same reasoning as [`the_directive_scan_reads_both_quote_styles_and_only_alpine_attributes`]
+    /// and its class-scan sibling: this helper decides what the accessibility guard can see, so a
+    /// gap in it makes that guard pass while checking less than it claims — coverage-shaped
+    /// silence, which is worse than the failure it was written to catch.
+    ///
+    /// The `>`-inside-an-attribute case is the whole reason the helper exists, so it is the case
+    /// pinned first.
+    #[test]
+    fn the_tag_scan_reads_whole_tags_and_skips_closing_ones() {
+        let html = concat!(
+            r#"<p x-if="a > 0" aria-live="polite" aria-atomic="true">hi</p>"#,
+            r#"<div class="[&>*]:min-w-0"><form aria-label='x'></form>"#,
         );
         assert_eq!(
-            live, atomic,
-            "every live region here is rewritten whole, so each needs aria-atomic; found {live} \
-             live and {atomic} atomic"
+            opening_tags(html),
+            vec![
+                r#"<p x-if="a > 0" aria-live="polite" aria-atomic="true">"#,
+                r#"<div class="[&>*]:min-w-0">"#,
+                r#"<form aria-label='x'>"#,
+            ],
+            "a `>` inside a quoted attribute value must not end the tag, and `</p>` is not a tag \
+             this guard asks about"
         );
+    }
+
+    /// Every served page keeps its accessible names and atomic live regions.
+    ///
+    /// # Why this is now both pages
+    ///
+    /// This read `ask.html` alone, and the scope *was* the finding: `index.html` would have failed
+    /// both halves, so a page-agnostic guard could only have existed alongside a standing
+    /// exemption for the larger page — the shape `O54` objects to. Both pages now hold the
+    /// property, so the exemption is gone and this iterates [`PAGES`] like every other scan here.
+    ///
+    /// # The two halves
+    ///
+    /// A `<form>` with no accessible name is announced as nothing but "form".
+    ///
+    /// `aria-atomic` matters because every live region on both pages is rewritten wholesale —
+    /// "23 minutes left today" becomes "22 minutes left today" — and without it a screen reader
+    /// may announce only the fragment that changed, which is a number stripped of what it counts.
+    /// That reasoning is a property of these regions rather than of live regions in general: a
+    /// `role="log"` is meant to be read incrementally, so the day one arrives this assertion is
+    /// the right place to have that argument rather than a rule to route around.
+    ///
+    /// # Per element, not per page
+    ///
+    /// The count-based version this replaces compared totals — occurrences of `aria-live=` against
+    /// occurrences of `aria-atomic=` across a whole file. Equal totals do not mean every live
+    /// region is atomic: one region carrying two atomics and another carrying none balances
+    /// exactly. It reported a property it was not testing, and passed only because that shape had
+    /// not happened yet.
+    #[test]
+    fn every_served_page_keeps_its_accessible_names_and_atomic_live_regions() {
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            let mut live_regions = 0usize;
+
+            for tag in opening_tags(&html) {
+                if tag.starts_with("<form") {
+                    assert!(
+                        tag.contains("aria-labelledby=") || tag.contains("aria-label="),
+                        "{name}: a form has no accessible name, so a screen reader announces only \
+                         \"form\": {tag}"
+                    );
+                }
+                if tag.contains("aria-live=") {
+                    live_regions += 1;
+                    assert!(
+                        tag.contains("aria-atomic="),
+                        "{name}: this live region is rewritten whole, so without aria-atomic a \
+                         screen reader may announce only the fragment that changed: {tag}"
+                    );
+                }
+            }
+
+            // The silent half. Deleting every live region satisfies the loop above perfectly, and
+            // on the child's page the remaining-time region is the entire point of it.
+            assert!(
+                live_regions > 0,
+                "{name}: no live regions left — the remaining-time and frame-staleness lines are \
+                 what tell a screen reader that something changed"
+            );
+        }
     }
 
     /// No inline `<script>` on any served page.
