@@ -42,7 +42,7 @@ use common::{PASSWORD, app_with_audit_file, body_json, crate_sources, get, login
 /// to do with the module they live in: the first is only recorded when the submission was
 /// **accepted**, and acceptance is capped at `timereq::MAX_PENDING` until a parent resolves one; the
 /// second is only recorded on a **valid** code, of which at most `timecode::MAX_ACTIVE_CODES` exist.
-const CLASSIFIED: [(&str, bool); 31] = [
+const CLASSIFIED: [(&str, bool); 32] = [
     // auth.rs — the only module where an unauthenticated caller reaches a writer.
     ("\"auth_failure\"", true), // no credential at all; 5/min/IP from the login limiter
     ("\"pair_failed\"", true),  // no credential; coalesced onto the lockout, so 1/min/IP
@@ -77,6 +77,10 @@ const CLASSIFIED: [(&str, bool); 31] = [
     ("\"extra_time_granted\"", false),
     ("\"provider_configured\"", false), // POST /api/providers, behind require_auth
     ("\"provider_removed\"", false),    // POST /api/providers/{name}/delete, behind require_auth
+    // POST /api/sessions/{handle}/revoke, behind require_auth. Paced by the parent clicking a
+    // row in the Signed-in devices card, and bounded harder than that: each one removes a session,
+    // so the supply runs out.
+    ("\"session_revoked\"", false),
     ("\"password_change_failed\"", false),
     ("\"password_changed\"", false),
 ];
