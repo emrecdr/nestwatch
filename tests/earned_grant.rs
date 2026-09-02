@@ -148,7 +148,12 @@ async fn earned_grants_latch_replay_and_validate() {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], json!(true));
+        // Carries weight beyond the latch this section is named for. The contract section at the
+        // bottom pins the response *key sets*, which catch a dropped field but pass happily on a
+        // flipped boolean — so the `ok` **values** are held only by bare assertions like this one,
+        // here and in the idempotency section below. None of them announces that another
+        // repository branches on the answer, which is why these two now say so.
+        assert_eq!(body["ok"], json!(true), "a provider grant says so in `ok`");
         assert_eq!(body["minutes"], json!(30));
 
         // ...and the same source the same day is told no, with nothing granted.
@@ -160,7 +165,11 @@ async fn earned_grants_latch_replay_and_validate() {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["ok"], json!(false));
+        assert_eq!(
+            body["ok"],
+            json!(false),
+            "and a refusal says so too — see above"
+        );
         assert_eq!(body["reason"], json!("already_granted_today"));
         {
             let cfg = nestwatch::state::recover_read(&config);
