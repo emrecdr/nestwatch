@@ -87,11 +87,11 @@ Each was checked by reading the cited line; three are the project's own words.
 
 | | The argument | Where |
 |---|---|---|
-| **1** | The eight-character password minimum: *"This password guards a LAN-only service behind an Argon2id hash with per-IP throttling — an attacker has to already be on the home network to try it at all."* | `src/auth.rs:28-30` |
-| **2** | All-digit passwords allowed: *"eight digits is 10^8, and against Argon2id behind per-IP throttling that is not the weak link."* | `src/auth.rs:142-143` |
-| **3** | Six-character time codes: *"That rate limit is the primary defence, not a secondary one… Loosening or removing the limiter therefore changes the security of time codes directly."* The bucket is keyed on **source IP**. | `src/api.rs:1639-1642` |
+| **1** | The eight-character password minimum: *"This password guards a LAN-only service behind an Argon2id hash with per-IP throttling — an attacker has to already be on the home network to try it at all."* | `src/auth.rs`, on `MIN_PASSWORD_LEN` |
+| **2** | All-digit passwords allowed: *"eight digits is 10^8, and against Argon2id behind per-IP throttling that is not the weak link."* | `src/auth.rs`, on `guessable` |
+| **3** | Six-character time codes: *"That rate limit is the primary defence, not a secondary one… Loosening or removing the limiter therefore changes the security of time codes directly."* The bucket is keyed on **source IP**. | `src/api.rs`, on `redeem_code` |
 | **4** | `/ask`, `/status`, `POST /time-request` and `POST /redeem-code` are **unauthenticated**. Their comments name the protection exactly: *"LAN-gated (outer router → require_lan_peer) and per-IP rate-limited."* | `src/server.rs` |
-| **5** | A paired device holds the parent's entire authority — `auth::pair` performs the same two steps as `auth::login`, and `require_auth` reads one boolean. Tracked as **O89**. | `docs/SECURITY.md`, `src/auth.rs` |
+| **5** | A device paired for the dashboard holds the parent's entire authority, and only geography bounds it. **Narrowed by `8d5f5c3`**, which gave pairing a scope: `Scope::Integration` reaches two endpoints, `Scope::Dashboard` still reaches everything. What remains is that a dashboard pairing cannot be revoked on its own — **O77**. | `docs/SECURITY.md`, `src/pairing.rs`, `auth::integration_may_reach` |
 
 `SECURITY.md` puts *"exposure to the public internet (the tool is LAN-only by design)"* out of
 scope. That sentence is the assumption the whole threat model was written under, and it is worth
@@ -121,9 +121,15 @@ So arguments 1 through 4 hold, restated:
   has the same effect while changing no line the limiter is written on.
 - The four unauthenticated child routes stay behind a gate that still means something.
 
-**Argument 5 does not survive, and full parity makes it the whole story.** O89 was never about the
-network. It is about what a single device holds once it is through, and that is unchanged by how
-good the tunnel is.
+**Argument 5 does not survive, and full parity makes it the story.** It was never about the network
+— it is about what a single device holds once it is through, which no tunnel improves.
+
+**It is smaller than it was.** `8d5f5c3` closed `O89` by scoping pairing at mint time: an
+integration token reaches `POST /api/extra-time` and `GET /api/usage/today` and nothing else, and
+its grants are attributed to the integration whatever the request body claims. A third-party app on
+the child's device is no longer inside the whole table. **What that does not narrow is the case this
+document is about** — the parent's own phone pairs for the *dashboard*, so it still carries
+everything, and remote access is what removes the geographic bound on it.
 
 ---
 
@@ -134,8 +140,10 @@ Under the decision taken, one phone carries three things at once:
 - **The WireGuard private key.** WireGuard has no passwords; possession of the key *is* the
   authorisation.
 - **A session cookie**, valid for 30 days of inactivity (`Expiry::OnInactivity`, `server.rs`).
-- **The parent's entire authority**, via O89 — the live screen, the complete recorded history
-  through `GET /api/export`, shutdown, the provider registry, and the control password itself.
+- **Everything a `Scope::Dashboard` session can do** — the live screen, the complete recorded
+  history through `GET /api/export`, shutdown, the provider registry, and the control password
+  itself. Scoping bounds an *integration*; it does not bound the parent's own phone, which is the
+  device this section is about.
 
 Today the bound on that is geography: whoever takes the phone has to be in the house for it to be
 worth anything. Remote access removes the bound and nothing currently replaces it.
@@ -241,10 +249,12 @@ Ordered because each step is a precondition for the next, not a preference about
 **0 · Settle the two blocking prerequisites.** CGNAT and the router's VPN capability, above. Both
 are minutes of checking and either can end the plan.
 
-**1 · Close O89, and give a session a device identity that can be revoked alone.** This is the
-entire security story under full parity, because the tunnel handles the network and the phone
-holds everything else. Adding an identity to the session is the same work O89 already requires,
-and it is what makes revocation surgical instead of total. Nothing else on this list is worth
+**1 · Give a session a device identity that can be revoked alone — `O77`.** This is the security
+story under full parity, because the tunnel handles the network and the phone holds everything
+else. Half of what this step originally asked for landed in `8d5f5c3`: pairing now carries a scope,
+so the *authority split* exists. The half that remains is identity — nothing in a session says
+which device holds it, so `clear_all()` is still the only revocation lever there is, and it is what
+makes revocation surgical instead of total. Nothing else on this list is worth
 doing first.
 
 **2 · Productize the tunnel, and teach `doctor` to check it.** No protocol work: generate the peer
@@ -310,8 +320,9 @@ Recorded so none of it is re-proposed as though it had been overlooked. Checked 
 - **One peer per device**, so losing one means revoking one. This matters more under full parity,
   and it is the half of revocation the router *can* do today while Nestwatch cannot.
 - **Treat the phone as the key.** Losing it unlocked is losing a permanent route into your LAN, a
-  window onto your child's screen, and — until O89 closes — every control in the dashboard. Find
-  out how to revoke a peer before you need it, not after.
+  window onto your child's screen, and every control in the dashboard — a dashboard pairing is
+  unscoped by design, and until `O77` closes it cannot be revoked without signing out every device
+  you own. Find out how to revoke a peer at the router before you need it, not after.
 - **The dashboard password still applies.** The tunnel gets you onto the network; it does not sign
   you in. Do not weaken the password because the network feels private now — and note that under
   full parity it is guarding more, from further away, than when its eight-character minimum was
@@ -341,7 +352,12 @@ problem with a narrower answer: [REMOTE-UPDATE.md](REMOTE-UPDATE.md), which stay
 
 ## Status of this guide
 
-The claims about this codebase were verified by reading the cited file and line on `c516270`, and
+Sources are cited **by symbol rather than by line number**, deliberately. The first version of this
+document cited lines; three of the five drifted within two commits while every quoted sentence
+stayed word-for-word intact, which sends a reader to the wrong place and makes correct prose look
+stale. A symbol moves with its comment.
+
+The claims about this codebase were verified by reading the cited symbol on `8d5f5c3`, and
 the five arguments above are quoted from the source rather than paraphrased. The external findings
 were checked against primary sources on 2026-09-02 and are cited inline. The Tailscale
 subnet-router behaviour was checked against Tailscale's own documentation.
@@ -349,5 +365,8 @@ subnet-router behaviour was checked against Tailscale's own documentation.
 **None of it has been set up and used against this project's own installation** — unlike
 [REMOTE-UPDATE.md](REMOTE-UPDATE.md), which describes a flow the generated script performs. Treat
 the reasoning as sound and every walkthrough as untested. Nothing in the plan has been built:
-`doctor` does not yet check any of this, Nestwatch does not generate peer configuration, and O89
-is open.
+`doctor` does not yet check any of this, and Nestwatch does not generate peer configuration.
+`O89` — the finding this document was first written against — was **closed by `8d5f5c3`** while
+this page was being written, and the paragraph it quoted from `SECURITY.md` was rewritten with it;
+the rows above were re-verified against that commit rather than carried over. `O77`, per-device
+revocation, is open and is now the one this plan depends on.
