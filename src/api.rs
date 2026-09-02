@@ -450,7 +450,10 @@ pub async fn set_language(
 /// **or** any paired keychain.
 ///
 /// "The child's unauthenticated surfaces are a separate router" remains true and was never the
-/// point — their *authenticated* surface is the one that grew. `O89` records the whole shape.
+/// point — their *authenticated* surface is the one that grew.
+///
+/// **Now bounded.** A pairing minted with `--integration` cannot reach this route at all; only a
+/// `Scope::Dashboard` session can, which is a password login or a QR a parent scanned themselves.
 pub async fn re_anchor(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let offset = crate::clock::current_offset_mins();
     let zone = crate::clock::current_zone_identity();
@@ -801,9 +804,23 @@ async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<
 pub async fn extra_time(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    scope: axum::Extension<crate::pairing::Scope>,
     Json(body): Json<ExtraTimeBody>,
 ) -> Result<Json<Value>, AppError> {
-    let source = body.source.unwrap_or_else(|| "parent".into());
+    // **A scoped integration grants as itself, whatever the body says.** This is the line that
+    // closes `O89` rather than merely bounding it: the allowlist alone would not, because
+    // `/api/extra-time` is *on* the allowlist, so a phone confined to this route could still have
+    // named itself `parent` — and `parent` is routed down the un-latched path, skipping the
+    // registry, the day latch and the daily ceiling together. Measured before the fix: five such
+    // requests granted 1200 minutes against a configured 30.
+    //
+    // Taking the name from the credential instead of the request also makes the audit line true
+    // by construction. It used to record whatever the caller claimed, so the one entry that would
+    // have revealed this said the parent did it themselves.
+    let source = match &*scope {
+        crate::pairing::Scope::Integration { source } => source.clone(),
+        crate::pairing::Scope::Dashboard => body.source.unwrap_or_else(|| "parent".into()),
+    };
     if !valid_source(&source) {
         return Err(AppError::BadRequest(
             "source must be 1-32 characters of a-z, 0-9, _ or -".into(),
@@ -974,7 +991,7 @@ fn recover_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> 
 /// `parent` is excluded because it is the reserved name for a human pressing the button, and a
 /// provider called `parent` would sit in the registry unable to ever be reached — `extra_time`
 /// routes that source down the un-latched path before it looks anything up.
-fn valid_provider_name(name: &str) -> bool {
+pub fn valid_provider_name(name: &str) -> bool {
     name != "parent" && valid_source(name)
 }
 

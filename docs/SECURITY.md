@@ -45,17 +45,29 @@ authenticated session*:
 `POST /api/password` keeps the parent logged in (rotating their session id) and **does** revoke
 every other session (see §4).
 
-**Every row above is reachable by any paired device, including one running software the parent did
-not write.** `GET /p/{token}` mints an *ordinary* session: `auth::pair` performs the same two steps
-as `auth::login` (`cycle_id`, then `insert(AUTH_KEY, true)`), and `require_auth` reads that one
-boolean and nothing else. There is no scope, no role and no client identity anywhere in the session.
-So a client that keeps the cookie holds this entire table.
+**Every row above needs a session whose scope is `Dashboard`.** A pairing token records what it is
+worth when it is *minted*, and redeeming it carries that across: `nestwatch pair` mints a dashboard
+token, which is what a person scanning it needs and what the Android app needs;
+`nestwatch pair --integration <name>` mints one that may reach `POST /api/extra-time` and
+`GET /api/usage/today` and nothing else, and whose grants are attributed to `<name>` whatever the
+request body says.
 
-Since `0.6.0`, one does. The earned-time integration's phone app stores what pairing minted and
-replays it on every push. The registry row's "never reads from the push" is a property of
-`POST /api/extra-time` — it is not a bound on that device, which can equally rewrite the registry
-row it is governed by, grant directly as `source=parent` with no day latch and no daily ceiling, or
-re-anchor the trusted clock. Tracked as `O89`.
+**This was not always true, and the gap is worth stating because the shape recurs.** Through
+`0.6.0`, `auth::pair` performed the same two steps as `auth::login` and `require_auth` read one
+boolean, so a paired device held this entire table. The earned-time integration's phone app stores
+what pairing minted and replays it — which meant a third-party application on the child's own
+device could rewrite the registry row governing it, grant as `source=parent` with no day latch and
+no daily ceiling, or re-anchor the trusted clock. Measured at the time: five requests, 1200 minutes,
+against a configured 30.
+
+**A session predating scopes is refused rather than promoted.** Upgrading therefore costs a
+password re-login in the browser and a fresh QR per paired device. That is deliberate: honouring an
+unscoped session would have left the hole open in precisely the installs that had it.
+
+**The scope is not a filter over the same authority — it changes who the caller *is*.** An
+integration's grant is recorded against the name in its credential, so the audit line cannot be
+made to say `parent` by a request that asks nicely, and `source=parent`'s un-latched path is not
+reachable from an integration at all.
 
 ## Who might try to reach it (adversaries in scope)
 
@@ -64,9 +76,11 @@ re-anchor the trusted clock. Tracked as `O89`.
   primary adversary.
 - **The child (a standard, non-admin user of the PC).** Handled mainly by the *tamper
   resistance* model (SYSTEM service + ACLs) documented in the README; not repeated here.
-  **Not** handled: a child holding a paired device. Pairing grants the parent's authority, so any
-  phone the child controls that has been paired — or whose keychain they can reach — is inside every
-  control this document describes rather than outside it. See `O89`.
+  Partly handled: a child holding a paired device. A device paired with
+  `--integration` can only add earned time as its own name, so a child who controls it — or who
+  can reach its keychain — gains nothing beyond what the parent already granted that integration.
+  A device paired for the **dashboard** is still the parent, in full; that is what a dashboard
+  pairing means, and the answer to a lost one is a password change, which revokes every session.
 - **Whoever could substitute the binary before it is installed** — a tampered release asset, a
   swapped download. Every other control in this document assumes the program being run is this
   program, so that assumption is worth an explicit check rather than an implicit one. See

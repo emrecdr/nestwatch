@@ -11,22 +11,25 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Security
 
-- **A paired device holds the whole of your dashboard's authority, and the 0.6.0 notes overstated
-  what the Integrations design bounds.** Pairing a phone is the same privilege step as typing your
-  password: the link `GET /p/{token}` mints an ordinary session, and nothing on it records that it
-  belongs to an app rather than to you. So while a *push* genuinely cannot choose its own reward —
-  the minutes come from this PC, and that part is real and tested — the app holding the pairing
-  cookie is not confined to pushing. It can reconfigure what it earns, grant directly, or change
-  settings, exactly as you could from the dashboard.
-  <br>**Nothing changed in the program here.** This release corrects the claim in three places that
-  a parent reads — the README feature table, the 0.6.0 notes below, and `docs/SECURITY.md`, whose
-  blast-radius table now states plainly that every capability in it is reachable by any paired
-  device. `POST /api/re-anchor`'s own note that "reaching it costs the parent's password" is
-  corrected too; it costs the password *or* any paired keychain.
-  <br>**What to do about it today:** pair only apps you would trust with the PC itself, and change
-  your control password to sign out a device you no longer control (that revokes every session).
-  The fix that would make an integration's pairing genuinely narrower is `O89` in
-  `docs/OPEN-FINDINGS.md`, and it needs a change in both repositories.
+- **An app you pair for earned time can now only do that.** Until this release, pairing a phone
+  was the same privilege step as typing your password — the QR link minted an ordinary session,
+  and nothing on it recorded that it belonged to an app rather than to you. A companion app that
+  kept the cookie was not confined to pushing practice results: it could change what it earns,
+  grant itself time directly, read your child's screen, or turn off the PC. The 0.6.0 notes below
+  said the design prevented this, and they were wrong about it.
+  <br>**A pairing QR now says what it is for.** `nestwatch pair` still produces the QR you scan
+  yourself, which signs you into everything. `nestwatch pair --integration studygo` produces a
+  different one: an app that scans it may add earned time **as that integration** and read today's
+  total back, and nothing else. Its grants are recorded under its own name, so it cannot ask to be
+  treated as you, and it cannot reach the rest of the dashboard at all.
+  <br>**You will have to sign in again, on every device.** Sessions created before this release do
+  not say what they are allowed to do, and the safe reading of "unknown" is "no" — so they are
+  refused rather than trusted. That means one password login in the browser, and one fresh QR for
+  each phone. It is the one upgrade in this project that costs you something, and the alternative
+  was leaving the problem open on exactly the machines that already have it.
+  <br>**What to do:** re-pair a companion app with `--integration`, and keep the plain QR for
+  people. If you have paired an app you no longer trust, changing your control password still
+  signs out everything.
 
 ## [0.6.0] — 2026-09-02
 

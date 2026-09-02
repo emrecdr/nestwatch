@@ -166,8 +166,14 @@ memory safety. That was the right question for choosing between WASM and data, a
 architecture 4 answers it completely: a provider runs nothing. But *what a provider is
 authenticated as* was never asked, so nothing in this document notices that the declarative
 design removed the code-execution risk and left authority untouched. A registry with careful
-bounds reads as though it had answered both. `O89` carries the finding and the two candidate
-repairs.
+bounds reads as though it had answered both.
+
+**Fixed, and the answer was a scoped credential rather than a sandbox.** A pairing token now
+records what it is for when it is minted; an integration's token reaches two routes and grants
+under its own name. Note what that does *not* need: no WASM, no sidecar, no process boundary. The
+risk was never that a provider might run something — architecture 4 was right about that — it was
+that a provider was authenticated as the parent. Bounding the credential closed it, which is why
+the original analysis reached a sound conclusion from an incomplete question.
 
 The recommendation as originally written follows.
 

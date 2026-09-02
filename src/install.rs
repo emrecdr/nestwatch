@@ -218,7 +218,7 @@ pub fn install() -> Result<()> {
     }
 
     println!("\nInstalled.");
-    print_access_block(cfg.port);
+    print_access_block(cfg.port, crate::pairing::Scope::Dashboard);
     println!("\nTLS cert SHA-256 — verify this the first time your browser warns, so you know");
     println!("you're trusting THIS machine and not a LAN impostor:");
     println!("  {fingerprint}");
@@ -295,7 +295,7 @@ pub fn uninstall() -> Result<()> {
 ///
 /// Best-effort throughout: a machine that's offline, or a QR that won't render, degrades to
 /// printing plain text. Nothing here is worth failing an install over.
-pub fn print_access_block(port: u16) {
+pub fn print_access_block(port: u16, scope: crate::pairing::Scope) {
     let hosts = crate::cert::reachable_hosts();
     let Some((primary, rest)) = hosts.split_first() else {
         println!(
@@ -306,7 +306,7 @@ pub fn print_access_block(port: u16) {
     };
 
     // A pairing token turns "type an IP and a passphrase on a phone" into "point the camera".
-    match crate::pairing::mint(&config::data_paths().pairing) {
+    match crate::pairing::mint(&config::data_paths().pairing, scope.clone()) {
         Ok(token) => {
             // Read back off disk rather than threaded down from `generate`, because this block
             // is shared with `nestwatch pair`, where the cert may be months old and no
@@ -322,7 +322,17 @@ pub fn print_access_block(port: u16) {
             // here takes the line from 46 columns to 145 — it wraps on an 80-column console,
             // which is the format a person copies from.
             let typed = crate::pairing::pair_url(primary, port, &token, None);
-            println!("\nScan this with your phone's camera — it opens the dashboard, signed in:");
+            // The line says what the QR is worth, because the two kinds look identical and are
+            // not: one signs a person into everything, the other authorises one app to add time.
+            match &scope {
+                crate::pairing::Scope::Dashboard => println!(
+                    "\nScan this with your phone's camera — it opens the dashboard, signed in:"
+                ),
+                crate::pairing::Scope::Integration { source } => println!(
+                    "\nScan this from the '{source}' app — it may add earned time and read \n\
+                     today's total, and nothing else. It does not open the dashboard:"
+                ),
+            }
             match crate::pairing::qr_code(&scanned) {
                 Some(qr) => println!("\n{qr}"),
                 None => println!(),

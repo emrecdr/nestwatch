@@ -30,6 +30,8 @@
 use std::fs;
 use std::path::Path;
 
+use nestwatch::srcscan::{production_source, statements};
+
 fn repo(rel: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
@@ -258,58 +260,91 @@ fn cited_number_before(entry: &str, anchor: &str) -> Option<usize> {
     digits.chars().rev().collect::<String>().parse().ok()
 }
 
-/// The session mutations inside `src/auth.rs`'s `pub async fn name`, in source order.
+/// Which `pub async fn` in `src/auth.rs` each interesting statement belongs to.
 ///
-/// Bounded by the first line that is exactly `}`, which is the function's own closing brace —
-/// every line of a body is indented, so nothing inside can end the scan early.
-fn session_writes(auth: &str, name: &str) -> Vec<String> {
-    let head = format!("pub async fn {name}(");
-    let start = auth
-        .find(&head)
-        .unwrap_or_else(|| panic!("`{name}` is no longer a `pub async fn` in src/auth.rs"));
-    let body = &auth[start..];
-    let end = body
-        .find("\n}")
-        .unwrap_or_else(|| panic!("`{name}` has no closing brace at column 0"));
-    body[..end]
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("session."))
-        .map(|line| line.split(".await").next().unwrap_or(line).to_owned())
-        .collect()
+/// **Two bugs deep, and both are the same bug.** The first version collected lines starting
+/// `session.`, and rustfmt wraps a long call — so `session.insert(SCOPE_KEY, …)` is stored as a
+/// bare `session` followed by `.insert(…)`, neither of which matches. It reported `login` as
+/// missing a write three lines above the assertion. The second version scanned the body as one
+/// string, which fixed that and still read the file with `.lines()` while hunting a needle of the
+/// form `IDENT(` — the precise shape `scanner_guards.rs` exists to reject, and it did reject it.
+///
+/// So this uses [`nestwatch::srcscan::statements`], the reader that joins lines until parentheses
+/// balance. The lesson is not about formatting: a guard that can be defeated by the formatter
+/// reports success while matching nothing, which is worse than no guard, because a passing test
+/// is read as evidence.
+fn scope_writes_by_function(auth: &str) -> (Vec<(usize, String)>, Vec<String>) {
+    let stmts = statements(production_source(auth));
+
+    // Every `pub async fn` and the line it starts on, so a statement can be attributed to one.
+    let functions: Vec<(usize, String)> = stmts
+        .iter()
+        .filter_map(|(line, stmt)| {
+            let rest = stmt.strip_prefix("pub async fn ")?;
+            Some((*line, rest.split('(').next().unwrap_or_default().to_owned()))
+        })
+        .collect();
+    let owner = |line: usize| -> Option<String> {
+        functions
+            .iter()
+            .rev()
+            .find(|(at, _)| *at <= line)
+            .map(|(_, name)| name.clone())
+    };
+
+    let authenticates = stmts
+        .iter()
+        .filter(|(_, stmt)| stmt.contains("insert(AUTH_KEY"))
+        .filter_map(|(line, _)| owner(*line).map(|name| (*line, name)))
+        .collect();
+    let scopes = stmts
+        .iter()
+        .filter(|(_, stmt)| stmt.contains("insert(SCOPE_KEY"))
+        .filter_map(|(line, _)| owner(*line))
+        .collect();
+    (authenticates, scopes)
 }
 
-/// Four documents say a paired device holds exactly the parent's authority. This holds that
-/// sentence to `src/auth.rs` instead of to four people's memories.
+/// Authenticating without recording an authority must stay impossible to do by accident.
 ///
-/// `pair`'s own comment calls itself "the same privilege transition as a password login", and
-/// `O89` is filed on the consequence: the phone app that pushes earned time stores the cookie
-/// pairing minted, so the principal that pushes and the principal that configures the registry
-/// are one. That claim is now restated at code-symbol precision in `re_anchor`'s doc comment,
-/// `docs/SECURITY.md`, `docs/PLUGIN-SYSTEM.md` and `O89` — four hand-maintained copies of a fact
-/// about two functions, which is the exact shape this file exists to stop drifting.
+/// **This guard replaces its own opposite, and the history is the point.** It used to assert that
+/// `pair` and `login` left *identical* session state — four documents said so, nothing held them
+/// to it, and the sameness was `O89`: a paired third-party app was indistinguishable from the
+/// parent, so it could grant as `source=parent` and skip the registry, the day latch and the
+/// daily ceiling together. It was written to go red on the commit that fixed that, and it did.
 ///
-/// **It is written to fire when `O89` is fixed, and that is the point.** Marking a paired session
-/// — `O89`'s candidate 2 — means writing something in `pair` that `login` does not, so this test
-/// goes red on the commit that repairs the finding rather than on some later one. Red here is not
-/// a defect; it is the signal that four documents describing the old behaviour are now stale, and
-/// the message names them.
+/// What replaces it is the invariant the fix depends on: **every site that writes `AUTH_KEY`
+/// writes `SCOPE_KEY` in the same function.** A session carrying authentication but no authority
+/// is refused by `require_auth`, so forgetting the second line does not open a hole — it creates
+/// a credential that silently never works, which a parent meets as "pairing did nothing".
+///
+/// Deliberately a source scan and not a behaviour test: the behaviour is covered in
+/// `tests/pairing_scope.rs`, and what this adds is *totality* — it fails on a third
+/// authentication path nobody wrote a test for, which is the one that would actually get missed.
 #[test]
-fn a_paired_session_still_carries_exactly_what_a_password_login_carries() {
+fn nothing_authenticates_a_session_without_also_recording_what_it_may_do() {
     let auth = repo("src/auth.rs");
-    let login = session_writes(&auth, "login");
-    let pair = session_writes(&auth, "pair");
+    let (authenticates, scopes) = scope_writes_by_function(&auth);
 
-    assert!(
-        !login.is_empty(),
-        "no session writes found in `login` — this guard has gone blind rather than passed"
-    );
     assert_eq!(
-        pair, login,
-        "`pair` and `login` no longer leave the same session state, so a paired device and a \
-         password login are no longer the same principal.\n\nIf this is `O89` being fixed, this \
-         is the commit that has to update the four places stating they are identical: \
-         `api::re_anchor`'s doc comment, the paragraph under `docs/SECURITY.md`'s blast-radius \
-         table, the correction in `docs/PLUGIN-SYSTEM.md`, and `O89` itself."
+        authenticates.len(),
+        2,
+        "expected exactly `login` and `pair` to authenticate, found {authenticates:?}. A third \
+         path is not a failure — add it here once you have checked it records a scope."
     );
+    for name in ["login", "pair"] {
+        assert!(
+            authenticates.iter().any(|(_, f)| f == name),
+            "`{name}` no longer writes AUTH_KEY — this guard has gone blind rather than passed"
+        );
+    }
+    for (line, name) in &authenticates {
+        assert!(
+            scopes.contains(name),
+            "`{name}` (src/auth.rs:{line}) authenticates a session without recording its scope. \
+             `require_auth` refuses a session with no scope, so this is not a hole — it is a \
+             credential that pairs and then cannot do anything, which is worse to diagnose. \
+             Write the scope beside AUTH_KEY."
+        );
+    }
 }

@@ -45,12 +45,41 @@ pub const TTL_SECS: u64 = 15 * 60;
 /// `pair` merely write the file.
 static REDEEM_GATE: Mutex<()> = Mutex::new(());
 
+/// What redeeming a token is allowed to produce.
+///
+/// **Chosen when the QR is minted, not derived from the fact of pairing** — and that is the
+/// whole design, arrived at by trying the other way first. A mark meaning "this session came
+/// from a QR" would have described `nestwatch-mobile` too: it redeems this same one-time token
+/// through its own pairing screen, and it is a full parent dashboard whose paths are most of
+/// what such a mark would refuse. Deriving authority from the redemption would not narrow an
+/// integration; it would disable that client. So the *minting* side says what the credential is
+/// for, and redemption only carries it across.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Scope {
+    /// Everything an authenticated parent can do. What `nestwatch pair` mints, what a password
+    /// login is worth, and what the browser and the Android app both need.
+    Dashboard,
+    /// One integration, allowed only to push earned time as `source` and to read today's total
+    /// back. Cannot reach the rest of the API, and cannot grant as anyone but itself.
+    Integration { source: String },
+}
+
 #[derive(Serialize, Deserialize)]
 struct Pending {
     /// Hex SHA-256 of the token — never the token itself.
     hash: String,
     /// Unix seconds after which the token is refused.
     expires_at: u64,
+    /// What this token is allowed to become.
+    ///
+    /// **Deliberately not `#[serde(default)]`.** A file written before this field existed fails
+    /// to parse, which [`redeem`] already treats as corrupt: it clears the file and refuses. That
+    /// is the fail-closed direction, and it costs nothing real — a pending token lives fifteen
+    /// minutes and is minted by a parent standing at the machine, so the whole remedy is to run
+    /// `nestwatch pair` again. A default would have silently promoted an unknown token to full
+    /// authority, which is the exact class of bug this field exists to close.
+    scope: Scope,
 }
 
 fn now_secs() -> u64 {
@@ -81,11 +110,12 @@ fn digests_match(a: &str, b: &str) -> bool {
 ///
 /// Replaces any previous pending token, so minting again invalidates the earlier QR — running
 /// `nestwatch pair` twice can never leave two live tokens outstanding.
-pub fn mint(path: &Path) -> Result<String> {
+pub fn mint(path: &Path, scope: Scope) -> Result<String> {
     let plaintext = token::random(TOKEN_LEN);
     let pending = Pending {
         hash: digest(&plaintext),
         expires_at: now_secs() + TTL_SECS,
+        scope,
     };
     let json = serde_json::to_string(&pending).context("serializing pairing token")?;
     crate::config::write_atomic(path, json.as_bytes())
@@ -93,38 +123,44 @@ pub fn mint(path: &Path) -> Result<String> {
     Ok(plaintext)
 }
 
-/// Consume `token` if it matches the pending, unexpired pairing. Single-use: a successful
-/// redemption deletes the file, as does encountering an expired one.
+/// Consume `token` if it matches the pending, unexpired pairing, returning **what it is worth**.
+/// Single-use: a successful redemption deletes the file, as does encountering an expired one.
 ///
-/// Returns `false` for anything else (no pending token, mismatch, expired, unreadable). Callers
-/// must not distinguish these to the client — see the handler in `web.rs`.
-pub fn redeem(path: &Path, supplied: &str) -> bool {
+/// Returns `None` for anything else (no pending token, mismatch, expired, unreadable, or written
+/// before tokens carried a [`Scope`]). Callers must not distinguish these to the client — see the
+/// handler in `web.rs`.
+///
+/// Returning the scope rather than a bool is what makes the authority decision impossible to
+/// forget: there is no success value that does not say what was granted.
+pub fn redeem(path: &Path, supplied: &str) -> Option<Scope> {
     let supplied = token::normalize(supplied);
     if supplied.is_empty() {
-        return false;
+        return None;
     }
     // Held across read → verify → consume. Without it, concurrent scans each observe the token
     // as valid and each get a session (see REDEEM_GATE).
     let _gate = REDEEM_GATE.lock().unwrap_or_else(|p| p.into_inner());
     let Ok(raw) = std::fs::read_to_string(path) else {
-        return false;
+        return None;
     };
     let Ok(pending) = serde_json::from_str::<Pending>(&raw) else {
-        // Corrupt file: clear it so a stuck token can't block future pairings.
+        // Corrupt file, or one written before tokens carried a scope: clear it so a stuck token
+        // can't block future pairings, and refuse. Refusing an unreadable token is the only safe
+        // reading — the alternative is guessing what authority it meant.
         let _ = std::fs::remove_file(path);
-        return false;
+        return None;
     };
     if now_secs() >= pending.expires_at {
         let _ = std::fs::remove_file(path);
-        return false;
+        return None;
     }
     // Compare digests, not the tokens themselves — the stored side is a hash by design.
     if !digests_match(&digest(&supplied), &pending.hash) {
-        return false;
+        return None;
     }
     // Consume inside the gate, so the next scan of this QR finds nothing. It is [`REDEEM_GATE`]
     // — *not* the unlink — that makes this single-use; `remove_file` is not exclusive.
-    std::fs::remove_file(path).is_ok()
+    std::fs::remove_file(path).ok().map(|()| pending.scope)
 }
 
 /// Discard any pending token. Used by `uninstall`; a successful [`redeem`] already unlinks.
@@ -230,7 +266,7 @@ mod tests {
     #[test]
     fn the_fragment_is_not_part_of_the_token() {
         let (path, _dir) = tmp("fragment");
-        let t = mint(&path).unwrap();
+        let t = mint(&path, Scope::Dashboard).unwrap();
         let url = pair_url("192.168.1.42", 8443, &t, Some(FP));
 
         // What axum hands `pair` as `{token}`: the path segment, fragment already gone.
@@ -240,7 +276,7 @@ mod tests {
             "the path segment must be the token and nothing else"
         );
         assert!(
-            redeem(&path, segment),
+            redeem(&path, segment).is_some(),
             "the token from a pinned URL must pair"
         );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -268,17 +304,74 @@ mod tests {
     #[test]
     fn mint_then_redeem_once() {
         let (path, _dir) = tmp("once");
-        let t = mint(&path).unwrap();
+        let t = mint(&path, Scope::Dashboard).unwrap();
         assert_eq!(t.chars().count(), TOKEN_LEN);
-        assert!(redeem(&path, &t), "the freshly minted token must pair");
-        assert!(!redeem(&path, &t), "a pairing token must be single-use");
+        assert!(
+            redeem(&path, &t).is_some(),
+            "the freshly minted token must pair"
+        );
+        assert!(
+            redeem(&path, &t).is_none(),
+            "a pairing token must be single-use"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A token is worth what it was minted for, and redemption is the only thing that says so.
+    ///
+    /// The scope is the authority, so a mint/redeem round trip that lost it would hand an
+    /// integration the dashboard — silently, since every other assertion here would still pass.
+    #[test]
+    fn a_token_redeems_to_the_scope_it_was_minted_with() {
+        let (path, _dir) = tmp("scope");
+        let t = mint(&path, Scope::Dashboard).unwrap();
+        assert_eq!(redeem(&path, &t), Some(Scope::Dashboard));
+
+        let t = mint(
+            &path,
+            Scope::Integration {
+                source: "studygo".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            redeem(&path, &t),
+            Some(Scope::Integration {
+                source: "studygo".into()
+            }),
+            "an integration token must not redeem to dashboard authority"
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A pairing file written before tokens carried a scope is refused, not promoted.
+    ///
+    /// This is the migration, at the one place it can be tested directly. Fifteen minutes is the
+    /// whole exposure, but "unknown authority" must never resolve to "all authority".
+    #[test]
+    fn a_scopeless_pairing_file_is_refused_and_cleared() {
+        let (path, _dir) = tmp("legacy");
+        let legacy = format!(
+            r#"{{"hash":"{}","expires_at":{}}}"#,
+            digest("LEGACYTOKEN12345"),
+            now_secs() + 600
+        );
+        std::fs::write(&path, legacy).unwrap();
+        assert!(
+            redeem(&path, "LEGACYTOKEN12345").is_none(),
+            "a token with no recorded authority must not pair"
+        );
+        assert!(
+            !path.exists(),
+            "and it must be cleared, so it cannot block a fresh pairing"
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
     fn the_plaintext_token_is_never_written_to_disk() {
         let (path, _dir) = tmp("nostore");
-        let t = mint(&path).unwrap();
+        let t = mint(&path, Scope::Dashboard).unwrap();
         let on_disk = std::fs::read_to_string(&path).unwrap();
         assert!(
             !on_disk.contains(&t),
@@ -290,21 +383,21 @@ mod tests {
     #[test]
     fn wrong_and_empty_tokens_are_refused_without_consuming() {
         let (path, _dir) = tmp("wrong");
-        let t = mint(&path).unwrap();
-        assert!(!redeem(&path, "WRONGWRONGWRONG1"));
-        assert!(!redeem(&path, ""));
+        let t = mint(&path, Scope::Dashboard).unwrap();
+        assert!(redeem(&path, "WRONGWRONGWRONG1").is_none());
+        assert!(redeem(&path, "").is_none());
         // A failed attempt must not burn the real token.
-        assert!(redeem(&path, &t));
+        assert!(redeem(&path, &t).is_some());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]
     fn typed_form_is_normalized() {
         let (path, _dir) = tmp("normalize");
-        let t = mint(&path).unwrap();
+        let t = mint(&path, Scope::Dashboard).unwrap();
         let typed = format!("{}-{}", &t[..8], &t[8..]).to_lowercase();
         assert!(
-            redeem(&path, &typed),
+            redeem(&path, &typed).is_some(),
             "hyphenated lowercase must still pair"
         );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -313,14 +406,17 @@ mod tests {
     #[test]
     fn expired_tokens_are_refused_and_cleaned_up() {
         let (path, _dir) = tmp("expired");
-        let t = mint(&path).unwrap();
+        let t = mint(&path, Scope::Dashboard).unwrap();
         // Rewrite the stored record with an expiry in the past.
         let raw = std::fs::read_to_string(&path).unwrap();
         let mut pending: Pending = serde_json::from_str(&raw).unwrap();
         pending.expires_at = now_secs() - 1;
         std::fs::write(&path, serde_json::to_string(&pending).unwrap()).unwrap();
 
-        assert!(!redeem(&path, &t), "an expired token must not pair");
+        assert!(
+            redeem(&path, &t).is_none(),
+            "an expired token must not pair"
+        );
         assert!(!path.exists(), "an expired token must be cleaned up");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
@@ -338,7 +434,7 @@ mod tests {
 
         let (path, _dir) = tmp("race");
         for round in 0..50 {
-            let token = mint(&path).unwrap();
+            let token = mint(&path, Scope::Dashboard).unwrap();
             let wins = Arc::new(AtomicUsize::new(0));
             let start = Arc::new(std::sync::Barrier::new(8));
             std::thread::scope(|s| {
@@ -347,7 +443,7 @@ mod tests {
                     let (w, b) = (wins.clone(), start.clone());
                     s.spawn(move || {
                         b.wait(); // maximize overlap
-                        if redeem(&p, &t) {
+                        if redeem(&p, &t).is_some() {
                             w.fetch_add(1, Ordering::SeqCst);
                         }
                     });
@@ -366,7 +462,7 @@ mod tests {
     fn redeem_with_no_pending_token_is_false() {
         let (path, _dir) = tmp("missing");
         let _ = std::fs::remove_file(&path);
-        assert!(!redeem(&path, "ANYTHINGATALL123"));
+        assert!(redeem(&path, "ANYTHINGATALL123").is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

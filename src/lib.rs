@@ -118,7 +118,8 @@ fn accepts(cmd: &str) -> Option<Accepts> {
         "install" => a(&["--fix", "--reset-config", "--new-cert"], &["--port"]),
         "uninstall" => a(&["--purge"], &[]),
         "remote-setup" => a(&["--off"], &[]),
-        "run" | "doctor" | "status" | "pair" | "fingerprint" => a(&[], &[]),
+        "pair" => a(&[], &["--integration"]),
+        "run" | "doctor" | "status" | "fingerprint" => a(&[], &[]),
         "version" | "--version" | "-V" | "help" | "--help" | "-h" => a(&[], &[]),
         // Deliberately unchecked:
         // `helper` already rejects anything it does not recognise, and is handled before this
@@ -190,7 +191,7 @@ pub fn run_cli() -> Result<()> {
         "run" => run_server(),
         "service-run" => run_service(),
         "fingerprint" => print_fingerprint(),
-        "pair" => print_pairing(),
+        "pair" => print_pairing(&args),
         "doctor" | "status" => doctor::run(),
         "remote-setup" => print_remote_setup(),
         "version" | "--version" | "-V" => {
@@ -251,7 +252,19 @@ fn run_helper(args: &[String]) -> Result<()> {
 /// (a second phone, a laptop) long after install without retyping an address or a passphrase.
 ///
 /// Reads the port from the saved config so it always matches the running service.
-fn print_pairing() -> Result<()> {
+///
+/// `--integration <name>` mints a **scoped** token instead: one that authorises an app to push
+/// earned time as `<name>` and read today's total back, and nothing else. Without the flag the
+/// token is worth the whole dashboard, which is what a person scanning it needs and what
+/// `nestwatch-mobile` needs — the two kinds exist because those are genuinely different asks, and
+/// before `O89` there was only the larger one.
+///
+/// **The name has to match an installed integration to be useful**, and is deliberately not
+/// checked here: minting runs in a different process from the service, `pair` already refuses to
+/// read anything but the port out of the config, and a token for an uninstalled name simply
+/// grants nothing until the parent installs it from the dashboard. Refusing here would be a
+/// second copy of the registry's rules in a process that cannot see the registry.
+fn print_pairing(args: &[String]) -> Result<()> {
     // Minting writes into the ACL-locked data dir, so this needs elevation like install does.
     // Without the check it "succeeded" while printing no QR (the mint failure was logged at
     // debug, invisible by default) and guessed DEFAULT_PORT, so a `--port 9443` install got a
@@ -261,10 +274,36 @@ fn print_pairing() -> Result<()> {
         "It reads the saved port and writes a one-time token into the protected data folder, \
          both of which require elevation.",
     )?;
+    // Scanned rather than positional, the same shape `--tier` and `--port` use here.
+    let named = args
+        .iter()
+        .position(|a| a == "--integration")
+        .map(|i| {
+            args.get(i + 1)
+                .cloned()
+                .context("--integration requires a name, e.g. `--integration studygo`")
+        })
+        .transpose()?;
+    let scope = match named {
+        None => pairing::Scope::Dashboard,
+        Some(name) => {
+            // The same rule the registry enforces, restated because this process cannot ask it:
+            // a source is 1-32 of `a-z 0-9 _ -`, and `parent` is reserved for a human pressing
+            // the button. A token naming `parent` would be a scoped credential for the one
+            // source that skips every scoped-credential check.
+            if !api::valid_provider_name(&name) {
+                anyhow::bail!(
+                    "an integration name is 1-32 characters of a-z, 0-9, _ or - (and not \
+                     'parent'); got {name:?}"
+                );
+            }
+            pairing::Scope::Integration { source: name }
+        }
+    };
     let port = config::Config::load()
         .context("reading the saved settings — is nestwatch installed?")?
         .port;
-    install::print_access_block(port);
+    install::print_access_block(port, scope);
     Ok(())
 }
 
@@ -397,6 +436,8 @@ USAGE:
                           remain, naming them (--purge also removes settings + history)
   nestwatch doctor        check the install and report anything wrong
   nestwatch pair          show a QR code to sign in another phone or laptop
+  nestwatch pair --integration <name>
+                          show a QR for an app that may only add earned time as <name>
   nestwatch fingerprint   print the TLS cert SHA-256 (to verify a new device)
   nestwatch version       print this build's version
   nestwatch remote-setup  print a script enabling remote admin (--off to undo)

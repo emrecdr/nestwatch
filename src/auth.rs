@@ -23,6 +23,21 @@ use crate::state::AppState;
 /// Session key holding the "logged in" flag.
 const AUTH_KEY: &str = "authenticated";
 
+/// Session key holding what this session is *allowed to do* — see [`crate::pairing::Scope`].
+///
+/// Until `O89` this did not exist, and [`AUTH_KEY`] was the whole authorisation model: one
+/// boolean, written identically by [`login`] and [`pair`], read by [`require_auth`]. That made a
+/// paired device and the parent indistinguishable, which was fine while the only things pairing
+/// were the parent's own browser and phone — and stopped being fine when a third-party
+/// application started keeping the cookie and replaying it.
+///
+/// **A session carrying [`AUTH_KEY`] but not this key is refused.** That is the migration, and it
+/// is deliberately the closed direction: every session predating this change is unscoped, and
+/// honouring an unscoped session would leave the hole open in precisely the installs that have
+/// one. The cost is a password re-login in the browser and one fresh QR per paired device; the
+/// alternative is a fix that does not apply to anybody who already has the bug.
+const SCOPE_KEY: &str = "scope";
+
 /// Minimum control-password length, enforced at install and on password change.
 ///
 /// Eight, not more, on purpose. This password guards a LAN-only service behind an Argon2id hash
@@ -431,6 +446,11 @@ pub async fn login(
         // Rotate the session id on privilege change (defeats session fixation).
         session.cycle_id().await?;
         session.insert(AUTH_KEY, true).await?;
+        // The password is the parent's, so this is the unrestricted scope. Written here rather
+        // than defaulted in `require_auth`, so that "no scope" keeps meaning "refuse".
+        session
+            .insert(SCOPE_KEY, crate::pairing::Scope::Dashboard)
+            .await?;
         Ok(Json(json!({ "ok": true })))
     } else {
         let locked_out = state.limiter.record_failure(ip);
@@ -492,9 +512,10 @@ pub async fn pair(
 
     let path = crate::config::data_paths().pairing;
     // Off-runtime: this touches the filesystem (read + unlink).
-    let ok = tokio::task::spawn_blocking(move || crate::pairing::redeem(&path, &token)).await?;
+    let redeemed =
+        tokio::task::spawn_blocking(move || crate::pairing::redeem(&path, &token)).await?;
 
-    if !ok {
+    let Some(scope) = redeemed else {
         // Audit the lockout transition only, never the individual attempt: a per-attempt record
         // lets anyone on the LAN append unbounded lines and roll the audit log off disk. Same
         // reasoning as the rate-limited branch of `login`.
@@ -505,15 +526,25 @@ pub async fn pair(
             );
         }
         return redirect();
-    }
+    };
 
     state.limiter.record_success(ip);
-    // Same privilege transition as a password login: rotate the id, then mark authenticated.
+    // Rotate the id, mark authenticated, and record **what this pairing is worth**. That last
+    // step is the one this used to be missing: without it `pair` and `login` left identical
+    // session state, so a paired device held the parent's whole capability table and an
+    // integration could grant as `source=parent`, skipping the registry and the day latch.
     session.cycle_id().await?;
     session.insert(AUTH_KEY, true).await?;
+    session.insert(SCOPE_KEY, scope.clone()).await?;
+    // The audit says which kind, because "a device paired" and "an integration was installed on
+    // a device" are different events to meet in a log a month later.
+    let kind = match &scope {
+        crate::pairing::Scope::Dashboard => json!("dashboard"),
+        crate::pairing::Scope::Integration { source } => json!({ "integration": source }),
+    };
     state
         .audit
-        .record("paired", json!({ "src_ip": ip.to_string() }));
+        .record("paired", json!({ "src_ip": ip.to_string(), "scope": kind }));
     redirect()
 }
 
@@ -560,6 +591,32 @@ const SLIDING_REFRESH_SECS: i64 = 5 * 86_400;
 /// alone behaves as a hard 30-day cutoff from login, even for someone using the dashboard daily.
 /// Touching a timestamp here marks the session modified, which refreshes both the stored expiry
 /// and the browser cookie. Stepped coarsely so this isn't a write per request.
+/// May a scoped integration reach this request?
+///
+/// **The allowlist is three routes and the third is the one that gets forgotten.** An integration
+/// pushes to `/api/extra-time`, and then *reads the grant back* from `/api/usage/today` — it
+/// refuses to tell a parent a number the PC does not show, which is the agreed mitigation for a
+/// replayed idempotency key crossing midnight (`O85`). An allowlist written from the obvious
+/// sentence — "the phone pushes grants" — contains only the first, silently disables the
+/// read-back, and **every test in both repositories still passes**. It was named as a trap by the
+/// session that maintains that client before this was written, which is the only reason it is
+/// not one here. The third route is `GET /p/{token}` itself, which never reaches this function
+/// because pairing is unauthenticated by design.
+///
+/// `/api/usage/today` stays open to `Scope::Dashboard` for everyone else: it is also the Android
+/// client's, and narrowing a shared route for one caller would break a full dashboard to bound an
+/// integration.
+///
+/// Matched on the path as this layer sees it, which is *inside* `.nest("/api", …)`. That is
+/// asserted by a test rather than assumed, because the difference between the nested and the
+/// original path is exactly one silent prefix.
+fn integration_may_reach(method: &axum::http::Method, path: &str) -> bool {
+    matches!(
+        (method.as_str(), path),
+        ("POST", "/extra-time" | "/api/extra-time") | ("GET", "/usage/today" | "/api/usage/today")
+    )
+}
+
 pub async fn require_auth(
     session: Session,
     request: Request,
@@ -569,6 +626,24 @@ pub async fn require_auth(
     if !authenticated {
         return Err(AppError::Unauthorized);
     }
+
+    // Fail closed on a session with no scope: it predates `SCOPE_KEY`, so what it may do was
+    // never recorded and cannot now be inferred. See that constant for why this is the right
+    // direction rather than the convenient one.
+    let Some(scope) = session.get::<crate::pairing::Scope>(SCOPE_KEY).await? else {
+        return Err(AppError::Unauthorized);
+    };
+    if let crate::pairing::Scope::Integration { .. } = &scope
+        && !integration_may_reach(request.method(), request.uri().path())
+    {
+        return Err(AppError::Forbidden(
+            "this pairing may push earned time and read today's total, nothing else".into(),
+        ));
+    }
+    // Handed to the handler so a grant is attributed to the credential that made it rather than
+    // to a name the request chose. `extra_time` is the one reader.
+    let mut request = request;
+    request.extensions_mut().insert(scope);
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let seen = session.get::<i64>(SEEN_KEY).await?.unwrap_or(0);

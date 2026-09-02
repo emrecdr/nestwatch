@@ -18,6 +18,16 @@ pub enum AppError {
     #[error("too many failed attempts, try again shortly")]
     TooManyAttempts,
 
+    /// Authenticated, but this credential is not allowed to do this.
+    ///
+    /// Distinct from [`AppError::Unauthorized`] on purpose, and the distinction is the useful
+    /// part: 401 means "sign in", and a client that meets it retries with a fresh session. A
+    /// scoped integration retrying its pairing would get a credential with exactly the same
+    /// bounds, so telling it to sign in again would be a loop. 403 says the bounds are the
+    /// answer.
+    #[error("{0}")]
+    Forbidden(String),
+
     #[error("{0}")]
     BadRequest(String),
 
@@ -49,6 +59,7 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::TooManyAttempts => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Control(ControlError::ProcessNotFound(_)) => {
                 (StatusCode::NOT_FOUND, self.to_string())
