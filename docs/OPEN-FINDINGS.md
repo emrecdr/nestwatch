@@ -1350,7 +1350,7 @@ was right and the layer above it was not: `axum-server` hard-codes
 `RustlsConfig::from_pem_file` ends up, and `Server::http1_only()` does not touch it. That one line
 alone would have advertised h2, let every current browser negotiate it, and then fed an h2 preface
 to an HTTP/1.1 parser — a blank dashboard for everyone, shipped as a cleanup. The fix needs the
-ALPN narrowing too (`serve_http1_only`), and
+ALPN narrowing too (`alpn_http1_only`), and
 `serving_one_protocol_and_advertising_it_cannot_drift_apart` fails if either call is removed
 without the other.
 
