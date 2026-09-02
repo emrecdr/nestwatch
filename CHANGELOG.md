@@ -211,6 +211,26 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   this is the same bytes from the same generator, with one fewer DLL and one fewer deprecated entry
   point between the child's PC and its secrets.
 
+- **Someone guessing your password can no longer erase the record of what this tool did.** A failed
+  sign-in and a failed pairing attempt are written for a caller who has presented no session, no
+  password and no code, at whatever rate the limiter allows — five a minute per source address, and
+  a home network lets one machine hold many addresses. Those shared a single 2 MiB ring with your
+  own history, so the cheapest event in the system could evict the most valuable one: measured, four
+  hundred wrong passwords removed a recorded screen-lock from the audit page, which is the only
+  place you can see what happened. They now append to their own file, rotating on its own budget,
+  and the audit page reads both with a separate row allowance each — so a guessing run can destroy
+  its own attempt history and nothing else, and cannot push your actions off the page either.
+  <br>**Kept in full rather than thinned, and that is the deliberate part.** The cheaper fix is to
+  write fewer lines — coalesce the failures, or record only the lockout. OWASP ASVS 5.0 **16.3.1**
+  forbids it: every authentication attempt is logged, successful and unsuccessful alike, because
+  failed attempts are the early indicator of credential stuffing and password spraying. **16.4.2**
+  requires that logs cannot be modified, and an attacker evicting entries is modifying them. Keeping
+  every attempt while denying it the power to evict satisfies both. What remains is stated plainly:
+  someone who already **has** a session can still flood the action log through any signed-in
+  endpoint, which no partition fixes and which the tamper model already treats as lost. Which events
+  sit on which side is a list in the code rather than a convention, and a test fails when a new
+  recording site appears that nobody has classified.
+
 ### Changed
 
 - **You can now keep a copy of your settings, and put them back.** *Settings backup*, at the bottom
