@@ -118,6 +118,15 @@ function emptyScreentime() {
   };
 }
 
+// One-or-many, for sentences the parent reads.
+//
+// At module scope rather than inside the one function that needed it. This file already chooses
+// between a singular and a plural noun in six other places, each written out by hand, and a helper
+// only one of the seven can reach is a convention nothing is able to follow. The six existing lines
+// are deliberately left alone -- they work, and rewriting working prose to adopt a helper is churn.
+// This is where the next one goes.
+const plural = (n, one, many) => (n === 1 ? one : many);
+
 function app() {
   return {
     theme: readTheme(),
@@ -215,6 +224,17 @@ function app() {
       { key: "sun", short: "Su", full: "Sunday" },
     ],
     rules: { enabled: true, daily_budget_mins: 0, budget_by_weekday: null, blocklist: [], app_limits: {}, app_groups: [], warn_secs: 60, budget_action: "lock" },
+    // The schedule attached to the routine currently being saved.
+    //
+    // One window, deliberately, where the server accepts several: a homework hour is one window,
+    // and the shape a parent can hold in their head on a phone is one row of controls rather than
+    // an add/remove list they also have to reason about. A hand-edited config with more still
+    // works — `Config::rules_at` reads them all — so this is a narrower editor, not a narrower
+    // feature.
+    //
+    // Empty `start`/`end` means "no schedule", which is what makes Save behave exactly as it
+    // always has unless the parent fills these in.
+    newRoutineWindow: { start: "", end: "", days: {} },
     appLimitRows: [],
     groupRows: [],
     savingRules: false,
@@ -647,16 +667,45 @@ function app() {
       return this.loadList("/api/routines", "routines", "loadingRoutines", "Failed to load routines");
     },
 
+    // The schedule to send with a save: one window, or none.
+    //
+    // Both times or neither. A half-filled row is the parent mid-typing, and sending it would
+    // either be rejected by `validate_windows` as an invalid time or — worse, if the blank one
+    // parsed — save a window that means something nobody asked for.
+    routineScheduleToSave() {
+      const w = this.newRoutineWindow;
+      if (!w.start || !w.end) return [];
+      return [{ start: w.start, end: w.end, days: w.days }];
+    },
+
+    // What a saved routine's schedule does, in words. Reuses `windowDayLabel` rather than
+    // restating the day rules: that function already knows a window belongs to the night it opens
+    // on, which took a measured bug to get right and must not be described twice.
+    routineScheduleLabel(r) {
+      if (!r.schedule || r.schedule.length === 0) return "";
+      const w = r.schedule[0];
+      const more = r.schedule.length > 1 ? " +" + (r.schedule.length - 1) + " more" : "";
+      return w.start + "–" + w.end + " · " + this.windowDayLabel(w).replace("Applies: ", "") + more;
+    },
+
     async saveRoutine() {
       const name = (this.newRoutineName || "").trim();
       if (!name) { this.toast("Enter a routine name", "error"); return; }
+      const w = this.newRoutineWindow;
+      // Caught here rather than at the server so the message names the box that is empty. The
+      // server still rejects a malformed window — this is the friendly half, not the only half.
+      if ((w.start && !w.end) || (!w.start && w.end)) {
+        this.toast("A schedule needs both a start and an end time", "error");
+        return;
+      }
       this.savingRoutine = true;
       this.collapseRules();
       try {
-        const r = await this.postJSON("/api/routines", { name, rules: this.rules });
+        const r = await this.postJSON("/api/routines", { name, rules: this.rules, schedule: this.routineScheduleToSave() });
         if (r.ok) {
           this.toast(`Saved routine "${name}"`, "success");
           this.newRoutineName = "";
+          this.newRoutineWindow = { start: "", end: "", days: {} };
           this.loadRoutines();
         } else if (r.status === 400) {
           this.toast(await this.rejection(r, "Could not save routine"), "error");
@@ -1432,7 +1481,6 @@ function app() {
     refusedRows() {
       const r = this.today?.refused;
       if (!r) return [];
-      const plural = (n, one, many) => (n === 1 ? one : many);
       const rows = [];
       if (r.clock_changes > 0) {
         rows.push({
