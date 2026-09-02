@@ -147,11 +147,27 @@ StudyGo is provider #1, pushing from Voortgang over the authenticated LAN API.
 
 One thing the build added that this analysis did not call for, and it is the security
 half worth recording: **the reward moved to this machine.** A push names its provider and
-asserts its threshold was met; the minutes come from that provider's config here. So a
-phone that is lost, spoofed, or simply buggy cannot choose its own reward — verified live,
-a push claiming 999 minutes granted the configured 25. The original design had the client
-send the number, which would have made the phone's integrity load-bearing for a limit the
-parent set.
+asserts its threshold was met; the minutes come from that provider's config here — verified
+live, a push claiming 999 minutes granted the configured 25. The original design had the
+client send the number, which would have made the phone's integrity load-bearing for a limit
+the parent set.
+
+**This paragraph used to end "so a phone that is lost, spoofed, or simply buggy cannot choose
+its own reward", and that was wrong.** It is true of the *push*. It is not true of the
+*phone*, because the phone does not have to push. Pairing mints an ordinary session —
+`auth::pair` performs the same two steps as `auth::login`, and `require_auth` reads one
+boolean with no scope on it — so the client holding the pairing cookie can reconfigure the
+provider it is governed by, or grant directly as `source=parent`, which skips the registry
+and the day latch together. Measured: five such requests granted 1200 minutes.
+
+**The analysis above is the reason the gap existed, and it is worth naming precisely.** Every
+architecture here was weighed on *what a provider runs* — syscalls, egress, in-process
+memory safety. That was the right question for choosing between WASM and data, and
+architecture 4 answers it completely: a provider runs nothing. But *what a provider is
+authenticated as* was never asked, so nothing in this document notices that the declarative
+design removed the code-execution risk and left authority untouched. A registry with careful
+bounds reads as though it had answered both. `O89` carries the finding and the two candidate
+repairs.
 
 The recommendation as originally written follows.
 
@@ -203,9 +219,10 @@ golden file would guarantee a drift failure over there, clearable only by vendor
 fixture that repo has no parser for. `tests/golden.rs` says what belongs in it in its
 first line: *every JSON shape the Android client parses.* This is not one.
 
-**The real gap that question points at** is `/api/extra-time`'s *response*, which
-Voortgang parses (`ok`, `reason`, `minutes`) and nothing pins. It cannot go in
-`tests/golden/` either, for the same reason — that directory is a contract with one
-specific repo. A second consumer now exists and the mechanism does not have a place for
-it. Worth solving deliberately rather than by dropping a file into a directory whose
-checker will reject it.
+**The real gap that question points at** was `/api/extra-time`'s *response*, which
+Voortgang parses (`ok`, `reason`, `minutes`) and nothing pinned. **Now pinned**, in
+`earned_grant.rs` rather than `tests/golden/`: the exact key set of both 200 bodies, plus
+the rule that `ok` and `reason` cannot disagree. A fixture could not go in `tests/golden/`
+for the reason given above — that directory is a contract with one specific repo, whose
+checker counts an unrecognised file as drift — and where shared fixtures should live is
+still open as `O86`, needing a decision in both repositories rather than one.

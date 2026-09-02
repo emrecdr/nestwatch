@@ -1727,6 +1727,17 @@ session should land alone. The same rule `O86` is filed under.
    The `studygo` side reports its owner has chosen this one; **the decision on this side has not
    been made**, and the two repositories have to agree before either moves.
 
+   **As stated, it is not implementable, and the reason is a third repository.** The mark cannot
+   be *"this session came from pairing"*, because `nestwatch-mobile` pairs the same way — it
+   redeems the same one-time token through `pairing_controller` and holds the resulting session —
+   and it is a full parent dashboard. Its paths are `/api/events`, `/api/time-requests`,
+   `/api/time-codes`, `/api/usage/today` and `/api/screenshot`, which is most of what the mark
+   would refuse. Deriving the mark from the fact of pairing would disable the Android client
+   entirely. **The mark has to be chosen when the QR is minted** — `nestwatch pair` for a
+   dashboard, something else for an integration — so it describes what the credential is *for*
+   rather than how it was redeemed. That is a change to the `pair` CLI and the pairing file, not
+   only to the session, and it moves this option most of the way toward option 1.
+
 If (2) is taken, three things are already known about it and one is a trap:
 
 - **The allowlist is three routes, not one.** Voortgang calls `GET /p/{token}`, `POST

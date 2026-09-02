@@ -2,6 +2,27 @@
 
 All notable changes to Nestwatch. Dates are the release-tag dates.
 
+## [Unreleased]
+
+### Security
+
+- **A paired device holds the whole of your dashboard's authority, and the 0.6.0 notes overstated
+  what the Integrations design bounds.** Pairing a phone is the same privilege step as typing your
+  password: the link `GET /p/{token}` mints an ordinary session, and nothing on it records that it
+  belongs to an app rather than to you. So while a *push* genuinely cannot choose its own reward —
+  the minutes come from this PC, and that part is real and tested — the app holding the pairing
+  cookie is not confined to pushing. It can reconfigure what it earns, grant directly, or change
+  settings, exactly as you could from the dashboard.
+  <br>**Nothing changed in the program here.** This release corrects the claim in three places that
+  a parent reads — the README feature table, the 0.6.0 notes above, and `docs/SECURITY.md`, whose
+  blast-radius table now states plainly that every capability in it is reachable by any paired
+  device. `POST /api/re-anchor`'s own note that "reaching it costs the parent's password" is
+  corrected too; it costs the password *or* any paired keychain.
+  <br>**What to do about it today:** pair only apps you would trust with the PC itself, and change
+  your control password to sign out a device you no longer control (that revokes every session).
+  The fix that would make an integration's pairing genuinely narrower is `O89` in
+  `docs/OPEN-FINDINGS.md`, and it needs a change in both repositories.
+
 ## [0.6.0] — 2026-09-02
 
 ### Added
@@ -29,9 +50,10 @@ All notable changes to Nestwatch. Dates are the release-tag dates.
   dashboard.** The earned-time grant added earlier is now a first-class *provider* — StudyGo is the
   first, and a new Integrations card lists each one with an on/off toggle and the minutes it grants.
   Two things matter about where the numbers live. A provider push says only *that* its threshold was
-  met; **how many minutes that earns is set here, on this PC, per provider** — so a phone that is
-  lost, spoofed, or simply buggy cannot choose its own reward, and a push claiming 999 minutes still
-  grants exactly what you configured. And an integration you turn off cannot grant at all, in one
+  met; **how many minutes that earns is set here, on this PC, per provider** — so a push claiming 999
+  minutes still grants exactly what you configured. (This entry originally said such a phone "cannot
+  choose its own reward". That was too broad and is corrected under *Unreleased* below: it is true of
+  the push, and a paired device has other ways to ask.) And an integration you turn off cannot grant at all, in one
   switch, without unpairing anything. A provider is data you toggle, never code this machine runs or
   a server it reaches out to — the reasoning, and the plugin architectures deliberately *not* taken,
   are in `docs/PLUGIN-SYSTEM.md`.
