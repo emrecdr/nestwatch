@@ -38,6 +38,24 @@ const AUTH_KEY: &str = "authenticated";
 /// per-device revocation is the compensation that made keeping it defensible.
 pub const SESSION_IDLE_DAYS: i64 = 30;
 
+/// Longest a session may live, in days, however heavily it is used.
+///
+/// **The companion to [`SESSION_IDLE_DAYS`], and the one that was missing.** The idle window
+/// *slides*: `require_auth` refreshes it on activity, so a phone opened daily held a session that
+/// never expired at all. OWASP's session guidance asks for both timeouts precisely because an
+/// idle window alone has no ceiling, and NIST SP 800-63B puts 30 days on a single-factor (AAL1)
+/// session, which a password login is.
+///
+/// Equal to the idle window on purpose, so the pair is one rule a parent can hold — *"signing in
+/// lasts a month"* — rather than two numbers that interact. It binds where the idle window does
+/// not: a device in daily use now re-authenticates monthly instead of never.
+///
+/// `docs/REMOTE-ACCESS.md` is why this changed rather than being tightened for its own sake. The
+/// 30-day window was chosen when a stolen cookie meant somebody already inside the house; a
+/// dashboard reachable through a tunnel is the premise that broke, and an unbounded session was
+/// the part of it that did not survive.
+pub const SESSION_MAX_DAYS: i64 = 30;
+
 /// Session key holding how this device announced itself, for the *Signed-in devices* card.
 ///
 /// A JSON object: `first_seen` (unix seconds) and `user_agent`. Written where the session is
@@ -853,6 +871,29 @@ pub async fn require_auth(
             "this pairing may push earned time and read today's total, nothing else".into(),
         ));
     }
+    // The absolute cap. Read from the device record rather than tracked separately, because
+    // `first_seen` already answers "when did this session begin" and a second timestamp would be
+    // a second thing to keep true. A session with no device record predates this and is already
+    // refused above for having no scope, so there is no unbounded-by-omission case.
+    if let Some(started) = session
+        .get::<Value>(DEVICE_KEY)
+        .await?
+        .as_ref()
+        .and_then(|d| d.get("first_seen"))
+        .and_then(Value::as_i64)
+    {
+        let age = OffsetDateTime::now_utc()
+            .unix_timestamp()
+            .saturating_sub(started);
+        if age >= SESSION_MAX_DAYS * 86_400 {
+            // Flushed rather than merely refused, so the store does not keep serving a record
+            // every later request has to re-reject — and so the *Signed-in devices* card stops
+            // listing a device that can no longer do anything.
+            session.flush().await?;
+            return Err(AppError::Unauthorized);
+        }
+    }
+
     // Handed to the handler so a grant is attributed to the credential that made it rather than
     // to a name the request chose. `extra_time` is the one reader.
     let mut request = request;
