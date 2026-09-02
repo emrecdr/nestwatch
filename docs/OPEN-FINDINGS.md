@@ -70,7 +70,7 @@ or rewritten rather than annotated, per the rules above.
 
 ## Release state
 
-**`v0.5.1`, published 2026-08-31.** Everything below is open against a release that is on the
+**`v0.6.0`, published 2026-09-02.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -86,6 +86,14 @@ on Windows. The three gates that were green when it shipped are the same three t
 `install` failed on real hardware and again when `remove_file` turned out not to be exclusive. That
 is not an argument for distrusting them; it is the reason the section below exists and the reason
 the checklist is the only method here with a track record.
+
+**And 0.6.0's own headline features are not in the checklist at all** — which is worse than being
+in it unrun, because an unrun item is at least counted. Section H is scoped to 0.5.0 by its title.
+Measured on 2026-09-02: `integration`, `provider`, `StudyGo`, `earned` and `idempot` each return
+**zero** matches in `WINDOWS-TESTING.md`, and the sole Routines item (§E2) exercises the *manual*
+save-and-apply path that predates the release. So scheduled routines and the integrations registry
+— the two things 0.6.0 was cut for — have neither run on Windows nor been written down as things
+to run. Tracked as `O87`.
 
 The enforcer wake is the one to run first. Its entire value is a timing property — an abort arriving
 in well under a second where it previously took up to 30 — measured once, on macOS, where `shutdown`
@@ -960,16 +968,28 @@ added so the tests cannot go stale when a third language lands.
 
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
-`assets/app.js` is **2,056 lines** registering a single `Alpine.data("app", app)` with ~97
-methods, consumed by two `x-data="app"` roots across 1,450 lines of markup. By comparison `src/`
-is 39 modules with a stated responsibility each.
+`assets/app.js` is **2,501 lines** registering a single `Alpine.data("app", app)` with ~139
+methods, consumed by one `x-data="app"` root across 1,766 lines of markup. By comparison `src/`
+is 38 modules with a stated responsibility each. *(Measured 2026-09-02.)*
 
 **The premise most reviews attach to this is false, and it was false when they wrote it.** The
 argument arrives as "a component this size cannot be tested without a browser, so split it to
 make it testable". `web/test/harness.js` has evaluated `app.js` in a `vm` context since
-`4434447`, and `web/test/app.test.js` is **1,910 lines** exercising its pure methods. Reachability
+`4434447`, and `web/test/app.test.js` is **2,333 lines** exercising its pure methods. Reachability
 was never the problem and splitting would not improve it. Anyone re-raising this should check the
 harness before repeating the testability argument.
+
+**The trigger below has fired twice and nobody was watching, which is the part worth acting on.**
+Every figure in this entry was re-measured on 2026-09-02 and every one had drifted, in six days,
+in the direction of "worse": the previous text read 2,056 lines, ~97 methods, 1,450 lines of
+markup and *two* `x-data` roots (there is one, and there was one when that was written). The
+component grew 22% and the method count 43% while the entry recording its size stood still. Two
+changes landed in this scope in that window — routine schedules and the integrations UI — and
+neither extracted a seam, so "until a change lands there anyway" is not a trigger a person
+reliably notices. `tests/doc_claims.rs::o71_line_counts_have_not_drifted_past_its_citation` now
+fails when the file grows more than 15% past the number written here, which turns the trigger into
+something CI can see. It is a one-sided bound: growth is the failure mode, so re-measuring and
+editing two numbers is the whole fix when it fires.
 
 **What is actually left.** One scope holding capture, process list, curfew editing, rules editing,
 routines, time codes, the audit feed, the screen-time report, theming, toasts and the update

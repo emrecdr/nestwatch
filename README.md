@@ -129,7 +129,7 @@ Browser (LAN) ──HTTPS──> SYSTEM service (Session 0) ── axum ── a
 |---|---|
 | Web / TLS | axum 0.8, axum-server 0.8, rustls 0.23 (**ring** provider), tower-sessions 0.15 |
 | Assets | rust-embed 8 (embeds `assets/`) |
-| Auth | argon2 0.5 (Argon2id) |
+| Auth | argon2 0.6 (Argon2id) |
 | OS ops | xcap 0.9 (screen, Windows-only dep), sysinfo 0.39 (processes), `shutdown /s` (power), `rundll32 …LockWorkStation` (lock) |
 | Session | `WTSQuerySessionInformation` (is the child logged in / locked / idle — screen-time counts active use only), `WTSSendMessage` (on-desktop "time's almost up" warning) |
 | Service / FFI | windows-service 0.8, windows 0.62 (WTS + CreateProcessAsUser) |
