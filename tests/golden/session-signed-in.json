@@ -1,4 +1,7 @@
 {
   "authenticated": true,
+  "scope": {
+    "kind": "dashboard"
+  },
   "version": "<version>"
 }

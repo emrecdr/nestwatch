@@ -565,6 +565,51 @@ pub async fn pair(
 /// Sent whether or not the caller is signed in: it is the same string printed at install, on the
 /// console, by an unauthenticated `version` command. It reveals nothing a LAN attacker could not
 /// read off the login page's own assets.
+///
+/// # `scope`, and what it is honestly worth
+///
+/// Also reports what the session may do, because a pairing link does not say what it is worth:
+/// a dashboard QR and an integration QR are byte-identical in form, and the scope lives in
+/// `pairing.json` on this machine, never in the URL. So an integration app handed the *wrong* QR
+/// pairs successfully and silently holds the parent's whole authority — which is precisely the
+/// posture scoping removed. Reading this field lets that app notice and refuse.
+///
+/// **This defends against a mistake, not an attacker, and the difference matters.** Nothing here
+/// can stop a client that declines to check, and an app that actually wanted parent authority
+/// would simply ask the parent for a dashboard link. The guarantee is unchanged and is still the
+/// credential: an integration pairing *cannot* reach the rest of the API whatever the client
+/// believes. What this adds is that an honest client can tell it was given more than it asked
+/// for, which is the case a household actually hits — a parent scanning whichever QR was on
+/// screen. It is the client-side half of audience validation, which is the standing advice for
+/// exactly this: a credential issued for one purpose must not be silently usable for another.
+///
+/// ## Against the nearest specification
+///
+/// The closest written thing is **RFC 7662, OAuth 2.0 Token Introspection**, and this departs
+/// from it twice on purpose. Cited because it is the only standard description of "ask what a
+/// credential is worth", not because this is an OAuth deployment — there is no authorisation
+/// server here, no bearer token, no client registration and no refresh.
+///
+/// 1. *`scope` is an object; RFC 7662's is a space-separated string.* That string is an artifact
+///    of OAuth carrying scopes through form-encoded parameters, and nothing here has that
+///    constraint. The two facts a client needs are *what may it do* and *who is it*, which OAuth
+///    splits across `scope` and `client_id`; inventing an OAuth vocabulary for a two-kind system
+///    would promise semantics this service does not have. An object also makes absence
+///    unambiguous — `null` is "no authority recorded", one value to test rather than two fields
+///    to correlate.
+///
+/// 2. *The endpoint is unauthenticated; RFC 7662 says introspection MUST NOT be.* Its reason is
+///    token scanning, and that attack needs a `token` **parameter** — somewhere to put a guess.
+///    There is none here: a caller can only ask about the cookie they already present. `/session`
+///    has answered `authenticated` to anyone on the LAN since `0.1.0`, so the validity oracle
+///    predates this field and is not widened by it. Anyone who guessed a session id already holds
+///    the authority this would describe, and learning its name tells them nothing a single
+///    request would not.
+///
+/// A caller with no session reads `null`. An *authenticated* caller reading `null` is holding a
+/// session minted before scopes existed — which `require_auth` refuses, so the honest answer to
+/// that pair is "re-pair", and it is distinguishable from "this build has no scopes" only by the
+/// field being present at all.
 pub async fn me(session: Session) -> Json<Value> {
     let authenticated = session
         .get::<bool>(AUTH_KEY)
@@ -572,7 +617,25 @@ pub async fn me(session: Session) -> Json<Value> {
         .ok()
         .flatten()
         .unwrap_or(false);
-    Json(json!({ "authenticated": authenticated, "version": crate::VERSION }))
+    // What this session is allowed to do, so a client can check it got what it asked for. See
+    // the `scope` note in this function's doc comment for why an *honest* client is the whole
+    // audience.
+    let scope = match session.get::<crate::pairing::Scope>(SCOPE_KEY).await {
+        Ok(Some(crate::pairing::Scope::Dashboard)) => json!({ "kind": "dashboard" }),
+        Ok(Some(crate::pairing::Scope::Integration { source })) => {
+            json!({ "kind": "integration", "source": source })
+        }
+        // Authenticated but unscoped is a session from before scopes existed, which `require_auth`
+        // refuses. Reported as null rather than omitted, so a client can tell "this build has no
+        // scopes" (field absent) from "your session predates them" (field present, null) — the
+        // second needs re-pairing and the first does not.
+        _ => Value::Null,
+    };
+    Json(json!({
+        "authenticated": authenticated,
+        "version": crate::VERSION,
+        "scope": scope,
+    }))
 }
 
 /// Session key holding the last time we refreshed the expiry (unix seconds). See [`require_auth`].

@@ -224,6 +224,64 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
         let _ = to_bytes(res.into_body(), usize::MAX).await;
     }
 
+    // --- `GET /session` says what the caller is holding, so an app can check. -------------
+    //
+    // The gap this closes is not enforcement — that is settled above — it is that the two QRs
+    // are byte-identical in form, so a parent who mints a dashboard link and scans it with an
+    // integration app hands it the parent's whole authority, and the app cannot tell. Reading
+    // this field is how it tells.
+    {
+        let state = state_with(test_config());
+        let app = app_with(state);
+
+        let read_scope = |cookie: Option<String>| {
+            let app = app.clone();
+            async move {
+                let mut req = Request::builder().uri("/session");
+                if let Some(c) = cookie {
+                    req = req.header(header::COOKIE, c);
+                }
+                let res = app.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+                serde_json::from_slice::<Value>(&bytes).unwrap()
+            }
+        };
+
+        // No session at all: nothing to report, and nothing learned.
+        let anon = read_scope(None).await;
+        assert_eq!(anon["authenticated"], json!(false));
+        assert_eq!(anon["scope"], Value::Null);
+
+        // A dashboard pairing says so — this is the value an integration app must refuse.
+        let browser = pair_with(&app, Scope::Dashboard).await.unwrap();
+        let seen = read_scope(Some(browser)).await;
+        assert_eq!(seen["authenticated"], json!(true));
+        assert_eq!(
+            seen["scope"],
+            json!({ "kind": "dashboard" }),
+            "an app that asked for an integration link and reads this must be able to tell it \
+             was handed the parent's authority instead"
+        );
+
+        // An integration pairing names its source. The **name** matters as much as the kind: a
+        // link minted for a different integration would otherwise push happily under that other
+        // name, with no error anywhere.
+        let phone = pair_with(
+            &app,
+            Scope::Integration {
+                source: "studygo".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let seen = read_scope(Some(phone)).await;
+        assert_eq!(
+            seen["scope"],
+            json!({ "kind": "integration", "source": "studygo" }),
+            "the source name has to travel, or a client cannot tell which integration it is"
+        );
+    }
+
     // --- The migration itself: a session authenticated but never scoped. ------------------
     //
     // **Written because a mutation survived without it.** Replacing `require_auth`'s scope read
