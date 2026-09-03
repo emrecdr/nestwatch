@@ -91,7 +91,7 @@ Each was checked by reading the cited line; three are the project's own words.
 | **2** | All-digit passwords allowed: *"eight digits is 10^8, and against Argon2id behind per-IP throttling that is not the weak link."* | `src/auth.rs`, on `guessable` |
 | **3** | Six-character time codes: *"That rate limit is the primary defence, not a secondary one… Loosening or removing the limiter therefore changes the security of time codes directly."* The bucket is keyed on **source IP**. | `src/api.rs`, on `redeem_code` |
 | **4** | `/ask`, `/status`, `POST /time-request` and `POST /redeem-code` are **unauthenticated**. Their comments name the protection exactly: *"LAN-gated (outer router → require_lan_peer) and per-IP rate-limited."* | `src/server.rs` |
-| **5** | A device paired for the dashboard holds the parent's entire authority, and only geography bounds it. **Narrowed by `8d5f5c3`**, which gave pairing a scope: `Scope::Integration` reaches two endpoints, `Scope::Dashboard` still reaches everything. What remains is that a dashboard pairing cannot be revoked on its own — **O77**. | `docs/SECURITY.md`, `src/pairing.rs`, `auth::integration_may_reach` |
+| **5** | A device paired for the dashboard holds the parent's entire authority, and only geography bounds it. **Narrowed by `8d5f5c3`**, which gave pairing a scope: `Scope::Integration` reaches two endpoints, `Scope::Dashboard` still reaches everything. **Closed by `be1c07e`/`f6687d8`**, which gave a session a device identity and a per-device revoke, so one lost phone no longer costs every device. | `docs/SECURITY.md`, `src/pairing.rs`, `auth::integration_may_reach`, `sessionstore::revoke` |
 
 `SECURITY.md` puts *"exposure to the public internet (the tool is LAN-only by design)"* out of
 scope. That sentence is the assumption the whole threat model was written under, and it is worth
@@ -146,16 +146,20 @@ Under the decision taken, one phone carries three things at once:
   device this section is about.
 
 Today the bound on that is geography: whoever takes the phone has to be in the house for it to be
-worth anything. Remote access removes the bound and nothing currently replaces it.
+worth anything. Remote access removes the bound, so something else has to replace it.
 
-Two gaps compound it, both verified by reading:
+Two gaps compounded this when the document was written, and **both are now closed** — they are kept
+here because they are the reason the work was ordered the way it was:
 
-- **There is no per-device session identity.** A session carries two keys and neither says which
-  device holds it.
-- **There is no per-device revocation.** `clear_all()` is the only lever, and its own comment says
-  why it exists: *"with sessions now surviving restarts there is otherwise **no** way to revoke a
-  leaked cookie for its full 30-day life."* Revoking one lost phone signs out every device you
-  own, including the one in your hand.
+- **There was no per-device session identity.** A session carried two keys and neither said which
+  device held it. `GET /api/sessions` now lists devices by handle.
+- **There was no per-device revocation.** `clear_all()` was the only lever, so revoking one lost
+  phone signed out every device including the one in your hand. `sessionstore::revoke` now ends one
+  alone.
+
+What does **not** change is the concentration itself: a dashboard pairing is still unscoped, so the
+phone still holds everything while you hold it. Revocation limits the damage after a loss; it does
+not reduce what the device carries before one.
 
 `SECURITY.md` is already explicit that a child holding a paired device is **not** handled. A
 household phone is a plausible thing for a child to reach, and remote access means that device no
@@ -249,19 +253,24 @@ Ordered because each step is a precondition for the next, not a preference about
 **0 · Settle the two blocking prerequisites.** CGNAT and the router's VPN capability, above. Both
 are minutes of checking and either can end the plan.
 
-**1 · Give a session a device identity that can be revoked alone — `O77`.** This is the security
-story under full parity, because the tunnel handles the network and the phone holds everything
-else. Half of what this step originally asked for landed in `8d5f5c3`: pairing now carries a scope,
-so the *authority split* exists. The half that remains is identity — nothing in a session says
-which device holds it, so `clear_all()` is still the only revocation lever there is, and it is what
-makes revocation surgical instead of total. Nothing else on this list is worth
-doing first.
+**1 · Give a session a device identity that can be revoked alone — `O77`. DONE** (`be1c07e`,
+`f6687d8`). This was the security story under full parity, because the tunnel handles the network
+and the phone holds everything else. It landed in two halves: `8d5f5c3` gave pairing a scope, so the
+*authority split* exists, and then identity — `GET /api/sessions` lists signed-in devices by
+**handle, never session id**, and `POST /api/sessions/{handle}/revoke` ends one alone
+(`sessionstore::revoke`). `clear_all()` is no longer the only lever, so revocation is surgical
+rather than total. The ordering held: this really was the precondition for everything else.
 
-**2 · Productize the tunnel, and teach `doctor` to check it.** No protocol work: generate the peer
-configuration and its QR alongside the existing pairing QR, and validate the path end to end.
-`doctor` already probes the local listener and reads firewall rules back, so this extends a
-pattern rather than inventing one. One check earns its place above the others — see the SNAT note
-below.
+**2 · Productize the tunnel, and teach `doctor` to check it. HALF DONE, and the other half was
+declined on the merits** (`2e72216`). The SNAT check is in: `doctor::masquerading_router` reads the
+access log and tells a parent when their router has made it unable to tell devices apart. That is
+the half true for *every* router, which is why this document put it above the others.
+
+**Peer-configuration generation was deliberately not built**, and the reasoning is better than this
+document's original framing. Generating a WireGuard peer config needs the router's key and endpoint,
+which Nestwatch cannot know and would have to be told — so it is a templating feature wearing a
+security feature's clothes, correct for one router and untestable for the rest. This document asked
+for it; that ask was wrong, and the half that survived is the half that generalises.
 
 **3 · Compensate on the session for the factors a domain would have given.** Declining a domain
 name is a legitimate call; it avoids a registration, a renewal, and DNS credentials on the
@@ -272,6 +281,12 @@ credential: a shorter expiry for sessions used through the tunnel, re-authentica
 destructive and disclosive actions rather than before every action, and revocation the parent can
 find *before* they need it. The 30-day window was chosen when a stolen cookie meant someone in the
 house; that premise is what changed.
+
+**DONE in the part that mattered most** (`3071152`, #21): the idle window now has a ceiling. A
+session used daily used to live forever, because `Expiry::OnInactivity` resets on every request —
+so "30 days" bounded neglect, never possession. The absolute cap is read from the device record
+added in step 1 rather than tracked separately (`auth.rs`), which is the two steps composing rather
+than accumulating.
 
 ---
 
@@ -321,8 +336,10 @@ Recorded so none of it is re-proposed as though it had been overlooked. Checked 
   and it is the half of revocation the router *can* do today while Nestwatch cannot.
 - **Treat the phone as the key.** Losing it unlocked is losing a permanent route into your LAN, a
   window onto your child's screen, and every control in the dashboard — a dashboard pairing is
-  unscoped by design, and until `O77` closes it cannot be revoked without signing out every device
-  you own. Find out how to revoke a peer at the router before you need it, not after.
+  unscoped by design. **Revoking it is now two separate actions, and you need both**: the device in
+  the dashboard's own list (`GET /api/sessions` → revoke, which ends the session), and the peer at
+  the router (which ends the network route). Neither does the other's job. Find out how to do both
+  before you need to, not after.
 - **The dashboard password still applies.** The tunnel gets you onto the network; it does not sign
   you in. Do not weaken the password because the network feels private now — and note that under
   full parity it is guarding more, from further away, than when its eight-character minimum was
@@ -357,16 +374,25 @@ document cited lines; three of the five drifted within two commits while every q
 stayed word-for-word intact, which sends a reader to the wrong place and makes correct prose look
 stale. A symbol moves with its comment.
 
-The claims about this codebase were verified by reading the cited symbol on `8d5f5c3`, and
+The claims about this codebase were verified by reading the cited symbol on `0feb242`, and
 the five arguments above are quoted from the source rather than paraphrased. The external findings
 were checked against primary sources on 2026-09-02 and are cited inline. The Tailscale
 subnet-router behaviour was checked against Tailscale's own documentation.
 
-**None of it has been set up and used against this project's own installation** — unlike
-[REMOTE-UPDATE.md](REMOTE-UPDATE.md), which describes a flow the generated script performs. Treat
-the reasoning as sound and every walkthrough as untested. Nothing in the plan has been built:
-`doctor` does not yet check any of this, and Nestwatch does not generate peer configuration.
-`O89` — the finding this document was first written against — was **closed by `8d5f5c3`** while
-this page was being written, and the paragraph it quoted from `SECURITY.md` was rewritten with it;
-the rows above were re-verified against that commit rather than carried over. `O77`, per-device
-revocation, is open and is now the one this plan depends on.
+**The plan above has been implemented; the walkthroughs have not been tested.** Those are separate
+claims and the difference matters. Steps 1 and 3 are in, step 2 is half in and half declined
+(above), and `main` was green at `0feb242`. What remains untested is everything involving an actual
+router: **no arrangement in this document has been set up and used against this project's own
+installation** — unlike [REMOTE-UPDATE.md](REMOTE-UPDATE.md), which describes a flow the generated
+script performs. Treat the reasoning as sound and every walkthrough as unverified.
+
+**Both findings this document was written against are now closed.** `O89` — a paired device holding
+the parent's whole authority — was closed by `8d5f5c3` while this page was being written, and the
+`SECURITY.md` paragraph it quoted was rewritten with it. `O77` — a leaked session revocable only by
+signing every device out — was closed by `be1c07e`/`f6687d8`. Both are **deleted** from
+`OPEN-FINDINGS.md` per that file's rule, so a citation pointing at either will find nothing; they
+are named here as history, not as open work.
+
+**Prerequisites 2 and 3 remain unverified for any specific household**, and they are still the two
+things that can make all of the above unreachable. Nothing implemented here changes that: the code
+is ready for a tunnel that nobody has yet confirmed this network can carry.
