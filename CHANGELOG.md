@@ -11,6 +11,18 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Security
 
+- **Signing in now lasts a month, however often you use it.** Sessions used to expire only after
+  30 days of *inactivity* — and that clock reset every time you opened the dashboard, so a phone
+  you used daily stayed signed in forever. There is now a firm ceiling as well: a month after you
+  sign in, that device asks for the password again. This is the standard limit for a
+  password-only login, and it matters more now that the dashboard is meant to be reachable from
+  outside the house.
+- **`nestwatch doctor` notices when your router hides which device is which.** If you reach the
+  dashboard through a VPN, some routers rewrite every visitor's address to their own. When that
+  happens the access log records the router instead of the phone, so it can no longer tell your
+  devices apart, and the rate limit meant to slow an attacker is shared between all of them.
+  `doctor` now says so, and what to change.
+
 - **You can now see every signed-in device, and sign out just one.** A *Signed-in devices* card
   lists each phone, tablet, computer and paired app that currently holds a session — what it is,
   when it first signed in, and whether it is a full dashboard login or an app that can only add

@@ -21,6 +21,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::Duration;
 
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::config::{self, Config};
 
@@ -129,6 +130,57 @@ fn warn(text: impl Into<String>, fix: impl Into<String>) -> Check {
         text: text.into(),
         fix: Some(fix.into()),
     }
+}
+
+/// How many different devices must share one address before it is worth mentioning.
+///
+/// Three, not two: one person running two browsers on the same PC is ordinary and would make a
+/// threshold of two fire on a healthy install. A parent-facing diagnostic that cries wolf gets
+/// ignored, which is the failure mode `DECLINED-OPTIONS.md` gives for refusing a coverage gate.
+const MASQUERADE_MIN_DEVICES: usize = 3;
+
+/// Does the access log look like a router that rewrites source addresses?
+///
+/// **Why this is worth a check at all.** `docs/REMOTE-ACCESS.md` records it as the one
+/// configuration detail that earns a place above the others: if the router masquerades tunnel
+/// traffic, every remote visitor arrives wearing the router's address. `audit.jsonl` then records
+/// the router instead of the device — and the audit log's whole job is making access visible — and
+/// the per-IP limiter shares one bucket across everyone who arrives that way, so one noisy client
+/// throttles the rest.
+///
+/// **The signal.** On a LAN every device has its own address, so distinct devices produce distinct
+/// `src_ip`s. Many *different* user agents arriving from *one* address is therefore not a normal
+/// shape; it means something between the device and this machine is rewriting the source.
+///
+/// **What it cannot tell you**, stated because a diagnostic that overclaims is worse than none:
+/// this cannot distinguish a masquerading VPN from any other NAT in the path, and it says nothing
+/// at all until devices have actually signed in — a fresh install reports nothing because there is
+/// nothing to see, not because the router is fine. It is a prompt to check the router's
+/// configuration, never a verdict on it.
+///
+/// Reads `auth_success` only. `paired` carries a source address but no user agent, so it cannot
+/// contribute to a count of *distinct devices* — including it would inflate the number with rows
+/// that cannot be told apart.
+fn masquerading_router(rows: &[Value]) -> Option<(String, usize)> {
+    let mut by_source: std::collections::BTreeMap<&str, std::collections::BTreeSet<&str>> =
+        std::collections::BTreeMap::new();
+    for row in rows {
+        if row.get("event").and_then(Value::as_str) != Some("auth_success") {
+            continue;
+        }
+        let (Some(ip), Some(agent)) = (
+            row.get("src_ip").and_then(Value::as_str),
+            row.get("user_agent").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        by_source.entry(ip).or_default().insert(agent);
+    }
+    by_source
+        .into_iter()
+        .filter(|(_, agents)| agents.len() >= MASQUERADE_MIN_DEVICES)
+        .max_by_key(|(_, agents)| agents.len())
+        .map(|(ip, agents)| (ip.to_owned(), agents.len()))
 }
 
 /// What `doctor` should say about the trusted clock, given what was recorded and what the machine
@@ -381,6 +433,24 @@ pub fn run() -> Result<()> {
                 "The service isn't running or failed to start. Check the newest\n\
                  service.<date>.log in the data folder (readable as Administrator).",
             )),
+        }
+        // Only meaningful once devices have actually signed in, and silent otherwise — a fresh
+        // install has nothing to look at, and saying "looks fine" about an empty log would be a
+        // reassurance with no evidence under it.
+        let signins = crate::audit::AuditLog::new(paths.dir.join("audit.jsonl")).recent(200, 0);
+        if let Some((ip, devices)) = masquerading_router(&signins) {
+            checks.push(warn(
+                format!(
+                    "{devices} different devices have signed in from one address ({ip}) — \
+                     something between them and this PC is rewriting the source"
+                ),
+                "Expected if you reach the dashboard through a VPN whose router masquerades\n\
+                 the traffic. It has two costs worth knowing about: the access log records\n\
+                 that one address instead of the device, so it can no longer tell your\n\
+                 devices apart, and the per-address rate limit is shared, so one busy client\n\
+                 slows the others. If your router can route the tunnel rather than masquerade\n\
+                 it, prefer that. See docs/REMOTE-ACCESS.md.",
+            ));
         }
         platform_network_checks(port, checks);
     }
@@ -786,6 +856,107 @@ fn platform_checks(report: &mut Report) {
 
 #[cfg(test)]
 mod tests {
+
+    /// The router-masquerade signal, including the shapes it must stay quiet about.
+    ///
+    /// A parent-facing warning is only worth having if it does not fire on ordinary use, so the
+    /// negative cases carry as much weight here as the positive one.
+    mod masquerade {
+        use super::super::masquerading_router;
+        use serde_json::json;
+
+        fn signin(ip: &str, agent: &str) -> serde_json::Value {
+            json!({ "event": "auth_success", "src_ip": ip, "user_agent": agent })
+        }
+
+        #[test]
+        fn many_devices_behind_one_address_is_reported() {
+            let rows = vec![
+                signin("192.168.1.1", "Mozilla/5.0 (iPhone)"),
+                signin("192.168.1.1", "Mozilla/5.0 (Android)"),
+                signin("192.168.1.1", "Mozilla/5.0 (Macintosh)"),
+            ];
+            assert_eq!(
+                masquerading_router(&rows),
+                Some(("192.168.1.1".to_owned(), 3)),
+                "three different devices cannot honestly share one LAN address"
+            );
+        }
+
+        #[test]
+        fn a_normal_household_is_silent() {
+            // Each device on its own LAN address: the ordinary case, and the one that decides
+            // whether this check is usable at all.
+            let rows = vec![
+                signin("192.168.1.20", "Mozilla/5.0 (iPhone)"),
+                signin("192.168.1.21", "Mozilla/5.0 (Android)"),
+                signin("192.168.1.22", "Mozilla/5.0 (Macintosh)"),
+            ];
+            assert_eq!(masquerading_router(&rows), None);
+        }
+
+        #[test]
+        fn two_browsers_on_one_pc_is_not_a_router() {
+            // The false positive a threshold of two would have produced. Someone using Chrome and
+            // Safari on the same machine is ordinary, and a diagnostic that fires on it gets
+            // ignored — which costs more than the check is worth.
+            let rows = vec![
+                signin("192.168.1.20", "Mozilla/5.0 (Macintosh) Chrome"),
+                signin("192.168.1.20", "Mozilla/5.0 (Macintosh) Safari"),
+            ];
+            assert_eq!(masquerading_router(&rows), None);
+        }
+
+        #[test]
+        fn repeat_signins_from_one_device_do_not_accumulate() {
+            // Counting *rows* rather than distinct agents would make every returning device look
+            // like a new one, and the warning would fire on the healthiest install in the house.
+            let rows = vec![
+                signin("192.168.1.20", "Mozilla/5.0 (iPhone)"),
+                signin("192.168.1.20", "Mozilla/5.0 (iPhone)"),
+                signin("192.168.1.20", "Mozilla/5.0 (iPhone)"),
+                signin("192.168.1.20", "Mozilla/5.0 (iPhone)"),
+            ];
+            assert_eq!(masquerading_router(&rows), None);
+        }
+
+        #[test]
+        fn an_empty_log_says_nothing_rather_than_says_fine() {
+            assert_eq!(masquerading_router(&[]), None);
+        }
+
+        /// Only sign-ins count, even when another event carries the same two fields.
+        ///
+        /// **This test was rewritten because a mutation survived it.** The first version used
+        /// `paired` rows, which carry a source address but no user agent — so deleting the event
+        /// filter entirely changed nothing and the test still passed. It was asserting the field
+        /// check, under a name that claimed to assert the event filter.
+        ///
+        /// Today `auth_success` is the only audited event carrying a user agent, so the filter is
+        /// redundant *at this moment*. It guards a change that is likely rather than exotic:
+        /// adding a user agent to `auth_failure` is obvious forensics, and the moment someone does,
+        /// failed guesses would start counting as devices and this warning would fire on an install
+        /// under attack rather than one behind a NAT. The rows below are that future, written now.
+        #[test]
+        fn only_successful_sign_ins_count_as_devices() {
+            let rows = vec![
+                json!({ "event": "auth_failure", "src_ip": "192.168.1.1",
+                        "user_agent": "Mozilla/5.0 (iPhone)" }),
+                json!({ "event": "auth_failure", "src_ip": "192.168.1.1",
+                        "user_agent": "Mozilla/5.0 (Android)" }),
+                json!({ "event": "auth_failure", "src_ip": "192.168.1.1",
+                        "user_agent": "Mozilla/5.0 (Macintosh)" }),
+                json!({ "event": "paired", "src_ip": "192.168.1.1" }),
+            ];
+            assert_eq!(
+                masquerading_router(&rows),
+                None,
+                "three failed guesses from one address are an attack, not three devices behind a \
+                 router — reporting them as a NAT problem would send a parent to their router \
+                 settings while somebody guesses passwords"
+            );
+        }
+    }
 
     /// Every branch a parent can land on, because this section is read rather than run.
     ///
