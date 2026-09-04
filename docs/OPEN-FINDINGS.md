@@ -1567,7 +1567,7 @@ at which point somebody has to re-vendor bytes that no mechanism currently hands
 
 ---
 
-### O87 · `0.6.0`'s two headline features are not in the Windows checklist at all
+### O87 · Six features are not in the Windows checklist at all
 
 The release state above says the checklist is "the only method here with a track record", and every
 other entry that defers to hardware defers to it. Scheduled routines and the integrations registry
@@ -1578,6 +1578,19 @@ are not in it.
 `schedule` twice, and none of those is the new behaviour — the only Routines item (§E2) is *"Save
 current as routine… then Apply → the settings revert"*, which is the manual press-a-preset path that
 predates the release. Section H, where new work goes, is titled **"New in 0.5.0"** and scoped to it.
+
+**Re-measured 2026-09-04, and the gap grew rather than closed.** All five counts above are still
+**0**, and four features merged since are absent on the same test: `revoke` **0**, `signed-in`
+**0**, `masquerad` **0**, and no item anywhere exercises the absolute session cap. (`scope` matches
+twice and `session` eighteen times; every one is unrelated — a firewall rule "scoped to
+`private,domain`", a Session 0 reference. Checked, not assumed.)
+
+Those four are **unreleased**, so unlike routines and the registry they are not yet open against
+the download page — which is the whole point of writing them down now. The 0.6.0 half of this
+entry became a gap by being forgotten at release; the unreleased half can still be closed before
+it repeats. Scoped pairing, per-device revocation and the absolute cap are all the
+*authentication* surface, where a checklist gap is worth most and where this release's one
+breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
 opens by saying 32 things have never executed, so the gap has a size and a reader can weigh it. A
@@ -1673,3 +1686,100 @@ desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
 `a_small_frame_is_never_scaled_up` already pins the never-upscale rule. Against that,
 `ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
 and a third size axis is exactly what it was written against. Weigh those before touching it.
+
+### O90 · The password path that revokes is not the one a parent reaches for when control is lost
+
+Two commands set the control password, and only one of them ends the sessions that password
+protected.
+
+**Measured 2026-09-04.** `api::change_password` (`src/api.rs:1767`) re-hashes, saves, calls
+`state.sessions.clear_all()` and rotates the caller's own id. `install` re-hashes into
+`Config.password_hash` (`src/install.rs:157`) and never touches the session store — `clear_all` has
+exactly one caller in the whole tree, and it is not this one. Confirmed by grep, not by reading the
+control flow.
+
+**Why the asymmetry points the wrong way.** `install` is the *documented recovery path*: the README
+tells a parent who has lost the password to re-run it, and reassures them that paired devices "will
+not warn again" and need no re-pairing. That reassurance is accurate and it is the feature —
+preserving sessions is exactly right for the common case, which is a forgotten password. But
+"forgotten" and "compromised" arrive by the same door, and the compromised case gets the weaker
+lever silently. A parent who re-runs `install` because they think someone else has the password has
+performed the ritual of locking the door and changed nothing about who is already inside.
+
+**The honest counter-argument, which is strong.** `install` needs an elevated console physically at
+the child's PC. An adversary with that has better options than a stolen cookie, so the realistic
+threat is not an attacker — it is the parent's own wrong mental model, formed by every other system
+they have used, where "reset the password" means "everyone is signed out".
+
+**This is not obviously a code fix.** Making `install` call `clear_all` would sign out the whole
+house on every routine reinstall, which is the cost the README currently advertises *against* — and
+reinstall is also how an upgrade is applied. The candidates, cheapest first:
+
+1. ~~Say so where the promise is made.~~ **Done 2026-09-04.** The README's "Only the password
+   changes" was true and read as more than it meant; it now states that devices already signed in
+   stay signed in, and points at *Signed-in devices* or a dashboard password change. That closes
+   the mental-model gap, which was the part of this worth fixing without a decision.
+2. `install --revoke-sessions`, for the parent who means the other thing.
+3. Prompt when `install` finds an existing config with live sessions.
+
+**What is left is 2 and 3, and neither is urgent.** With the documentation corrected, this is no
+longer a parent being misled — it is a missing convenience for an uncommon case that still has a
+working answer (change the password from the dashboard).
+
+**Found by** auditing the docs rather than the code: the README claim was checked against
+`install.rs` to confirm it was true, and it is — the gap is in what it leaves unsaid.
+
+### O91 · The firewall rule and the app-layer gate would disagree about a tunnel peer, and neither would say so
+
+Two independent gates decide whether a client may reach this service, and they encode the same
+assumption — *"clients are on the home LAN"* — at two different widths.
+
+**Verified 2026-09-04 by reading both.** `security::is_lan` (`src/security.rs:43`) admits any
+RFC1918 address: `v4.is_private() || v4.is_loopback()`. The firewall rule `install` writes admits
+only the local subnet — `netsh … profile=private,domain remoteip=LocalSubnet`
+(`src/install.rs:1108`), read back and checked for the `LocalSubnet` token at line 1145. Those are
+not the same set. Nothing makes them differ today, because every client really is on the local
+subnet, so the two gates agree **by circumstance rather than by construction**.
+
+**A tunnel breaks the coincidence.** A WireGuard peer arriving on a tunnel subnet — `10.7.0.2`, say
+— is private, so `is_lan` admits it; it is not the local subnet, so the firewall drops the packet
+before the service ever sees it. **Nothing logs the disagreement.** The app-layer gate is never
+reached, and the firewall does not explain itself. What the parent sees is a tunnel that connects
+and a dashboard that does not load — the failure mode with no message attached, which this project
+has spent the `focus_missing` marker and the `measured`-versus-absent distinction learning to
+refuse.
+
+**Why this is filed rather than fixed.** The fix depends on a decision nobody has taken. If the
+tunnel terminates on a *router*, the peer can be handed an address on the local subnet and nothing
+here changes. If the endpoint is embedded in Nestwatch (`REMOTE-ACCESS.md` option 4), the rule has
+to admit the tunnel subnet — so the rule becomes conditional on a feature, enabling or disabling
+that feature has to rewrite it, and `uninstall` has to restore it. That is a change to shared
+install state on behalf of an optional feature, which deserves deciding deliberately rather than
+discovering.
+
+**The general form is the part worth keeping.** `SECURITY.md` calls these two gates deliberate
+belt-and-suspenders, and they are. The hazard is not that they overlap; it is that a change widening
+one and not the other produces a *silent failure* rather than a refusal — and the narrower gate is
+the one no Rust test can see, because `configure_firewall` is `#[cfg(windows)]` and a host build
+compiles none of it. Confirmed: `src/install.rs:1082` and `:1098` both sit under `#[cfg(windows)]`.
+
+**It is two gates wide, not one — found 2026-09-04 while costing the tunnel work.** The rule is
+`profile=private,domain` as well as `remoteip=LocalSubnet`, and a freshly created tunnel adapter on
+Windows is frequently categorised **Public**. So a tunnel peer can fail this rule for two
+independent reasons, and fixing only the address scope leaves the second one live — with the same
+silence, because a profile mismatch is not logged either. Anyone widening the rule has to widen
+both halves and confirm the adapter's category, not just the subnet.
+
+**This is not only a future problem for the embedded endpoint.** Because neither router in the
+household that prompted this work can terminate a tunnel, the endpoint must sit on the monitored PC
+either way. A parent could therefore install stock WireGuard for Windows today, change no Nestwatch
+code at all, and still be unable to load the dashboard: `is_lan` admits `10.7.0.2`, the firewall
+drops it, and what they see is a tunnel that connects and a page that never arrives. That makes
+this entry the blocker for the *cheapest* path available right now, not merely for the largest one.
+
+**Trigger.** Any work that lets a client reach this service from an address that is private but not
+on the local subnet. Until then the two gates agree and there is nothing to do.
+
+**Filed by the concurrent session** working `docs/REMOTE-ACCESS.md`; the number was reserved here
+because this tree held uncommitted edits to this file. Both source claims re-verified independently
+before it was written down.
