@@ -71,6 +71,21 @@ preference:
 | An IPsec or OpenVPN server | Works. Judge it on the same two questions: does the traffic arrive on the home subnet, and does the monitored PC have to run anything? |
 | Neither | **No path under this decision.** Running [PiVPN](https://pivpn.io) on a Raspberry Pi or NAS is the usual answer and it is a second always-on machine — the option that was declined. Replacing the router is the other. Both reopen the decision. |
 
+**Expect "neither", because the common arrangement produces it.** An ISP-supplied box plus your own
+router behind it — the [double-NAT case](#4-count-your-routers--a-second-one-breaks-this-quietly)
+below — typically means *neither* box can terminate a tunnel. ISP units generally offer port
+forwarding and no VPN server at all; consumer routers vary, and several popular lines have no
+WireGuard **server** in stock firmware, only a VPN *client*, which is the opposite of what is needed
+here. Checked while writing this: Xiaomi/MiWiFi stock firmware has no WireGuard server — it is
+reachable on that hardware only by flashing OpenWrt, which is firmware replacement rather than
+router configuration, and carries its own risk.
+
+So "check the model" is not a formality. **Look for a VPN *server* page, not a VPN entry in the
+menu**, and confirm it offers WireGuard, IPsec or OpenVPN in the inbound direction. Where the answer
+is neither box, the honest options are a second always-on machine, replacing the inner router with
+one that has a server, or — if the house has a public address — the embedded endpoint in option 4,
+which is the only one that needs no new hardware.
+
 ### 4. Count your routers — a second one breaks this quietly
 
 Two NAT layers in series is ordinary: the ISP's box, plus your own router behind it. It does not
@@ -280,6 +295,13 @@ Windows that means shipping a TUN driver or building a userspace network stack �
 unglamorous cost for a single-binary tool whose install story is a strength, and new cryptographic
 surface inside a security product. It also has no CGNAT answer, so it does not buy back
 prerequisite 2.
+
+**But weigh that second objection against your own network before applying it.** It only bites
+behind CGNAT. Where prerequisite 2 passes and prerequisite 3 fails — a public address, and neither
+router able to terminate a tunnel — this option becomes the *only* one that needs no new hardware
+and no firmware replacement, because the routers are then asked for nothing but a forwarded UDP
+port, which even ISP-supplied boxes do. That is a common enough shape that the option should be
+re-priced per household rather than declined once and for all.
 
 Revisit if the router path proves unworkable in practice, and only with a real assessment of the
 Windows stack question first.
