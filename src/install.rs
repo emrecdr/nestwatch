@@ -569,11 +569,16 @@ fn prompt_for_password() -> Result<String> {
     // Said *before* the prompt, not after, because it changes how the password is chosen.
     //
     // There is no reset link, no recovery email and no vendor to ring — those all need an account
-    // and a cloud, which this tool does not have. That is the intended trade, but it interacts
-    // badly with something the parent will not notice for a month: sessions persist for 30 days of
-    // inactivity, so after this install they will essentially never type this again. A secret you
-    // choose once and then never rehearse is a secret you forget, and the first time you find out
-    // is when you are holding a phone that no longer has the cookie.
+    // and a cloud, which this tool does not have. That is the intended trade, and a secret you
+    // choose once and never rehearse is a secret you forget — the first time you find out being
+    // when you are holding a phone that no longer has the cookie.
+    //
+    // This used to read "they will essentially never type this again", because a session slid on
+    // inactivity alone and a phone opened daily never expired. `SESSION_MAX_DAYS` ended that: a
+    // session now stops a month after it began however often it is used, so the parent re-enters
+    // this monthly and rehearses it. The cap made the forgetting *less* likely, which is worth
+    // saying plainly rather than quietly leaving the old warning in place — but it did not make
+    // the password recoverable, so the paragraph below stays.
     //
     // The way back exists and is cheap — this same command, which preserves curfew, rules,
     // routines and the certificate — but it needs an elevated console *on this PC*, which is
@@ -582,7 +587,7 @@ fn prompt_for_password() -> Result<String> {
         "\nThis password cannot be reset remotely. There is no account behind it and no recovery\n\
          email. If it is lost, the way back in is to run `install` again from an elevated console\n\
          on this PC — your curfew, rules, routines and certificate all survive that.\n\
-         You will rarely type it (signed-in devices stay signed in), so put it in a password\n\
+         Each device asks for it again a month after it signs in, so put it in a password\n\
          manager now rather than trusting memory.\n"
     );
 

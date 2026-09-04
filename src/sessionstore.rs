@@ -109,8 +109,12 @@ impl FileSessionStore {
     }
 
     /// Sign every device out. Used on password change: the parent's mental model is that changing
-    /// the password locks everyone else out, and with sessions now surviving restarts there is
-    /// otherwise **no** way to revoke a leaked cookie for its full 30-day life.
+    /// the password locks everyone else out, and since sessions survive restarts nothing else
+    /// clears them wholesale.
+    ///
+    /// This used to justify itself as the *only* way to revoke a leaked cookie inside its 30-day
+    /// life. [`Self::revoke`] falsified that, and is the better answer to one lost phone — this
+    /// stays the blunt instrument, for when the password itself is what leaked.
     pub fn clear_all(&self) {
         let mut map = self.map();
         map.clear();

@@ -153,12 +153,19 @@ client send the number, which would have made the phone's integrity load-bearing
 the parent set.
 
 **This paragraph used to end "so a phone that is lost, spoofed, or simply buggy cannot choose
-its own reward", and that was wrong.** It is true of the *push*. It is not true of the
-*phone*, because the phone does not have to push. Pairing mints an ordinary session — the
-mechanism, and what it reaches, are in `docs/SECURITY.md` — so the client holding the pairing
-cookie can reconfigure the provider it is governed by, or grant directly as `source=parent`,
-which skips the registry and the day latch together. Measured: five such requests granted
-1200 minutes.
+its own reward", and that was wrong.** It is true of the *push*: the client asserts a threshold
+and the minutes come from this machine's config. It was not true of the *phone*, because the
+phone did not have to push. Pairing minted an ordinary session, so the client holding the
+pairing cookie could reconfigure the provider it was governed by, or grant directly as
+`source=parent`, skipping the registry and the day latch together. Measured before the fix:
+five such requests granted 1200 minutes.
+
+**The sentence is true again today — but only for one of the two QR codes.** An
+`--integration` pairing cannot reconfigure its provider or grant as anyone else, so a lost
+phone holding one really cannot choose its own reward. A plain dashboard pairing still carries
+everything the parent has, and for it the sentence remains as wrong as it was. Which credential
+a client holds is therefore the whole of the difference; the mechanism is in
+`docs/SECURITY.md`.
 
 **The analysis above is the reason the gap existed, and it is worth naming precisely.** Every
 architecture here was weighed on *what a provider runs* — syscalls, egress, in-process

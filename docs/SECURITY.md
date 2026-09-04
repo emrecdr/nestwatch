@@ -200,25 +200,38 @@ open the door on its own.
 - On success the session id is rotated (anti-fixation) and stored in a cookie that is
   `Secure`, `HttpOnly`, and `SameSite=Strict`.
 - Sessions **persist across restarts** (`sessions.json` in the ACL-hardened data dir) and slide
-  on a 30-day inactivity window, so signing in is a one-time cost per device rather than a
-  penalty for every reboot of an auto-restarting service. Two consequences worth stating plainly:
+  on a 30-day inactivity window (`auth::SESSION_IDLE_DAYS`), so a reboot of an auto-restarting
+  service is not a penalty. Two consequences worth stating plainly:
   - That file is a set of **long-lived bearer tokens**. It inherits the SYSTEM+Administrators-only
     ACL, so the child can't read it — but anything that copies the data directory (a backup, a
     disk image) copies live credentials. Treat it like the TLS key.
   - A reboot is **no longer** an implicit "log everyone out" lever, which it used to be.
+- The sliding window is bounded by an **absolute cap** (`auth::SESSION_MAX_DAYS`, also 30 days,
+  enforced in `require_auth` against the `first_seen` recorded at sign-in). Without it a device
+  opened daily slid forever, which is the failure OWASP's session-management guidance names and
+  which NIST SP 800-63B bounds at 30 days for a password-only (AAL1) session. A session that
+  hits the cap is flushed on its next request, whatever the idle clock says.
 - Changing the password (`POST /api/password`) re-hashes with Argon2id, persists, **signs every
-  other device out**, and rotates the caller's own id so the parent stays logged in. Since a
-  restart no longer clears sessions, this is the only way to revoke a leaked cookie before its
-  30-day expiry — and it's what a worried parent will do, so it must actually work.
+  other device out**, and rotates the caller's own id so the parent stays logged in.
+- A **single** leaked cookie is revoked without disturbing anything else:
+  `POST /api/sessions/{handle}/revoke` (`sessionstore::revoke`), listed by
+  `GET /api/sessions`. The handle is a salted SHA-256 prefix, never the session id, so the
+  list a parent reads cannot be replayed as the credential it describes. Password change
+  remains the blunt instrument for "sign out everything"; it is no longer the only one.
 - **CSRF:** three layers. `SameSite=Strict` on the cookie; every state-changing endpoint that takes
   a JSON body also requires `Content-Type: application/json`, forcing a CORS preflight that fails
   closed; and an **origin check** on every request (`src/security.rs::require_same_origin`).
   - The origin check exists because the first two leave a real hole. A "site" is scheme +
     registrable domain and **excludes the port**, so a page served over HTTPS from another port on
     this same machine is *same-site* and the browser attaches the parent's session cookie to it.
-    Seven `/api` endpoints take no JSON body (`.../kill`, `/shutdown`, `/lock`, `.../approve`,
-    `.../deny`, `.../apply`, `.../delete`), so nothing forces a preflight for them and a plain HTML
-    form reaches them. The child has an account on this PC and can serve such a page from it. This
+    **10 `/api` endpoints take no JSON body** — `/lock`, `/re-anchor`, `/shutdown`, `.../kill`,
+    `.../approve`, `.../deny`, `.../apply`, `/routines/{name}/delete`,
+    `/providers/{name}/delete` and `/sessions/{handle}/revoke` — so nothing forces a preflight
+    for them and a plain HTML form reaches them. (Counted from the router and the handler
+    signatures, not by hand: it read *seven* from 2026-08-19 until 2026-09-04 and drifted three
+    times in between, once per route added, each time with the whole suite green.
+    `tests/doc_claims.rs` now fails when it drifts again.) The child has an account on this PC
+    and can serve such a page from it. This
     was **demonstrated**, not theorised: with the middleware removed, a same-site `POST` carrying
     the parent's cookie killed a process and returned `200` (`tests/origin.rs`).
   - `Sec-Fetch-Site` distinguishes `same-origin` from `same-site`, which is exactly what the cookie

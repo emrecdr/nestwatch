@@ -243,12 +243,22 @@ the gate this list called it.
    cookie in secure storage. Then three screens — pending time requests with approve/deny, today's
    usage, and the screenshot. Leave rules, routines and the audit log in the browser; they are
    configuration, done rarely, and each one added is a second interface to keep in step.
+   <br>**Persisting the cookie is not the whole login story any more.** A session now ends a month
+   after it began however often it is used (`auth::SESSION_MAX_DAYS`), so a stored cookie will
+   start returning `401` on a schedule rather than only after neglect. The client has to treat
+   `401` as *sign in again*, not as *the server is broken* — otherwise it looks broken every
+   thirty days, and does so first on the device that uses it most. Scan the QR for a dashboard
+   login; `--integration` pairings are for apps that only push earned time and cannot read any
+   of the three screens above.
 4. **Android foreground-service notifications**, which is the only platform where they can work.
 5. **Store paperwork from day one** — `isMonitoringTool`, the 4.2.7 note, a privacy policy naming
    screenshots of the child's desktop as that child's personal data.
 
-The cost to keep in view: the dashboard is roughly 1,900 lines against 24 API routes. A native
-client re-implements as much of that as it exposes, forever, and every future feature ships twice.
+The cost to keep in view, **re-measured 2026-09-04**: `assets/app.js` is 2,598 lines against the
+31 routes registered under `/api`. When this was written on 2026-08-26 it was 1,687 lines against
+20 routes — both grew by more than half in nine days, which is the argument rather than a
+footnote to it. A native client re-implements as much of that as it exposes, forever, and every
+future feature ships twice.
 That is the real argument for keeping the app small and leaving configuration in the browser.
 
 ---

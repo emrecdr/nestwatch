@@ -86,7 +86,8 @@ one on the real machine with **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.
 | **App rules** | Blocklist, per-app daily limits, and groups sharing one pool. Habit-shaping, not a wall — see [Not included](#not-included). |
 | **Modes** | Pause the whole rules enforcer with one toggle for a free evening (curfew still applies). Save the current setup as a named routine and reapply with a click. |
 | **Routines that run themselves** | A routine can carry a **schedule** — "16:00 to 18:00, Mon–Fri" — and applies itself while that window is open, then hands back to your normal settings when it closes. This is how you say *"games are blocked during homework hour, but the PC stays on"*, which the curfew cannot express: bedtime's only move is to power the machine off. **Nothing is overwritten.** A schedule chooses which settings are in force at each moment rather than writing over your defaults, so your normal rules are still there when the window ends, editing them mid-window is not silently reverted, and there is no timer quietly rewriting your config. **Pause still beats everything** — an install you paused stays paused, even inside a scheduled window — and where two schedules overlap, the one higher in the list wins. Routines you already have keep working exactly as before: no schedule means manual-only, which is what every existing routine loads as. |
-| **Integrations** | Apps that earn screen time, which you install and switch off from the dashboard. A paired app reports only *that* its threshold was met — **how many minutes that earns is set here, on this PC, per integration** — so a report claiming 999 minutes grants exactly what you configured. An integration you switch off cannot grant at all, in one toggle, without unpairing anything. **What this does not do is make a paired phone safe to lose.** Pairing hands a device the same authority this dashboard has, so an app you pair can do anything you can — including changing what it earns, or granting directly. Pair only apps you would trust with the PC itself, and change your password to sign out a phone you no longer control. It is data you toggle, never code this machine runs or a server it reaches out to — see [`docs/PLUGIN-SYSTEM.md`](docs/PLUGIN-SYSTEM.md). |
+| **Integrations** | Apps that earn screen time, which you install and switch off from the dashboard. A paired app reports only *that* its threshold was met — **how many minutes that earns is set here, on this PC, per integration** — so a report claiming 999 minutes grants exactly what you configured. An integration you switch off cannot grant at all, in one toggle, without unpairing anything. **Pair the right QR and a lost phone costs you very little.** `nestwatch pair --integration studygo` mints a credential that may add earned time *as that integration* and read today's total back — it cannot change what it earns, grant as you, watch your child's screen, or reach anything else here. The plain `nestwatch pair` QR is the one that signs a *person* in, and that one does hand a device everything you have, so keep it for people. Either way, a device you no longer control is signed out from its own row in **Signed-in devices**; you no longer have to change your password and re-pair the whole house. It is data you toggle, never code this machine runs or a server it reaches out to — see [`docs/PLUGIN-SYSTEM.md`](docs/PLUGIN-SYSTEM.md). |
+| **Signed-in devices** | Every phone, tablet, computer and paired app currently holding a session, with what it announced itself as, when it first signed in, and whether it is a full dashboard login or an app that can only add earned time. Each row has its own **Sign out**. Before this, ending one session meant changing your control password, which signs out *everything* — so a phone left in a taxi cost you a password change plus re-pairing every other device in the house. |
 | **Refused today** | The limits don't only hold — you can see them holding. When the PC's clock is moved to shift the day boundary, when something tries to start the day over and wipe the tally, or when a shutdown is cancelled with `shutdown /a`, Nestwatch declines it and now **says so on the dashboard**. Until this, every one of those refusals went to a log file that needs an Administrator console on the child's PC to read — the record existed exactly where you couldn't reach it. The card appears only when there is something to show, which is not most days, and it survives a reboot. It reports **what the tool did, not what anyone meant by it**: a family that really crossed a time zone produces the same count as a clock moved on purpose, so it says "clock change ignored — screen time and bedtime kept using the trusted time" and leaves the intent to you. That wording is why it's safe to show your child too. |
 | **Trust the setup** | `nestwatch doctor` reports whether the service is up, the port listening, the firewall rule right, the network private, the certificate valid, whether this Windows is new enough to take screenshots at all, and whether anything is actually being enforced. Every problem prints its fix. |
 | **Dutch for the child** | The child's own surfaces — their `/ask` page and every notice that reaches their desktop: the remaining-time countdowns, the bedtime warning, the lock warning, and the notice Windows shows as it powers the machine off — can be set to Dutch; the parent's dashboard stays English. Set by the parent (`POST /api/language`), not detected from the browser: `Accept-Language` is set in the child's own browser, and the child does not get to choose the language of the notice telling them what is being watched. Defaults to English, so an install that never sets it is unchanged. |
@@ -242,13 +243,16 @@ point. **The way back in is to run `install` again** from an elevated console on
 Your curfew, screen-time rules, app limits, routines and granted extra time are all preserved
 (`install` merges over the existing settings), and the TLS certificate is reused as long as it
 still covers the machine — so **devices you have already paired will not warn again**, and you do
-not need to re-pair them. Only the password changes.
+not need to re-pair them. Only the password changes — and it changes *only* the password:
+devices already signed in stay signed in. If what you want is to end someone else's access,
+sign that device out from **Signed-in devices**, or change the password from the dashboard,
+which signs every other device out.
 
 Two things worth knowing before you need this. It requires being **at the PC, with an
-administrator account** — so it is not something you can do from a hotel. And you will hardly ever
-type this password, because signed-in devices stay signed in for 30 days of inactivity: that is
-convenient, and it is exactly why the password is easy to forget. Put it in a password manager at
-install time.
+administrator account** — so it is not something you can do from a hotel. And you will type this
+password about once a month per device: a session lasts through 30 days of inactivity, **and**
+ends a month after it began however often you use it. Put it in a password manager at install
+time.
 
 ## Command reference
 
@@ -258,6 +262,8 @@ nestwatch.exe install     # password + TLS cert; copies binary, registers & star
 nestwatch.exe doctor      # check the install; report anything wrong and how to fix it
 #                           (including if this binary is newer than the installed service)
 nestwatch.exe pair        # print a fresh QR to sign in another phone/laptop
+nestwatch.exe pair --integration studygo
+                          # a QR for an app that may only add earned time as that name
 nestwatch.exe fingerprint # re-print the TLS cert SHA-256 (to verify a new device later)
 nestwatch.exe uninstall   # remove service, firewall rule and files; --purge also removes data
 nestwatch.exe version     # print this build's version (also --version / -V)

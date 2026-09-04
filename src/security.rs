@@ -54,8 +54,9 @@ fn is_lan(ip: IpAddr) -> bool {
 /// **The gap this closes.** `SameSite=Strict` on the session cookie is scoped to the *site*,
 /// and a site is scheme + registrable domain — **not the port**. So a page served over HTTPS
 /// from another port on this same machine counts as same-site, and the browser attaches the
-/// parent's session cookie to requests it makes here. Seven `/api` endpoints take no JSON body
-/// (`.../kill`, `/shutdown`, `/lock`, `.../approve`, `.../deny`, `.../apply`, `.../delete`), so
+/// parent's session cookie to requests it makes here. **10 `/api` endpoints take no JSON body**
+/// — `/lock`, `/re-anchor`, `/shutdown`, `.../kill`, `.../approve`, `.../deny`, `.../apply`,
+/// `/routines/{name}/delete`, `/providers/{name}/delete` and `/sessions/{handle}/revoke` — so
 /// they never trigger the `Content-Type: application/json` preflight that protects the rest —
 /// a plain form POST reaches them with the cookie attached. The child owns an account on this
 /// PC and can serve such a page from it.
