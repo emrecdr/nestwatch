@@ -373,6 +373,101 @@ today. That is the honest cost, it is per-install, and the feature must be **off
 exists while the feature is disabled. This codebase has been caught more than once by a check that
 ran, reported success, and demonstrated nothing.
 
+
+#### 4b. The same endpoint without Wintun — measured 2026-09-04, by the other session
+
+**Everything above stands except the adapter.** Option 4 assumes a Wintun virtual adapter, and
+prices its largest product cost accordingly: *"It ends the single-binary install… not recoverable
+by tuning anything."* That cost is recoverable, by not having an adapter at all.
+
+WireGuard needs a TUN device only to route arbitrary IP. This feature routes exactly one thing: a
+parent's phone reaching one TCP port on this machine. That is small enough to terminate in
+userspace — the WireGuard state machine handles the handshake and crypto, a userspace TCP/IP stack
+(`smoltcp`) terminates the inner connection, and the payload is handed to the local listener. The
+pattern is not speculative; `onetun` ships it, in the outbound direction.
+
+**What dissolves, rather than being mitigated:**
+
+| Cost priced above | Under 4b |
+|---|---|
+| `wintun.dll` beside the executable; single-binary install ends | **No DLL.** The install stays one file |
+| Load by absolute path from the ACL-hardened directory; service-only | **Nothing to load** |
+| Wintun's licence, and whether prebuilt binaries may be redistributed | **Moot** |
+| The `PLUGIN-SYSTEM.md` tension — a signed driver shim is not "foreign code as SYSTEM", but needs saying | **Does not arise** |
+| A network adapter visible in the OS | **None** |
+| `#[cfg(windows)]`, so no host test can see it | **Cross-platform.** Runs and is tested on the dev machine and in CI |
+
+That last row is the one that should decide it. `O87`, `O70` and `O75` all record the same thing:
+this project's real defects live in Windows-only code that nothing can execute. A Wintun design is
+born into that category. A userspace design is not.
+
+**The cost is `smoltcp` — measured at 7 crates — and an inbound TCP bridge.** `onetun` does this
+outbound; inbound is the mirror and is the genuinely novel work here. That is where surprises
+should be expected, and it is the reason to prove the network path before building it.
+
+#### The crate figures, re-measured — and one correction to the row above
+
+Measured by diffing a scratch lockfile against this tree's, the method that row claims:
+
+| | Crates added | Crypto |
+|---|---|---|
+| `boringtun` 0.6, no default features | **+33** | pure Rust |
+| `gotatun` 0.9.2, **default features** | **+54** | pulls `aws-lc-rs` + `aws-lc-sys` + `cmake` — a C stack |
+| `gotatun` 0.9.2, `default-features = false` | +38 | pure Rust, **no `aws-lc`, no `cmake`** |
+| `gotatun` no-default **+ `smoltcp`** — what 4b costs | **+47** | pure Rust |
+
+**`boringtun`'s "22 crates" above was wrong when written, and this is not drift.** `boringtun`
+0.6.0 is a pinned version; its dependency closure cannot change over three days. Measured against
+`ac05975` itself — the commit that states 22 — the lockfile delta is 33 here and 34 by the other
+session's `cargo add --no-default-features`, a one-crate gap between methods that is smaller than
+the error it sits inside. The likely cause of the original figure is a `cargo tree` depth counted
+instead of a lockfile diff.
+
+**The distinction matters and is worth keeping separate from the `SECURITY.md` case.** That one
+*did* drift — seven bodyless endpoints really did become ten as routes were added, each addition
+correct in isolation. This one was never right. Calling both "drift" would teach a reader that
+pinned crate counts move on their own, and cost them trust in every other number on this page for
+the wrong reason. Only the first kind is what a guard test can pin.
+
+**Prefer `gotatun`, and the reason is not performance.** `boringtun`'s own crates.io page says it
+is *"still undergoing review for security concerns"* and advises caution before production use —
+which is not a sentence to inherit silently into a tool guarding a child's PC. Mullvad's `gotatun`
+fork was independently audited by Assured Security Consultants between 19 January and 15 February
+2026: no critical, high or medium findings; two low, nine informational. It is actively maintained
+and ships in production. The audit costs about 14 crates over `boringtun`.
+
+**The `aws-lc` trap is worth writing down, because the default is the wrong one here.** Taking
+`gotatun` at its defaults pulls a C cryptography stack requiring `cmake` into a tree that pins
+rustls and rcgen to **ring**, ships a size-tuned binary, and publishes an SBOM. `default-features =
+false` removes it entirely. A reader who adds the dependency the obvious way gets the wrong build
+and may not notice until the release runner does.
+
+#### Dynamic DNS is not only an option-1-and-2 problem
+
+The Dynamic DNS note under *If you set up option 1 or 2* applies unchanged to **4 and 4b**. The
+phone dials a UDP endpoint by address, and a residential address is a lease. Filed here because the
+existing note sits under a heading an option-4 reader has no reason to open, and the failure it
+prevents — a tunnel that worked for a month and then silently stopped — reads as the feature
+breaking rather than as the address moving.
+
+Whether an address is a lease is checkable without waiting for it to change: an ISP that generates
+`PTR` records algorithmically from the octets is naming a pool, not a customer.
+
+#### What no option here removes: one router change
+
+**No new hardware, no firmware replacement — but the perimeter must let the first packet in.** A
+forwarded UDP port on each NAT, or bridge mode on the outer box. Both are configuration, not
+hardware, and ISP-supplied boxes do them.
+
+There is no zero-configuration variant that keeps the promise. Reaching a machine behind NAT
+without touching the NAT means dialling *outward* to a rendezvous or relay — Cloudflare Tunnel,
+ngrok, a DERP-style mesh — and the table below already refuses all of them, on the grounds that
+they put a third party in the path of a child's screen. UPnP could ask a router to open the port
+automatically, but it is frequently disabled, it would reach only the inner router under a double
+NAT, and a monitoring service that opens its own hole in the firewall is a worse default than a
+parent who opened one deliberately.
+
+
 ---
 
 ## What does not work, and why
