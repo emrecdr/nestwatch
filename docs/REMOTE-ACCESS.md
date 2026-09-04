@@ -15,9 +15,11 @@ makes no outbound connection, which is the promise the whole design rests on.
 
 ---
 
-## Two prerequisites, and a third that is not negotiable
+## Four prerequisites, and the first is not negotiable
 
-Check all three before spending time on anything below. The first two can end the plan.
+Check all four before spending time on anything below. Two of them can end the plan, and the
+fourth decides where the tunnel has to terminate — all four are minutes of work, and every one of
+them is cheaper to answer now than to discover halfway through.
 
 ### 1. Your child must not be a local administrator
 
@@ -41,7 +43,20 @@ router-terminated tunnel is impossible. Thirty seconds settles it:
 1. Look at the WAN/Internet address in your router's status page.
 2. Compare it with what <https://whatismyip.com> reports.
 
-**Different → you are behind CGNAT.** Every arrangement that tolerates CGNAT needs either a second
+**Different → you are behind CGNAT.**
+
+If you would rather not log into the router, the shell answers it too, and gives you prerequisite 4
+in the same breath:
+
+```sh
+curl -s https://api.ipify.org; echo          # what the internet sees
+traceroute -n -m 4 8.8.8.8                   # what you are behind
+```
+
+An address in **`100.64.0.0` – `100.127.255.255`** is carrier-grade NAT, conclusively. So is a
+`100.64/10` hop in the trace. If the first public hop shares a `/24` with your public address, that
+is your ISP's gateway one step beyond your own router — which is what *not* being behind CGNAT looks
+like. Every arrangement that tolerates CGNAT needs either a second
 always-on machine or a third-party coordinator, and both were ruled out. This does not mean the
 decision was wrong; it means it has to be reopened rather than worked around.
 
@@ -55,6 +70,44 @@ preference:
 | **A WireGuard server** | The one to want. See option 1 below for why it is not merely a preference. |
 | An IPsec or OpenVPN server | Works. Judge it on the same two questions: does the traffic arrive on the home subnet, and does the monitored PC have to run anything? |
 | Neither | **No path under this decision.** Running [PiVPN](https://pivpn.io) on a Raspberry Pi or NAS is the usual answer and it is a second always-on machine — the option that was declined. Replacing the router is the other. Both reopen the decision. |
+
+### 4. Count your routers — a second one breaks this quietly
+
+Two NAT layers in series is ordinary: the ISP's box, plus your own router behind it. It does not
+stop remote access, but it decides **where the tunnel has to terminate**, and when it is wrong the
+failure does not look like a topology problem. Traced on a real home network while writing this:
+
+```sh
+traceroute -n -m 4 8.8.8.8
+```
+```
+ 1  192.168.31.1     <- your gateway
+ 2  192.168.178.1    <- a SECOND router, and the one holding the public address
+ 3  62.163.230.1     <- the ISP
+```
+
+**Every RFC1918 address before the first public hop is a router you are behind.** One is normal.
+Two means the PC and the tunnel endpoint are on *different private subnets*, and the tunnel has to
+terminate on the box that holds the public address — the outer one — because that is the only one
+the internet can reach.
+
+**Why this is worth its own check: the failure is invisible to every gate in this program.** A peer
+arriving on the outer subnet (`192.168.178.x`) is RFC1918, so `is_lan` admits it. The firewall rule
+is scoped to `LocalSubnet`, which is the *inner* subnet, so it rejects the packet — and if that rule
+is absent or the profile has flipped, the request simply never arrives, because nothing routes into
+the inner subnet at all. Nothing logs "wrong subnet". The parent sees a tunnel that connects and a
+dashboard that does not load, which reads as the tool being broken.
+
+Two ways out, and they are the router's job rather than Nestwatch's:
+
+* **Put the PC's subnet on a route.** A static route on the outer router for the inner subnet, and
+  the inner router not translating addresses (bridge or access-point mode). Then one subnet exists
+  and everything above applies unchanged.
+* **Terminate the tunnel on the inner router**, if it has a VPN server, and forward one UDP port to
+  it from the outer box. The peer then lands on the PC's own subnet directly.
+
+Collapsing to a single router is the better fix where it is possible, because double NAT costs
+something every day and buys nothing here.
 
 ---
 
