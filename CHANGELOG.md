@@ -7,7 +7,7 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
-## [Unreleased]
+## [0.7.0] — 2026-09-04
 
 ### Security
 

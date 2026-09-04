@@ -70,7 +70,7 @@ or rewritten rather than annotated, per the rules above.
 
 ## Release state
 
-**`v0.6.0`, published 2026-09-02.** Everything below is open against a release that is on the
+**`v0.7.0`, published 2026-09-04.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -87,13 +87,20 @@ on Windows. The three gates that were green when it shipped are the same three t
 is not an argument for distrusting them; it is the reason the section below exists and the reason
 the checklist is the only method here with a track record.
 
-**And 0.6.0's own headline features are not in the checklist at all** — which is worse than being
-in it unrun, because an unrun item is at least counted. Section H is scoped to 0.5.0 by its title.
-Measured on 2026-09-02: `integration`, `provider`, `StudyGo`, `earned` and `idempot` each return
-**zero** matches in `WINDOWS-TESTING.md`, and the sole Routines item (§E2) exercises the *manual*
-save-and-apply path that predates the release. So scheduled routines and the integrations registry
-— the two things 0.6.0 was cut for — have neither run on Windows nor been written down as things
-to run. Tracked as `O87`.
+**And neither 0.6.0's nor 0.7.0's headline features are in the checklist at all** — which is worse
+than being in it unrun, because an unrun item is at least counted. Section H is scoped to 0.5.0 by
+its title. Measured 2026-09-02 and re-measured 2026-09-04: `integration`, `provider`, `StudyGo`,
+`earned`, `idempot`, `revoke`, `signed-in` and `masquerad` each return **zero** matches in
+`WINDOWS-TESTING.md`, nothing exercises the absolute session cap, and the sole Routines item (§E2)
+exercises the *manual* save-and-apply path that predates both releases. Tracked as `O87`.
+
+**For 0.7.0 that gap sits on the authentication surface, which is the part worth saying out loud.**
+Scoped pairing, per-device revocation and the absolute cap all decide whether a person gets in, they
+fail closed by design, and the way back from a mistake is an elevated console on the child's PC. The
+release also carries the one breaking change this project has shipped — every existing session is
+refused, so every device must be paired again — and that upgrade path has itself never run on
+Windows. Nothing here says the code is wrong; it says the gates that were green when `install` failed
+on real hardware are the same three that are green now.
 
 The enforcer wake is the one to run first. Its entire value is a timing property — an abort arriving
 in well under a second where it previously took up to 30 — measured once, on macOS, where `shutdown`
@@ -1585,10 +1592,11 @@ predates the release. Section H, where new work goes, is titled **"New in 0.5.0"
 twice and `session` eighteen times; every one is unrelated — a firewall rule "scoped to
 `private,domain`", a Session 0 reference. Checked, not assumed.)
 
-Those four are **unreleased**, so unlike routines and the registry they are not yet open against
-the download page — which is the whole point of writing them down now. The 0.6.0 half of this
-entry became a gap by being forgotten at release; the unreleased half can still be closed before
-it repeats. Scoped pairing, per-device revocation and the absolute cap are all the
+**They shipped in `0.7.0` on 2026-09-04, so this is no longer a warning about future work.** The
+0.6.0 half of this entry became a gap by being forgotten at release; the 0.7.0 half was written
+down while it was still unreleased and shipped anyway, which is the more useful failure to record —
+knowing did not close it. All six now sit on the download page unexercised on the hardware they run
+on, and three of them decide whether a parent can sign in. Scoped pairing, per-device revocation and the absolute cap are all the
 *authentication* surface, where a checklist gap is worth most and where this release's one
 breaking change — every existing session refused — actually lands.
 

@@ -371,11 +371,12 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.6.0` (2026-09-02) is the newest published release — it
-adds routines that apply themselves on a schedule and the integrations registry, and carries no new
-Windows-only code: `src/control/windows.rs` is unchanged since `v0.5.1`. The release before it was a
-single security fix over `v0.5.0` the same day, adding nothing that needs a Windows machine to
-verify. Both shipped with tiers 1 and 2 green and **tier 3 unrun**: the 32 items in section H of the checklist — covering the bedtime extension, the
+**Where the current release stands.** `v0.7.0` (2026-09-04) is the newest published release — it
+scopes what a pairing QR is worth, lists and revokes signed-in devices one at a time, caps how long
+a session can live however often it is used, and tells you when your router has made the access log
+unable to tell devices apart. It carries **no new Windows-only code**: `src/control/windows.rs` is
+unchanged since `v0.5.1`, and the diff from `v0.6.0` adds no `#[cfg(windows)]` block at all. What it
+does change is the authentication surface, which is why every device must be paired again. Both shipped with tiers 1 and 2 green and **tier 3 unrun**: the 32 items in section H of the checklist — covering the bedtime extension, the
 enforcer wake, the translated shutdown notices and the ask link — have not been executed on a
 Windows machine. That is stated here rather than only in the changelog, because tier 3 is the tier
 the sentence above says every serious bug has lived in, and a reader deciding whether to install
