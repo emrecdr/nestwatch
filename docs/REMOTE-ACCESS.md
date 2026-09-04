@@ -281,30 +281,97 @@ returns `403`. Widening the gate to admit that range was considered and declined
 [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md). The five arguments above are why that decline should be
 read as load-bearing rather than fussy.
 
-### 4. A WireGuard endpoint inside Nestwatch — evaluated, not recommended yet
+### 4. A WireGuard endpoint inside Nestwatch — costed, and the answer where 3 fails
 
-Not previously considered anywhere in these docs, and it deserves a row because it fits the
-promises unusually well. Nestwatch would listen on UDP itself; the parent's phone would be a peer;
-traffic would arrive from RFC1918 and pass the gate unchanged. It converts the forbidden move —
-port-forwarding the dashboard — into a defensible one, because what gets forwarded is silent to
-everything that is not a peer.
+Nestwatch listens on UDP itself; the parent's phone is a peer; traffic arrives from RFC1918 and
+passes the gate unchanged. It converts the forbidden move — port-forwarding the dashboard — into a
+defensible one, because what gets forwarded is silent to everything that is not a peer.
 
-**The cost is why it is not the recommendation.** `boringtun` is maintained and deployed at scale,
-but it *"implements the underlying WireGuard protocol, without the network or tunnel stacks"*. On
-Windows that means shipping a TUN driver or building a userspace network stack — a large,
-unglamorous cost for a single-binary tool whose install story is a strength, and new cryptographic
-surface inside a security product. It also has no CGNAT answer, so it does not buy back
-prerequisite 2.
+**It does not break the promise this project rests on.** *Do not give Nestwatch a way out; give
+yourself a way in.* An inbound listener is a way **in**: the monitored PC still makes no outbound
+connection of its own. And it does not falsify the five arguments above, for the same reason the
+router tunnel does not — a peer is cryptographically authenticated before a byte reaches the HTTP
+stack, and arrives wearing a private address.
 
-**But weigh that second objection against your own network before applying it.** It only bites
-behind CGNAT. Where prerequisite 2 passes and prerequisite 3 fails — a public address, and neither
-router able to terminate a tunnel — this option becomes the *only* one that needs no new hardware
-and no firmware replacement, because the routers are then asked for nothing but a forwarded UDP
-port, which even ISP-supplied boxes do. That is a common enough shape that the option should be
-re-priced per household rather than declined once and for all.
+**Where prerequisite 2 passes and prerequisite 3 fails — a public address, and neither router able
+to terminate a tunnel — this is the only option that needs no new hardware and no firmware
+replacement.** The routers are asked for nothing but a forwarded UDP port, which even ISP-supplied
+boxes do. That combination is common, so this is not an exotic fallback.
 
-Revisit if the router path proves unworkable in practice, and only with a real assessment of the
-Windows stack question first.
+#### What it costs, measured rather than estimated
+
+| | |
+|---|---|
+| **RAM** | Dominated by Wintun's two shared-memory rings: `2 × (capacity + 64 KiB)`. Capacity is a power of two between `WINTUN_MIN_RING_CAPACITY` (**128 KiB**) and `WINTUN_MAX_RING_CAPACITY` (64 MiB). At the minimum that is **~384 KiB**; at a comfortable 1 MiB it is ~2.1 MiB. This service's heaviest payload is a preview screenshot of about 23 KiB, so the minimum is the right starting point. Per-peer session state is kilobytes. **Under 1 MB in total.** |
+| **CPU** | Idle with no peer: one UDP socket receive, effectively nothing. Idle with a peer: a 32-byte keepalive every 25 s. Active: ChaCha20-Poly1305 runs at gigabytes per second per core, against a dashboard session measured in tens of kilobytes per second. Userspace WireGuard's real ceiling is per-packet syscall overhead, in the hundreds of Mbps — orders of magnitude above anything this serves. |
+| **Binary** | Measured, not guessed: `boringtun` added **~33 KiB** to a release binary. That probe exercised the key path only, so read it as a lower bound; the crate is small and the full protocol state machine will not change the order of magnitude. |
+| **Dependencies** | **22 crates** this tree does not already carry, including `curve25519-dalek`, `chacha20poly1305`, `x25519-dalek` and `nix`. All reputable, and it is still a real increase in the audit surface of a security tool with a supply-chain gate in CI. |
+
+#### The costs that are not RAM
+
+**It ends the single-binary install.** `wintun.dll` ships beside the executable, and the README's
+install story is currently one file. That is the largest product cost here and it is not
+recoverable by tuning anything.
+
+**The licence is clean, and this was checked rather than assumed** — it decides whether the option
+is possible at all, because this project is MIT. Wintun's *source* is GPLv2, but the **prebuilt
+signed binaries carry their own terms permitting redistribution alongside a third-party
+application**, with no fee and **no copyleft obligation on the accompanying software**. The single
+condition is that the application use the driver only through the documented `wintun.h` API.
+Microsoft's kernel-driver signing is satisfied by WireGuard LLC's signature, so no EV certificate
+and no attestation cost falls on this project.
+
+**Where the DLL lives is a security decision, and this repository already ruled on it.** Wintun's
+own documentation says to install it *"side-by-side with your application"*. `syspath.rs` exists
+precisely because, in Windows' search order, **the application's own directory outranks
+`System32`** — that module was written to stop a look-alike beside the executable being run with
+administrator rights. The same rule applies here and is not optional:
+
+* Load it **by absolute path from the ACL-hardened install directory**, which `install` already
+  locks to SYSTEM + Administrators with Users read-and-execute only. Never by bare name.
+* The **service** loads it. `install` and `doctor` run elevated from wherever the parent left
+  `nestwatch.exe` — a directory the child may be able to write — which is the exact window
+  `syspath` documents.
+
+**It is not the thing `PLUGIN-SYSTEM.md` refuses, and the difference has to be written down.** That
+document rejects *"native dynamic loading (`.dll` the service `dlopen`s)"* as its first
+architecture, on the constraint that no foreign code may run as SYSTEM from a source the child can
+influence. A Microsoft-signed driver shim, placed by the installer into a directory the child
+cannot write, is not that. Left unstated, the next reader will either revert this as a violation of
+a rule the project already made, or — worse — cite it as precedent for loading something that *is*
+child-influenceable.
+
+**One coupling to the shared install path**, and it is the reason this cannot be purely additive:
+the firewall rule is `remoteip=LocalSubnet`, and a tunnel subnet is not the local subnet. A peer
+would be admitted by `is_lan` and dropped by the firewall, with nothing logging the disagreement —
+the app-layer gate is never reached, and the firewall does not explain itself. Two gates written
+against the same assumption at different widths, agreeing today only because every client really is
+on the local subnet. Widening one and not the other yields a silent failure rather than a refusal,
+and the narrower of the two is `#[cfg(windows)]`, so no host test can see it.
+
+#### How to make it genuinely optional
+
+The question is whether a household that does not want this pays anything for it. Mostly no, and
+the exceptions are worth being precise about.
+
+**Free:** the DLL is loaded at runtime, not linked, so its absence makes the feature unavailable
+and changes nothing else. The tunnel adapter, the private key and the UDP socket all come into
+existence only when the feature is switched on, and the key is a new secret that belongs under the
+same ACL treatment as the config.
+
+**Not free:** the 22 crates are in the shipped artifact whether or not anyone enables the feature.
+A Cargo feature flag only removes them if two builds are published, which costs release complexity
+and hands users a choice they will get wrong. There is currently no `[features]` section in
+`Cargo.toml` at all.
+
+**The one genuine change in exposure:** with the feature on, the monitored PC accepts inbound UDP
+from the internet. WireGuard answers nothing that is not already a peer, so a scanner cannot tell
+the port is open — but it is a reachable code path on the child's machine that does not exist
+today. That is the honest cost, it is per-install, and the feature must be **off by default**.
+
+**Make "off" provable rather than assumed.** A test asserting that no socket is bound and no adapter
+exists while the feature is disabled. This codebase has been caught more than once by a check that
+ran, reported success, and demonstrated nothing.
 
 ---
 
