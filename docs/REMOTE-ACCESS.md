@@ -305,7 +305,7 @@ boxes do. That combination is common, so this is not an exotic fallback.
 | **RAM** | Dominated by Wintun's two shared-memory rings: `2 × (capacity + 64 KiB)`. Capacity is a power of two between `WINTUN_MIN_RING_CAPACITY` (**128 KiB**) and `WINTUN_MAX_RING_CAPACITY` (64 MiB). At the minimum that is **~384 KiB**; at a comfortable 1 MiB it is ~2.1 MiB. This service's heaviest payload is a preview screenshot of about 23 KiB, so the minimum is the right starting point. Per-peer session state is kilobytes. **Under 1 MB in total.** |
 | **CPU** | Idle with no peer: one UDP socket receive, effectively nothing. Idle with a peer: a 32-byte keepalive every 25 s. Active: ChaCha20-Poly1305 runs at gigabytes per second per core, against a dashboard session measured in tens of kilobytes per second. Userspace WireGuard's real ceiling is per-packet syscall overhead, in the hundreds of Mbps — orders of magnitude above anything this serves. |
 | **Binary** | Measured, not guessed: `boringtun` added **~33 KiB** to a release binary. That probe exercised the key path only, so read it as a lower bound; the crate is small and the full protocol state machine will not change the order of magnitude. |
-| **Dependencies** | **22 crates** this tree does not already carry, including `curve25519-dalek`, `chacha20poly1305`, `x25519-dalek` and `nix`. All reputable, and it is still a real increase in the audit surface of a security tool with a supply-chain gate in CI. |
+| **Dependencies** | **33–34 crates** this tree does not already carry, including `curve25519-dalek`, `chacha20poly1305`, `x25519-dalek` and `nix`. Two lockfile diffs against `ac05975` disagree by one; the re-measurement further down gives both methods and the gap. All reputable, and it is still a real increase in the audit surface of a security tool with a supply-chain gate in CI. |
 
 #### The costs that are not RAM
 
@@ -349,6 +349,15 @@ against the same assumption at different widths, agreeing today only because eve
 on the local subnet. Widening one and not the other yields a silent failure rather than a refusal,
 and the narrower of the two is `#[cfg(windows)]`, so no host test can see it.
 
+**Filed as `O91`, which records the half this section first missed: the coupling is two gates wide,
+not one.** The rule is `profile=private,domain` as well as `remoteip=LocalSubnet`, and a freshly
+created tunnel adapter on Windows is frequently categorised **Public**. A peer can therefore fail
+that one rule for two independent reasons, and both are equally silent — so widening the address
+scope alone leaves the second failure live. Anyone doing this work has to widen both halves and
+confirm the adapter's category. `O91` also makes the point that this is not only a problem for the
+embedded endpoint: a parent who installs stock WireGuard for Windows today, changing no Nestwatch
+code at all, hits the same wall — a tunnel that connects and a dashboard that never loads.
+
 #### How to make it genuinely optional
 
 The question is whether a household that does not want this pays anything for it. Mostly no, and
@@ -359,7 +368,7 @@ and changes nothing else. The tunnel adapter, the private key and the UDP socket
 existence only when the feature is switched on, and the key is a new secret that belongs under the
 same ACL treatment as the config.
 
-**Not free:** the 22 crates are in the shipped artifact whether or not anyone enables the feature.
+**Not free:** those crates are in the shipped artifact whether or not anyone enables the feature.
 A Cargo feature flag only removes them if two builds are published, which costs release complexity
 and hands users a choice they will get wrong. There is currently no `[features]` section in
 `Cargo.toml` at all.
@@ -416,12 +425,12 @@ Measured by diffing a scratch lockfile against this tree's, the method that row 
 | `gotatun` 0.9.2, `default-features = false` | +38 | pure Rust, **no `aws-lc`, no `cmake`** |
 | `gotatun` no-default **+ `smoltcp`** — what 4b costs | **+47** | pure Rust |
 
-**`boringtun`'s "22 crates" above was wrong when written, and this is not drift.** `boringtun`
-0.6.0 is a pinned version; its dependency closure cannot change over three days. Measured against
-`ac05975` itself — the commit that states 22 — the lockfile delta is 33 here and 34 by the other
-session's `cargo add --no-default-features`, a one-crate gap between methods that is smaller than
-the error it sits inside. The likely cause of the original figure is a `cargo tree` depth counted
-instead of a lockfile diff.
+**The row above carried "22 crates" from `ac05975` until this correction, and that was wrong when
+written, not drift.** `boringtun` 0.6.0 is a pinned version; its dependency closure cannot change
+over three days. Measured against `ac05975` itself — the commit that stated 22 — the lockfile delta
+is 33 here and 34 by the other session's `cargo add --no-default-features`, a one-crate gap between
+methods that is smaller than the error it sits inside. The likely cause of the original figure is a
+`cargo tree` depth counted instead of a lockfile diff.
 
 **The distinction matters and is worth keeping separate from the `SECURITY.md` case.** That one
 *did* drift — seven bodyless endpoints really did become ten as routes were added, each addition
