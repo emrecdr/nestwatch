@@ -153,15 +153,30 @@ impl FileSessionStore {
     /// Returns whether anything was actually removed, so a caller can tell "revoked" from
     /// "already gone" rather than reporting success for a session that was never there.
     pub fn revoke(&self, id: &Id) -> bool {
+        self.revoke_all(std::slice::from_ref(id)) == 1
+    }
+
+    /// Sign out every id in `ids`, returning how many were actually there.
+    ///
+    /// **One write, not one per session**, which is the whole reason this exists next to
+    /// [`revoke`]. [`persist`](Self::persist) re-serializes the entire remaining map and does an
+    /// atomic write for each call, so revoking a set one id at a time costs a full pass over the
+    /// store per member. The set is small — the caller is `api::delete_provider` ending the
+    /// pairings one integration issued — so this is tidiness rather than a rescue, but a loop
+    /// that fsyncs per element is the kind of shape that stops being tidy when the set grows.
+    ///
+    /// Takes the lock once as well, so a concurrent reader sees the whole revocation or none of
+    /// it rather than a device list with half the set still in it.
+    pub fn revoke_all(&self, ids: &[Id]) -> usize {
         let mut map = self.map();
-        let existed = map.remove(id).is_some();
-        if existed {
+        let removed = ids.iter().filter(|id| map.remove(id).is_some()).count();
+        if removed > 0 {
             self.persist(
                 &mut map,
-                "that device may stay signed in until the next restart",
+                "those devices may stay signed in until the next restart",
             );
         }
-        existed
+        removed
     }
 }
 

@@ -18,31 +18,7 @@ use tower::ServiceExt;
 use nestwatch::pairing::Scope;
 
 mod common;
-use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
-
-/// Pair against a freshly minted token of `scope`, returning the session cookie it produced.
-///
-/// Mints through the real `pairing::mint`, so this exercises the same file the installer writes
-/// rather than a session the test constructed — the scope has to survive disk to mean anything.
-async fn pair_with(app: &axum::Router, scope: Scope) -> Option<String> {
-    let token = nestwatch::pairing::mint(&nestwatch::config::data_paths().pairing, scope)
-        .expect("minting a pairing token");
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/p/{token}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    res.headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| c.split(';').next())
-        .map(str::to_owned)
-}
+use common::{PASSWORD, ScratchDir, app_with, login, pair_with, state_with, test_config};
 
 async fn send(
     app: &axum::Router,
@@ -95,6 +71,7 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
             Scope::Integration {
                 source: "studygo".into(),
             },
+            None,
         )
         .await
         .expect("an integration pairing must still produce a session");
@@ -179,7 +156,7 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
     {
         let state = state_with(test_config());
         let app = app_with(state);
-        let browser = pair_with(&app, Scope::Dashboard)
+        let browser = pair_with(&app, Scope::Dashboard, None)
             .await
             .expect("a dashboard pairing must produce a session");
 
@@ -253,7 +230,7 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
         assert_eq!(anon["scope"], Value::Null);
 
         // A dashboard pairing says so — this is the value an integration app must refuse.
-        let browser = pair_with(&app, Scope::Dashboard).await.unwrap();
+        let browser = pair_with(&app, Scope::Dashboard, None).await.unwrap();
         let seen = read_scope(Some(browser)).await;
         assert_eq!(seen["authenticated"], json!(true));
         assert_eq!(
@@ -271,6 +248,7 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
             Scope::Integration {
                 source: "studygo".into(),
             },
+            None,
         )
         .await
         .unwrap();

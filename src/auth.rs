@@ -842,7 +842,7 @@ pub fn revoke_integration_sessions(
     store: &crate::sessionstore::FileSessionStore,
     source: &str,
 ) -> usize {
-    store
+    let ids: Vec<Id> = store
         .snapshot()
         .into_iter()
         .filter(|record| {
@@ -855,8 +855,12 @@ pub fn revoke_integration_sessions(
                 Some(crate::pairing::Scope::Integration { source: s }) if s == source
             )
         })
-        .filter(|record| store.revoke(&record.id))
-        .count()
+        .map(|record| record.id)
+        .collect();
+    // One write for the whole set: `revoke` persists the entire store per call, so ending three
+    // pairings one at a time would rewrite the file three times and leave two observable states
+    // in between where the integration is half signed out.
+    store.revoke_all(&ids)
 }
 
 /// May a scoped integration reach this request?

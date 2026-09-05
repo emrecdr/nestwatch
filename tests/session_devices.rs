@@ -17,30 +17,9 @@ use tower::ServiceExt;
 use nestwatch::pairing::Scope;
 
 mod common;
-use common::{PASSWORD, ScratchDir, app_with, configure_provider, login, state_with, test_config};
-
-/// Pair against a freshly minted token of `scope`, returning the cookie it produced.
-async fn pair_with(app: &axum::Router, scope: Scope, agent: &str) -> String {
-    let token = nestwatch::pairing::mint(&nestwatch::config::data_paths().pairing, scope)
-        .expect("minting a pairing token");
-    let res = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/p/{token}"))
-                .header(header::USER_AGENT, agent)
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    res.headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| c.split(';').next())
-        .map(str::to_owned)
-        .expect("pairing must produce a session cookie")
-}
+use common::{
+    PASSWORD, ScratchDir, app_with, configure_provider, login, pair_with, state_with, test_config,
+};
 
 async fn get_json(app: &axum::Router, cookie: &str, uri: &str) -> (StatusCode, Value) {
     let res = app
@@ -112,9 +91,10 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
         let phone = pair_with(
             &app,
             Scope::Dashboard,
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)",
+            Some("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)"),
         )
-        .await;
+        .await
+        .expect("pairing must produce a session cookie");
         // Since `O92` a pairing is only a usable credential while its provider is installed,
         // so this is fixture setup rather than a convenience: without it the robot below is
         // signed in and unable to answer, and the assertion that revoking the phone leaves it
@@ -128,9 +108,10 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
             Scope::Integration {
                 source: "studygo".into(),
             },
-            "Voortgang/1.0",
+            Some("Voortgang/1.0"),
         )
-        .await;
+        .await
+        .expect("pairing must produce a session cookie");
 
         // --- The list names all three, and says what each may do. ---------------------------
         let (status, rows) = get_json(&app, &browser, "/api/sessions").await;

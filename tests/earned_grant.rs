@@ -21,7 +21,7 @@ use tower::ServiceExt;
 use nestwatch::config::{MAX_PROVIDERS, data_paths};
 
 mod common;
-use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
+use common::{PASSWORD, ScratchDir, app_with, configure_provider, login, state_with, test_config};
 
 /// POST `/api/extra-time` with `body`, returning (status, parsed body).
 async fn grant(
@@ -47,31 +47,6 @@ async fn grant(
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let parsed = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, parsed)
-}
-
-/// Install or reconfigure a provider via `POST /api/providers/{name}`.
-async fn configure_provider(
-    app: &axum::Router,
-    cookie: &str,
-    name: &str,
-    enabled: bool,
-    minutes: u32,
-) -> StatusCode {
-    app.clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/providers/{name}"))
-                .header(header::COOKIE, cookie)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "enabled": enabled, "minutes": minutes }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap()
-        .status()
 }
 
 /// Uninstall a provider via `POST /api/providers/{name}/delete`.
