@@ -497,7 +497,9 @@ parent who opened one deliberately.
 Ordered because each step is a precondition for the next, not a preference about what to do first.
 
 **0 · Settle the two blocking prerequisites.** CGNAT and the router's VPN capability, above. Both
-are minutes of checking and either can end the plan.
+are minutes of checking and either can end the plan. **Done once already**, for the household that
+prompted this document: 2 passes, 3 fails, which closes this step for that house and selects option
+4 — see the status note at the end. Any other household still has to answer them for itself.
 
 **1 · Give a session a device identity that can be revoked alone — `O77`. DONE** (`be1c07e`,
 `f6687d8`). This was the security story under full parity, because the tunnel handles the network
@@ -639,6 +641,21 @@ signing every device out — was closed by `be1c07e`/`f6687d8`. Both are **delet
 `OPEN-FINDINGS.md` per that file's rule, so a citation pointing at either will find nothing; they
 are named here as history, not as open work.
 
-**Prerequisites 2 and 3 remain unverified for any specific household**, and they are still the two
-things that can make all of the above unreachable. Nothing implemented here changes that: the code
-is ready for a tunnel that nobody has yet confirmed this network can carry.
+**Prerequisites 2 and 3 have since been answered for one household — the one that prompted this
+document — and they split.** Measured 2026-09-04. Prerequisite 2 **passes**: the house has a real
+routable address, not carrier-grade NAT. Prerequisite 3 **fails**: two routers in series, neither
+able to terminate a tunnel. The measurements behind those two verdicts — the public address, both
+router models, the SSID — are in `docs/private/OPERATIONAL-FINDINGS.md`, which is git-ignored,
+because this repository is public and those facts together are a map of one family's perimeter and
+the machine behind it is a child's. This page tells a reader how to check their own prerequisites;
+it deliberately does not carry the answers for this house.
+
+**That split is why option 4 stopped reading as a fallback.** It is precisely the combination
+option 4 is written for, which means options 1 and 2 — the two this page recommends — were both
+unavailable in the first real house it was checked against. `O91` records what anyone building the
+embedded endpoint runs into next.
+
+**What remains unverified is the network path itself**, and that is unchanged: no tunnel has been
+stood up against this project's own installation, so every walkthrough above is still as untested
+as *"the plan above has been implemented; the walkthroughs have not been tested"* says at the top of
+this section. Knowing which option applies is not the same as having carried traffic over it.
