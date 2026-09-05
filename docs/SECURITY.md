@@ -71,6 +71,13 @@ token, which is what a person scanning it needs and what the Android app needs;
 `GET /api/usage/today` and nothing else, and whose grants are attributed to `<name>` whatever the
 request body says.
 
+**And only while `<name>` is installed and enabled** — the registry entry is the authority, not
+merely the policy. Switching an integration off refuses both of its routes, and removing it revokes
+every session that pairing minted. Before `O92` neither did: the entry and the credential were two
+objects sharing a name, so a removed integration went on reading the child's day until the absolute
+session cap expired. The read is the half that was missed, because `extra_time` had always asked
+the registry before granting and nothing asked it before answering.
+
 **This was not always true, and the gap is worth stating because the shape recurs.** Through
 `0.6.0`, `auth::pair` performed the same two steps as `auth::login` and `require_auth` read one
 boolean, so a paired device held this entire table. The earned-time integration's phone app stores

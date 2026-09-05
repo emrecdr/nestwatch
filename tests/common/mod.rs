@@ -173,6 +173,62 @@ pub async fn post_json(
         .unwrap()
 }
 
+/// Pair against a freshly minted token of `scope`, returning the session cookie it produced.
+///
+/// Through the real `pairing::mint`, so the scope has to survive disk to mean anything: a test
+/// that constructed a session directly would prove nothing about the file the installer writes.
+///
+/// Here rather than per-binary because three test files had grown their own copy. The separate
+/// binaries are deliberate — each needs the process-wide `NESTWATCH_DATA_DIR` override — but that
+/// argues for separate *binaries*, not for separate copies of a function they all already import
+/// this module into.
+pub async fn pair_with(
+    app: &Router,
+    scope: nestwatch::pairing::Scope,
+    user_agent: Option<&str>,
+) -> Option<String> {
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
+    let token = nestwatch::pairing::mint(&nestwatch::config::data_paths().pairing, scope)
+        .expect("minting a pairing token");
+    let mut req = Request::builder().uri(format!("/p/{token}"));
+    if let Some(agent) = user_agent {
+        req = req.header(header::USER_AGENT, agent);
+    }
+    let res = app
+        .clone()
+        .oneshot(req.body(axum::body::Body::empty()).unwrap())
+        .await
+        .unwrap();
+    res.headers()
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| c.split(';').next())
+        .map(str::to_owned)
+}
+
+/// Install or reconfigure an integration, returning the status.
+///
+/// Since `O92` a pairing scoped to an integration is only a usable credential while that
+/// integration is installed and enabled, so this is fixture setup for any test that pairs one —
+/// not merely a convenience.
+pub async fn configure_provider(
+    app: &Router,
+    cookie: &str,
+    name: &str,
+    enabled: bool,
+    minutes: u32,
+) -> axum::http::StatusCode {
+    post_json(
+        app,
+        &format!("/api/providers/{name}"),
+        Some(cookie),
+        serde_json::json!({ "enabled": enabled, "minutes": minutes }),
+    )
+    .await
+    .status()
+}
+
 /// `POST /login`, returning the session cookie (`name=value`) on success, `None` otherwise.
 pub async fn login(app: &Router, password: &str) -> Option<String> {
     let res = post_json(app, "/login", None, json!({ "password": password })).await;

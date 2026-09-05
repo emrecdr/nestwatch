@@ -329,17 +329,14 @@ mod tests {
     /// review is for.
     #[test]
     fn every_authenticated_route_is_reachable_from_the_dashboard() {
+        // Imported here rather than at the top of the file, deliberately, for the reason
+        // `server.rs`'s test module states: `tests/scanner_guards.rs` treats a `srcscan` import in
+        // a file's production half as "this file has adopted srcscan" and skips it wholesale.
+        use crate::srcscan::api_router_body;
+
         const SERVER_RS: &str = include_str!("server.rs");
-        let router_src = SERVER_RS
-            .split_once("#[cfg(test)]")
-            .map_or(SERVER_RS, |(before, _)| before);
-        let guarded = router_src
-            .split_once("route_layer(middleware::from_fn(auth::require_auth))")
-            .expect("the /api router must apply require_auth")
-            .0
-            .split_once("let api = Router::new()")
-            .expect("the guarded router must still be built here")
-            .1;
+        let guarded = api_router_body(SERVER_RS)
+            .expect("the /api router must apply require_auth and still be built as `api`");
 
         let ui = format!(
             "{}{}",

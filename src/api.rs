@@ -908,18 +908,13 @@ pub async fn extra_time(
             if robot {
                 // A provider grant is governed by the registry: it must name an enabled provider,
                 // and the reward is that provider's configured minutes.
-                match c.providers.get(&source) {
-                    Some(p) if p.enabled => minutes = p.minutes,
-                    Some(_) => {
-                        return Err(AppError::BadRequest(format!(
-                            "the '{source}' integration is turned off"
-                        )));
-                    }
-                    None => {
-                        return Err(AppError::BadRequest(format!(
-                            "no '{source}' integration is installed"
-                        )));
-                    }
+                // The same decision `require_auth` made before this request was routed, asked
+                // again here because this one is inside the write guard: it is atomic with the
+                // day latch below, and it is the only check at all for a `Scope::Dashboard`
+                // caller naming a `source` in its body, which never reaches that middleware arm.
+                match c.provider_authority(&source) {
+                    Ok(p) => minutes = p.minutes,
+                    Err(message) => return Err(AppError::BadRequest(message)),
                 }
                 if c.earned.get(&source) == Some(&today) {
                     granted = false;
@@ -1076,7 +1071,16 @@ pub async fn list_providers(State(state): State<AppState>) -> Json<Value> {
 /// `POST /api/providers/{name}` → install or reconfigure an integration.
 ///
 /// Upsert by name: `{ "enabled": true, "minutes": 30 }` installs StudyGo worth thirty minutes, or
-/// flips an existing one on or off. The name is validated to the same charset the grant `source`
+/// flips an existing one on or off.
+///
+/// **Switching one off deliberately does not revoke its pairing**, unlike [`delete_provider`] —
+/// and the absence of that call is the whole statement, so it is written down here rather than
+/// left to be inferred. A disabled provider is refused both of its routes by `require_auth`, so
+/// off really is off; keeping the credential is what makes it *reversible*, which is the
+/// distinction GitHub draws between suspending an app and uninstalling it. A toggle that cost a
+/// fresh QR every time would push a parent toward *Remove* instead — the more destructive
+/// control — which is the same trap `O77` records about `change_password` being too expensive a
+/// revocation to actually perform. The name is validated to the same charset the grant `source`
 /// is, so an installed provider is always one a push can actually name. The reward is bounded by
 /// the same cap parent grants are, because it *becomes* a grant.
 pub async fn set_provider(
@@ -1148,9 +1152,22 @@ pub async fn delete_provider(
         c.providers.remove(&name);
     })
     .await?;
-    state
-        .audit
-        .record("provider_removed", json!({ "name": name }));
+    // **Uninstalling has to reach the credential, not only the entry.** Before this, removing a
+    // provider refused its next grant and left the device it was paired with reading
+    // `/api/usage/today` until the absolute session cap expired — the child's budget, per-app
+    // usage and window titles, to an app the parent had just disconnected. The two were separate
+    // objects sharing a name; this is what joins them.
+    //
+    // After the config write rather than inside it: `update_config` holds the config lock and
+    // persists off the runtime, and revocation touches a different store. Sequencing them means
+    // neither waits on the other, and the order is the safe one — a crash between the two leaves
+    // the provider gone and its session live, which is the state that already existed and is
+    // refused by `require_auth` anyway once the entry is missing.
+    let revoked = crate::auth::revoke_integration_sessions(&state.sessions, &name);
+    state.audit.record(
+        "provider_removed",
+        json!({ "name": name, "sessions_revoked": revoked }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 

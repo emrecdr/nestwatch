@@ -431,6 +431,28 @@ impl Config {
     /// meant anything anyway — `apply_routine` overwrites it on every Apply. Routines written
     /// before that normalisation existed cannot reach this path either, because they have no
     /// schedule and an empty schedule never matches.
+    /// The provider `source` names, if it may currently grant — otherwise why it may not.
+    ///
+    /// **One place decides, because two callers ask and they must not drift.** `require_auth`
+    /// asks before letting an integration-scoped session reach either of its routes;
+    /// `api::extra_time` asks again inside the write guard, which is the race-free one and also
+    /// the *only* check for a `Scope::Dashboard` caller naming a `source` in its body. Both are
+    /// load-bearing and neither can go — so what is shared here is the decision and its wording,
+    /// not the call.
+    ///
+    /// **The two messages are a cross-repo contract**, which is the sharper reason to keep them
+    /// in one place. Voortgang routes on the status and shows the parent a remedy; "turned off"
+    /// and "not installed" both mean *fix it on the PC*, and a reworded copy that drifted from
+    /// its twin would send half the callers to the wrong sentence. `tests/provider_lifecycle.rs`
+    /// asserts both routes answer identically, and this is what makes that cheap to keep true.
+    pub fn provider_authority(&self, source: &str) -> Result<&Provider, String> {
+        match self.providers.get(source) {
+            Some(provider) if provider.enabled => Ok(provider),
+            Some(_) => Err(format!("the '{source}' integration is turned off")),
+            None => Err(format!("no '{source}' integration is installed")),
+        }
+    }
+
     pub fn rules_at(&self, at: DateTime<FixedOffset>) -> &crate::rules::Rules {
         self.scheduled_routine_at(at)
             .map_or(&self.rules, |r| &r.rules)

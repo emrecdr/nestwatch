@@ -225,6 +225,36 @@ pub fn call_arguments(text: &str, from: usize) -> Option<&str> {
     None
 }
 
+/// `src/server.rs` split at the layer guarding `/api`: everything registered behind
+/// `require_auth`, and everything after it.
+///
+/// **Three guards asked this question and each hand-rolled the answer.** `server.rs`'s own route
+/// guard, `web.rs`'s dashboard-reachability guard and `tests/doc_claims.rs`'s bodyless-POST scan
+/// all split this file on the auth layer, in three copies that had to be edited together — and
+/// were, the day `from_fn` became `from_fn_with_state` and the needle moved. Two of them also cut
+/// the test module with a bare `#[cfg(test)]`, the naive form [`production_source`] exists
+/// because it silently truncated three files in this crate.
+///
+/// The needle is the mounted handler rather than the whole `route_layer(…)` call, because that
+/// call is exactly the kind of expression `rustfmt` reflows across lines the moment it grows an
+/// argument — which is the failure this module was written for. `None` when the layer is not
+/// found at all, so a caller says what a missing layer means to it rather than inheriting a
+/// panic message written for somebody else.
+pub fn api_router_halves(server_src: &str) -> Option<(&str, &str)> {
+    production_source(server_src).split_once("auth::require_auth,")
+}
+
+/// Just the `/api` router's registrations: between `let api = Router::new()` and its auth layer.
+///
+/// What a caller wants when the question is "which routes are behind the gate" rather than
+/// "which are outside it". Built on [`api_router_halves`] so the auth needle stays in one place.
+pub fn api_router_body(server_src: &str) -> Option<&str> {
+    let (guarded, _) = api_router_halves(server_src)?;
+    guarded
+        .split_once("let api = Router::new()")
+        .map(|(_, b)| b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

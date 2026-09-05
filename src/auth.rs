@@ -822,6 +822,43 @@ pub fn session_by_handle(
         .map(|r| r.id)
 }
 
+/// End every session minted for the integration named `source`, returning how many.
+///
+/// Beside [`session_by_handle`] rather than in `api.rs` because [`SCOPE_KEY`] and the shape
+/// stored under it are this module's, and a caller reconstructing that shape elsewhere is a
+/// second place to keep true.
+///
+/// **Uninstalling is the one operation that has to reach the credential.** A provider's entry
+/// and the session paired to it are two objects sharing a name, and dropping the first left the
+/// second holding `GET /api/usage/today` for the remainder of the absolute cap — the child's
+/// budget and window titles, to a device the parent had just disconnected. This is the
+/// general case rather than this project's peculiarity: OWASP asks that a session be renewed or
+/// destroyed "after any privilege level change" and names permission changes; Slack's
+/// `apps.uninstall` revokes every token for the installation rather than only its listing.
+///
+/// Scoped to one `source`, so removing StudyGo cannot sign out a chores app. A dashboard session
+/// is never matched — the parent stays signed in through an uninstall they performed.
+pub fn revoke_integration_sessions(
+    store: &crate::sessionstore::FileSessionStore,
+    source: &str,
+) -> usize {
+    store
+        .snapshot()
+        .into_iter()
+        .filter(|record| {
+            matches!(
+                record
+                    .data
+                    .get(SCOPE_KEY)
+                    .cloned()
+                    .and_then(|v| serde_json::from_value::<crate::pairing::Scope>(v).ok()),
+                Some(crate::pairing::Scope::Integration { source: s }) if s == source
+            )
+        })
+        .filter(|record| store.revoke(&record.id))
+        .count()
+}
+
 /// May a scoped integration reach this request?
 ///
 /// **The allowlist is three routes and the third is the one that gets forgotten.** An integration
@@ -849,6 +886,7 @@ fn integration_may_reach(method: &axum::http::Method, path: &str) -> bool {
 }
 
 pub async fn require_auth(
+    State(state): State<AppState>,
     session: Session,
     request: Request,
     next: Next,
@@ -864,12 +902,39 @@ pub async fn require_auth(
     let Some(scope) = session.get::<crate::pairing::Scope>(SCOPE_KEY).await? else {
         return Err(AppError::Unauthorized);
     };
-    if let crate::pairing::Scope::Integration { .. } = &scope
-        && !integration_may_reach(request.method(), request.uri().path())
-    {
-        return Err(AppError::Forbidden(
-            "this pairing may push earned time and read today's total, nothing else".into(),
-        ));
+    if let crate::pairing::Scope::Integration { source } = &scope {
+        if !integration_may_reach(request.method(), request.uri().path()) {
+            return Err(AppError::Forbidden(
+                "this pairing may push earned time and read today's total, nothing else".into(),
+            ));
+        }
+        // **The registry is the boundary, for the read as well as the write.** `extra_time`
+        // has always asked this before granting; nothing asked it before *reading*, so a
+        // provider the parent had switched off went on serving the child's day. GitHub Apps
+        // draw the line in the same place and are the reason it is drawn here: suspending an
+        // installation keeps it — it is offered as the alternative to uninstalling, "which has
+        // the consequence of deauthorizing every user" — and a suspended app still "cannot
+        // access the GitHub API or webhook events". Suspend keeps the credential *and* closes
+        // the door; only uninstall destroys it. See [`revoke_integration_sessions`] for that half.
+        //
+        // **`400`, not `403`, and that is a cross-repo contract.** Voortgang reads `400` as "the
+        // integration is not switched on over there" and `401`/`403` as "re-pair this app"
+        // (`nestwatch_client.dart`, `refused` versus `pairingRejected`). A disabled provider
+        // needs the first sentence — the link is perfectly good — and answering `403` here would
+        // send a parent to re-pair something that was never broken. The wording matches
+        // `extra_time`'s to the character so both routes classify identically.
+        //
+        // `Config::provider_authority` is the one place that decides, so this cannot drift from
+        // the check `extra_time` makes inside its write guard. `.err()` takes an owned `String`
+        // off the borrow, so the std read guard is a temporary of this statement and is released
+        // at the semicolon — well before the awaits below, which is what a non-async lock in an
+        // async fn requires.
+        if let Some(message) = crate::state::recover_read(&state.config)
+            .provider_authority(source)
+            .err()
+        {
+            return Err(AppError::BadRequest(message));
+        }
     }
     // The absolute cap. Read from the device record rather than tracked separately, because
     // `first_seen` already answers "when did this session begin" and a second timestamp would be

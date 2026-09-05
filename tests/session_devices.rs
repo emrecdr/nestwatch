@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use nestwatch::pairing::Scope;
 
 mod common;
-use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
+use common::{PASSWORD, ScratchDir, app_with, configure_provider, login, state_with, test_config};
 
 /// Pair against a freshly minted token of `scope`, returning the cookie it produced.
 async fn pair_with(app: &axum::Router, scope: Scope, agent: &str) -> String {
@@ -115,6 +115,14 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
             "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)",
         )
         .await;
+        // Since `O92` a pairing is only a usable credential while its provider is installed,
+        // so this is fixture setup rather than a convenience: without it the robot below is
+        // signed in and unable to answer, and the assertion that revoking the phone leaves it
+        // alone would pass against a session that could not have answered anyway.
+        assert_eq!(
+            configure_provider(&app, &browser, "studygo", true, 30).await,
+            StatusCode::OK,
+        );
         let robot = pair_with(
             &app,
             Scope::Integration {

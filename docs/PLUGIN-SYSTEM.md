@@ -182,6 +182,52 @@ risk was never that a provider might run something — architecture 4 was right 
 that a provider was authenticated as the parent. Bounding the credential closed it, which is why
 the original analysis reached a sound conclusion from an incomplete question.
 
+## The third question, asked 2026-09-06 — `O92`
+
+Twice now this document has answered a question completely and left the neighbouring one unasked,
+and the pattern is the useful part rather than either defect.
+
+The architecture comparison asked what a provider *runs*, and architecture 4 answers it entirely: a
+provider runs nothing. The section above records the second gap — nothing asked what a provider is
+*authenticated as* — and scoped pairings closed it. **Neither asked how long that authentication
+outlives the provider.** `delete_provider` dropped the registry entry; `require_auth` read the
+session's scope and never consulted the registry; so uninstalling StudyGo from the Integrations
+card refused its next grant and left the paired device reading `GET /api/usage/today` — today's
+budget, per-app usage and up to `MAX_PAGES` window titles — until the absolute session cap expired
+up to thirty days later. Disabling it did the same. Measured against a live router before it was
+fixed, not argued.
+
+**The registry now bounds both routes, and uninstalling revokes.** `require_auth` asks the registry
+whether an integration's provider is installed and enabled, so the read is governed by the same
+switch the grant always was; `delete_provider` ends every session that pairing minted, scoped to
+that one source. The parent's own session and any other integration are untouched.
+
+**The split between the two came from prior art rather than from taste**, which is worth recording
+because the tempting design — revoke on both — is wrong. GitHub Apps separate *suspend* from
+*uninstall*: suspension is offered as the alternative to uninstalling, *"which has the consequence
+of deauthorizing every user"*, and a suspended app still *"cannot access the GitHub API or webhook
+events."* Both halves matter. Suspension keeps the credential **and** closes the door; only
+uninstall destroys it. A toggle that forced a re-pair every time would make *off* expensive enough
+that a parent uses *Remove* instead, which is the more destructive control — the same argument
+`O77` makes about `change_password` being too expensive a revocation to actually perform.
+
+**The refusal is `400`, and that is a cross-repo contract rather than an HTTP preference.**
+Voortgang reads `400` as *"the integration is not switched on over there"* and `401`/`403` as
+*"re-pair this app"*. A disabled provider needs the first sentence, because the link is perfectly
+good. `403` would have sent a parent to re-pair something that was never broken — a refusal that is
+correct HTTP and wrong advice.
+
+**What this says about the analysis above, which is still sound.** Every architecture here was
+judged on capability: syscalls, egress, in-process memory safety. That was the right axis for
+choosing between WASM and data. But capability is what a credential *may do*, and a lifecycle is
+*for how long* — and a document that answers the first thoroughly reads as though it had answered
+the second. Three passes over the same design, each complete on its own axis, and the gap sat in
+the space between them each time. The general form: **a provider is a registry entry plus a
+credential bound to it.** Anything that treats those as two objects sharing a string will leak in
+whichever direction was not the subject of the last review.
+
+---
+
 The recommendation as originally written follows.
 
 Build architecture **4**: promote the shipped grant endpoint into a real provider

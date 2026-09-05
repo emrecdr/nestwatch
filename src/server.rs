@@ -131,7 +131,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/sessions", get(api::list_sessions))
         .route("/sessions/{handle}/revoke", post(api::revoke_session))
         .route("/password", post(api::change_password))
-        .route_layer(middleware::from_fn(auth::require_auth));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
 
     Router::new()
         .route("/", get(web::index))
@@ -389,7 +392,7 @@ mod tests {
     // `use` item in the file's PRODUCTION half, and an adopted file is skipped wholesale. A
     // top-of-file import here would therefore switch that guard off for `server.rs` — silently,
     // and for a scanner (the route guard below) that genuinely reads line-oriented text.
-    use crate::srcscan::{find_tokens, production_source};
+    use crate::srcscan::{api_router_halves, find_tokens, production_source};
 
     /// This file's own source, so the guard below reads the router as written rather than as
     /// remembered.
@@ -568,12 +571,7 @@ mod tests {
         // guard reports itself. That is not hypothetical — it is what this test did on its first
         // run, and it is the same trap `no_alpine_template_inside_svg` hit when the comment
         // explaining it contained the markup it forbids. A source scan must exclude its own text.
-        let router_src = SERVER_RS
-            .split_once("#[cfg(test)]")
-            .map_or(SERVER_RS, |(before, _)| before);
-
-        let (guarded, open) = router_src
-            .split_once("route_layer(middleware::from_fn(auth::require_auth))")
+        let (guarded, open) = api_router_halves(SERVER_RS)
             .expect("the /api router must apply require_auth — if this moved, this guard is stale");
 
         assert!(

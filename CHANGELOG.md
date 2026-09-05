@@ -7,6 +7,24 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Security
+
+- **Removing an integration now signs out the app that was using it.** Until now, *Remove* on the
+  Integrations card deleted the setting and left the app's pairing alive. It could no longer add
+  time — but it could still read your child's day, which is today's budget, the minutes used, and
+  which apps and web pages they were on. That continued for up to a month, from a phone you had
+  every reason to believe you had just disconnected. Removing an integration now ends the pairings
+  it issued, and only those: another integration keeps working and you stay signed in.
+  <br>**Turning one off now closes it too, and still costs no re-pairing.** The on/off toggle used
+  to stop an app granting time while leaving it able to read. It now refuses both, and switching
+  back on restores the app without a new QR — so *off* means off, and off is still reversible.
+  This is the split GitHub uses between suspending an app and uninstalling it, and it is the same
+  reasoning: suspending keeps the installation and closes the door, uninstalling takes the keys.
+  <br>**What to do:** nothing. An app you switch off is told it was switched off, which is the
+  message it already knows how to show a parent; an app you remove is told to link again.
+
 ## [0.7.0] — 2026-09-04
 
 ### Security
@@ -86,7 +104,7 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   Two things matter about where the numbers live. A provider push says only *that* its threshold was
   met; **how many minutes that earns is set here, on this PC, per provider** — so a push claiming 999
   minutes still grants exactly what you configured. (This entry originally said such a phone "cannot
-  choose its own reward". That was too broad and is corrected under *Unreleased* above: it is true of
+  choose its own reward". That was too broad and is corrected under *[0.7.0]* above: it is true of
   the push, and a paired device has other ways to ask.) And an integration you turn off cannot grant at all, in one
   switch, without unpairing anything. A provider is data you toggle, never code this machine runs or
   a server it reaches out to — the reasoning, and the plugin architectures deliberately *not* taken,

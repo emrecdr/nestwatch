@@ -469,13 +469,8 @@ fn every_command_and_flag_in_the_usage_message_is_findable_in_the_readme() {
 /// would silently match fewer routes each time the formatter moved one.
 fn post_routes_without_a_json_body() -> Vec<String> {
     let server = repo("src/server.rs");
-    let nest = server
-        .split_once("let api = Router::new")
-        .expect("src/server.rs must build the `/api` router")
-        .1
-        .split_once("route_layer(middleware::from_fn(auth::require_auth))")
-        .expect("the `/api` router must carry the auth layer")
-        .0;
+    let nest = nestwatch::srcscan::api_router_body(&server)
+        .expect("src/server.rs must build the `/api` router and carry the auth layer");
     let api = repo("src/api.rs");
 
     let mut bodyless = Vec::new();
