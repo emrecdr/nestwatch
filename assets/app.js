@@ -151,6 +151,7 @@ function app() {
     languageOptions: [
       { key: "en", label: "English" },
       { key: "nl", label: "Nederlands" },
+      { key: "tr", label: "Türkçe" },
     ],
     authed: null,
     busy: false,

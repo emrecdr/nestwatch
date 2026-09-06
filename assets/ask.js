@@ -5,9 +5,11 @@
 // the child's own browser and the child does not choose the language of the notice explaining what
 // is being watched.
 //
-// Keys match `data-i18n` in ask.html. `nl` must answer every key `en` does — the test at the
-// bottom of web/test/app.test.js holds the two tables to the same shape, because a missing key
-// would silently leave one English sentence in an otherwise Dutch page.
+// Keys match `data-i18n` in ask.html. Every table here must answer every key `en` does —
+// web/test/ask-i18n.test.js discovers the tables rather than naming them and holds them all to the
+// same shape, because a missing key would silently leave one English sentence in an otherwise
+// translated page. Adding a language means adding a block here and a `Language` variant in
+// src/config.rs; the Rust side will not compile until its own message functions answer too.
 const STRINGS = {
   en: null, // the markup is already English; nothing to swap
   nl: {
@@ -55,6 +57,56 @@ const STRINGS = {
     watchedNone: "Er is vandaag niet naar je scherm gekeken.",
     watchedOnce: "Er is vandaag \u00e9\u00e9n keer naar je scherm gekeken.",
     watchedMany: (n) => `Er is vandaag ${n} keer naar je scherm gekeken.`,
+  },
+  tr: {
+    title: "Ekran s\u00fcren",
+    checking: "Bak\u0131l\u0131yor\u2026",
+    needMore: "daha fazla m\u0131 laz\u0131m?",
+    askHeading: "Daha fazla s\u00fcre iste",
+    askBlurb: "\u0130ste\u011fin ailene gider.",
+    minutes: "Dakika",
+    why: "Neden? (zorunlu de\u011fil)",
+    whyHint: "\u00f6devim bitti",
+    send: "\u0130stek g\u00f6nder",
+    or: "veya",
+    codeHeading: "Kodun var m\u0131?",
+    codeBlurb: "Hemen dakika eklemek i\u00e7in s\u00fcre kodunu gir.",
+    codeLabel: "S\u00fcre kodu",
+    redeem: "Kullan",
+    weekHeading: "Son 7 g\u00fcn\u00fcn",
+    disclosureLabel: "Bu program neleri g\u00f6rebilir",
+    disclosure:
+      "Bunu ailen ayarlad\u0131. Hangi uygulamalar\u0131 ne kadar kulland\u0131\u011f\u0131n " +
+      "g\u00fcn boyunca kaydediliyor. Ekran\u0131na da bakabilirler \u2014 Windows o s\u0131rada " +
+      "ekran\u0131n \u00e7evresine sar\u0131 bir \u00e7er\u00e7eve \u00e7izer.",
+
+    // Strings this script builds rather than swaps.
+    noLimit: "Bug\u00fcn s\u00fcre s\u0131n\u0131r\u0131 yok \u{1F389}",
+    // Identical to `minutesLeft`, and deliberately so rather than a copy-paste slip: Turkish
+    // leaves a noun singular after a numeral, so "1 dakika" and "9 dakika" take the same word.
+    // The caller still picks between them on n === 1, which costs nothing and keeps this table
+    // the same shape as the others.
+    minuteLeft: "dakika kald\u0131 bug\u00fcn",
+    minutesLeft: "dakika kald\u0131 bug\u00fcn",
+    usedOf: (used, budget) => `${budget} dakikan\u0131n ${used} dakikas\u0131 kullan\u0131ld\u0131`,
+    usedAria: (used, budget) =>
+      `bug\u00fcn ${budget} dakikan\u0131n ${used} dakikas\u0131 kullan\u0131ld\u0131`,
+    cantCheck: "S\u00fcren \u015fu anda al\u0131namad\u0131.",
+    sent: "G\u00f6nderildi \u2014 ailenin yan\u0131t\u0131 bekleniyor.",
+    tooMany: "\u00c7ok fazla istek \u2014 biraz bekleyip tekrar dene.",
+    sendFailed: "G\u00f6nderilemedi (dakika say\u0131s\u0131n\u0131 kontrol et).",
+    noServer: "Sunucuya ula\u015f\u0131lamad\u0131.",
+    approved: (n) => `Ailen ${n} dakika daha verdi.`,
+    denied: "Ailen bu sefer olmaz dedi.",
+    codeNoLimit: "Kod kabul edildi \u2014 ama bug\u00fcn zaten s\u0131n\u0131r yok.",
+    codeAdded: (n) => `${n} dakika eklendi!`,
+    codeTooMany: "\u00c7ok fazla deneme \u2014 biraz bekleyip tekrar dene.",
+    codeInvalid: "Bu kod ge\u00e7erli de\u011fil.",
+    notMeasured: "\u00f6l\u00e7\u00fclmedi",
+    minShort: (n) => `${n} dk`,
+    watchedNone: "Bug\u00fcn ekran\u0131na bak\u0131lmad\u0131.",
+    watchedOnce: "Bug\u00fcn ekran\u0131na bir kez bak\u0131ld\u0131.",
+    watchedMany: (n) => `Bug\u00fcn ekran\u0131na ${n} kez bak\u0131ld\u0131.`,
   },
 };
 

@@ -239,6 +239,7 @@ pub enum Language {
     #[default]
     En,
     Nl,
+    Tr,
 }
 
 impl Language {
@@ -249,13 +250,14 @@ impl Language {
     /// tautological-fixture trap `tests/spawn_paths.rs` was written to close. Adding a variant
     /// without extending this list fails `all_lists_every_language_variant` below, which counts
     /// the variants in this file's own source rather than trusting the list.
-    pub const ALL: [Language; 2] = [Language::En, Language::Nl];
+    pub const ALL: [Language; 3] = [Language::En, Language::Nl, Language::Tr];
 
     /// The BCP-47 tag, for `<html lang>` and for the client's string table.
     pub fn tag(self) -> &'static str {
         match self {
             Language::En => "en",
             Language::Nl => "nl",
+            Language::Tr => "tr",
         }
     }
 
@@ -265,6 +267,7 @@ impl Language {
         match tag {
             "en" => Some(Language::En),
             "nl" => Some(Language::Nl),
+            "tr" => Some(Language::Tr),
             _ => None,
         }
     }
@@ -623,6 +626,43 @@ mod tests {
             include_str!("config.rs"),
             "pub enum Language {",
             Language::ALL.len(),
+        );
+    }
+
+    /// Every language the build can *emit* is one it can also *parse* back.
+    ///
+    /// [`Language::tag`] and [`Language::from_tag`] are two matches over the same enum, and only
+    /// one of them is exercised by anything else: the message tests walk `ALL` and call `tag`,
+    /// while `from_tag` is reached only through `api::set_language`, whose tests name specific
+    /// tags. So a variant added to `tag` and forgotten in `from_tag` compiles, ships, and fails
+    /// exactly once — when a parent presses that button and the API answers 400 for a language
+    /// the dashboard is offering them.
+    ///
+    /// **Measured before this was written, which is why it exists:** deleting the `"tr"` arm from
+    /// `from_tag` left the whole suite green at 628 tests. `ALL` cannot close this on its own —
+    /// it proves the list is complete, not that the two directions agree.
+    #[test]
+    fn every_language_parses_back_from_the_tag_it_emits() {
+        for lang in Language::ALL {
+            let tag = lang.tag();
+            assert_eq!(
+                Language::from_tag(tag),
+                Some(lang),
+                "{lang:?} emits the tag {tag:?}, which `from_tag` does not accept — the dashboard \
+                 would offer this language and the API would refuse it"
+            );
+        }
+    }
+
+    /// A tag this build has no strings for is refused rather than quietly served as English.
+    #[test]
+    fn an_unknown_tag_is_refused() {
+        assert_eq!(Language::from_tag("de"), None);
+        assert_eq!(Language::from_tag(""), None);
+        assert_eq!(
+            Language::from_tag("TR"),
+            None,
+            "tags are lowercase on the wire"
         );
     }
 

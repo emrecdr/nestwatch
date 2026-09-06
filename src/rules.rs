@@ -1807,6 +1807,7 @@ async fn notify_child(control: &Arc<dyn SystemControl>, body: &str, lang: Langua
     let title = match lang {
         Language::En => "Screen time",
         Language::Nl => "Schermtijd",
+        Language::Tr => "Ekran süresi",
     };
     crate::control::notify(control, title, body).await
 }
@@ -1838,6 +1839,7 @@ fn ask_hint(port: u16, lang: Language, curfew_active: bool) -> Option<String> {
     Some(match lang {
         Language::En => format!("Need more? https://localhost:{port}/ask"),
         Language::Nl => format!("Meer nodig? https://localhost:{port}/ask"),
+        Language::Tr => format!("Daha fazla mı lazım? https://localhost:{port}/ask"),
     })
 }
 
@@ -1856,6 +1858,9 @@ fn lock_warning_message(secs: u32, lang: Language) -> String {
         Language::Nl => {
             format!("Je schermtijd is op. Deze computer gaat over {secs} seconden op slot.")
         }
+        Language::Tr => {
+            format!("Ekran süren doldu. Bu bilgisayar {secs} saniye içinde kilitlenecek.")
+        }
     }
 }
 
@@ -1864,6 +1869,7 @@ fn limit_reached_message(lang: Language) -> &'static str {
     match lang {
         Language::En => "You've reached today's screen-time limit.",
         Language::Nl => "Je hebt je schermtijd voor vandaag opgebruikt.",
+        Language::Tr => "Bugünkü ekran süreni doldurdun.",
     }
 }
 
@@ -1894,6 +1900,15 @@ fn app_stopped_message(app: &str, reason: &StopReason, lang: Language) -> String
         (Language::Nl, StopReason::GroupPool { group, limit_mins }) => format!(
             "{group} heeft de {limit_mins} minuten voor vandaag opgebruikt, dus {app} is gesloten."
         ),
+        (Language::Tr, StopReason::Blocked) => {
+            format!("{app} engelli olduğu için kapatıldı.")
+        }
+        (Language::Tr, StopReason::AppLimit { limit_mins }) => {
+            format!("{app} bugünkü {limit_mins} dakikasını doldurdu, bu yüzden kapatıldı.")
+        }
+        (Language::Tr, StopReason::GroupPool { group, limit_mins }) => {
+            format!("{group} bugünkü {limit_mins} dakikasını doldurdu, bu yüzden {app} kapatıldı.")
+        }
     }
 }
 
@@ -1909,6 +1924,7 @@ fn shutdown_message(lang: Language) -> &'static str {
     match lang {
         Language::En => "Screen time is up — this computer is shutting down.",
         Language::Nl => "Je schermtijd is op — deze computer wordt afgesloten.",
+        Language::Tr => "Ekran süren doldu — bu bilgisayar kapanıyor.",
     }
 }
 
@@ -1925,6 +1941,16 @@ fn budget_countdown_message(mins: u32, lang: Language) -> String {
         (Language::Nl, 1) => "Nog 1 minuut schermtijd!".to_string(),
         (Language::Nl, 5) => "Nog 5 minuten schermtijd — sla je werk even op.".to_string(),
         (Language::Nl, m) => format!("Nog {m} minuten schermtijd vandaag."),
+        // Turkish does NOT need the 1/5/rest split for grammar the way the note above describes
+        // for Dutch: a numeral leaves the noun singular, so "1 dakika" and "20 dakika" both take
+        // the same word. The three arms survive only because the wording differs — the exclamation
+        // at one minute, the save-your-work hint at five — which is a style choice this language
+        // shares rather than a plural rule it is forced into.
+        (Language::Tr, 1) => "1 dakika ekran süren kaldı!".to_string(),
+        (Language::Tr, 5) => {
+            "5 dakika ekran süren kaldı — işini kaydetmek için iyi bir zaman.".to_string()
+        }
+        (Language::Tr, m) => format!("Bugün {m} dakika ekran süren kaldı."),
     }
 }
 

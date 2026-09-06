@@ -505,6 +505,13 @@ fn bedtime_message(mins: u32, lang: Language) -> String {
         (Language::Nl, 1) => "Over 1 minuut is het bedtijd!".to_string(),
         (Language::Nl, 5) => "Over 5 minuten is het bedtijd — sla je werk even op.".to_string(),
         (Language::Nl, m) => format!("Over {m} minuten is het bedtijd."),
+        // Turkish takes the singular after a numeral, so the split here is stylistic rather than
+        // grammatical — see the fuller note on `rules::budget_countdown_message`.
+        (Language::Tr, 1) => "1 dakika sonra yatma vakti!".to_string(),
+        (Language::Tr, 5) => {
+            "5 dakika sonra yatma vakti — işini kaydetmek için iyi bir zaman.".to_string()
+        }
+        (Language::Tr, m) => format!("{m} dakika sonra yatma vakti."),
     }
 }
 
@@ -513,6 +520,7 @@ fn bedtime_title(lang: Language) -> &'static str {
     match lang {
         Language::En => "Bedtime",
         Language::Nl => "Bedtijd",
+        Language::Tr => "Yatma vakti",
     }
 }
 
@@ -529,6 +537,9 @@ fn bedtime_shutdown_message(lang: Language) -> &'static str {
     match lang {
         Language::En => "Bedtime — this computer is shutting down.",
         Language::Nl => "Het is bedtijd — deze computer wordt afgesloten.",
+        // Says "yatma vakti", the same words the countdown just used, for the reason the doc
+        // above gives about not naming one event two ways a minute apart.
+        Language::Tr => "Yatma vakti — bu bilgisayar kapanıyor.",
     }
 }
 
@@ -1248,9 +1259,10 @@ mod tests {
     #[test]
     fn bedtime_messages_read_naturally_at_every_threshold() {
         for &m in &crate::countdown::WARN_AT_MINS {
-            // Both languages, because a translation that pluralises "1 minuten" is exactly the
-            // trap the singular arms exist to avoid, and English passing says nothing about Dutch.
-            // Derived from `Language::ALL` so a third language cannot be added past this test.
+            // Every language, because a translation that pluralises "1 minuten" is exactly the
+            // trap the singular arms exist to avoid, and English passing says nothing about the
+            // others. Derived from `Language::ALL`, which is what made Turkish land inside this
+            // test rather than beside it.
             for lang in Language::ALL {
                 let msg = bedtime_message(m, lang);
                 assert!(
