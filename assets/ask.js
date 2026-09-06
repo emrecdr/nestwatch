@@ -28,8 +28,8 @@ const STRINGS = {
     weekHeading: "Je afgelopen 7 dagen",
     disclosureLabel: "Wat dit programma kan zien",
     disclosure:
-      "Een ouder heeft dit ingesteld en kan dit scherm zien, welke apps je gebruikt en hoe lang. " +
-      "Windows zet een gele rand om het scherm terwijl er gekeken wordt.",
+      "Een ouder heeft dit ingesteld. Welke apps je gebruikt en hoe lang wordt de hele dag " +
+      "bijgehouden. Ze kunnen ook je scherm bekijken — Windows zet er dan een gele rand omheen.",
 
     // Strings this script builds rather than swaps.
     noLimit: "Vandaag geen tijdslimiet \u{1F389}",
