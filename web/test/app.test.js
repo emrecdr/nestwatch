@@ -13,6 +13,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { withState, loadApp } from "./harness.js";
+// For the two i18n guards at the foot of this file, which read the tables as text rather than
+// standing up a DOM — the same trade harness.js records for the rest of app.js.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 // --- compareVersions -------------------------------------------------------
 //
@@ -2448,3 +2453,73 @@ test("confirmPairing keeps what the server minted", async () => {
   assert.equal(app.pairingBusy, false, "the button must not stay disabled after it finished");
 });
 
+
+// --- Dashboard language ------------------------------------------------------------------------
+//
+// The same guarantee `ask-i18n.test.js` holds the child's page to, for the parent's. Tables are
+// discovered rather than named, so a fourth language is covered by existing.
+
+/** The `UI` object literal from app.js, as `{tag: Set(keys)}`. Read as text: app.js is a browser
+ *  script and standing up a DOM to check a data table is a larger decision than the check needs. */
+function uiTables() {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "app.js"),
+    "utf8",
+  );
+  const start = src.indexOf("const UI = {");
+  assert.notEqual(start, -1, "could not find the UI table in app.js");
+  let depth = 0, end = start;
+  for (let i = src.indexOf("{", start); i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") { depth -= 1; if (depth === 0) { end = i; break; } }
+  }
+  const block = src.slice(start, end + 1);
+  const tables = {};
+  for (const m of block.matchAll(/^ {2}([a-z]{2}): \{/gm)) {
+    let d = 0, from = block.indexOf("{", m.index), to = from;
+    for (let i = from; i < block.length; i += 1) {
+      if (block[i] === "{") d += 1;
+      else if (block[i] === "}") { d -= 1; if (d === 0) { to = i; break; } }
+    }
+    tables[m[1]] = new Set(
+      [...block.slice(from, to).matchAll(/^ {4}([A-Za-z][A-Za-z0-9]*):/gm)].map((x) => x[1]),
+    );
+  }
+  return tables;
+}
+
+test("every dashboard string exists in every language the selector offers", () => {
+  const tables = uiTables();
+  const tags = Object.keys(tables);
+  assert.ok(tags.length >= 3, `expected en/nl/tr at minimum, found ${tags}`);
+  assert.ok(tables.en.size > 100, `expected a real English table, found ${tables.en.size}`);
+
+  for (const tag of tags) {
+    if (tag === "en") continue;
+    const missing = [...tables.en].filter((k) => !tables[tag].has(k));
+    assert.deepEqual(
+      missing,
+      [],
+      `${tag} is missing ${missing.length} dashboard string(s); t() would fall back to English ` +
+        `for each, leaving them in the wrong language on a page the parent chose: ` +
+        `${missing.join(", ")}`,
+    );
+  }
+});
+
+test("every key the markup calls t() with is answered by the English table", () => {
+  const html = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "index.html"),
+    "utf8",
+  );
+  const used = [...html.matchAll(/t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]);
+  assert.ok(used.length > 100, `expected the markup to call t() throughout, found ${used.length}`);
+  const en = uiTables().en;
+  const missing = [...new Set(used)].filter((k) => !en.has(k));
+  assert.deepEqual(
+    missing,
+    [],
+    `index.html calls t() with keys no table answers, which renders the raw key on the page: ` +
+      `${missing.join(", ")}`,
+  );
+});

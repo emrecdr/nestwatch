@@ -36,7 +36,7 @@
                name a screen reader should read out before the password field. -->
           <form class="card-body" aria-label="Sign in" @submit.prevent="login()">
             <h1 class="card-title justify-center text-2xl">🩺 Host Health</h1>
-            <p class="text-center text-sm opacity-70">Sign in to continue</p>
+            <p class="text-center text-sm opacity-70" x-text="t('signInToContinue')"></p>
 
             <!-- There is one password and no user name, so this field carries no information and
                  exists entirely for the password manager. Without it the form is a lone password
@@ -55,7 +55,7 @@
                    aria-hidden="true" class="sr-only" />
 
             <label class="flex flex-col w-full mt-2">
-              <span class="text-sm mb-1">Password</span>
+              <span class="text-sm mb-1" x-text="t('password')"></span>
               <input
                 type="password"
                 x-model="password"
@@ -92,7 +92,7 @@
              point: it is for the person tabbing, and invisible to everyone else. -->
         <a href="#main"
            class="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:text-primary-content"
-           >Skip to dashboard</a>
+            x-text="t('skipToDashboard')"></a>
         <!-- ── Sticky summary ───────────────────────────────────────────
              Eleven cards on one continuous scroll, no tabs and no nav, so the thing a parent opens
              this page for several times a day sat in the same vertical queue as the things they
@@ -121,16 +121,15 @@
               </div>
             </template>
             <template x-if="today && !(today.budget_mins > 0)">
-              <span class="flex-1 opacity-70">No limit set today</span>
+              <span class="flex-1 opacity-70" x-text="t('noLimitSetToday')"></span>
             </template>
             <template x-if="!today">
-              <span class="flex-1 opacity-70">Today's usage unavailable</span>
+              <span class="flex-1 opacity-70" x-text="t('todaySUsageUnavailable')"></span>
             </template>
 
             <span class="badge badge-warning badge-sm gap-1" x-show="showRequests()"
                   x-text="requestBadge()"></span>
-            <span class="badge badge-error badge-sm" x-show="stEnforcementStale()">enforcement
-              may be stopped</span>
+            <span class="badge badge-error badge-sm" x-show="stEnforcementStale()" x-text="t('enforcementMayBeStopped')"></span>
           </div>
         </div>
 
@@ -158,18 +157,33 @@
                  same reason the rest of this page distinguishes states: "following the device" is
                  not the same as "light", even when they look identical right now. -->
             <div class="join" role="group" aria-label="Colour theme">
-              <template x-for="t in themeOptions" :key="t.key">
+              <!-- `th`, not `t`: `t` is the translate function every other expression on this
+                   page calls, and an x-for binding it would shadow that inside this template —
+                   silently, since `t('lock')` on a theme object is not a syntax error. -->
+              <template x-for="th in themeOptions" :key="th.key">
                 <button class="btn btn-xs join-item"
-                        :class="theme === t.key ? 'btn-active' : 'btn-ghost'"
-                        :aria-pressed="theme === t.key"
-                        :aria-label="t.label" :title="t.label"
-                        @click="setTheme(t.key)"
-                        x-text="t.glyph"></button>
+                        :class="theme === th.key ? 'btn-active' : 'btn-ghost'"
+                        :aria-pressed="theme === th.key"
+                        :aria-label="th.label" :title="th.label"
+                        @click="setTheme(th.key)"
+                        x-text="th.glyph"></button>
               </template>
             </div>
-            <button class="btn btn-info btn-sm" @click="doLock()">🔒 Lock</button>
-            <button class="btn btn-warning btn-sm" @click="confirmShutdown = true">⏻ Shut down</button>
-            <button class="btn btn-ghost btn-sm" @click="logout()">Log out</button>
+            <!-- This device's language, not the child's. Sits beside the theme because it is the
+                 same kind of setting: a preference of whoever is holding this screen. -->
+            <div class="join" role="group" aria-label="Dashboard language">
+              <template x-for="lg in languages" :key="lg.key">
+                <button class="btn btn-xs join-item"
+                        :class="lang === lg.key ? 'btn-active' : 'btn-ghost'"
+                        :aria-pressed="lang === lg.key"
+                        :aria-label="lg.label" :title="lg.label"
+                        @click="setLang(lg.key)"
+                        x-text="lg.key"></button>
+              </template>
+            </div>
+            <button class="btn btn-info btn-sm" @click="doLock()" x-text="t('lock')"></button>
+            <button class="btn btn-warning btn-sm" @click="confirmShutdown = true" x-text="t('shutDown')"></button>
+            <button class="btn btn-ghost btn-sm" @click="logout()" x-text="t('logOut')"></button>
           </div>
         </div>
 
@@ -223,14 +237,11 @@
           <section class="card bg-base-100 shadow md:col-span-2" x-show="refusedAny" x-cloak
                    aria-label="What was refused today">
             <div class="card-body">
-              <h2 class="card-title text-base">Refused today</h2>
+              <h2 class="card-title text-base" x-text="t('refusedToday')"></h2>
               <!-- States what the tool did, not what anyone meant by it. A machine that genuinely
                    crossed a time zone produces the same first line as one whose clock was moved
                    on purpose, and this card does not pretend to tell them apart. -->
-              <p class="text-sm opacity-70">
-                Things this PC tried that Nestwatch declined. The limits held; nothing here needs
-                fixing. Counted since midnight.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('thingsThisPcTriedThat')"></p>
               <ul class="mt-1 space-y-1 text-sm" aria-live="polite" aria-atomic="true">
                 <template x-for="r in refusedRows()" :key="r.key">
                   <li class="flex items-baseline gap-2">
@@ -251,10 +262,10 @@
                    control group that is two lines tall on a phone. Letting the outer row break
                    puts the controls on their own line instead of compressing the title. -->
               <div class="flex flex-wrap items-center justify-between gap-2">
-                <h2 class="card-title text-base">Screen</h2>
+                <h2 class="card-title text-base" x-text="t('screen')"></h2>
                 <div class="flex flex-wrap items-center gap-2">
                   <label class="label cursor-pointer gap-2 py-0">
-                    <span class="text-xs">Live</span>
+                    <span class="text-xs" x-text="t('live')"></span>
                     <input type="checkbox" class="toggle toggle-primary toggle-sm"
                            x-model="autoRefresh" @change="toggleAutoRefresh()" />
                   </label>
@@ -280,9 +291,7 @@
                     </template>
                   </div>
                   <button class="btn btn-ghost btn-sm" @click="openShotFull()"
-                          :disabled="!shotUrl" title="Expand to fill the window (Esc to close)">
-                    ⤢ Expand
-                  </button>
+                          :disabled="!shotUrl" title="Expand to fill the window (Esc to close)" x-text="t('expand')"></button>
                   <button class="btn btn-primary btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
                     <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
                     Take screenshot
@@ -291,7 +300,7 @@
               </div>
               <div class="mt-2 flex min-h-48 items-center justify-center rounded-lg bg-base-300">
                 <template x-if="!shotUrl && !loadingShot">
-                  <span class="opacity-50">No screenshot yet</span>
+                  <span class="opacity-50" x-text="t('noScreenshotYet')"></span>
                 </template>
                 <template x-if="shotUrl">
                   <!-- The thumbnail is deliberately capped: this card shares a row, and a 4K
@@ -331,7 +340,7 @@
           <section class="card bg-base-100 shadow">
             <div class="card-body">
               <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Running apps</h2>
+                <h2 class="card-title text-base" x-text="t('runningApps')"></h2>
                 <button class="btn btn-ghost btn-sm" @click="loadProcesses()" :disabled="loadingProcs">
                   <span x-show="loadingProcs" class="loading loading-spinner loading-xs"></span>
                   Refresh
@@ -340,7 +349,7 @@
               <div class="mt-2 max-h-96 overflow-y-auto">
                 <table class="table table-pin-rows table-sm">
                   <thead>
-                    <tr><th scope="col">App</th><th scope="col" class="text-right">Memory</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+                    <tr><th scope="col" x-text="t('app')"></th><th scope="col" class="text-right" x-text="t('memory')"></th><th scope="col"><span class="sr-only" x-text="t('actions')"></span></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="p in processes" :key="p.pid">
@@ -348,12 +357,12 @@
                         <td class="truncate" x-text="p.name"></td>
                         <td class="text-right whitespace-nowrap" x-text="fmtBytes(p.memory_bytes)"></td>
                         <td class="text-right">
-                          <button class="btn btn-error btn-xs" @click="askKill(p)">Kill</button>
+                          <button class="btn btn-error btn-xs" @click="askKill(p)" x-text="t('kill')"></button>
                         </td>
                       </tr>
                     </template>
                     <template x-if="processes.length === 0 && !loadingProcs">
-                      <tr><td colspan="3" class="text-center opacity-50">No processes</td></tr>
+                      <tr><td colspan="3" class="text-center opacity-50" x-text="t('noProcesses')"></td></tr>
                     </template>
                   </tbody>
                 </table>
@@ -365,7 +374,7 @@
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
               <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Curfew</h2>
+                <h2 class="card-title text-base" x-text="t('curfew')"></h2>
                 <!-- Visible state beside the switch, not only an `aria-label`. A bare toggle names
                      itself for a screen reader and leaves a sighted parent guessing, and this is
                      the control that decides whether a child's PC powers itself off at night. The
@@ -377,19 +386,17 @@
                          x-model="curfew.enabled" aria-label="Curfew" />
                 </label>
               </div>
-              <p class="text-sm opacity-70">
-                When the PC is on during a closed window, it shuts down (with a warning countdown).
-              </p>
+              <p class="text-sm opacity-70" x-text="t('whenThePcIsOn')"></p>
 
               <!-- Simple single window (shown until you add day-specific schedules) -->
               <template x-if="!curfew.windows || curfew.windows.length === 0">
                 <div class="mt-2 flex flex-wrap items-end gap-3">
                   <label class="flex flex-col">
-                    <span class="text-sm mb-1">From</span>
+                    <span class="text-sm mb-1" x-text="t('from')"></span>
                     <input type="time" x-model="curfew.start" class="input w-28" />
                   </label>
                   <label class="flex flex-col">
-                    <span class="text-sm mb-1">Until</span>
+                    <span class="text-sm mb-1" x-text="t('until')"></span>
                     <input type="time" x-model="curfew.end" class="input w-28" />
                   </label>
                 </div>
@@ -407,11 +414,11 @@
                            on top of the digits. Found by looking at it; `scrollWidth` equals
                            `clientWidth` here, so nothing measures it as overflowing. -->
                       <label class="flex flex-col">
-                        <span class="mb-1 text-xs">From</span>
+                        <span class="mb-1 text-xs" x-text="t('from')"></span>
                         <input type="time" x-model="w.start" class="input input-sm w-24" />
                       </label>
                       <label class="flex flex-col">
-                        <span class="mb-1 text-xs">Until</span>
+                        <span class="mb-1 text-xs" x-text="t('until')"></span>
                         <input type="time" x-model="w.end" class="input input-sm w-24" />
                       </label>
                       <div class="flex items-end gap-1">
@@ -442,10 +449,7 @@
                          x-text="windowDayLabel(w)"></p>
                     </div>
                   </template>
-                  <p class="text-xs opacity-60">
-                    Ticking no days means the window applies every day — clearing them all does not
-                    switch it off. Use ✕ to remove a window you no longer want.
-                  </p>
+                  <p class="text-xs opacity-60" x-text="t('tickingNoDaysMeansThe')"></p>
                 </div>
               </template>
 
@@ -459,7 +463,7 @@
                    `btn-outline`, matching the bonus row it mirrors: this grants something, but it
                    is not the card's primary action — Save is. -->
               <div class="mt-3 flex flex-wrap items-center gap-2" x-show="curfew.enabled" x-cloak>
-                <span class="text-sm">Later bedtime tonight:</span>
+                <span class="text-sm" x-text="t('laterBedtimeTonight')"></span>
                 <button class="btn btn-outline btn-sm" @click="extendCurfew(15)" :disabled="extendingCurfew">+15</button>
                 <button class="btn btn-outline btn-sm" @click="extendCurfew(30)" :disabled="extendingCurfew">+30</button>
                 <button class="btn btn-outline btn-sm" @click="extendCurfew(60)" :disabled="extendingCurfew">+60</button>
@@ -468,9 +472,9 @@
               </div>
 
               <div class="mt-3 flex flex-wrap items-end gap-3">
-                <button class="btn btn-ghost btn-sm" @click="addWindow()">+ Add day schedule</button>
+                <button class="btn btn-ghost btn-sm" @click="addWindow()" x-text="t('addDaySchedule')"></button>
                 <label class="flex flex-col">
-                  <span class="text-sm mb-1">Warning (sec)</span>
+                  <span class="text-sm mb-1" x-text="t('warningSec')"></span>
                   <input type="number" min="0" max="600" x-model.number="curfew.warn_secs"
                          class="input w-28" />
                 </label>
@@ -497,7 +501,7 @@
               <div class="flex items-center justify-between">
                 <h2 class="card-title text-base">
                   Today's screen time
-                  <span class="badge badge-warning badge-sm" x-show="isPaused">Paused</span>
+                  <span class="badge badge-warning badge-sm" x-show="isPaused" x-text="t('paused')"></span>
                 </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadToday()" :disabled="loadingToday">
                   <span x-show="loadingToday" class="loading loading-spinner loading-xs"></span>
@@ -511,10 +515,10 @@
               <template x-if="stEnforcementStale()">
                 <div class="alert alert-error mt-1">
                   <span class="text-sm">
-                    <strong>Enforcement may not be running.</strong>
+                    <strong x-text="t('enforcementMayNotBeRunning')"></strong>
                     <span x-text="enforcementDetail()"></span>
                     Limits and curfew may not be applied right now — run
-                    <span class="font-mono">nestwatch doctor</span> on the PC.
+                    <span class="font-mono" x-text="t('nestwatchDoctor')"></span> on the PC.
                   </span>
                 </div>
               </template>
@@ -564,7 +568,7 @@
                    a dashboard that may not have reached the service at all. It starts null instead;
                    same distinction the report draws between a measured zero and an unmeasured day. -->
               <template x-if="!today">
-                <p class="mt-1 text-sm opacity-70">Today's figures haven't loaded yet.</p>
+                <p class="mt-1 text-sm opacity-70" x-text="t('todaySFiguresHavenT')"></p>
               </template>
 
               <!-- No budget: still show the tally. Time is counted regardless, so this answers
@@ -582,19 +586,16 @@
                   </p>
                   <p class="text-sm opacity-70" x-show="!isPaused">
                     No daily limit set — tracking only. Set one under
-                    <span class="font-medium">Limits &amp; rules</span> to start enforcing.
+                    <span class="font-medium" x-text="t('limitsAmpRules')"></span> to start enforcing.
                   </p>
-                  <p class="text-sm opacity-70" x-show="isPaused">
-                    Enforcing is paused, so nothing is being counted either — this figure stops
-                    here until you turn it back on.
-                  </p>
+                  <p class="text-sm opacity-70" x-show="isPaused" x-text="t('enforcingIsPausedSoNothing')"></p>
                 </div>
               </template>
 
               <!-- Parent-granted bonus time (only meaningful with a budget) -->
               <div class="mt-2 flex flex-wrap items-center gap-2"
                    x-show="today && today.budget_mins > 0">
-                <span class="text-sm">Add bonus time today:</span>
+                <span class="text-sm" x-text="t('addBonusTimeToday')"></span>
                 <button class="btn btn-outline btn-sm" @click="grantExtra(15)" :disabled="grantingExtra">+15</button>
                 <button class="btn btn-outline btn-sm" @click="grantExtra(30)" :disabled="grantingExtra">+30</button>
                 <button class="btn btn-outline btn-sm" @click="grantExtra(60)" :disabled="grantingExtra">+60</button>
@@ -603,7 +604,7 @@
               <!-- Per-app usage -->
               <template x-if="hasPerApp">
                 <div class="mt-2">
-                  <span class="text-sm">Per-app usage today</span>
+                  <span class="text-sm" x-text="t('perAppUsageToday')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="a in today.per_app" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -627,17 +628,12 @@
                    response arrives; an unguarded read here throws at runtime where no Rust test can
                    see it, which is how the chart shipped drawing nothing. -->
               <template x-if="focusMissing">
-                <p class="mt-2 text-sm opacity-70">
-                  No focus figures today. Time in front of each app is measured by a helper running
-                  in your child's own session — if it is not running, this stays empty even on a
-                  busy day. It restarts itself within about half a minute, so if this is still
-                  empty later, the helper cannot start at all.
-                </p>
+                <p class="mt-2 text-sm opacity-70" x-text="t('noFocusFiguresTodayTime')"></p>
               </template>
 
               <template x-if="hasFocused">
                 <div class="mt-2">
-                  <span class="text-sm">In front today</span>
+                  <span class="text-sm" x-text="t('inFrontToday')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="a in today.focused" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -646,18 +642,13 @@
                       </div>
                     </template>
                   </div>
-                  <p class="mt-1 text-xs opacity-60">
-                    Time each app spent as the window in front, while somebody was actually at the
-                    keyboard. Different from the figures above, which count an app from the moment
-                    it starts — a game left running behind a homework window still uses up its
-                    limit.
-                  </p>
+                  <p class="mt-1 text-xs opacity-60" x-text="t('timeEachAppSpentAs')"></p>
                 </div>
               </template>
 
               <template x-if="hasPages">
                 <div class="mt-2">
-                  <span class="text-sm">In the browser today</span>
+                  <span class="text-sm" x-text="t('inTheBrowserToday')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="pg in today.pages" :key="pg.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -673,19 +664,14 @@
                       </div>
                     </template>
                   </div>
-                  <p class="mt-1 text-xs opacity-60">
-                    The title each page gave itself, never its address and never a browsing history.
-                    A game portal is labelled when the title names one; a renamed tab or a site not
-                    on the list is simply not labelled, so no badge means nothing was recognised —
-                    not that nothing was played.
-                  </p>
+                  <p class="mt-1 text-xs opacity-60" x-text="t('theTitleEachPageGave')"></p>
                 </div>
               </template>
 
               <!-- Group (shared pool) usage -->
               <template x-if="hasGroups">
                 <div class="mt-2">
-                  <span class="text-sm">App groups today</span>
+                  <span class="text-sm" x-text="t('appGroupsToday')"></span>
                   <div class="mt-1 flex flex-col gap-1">
                     <template x-for="g in today.groups" :key="g.name">
                       <div class="flex items-center gap-2 text-sm">
@@ -708,7 +694,7 @@
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
               <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Limits &amp; rules</h2>
+                <h2 class="card-title text-base" x-text="t('limitsAmpRules')"></h2>
                 <label class="flex items-center gap-2 cursor-pointer">
                   <!-- Three states, not two. `enabled` only means "not paused"; with nothing
                        configured the enforcer skips every tick, so showing "Enforcing" on a
@@ -725,40 +711,34 @@
                    stretch. Saying only "not enforced" invites the reasonable opposite reading —
                    that Nestwatch keeps watching and merely stops acting — and a parent who
                    believed that would come back to a report that silently understates the day. -->
-              <p class="text-sm opacity-70" x-show="!rules.enabled">
-                Paused — screen-time, blocked apps, and per-app limits are not enforced, and
-                nothing is being recorded while it stays off (curfew still applies).
-              </p>
+              <p class="text-sm opacity-70" x-show="!rules.enabled" x-text="t('pausedScreenTimeBlockedApps')"></p>
               <div class="alert alert-info mt-1" x-show="rules.enabled && !anyRulesSet()">
-                <span class="text-sm">
-                  No limits are set, so nothing is being enforced yet. Set a daily limit below
-                  (or turn on Curfew) to start.
-                </span>
+                <span class="text-sm" x-text="t('noLimitsAreSetSo')"></span>
               </div>
 
               <!-- Daily budget -->
               <label class="flex w-fit items-center gap-2 mt-1 cursor-pointer">
                 <input type="checkbox" class="checkbox checkbox-sm"
                        :checked="!!rules.budget_by_weekday" @change="togglePerDay($event.target.checked)" />
-                <span class="text-sm">Different limit each day</span>
+                <span class="text-sm" x-text="t('differentLimitEachDay')"></span>
               </label>
 
               <div class="mt-1 flex flex-wrap items-end gap-3">
                 <label class="flex flex-col" x-show="!rules.budget_by_weekday">
-                  <span class="text-sm mb-1">Daily limit (min, 0 = off)</span>
+                  <span class="text-sm mb-1" x-text="t('dailyLimitMin0Off')"></span>
                   <input type="number" min="0" max="10080" x-model.number="rules.daily_budget_mins"
                          class="input w-40" />
                 </label>
                 <label class="flex flex-col">
-                  <span class="text-sm mb-1">When time's up</span>
+                  <span class="text-sm mb-1" x-text="t('whenTimeSUp')"></span>
                   <select x-model="rules.budget_action" class="select">
-                    <option value="lock">Lock screen</option>
-                    <option value="shutdown">Shut down</option>
-                    <option value="warn">Warn only</option>
+                    <option value="lock" x-text="t('lockScreen')"></option>
+                    <option value="shutdown" x-text="t('shutDown2')"></option>
+                    <option value="warn" x-text="t('warnOnly')"></option>
                   </select>
                 </label>
                 <label class="flex flex-col">
-                  <span class="text-sm mb-1">Warning (sec)</span>
+                  <span class="text-sm mb-1" x-text="t('warningSec')"></span>
                   <input type="number" min="0" max="600" x-model.number="rules.warn_secs"
                          class="input w-28" />
                 </label>
@@ -777,15 +757,13 @@
                       </label>
                     </template>
                   </div>
-                  <p class="text-xs opacity-60 mt-1">
-                    0 = no limit that day. To block a day entirely, use a full-day curfew window.
-                  </p>
+                  <p class="text-xs opacity-60 mt-1" x-text="t('n0NoLimitThatDay')"></p>
                 </div>
               </template>
 
               <!-- Blocked apps -->
               <div class="mt-3">
-                <span class="text-sm">Blocked apps (killed on sight)</span>
+                <span class="text-sm" x-text="t('blockedAppsKilledOnSight')"></span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(b, i) in rules.blocklist" :key="i">
                     <div class="flex items-center gap-2">
@@ -794,13 +772,13 @@
                       <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
                     </div>
                   </template>
-                  <button class="btn btn-ghost btn-sm w-fit" @click="rules.blocklist.push('')">+ Add app</button>
+                  <button class="btn btn-ghost btn-sm w-fit" @click="rules.blocklist.push('')" x-text="t('addApp')"></button>
                 </div>
               </div>
 
               <!-- Per-app limits -->
               <div class="mt-3">
-                <span class="text-sm">Per-app daily limits</span>
+                <span class="text-sm" x-text="t('perAppDailyLimits')"></span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(row, i) in appLimitRows" :key="i">
                     <div class="flex items-center gap-2">
@@ -812,13 +790,13 @@
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit"
-                          @click="appLimitRows.push({ name: '', mins: 60 })">+ Add limit</button>
+                          @click="appLimitRows.push({ name: '', mins: 60 })" x-text="t('addLimit')"></button>
                 </div>
               </div>
 
               <!-- App groups (shared pool) -->
               <div class="mt-3">
-                <span class="text-sm">App groups (shared daily pool)</span>
+                <span class="text-sm" x-text="t('appGroupsSharedDailyPool')"></span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(g, i) in groupRows" :key="i">
                     <div class="flex flex-wrap items-center gap-2">
@@ -834,7 +812,7 @@
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit"
-                          @click="groupRows.push({ name: '', appsText: '', limit_mins: 90 })">+ Add group</button>
+                          @click="groupRows.push({ name: '', appsText: '', limit_mins: 90 })" x-text="t('addGroup')"></button>
                 </div>
               </div>
 
@@ -851,7 +829,7 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Routines</h2>
+              <h2 class="card-title text-base" x-text="t('routines')"></h2>
             </summary>
             <div class="card-body pt-0">
               <div class="flex items-center justify-end">
@@ -860,12 +838,9 @@
                   Refresh
                 </button>
               </div>
+              <p class="text-sm opacity-70" x-text="t('saveTheCurrentScreenTime')"></p>
               <p class="text-sm opacity-70">
-                Save the current screen-time settings above as a named preset, then switch with one
-                click (e.g. Homework, Weekend). Applying a routine replaces the live settings.
-              </p>
-              <p class="text-sm opacity-70">
-                Give it times and it runs <strong>by itself</strong> while that window is open —
+                Give it times and it runs <strong x-text="t('byItself')"></strong> while that window is open —
                 "no games 16:00–18:00, Mon–Fri" — then hands back to your normal settings when it
                 closes. Your settings are not overwritten, so they are still there afterwards. A
                 pause always wins, even inside a window, and if two windows overlap the routine
@@ -885,11 +860,11 @@
                    with days", so a parent who has set a bedtime already knows how to read this. -->
               <div class="mt-2 flex flex-wrap items-end gap-2 rounded-lg bg-base-200 p-2">
                 <label class="flex flex-col">
-                  <span class="mb-1 text-xs">Runs from</span>
+                  <span class="mb-1 text-xs" x-text="t('runsFrom')"></span>
                   <input type="time" x-model="newRoutineWindow.start" class="input input-sm w-24" />
                 </label>
                 <label class="flex flex-col">
-                  <span class="mb-1 text-xs">Until</span>
+                  <span class="mb-1 text-xs" x-text="t('until')"></span>
                   <input type="time" x-model="newRoutineWindow.end" class="input input-sm w-24" />
                 </label>
                 <div class="flex items-end gap-1">
@@ -910,17 +885,15 @@
                     <span class="flex-1 truncate" x-text="r.name"></span>
                     <!-- Which routine is running, decided by the server at one instant, so this
                          badge and the budget on the Today card cannot disagree at 18:00:00. -->
-                    <span class="badge badge-success badge-sm" x-show="r.active_now">Running now</span>
+                    <span class="badge badge-success badge-sm" x-show="r.active_now" x-text="t('runningNow')"></span>
                     <span class="text-xs opacity-60" x-show="r.schedule && r.schedule.length > 0"
                           x-text="routineScheduleLabel(r)"></span>
-                    <button class="btn btn-success btn-xs" @click="applyRoutine(r.name)">Apply</button>
-                    <button class="btn btn-ghost btn-xs" @click="deleteRoutine(r.name)">Delete</button>
+                    <button class="btn btn-success btn-xs" @click="applyRoutine(r.name)" x-text="t('apply')"></button>
+                    <button class="btn btn-ghost btn-xs" @click="deleteRoutine(r.name)" x-text="t('delete')"></button>
                   </div>
                 </template>
               </div>
-              <p class="text-sm opacity-50" x-show="routines.length === 0 && !loadingRoutines">
-                No saved routines.
-              </p>
+              <p class="text-sm opacity-50" x-show="routines.length === 0 && !loadingRoutines" x-text="t('noSavedRoutines')"></p>
             </div>
           </details>
 
@@ -928,7 +901,7 @@
           <details class="card bg-base-100 shadow md:col-span-2" @toggle="loadSessionsOnce()">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">&#9654;</span>
-              <h2 class="card-title text-base">Signed-in devices</h2>
+              <h2 class="card-title text-base" x-text="t('signedInDevices')"></h2>
             </summary>
             <div class="card-body pt-0">
               <div class="flex items-center justify-end">
@@ -937,18 +910,14 @@
                   Refresh
                 </button>
               </div>
-              <p class="text-sm opacity-70">
-                Every phone, tablet and computer currently signed in here, plus any app you have
-                paired. Signing one out affects only that device &mdash; the others stay signed in.
-                Use this if a device is lost or you no longer want an app connected.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('everyPhoneTabletAndComputer')"></p>
               <div class="mt-2 flex flex-col gap-2" x-show="sessions.length > 0">
                 <template x-for="row in sessions" :key="row.handle">
                   <div class="flex items-center gap-3">
                     <div class="min-w-0 flex-1">
                       <div class="flex items-center gap-2">
                         <span class="truncate font-medium" x-text="deviceLabel(row.user_agent)"></span>
-                        <span class="badge badge-sm" x-show="row.current">This device</span>
+                        <span class="badge badge-sm" x-show="row.current" x-text="t('thisDevice')"></span>
                       </div>
                       <div class="text-xs opacity-60" x-text="scopeLabel(row.scope)"></div>
                       <!-- The raw string the device sent. Shown because `deviceLabel` is an
@@ -961,13 +930,11 @@
                       <div>First seen <span x-text="fmtWhen(row.first_seen)"></span></div>
                       <div>Active <span x-text="fmtWhen(row.last_seen)"></span></div>
                     </div>
-                    <button class="btn btn-ghost btn-xs" @click="revokeSession(row)">Sign out</button>
+                    <button class="btn btn-ghost btn-xs" @click="revokeSession(row)" x-text="t('signOut')"></button>
                   </div>
                 </template>
               </div>
-              <p class="text-sm opacity-50" x-show="sessions.length === 0 && !loadingSessions">
-                No signed-in devices to show.
-              </p>
+              <p class="text-sm opacity-50" x-show="sessions.length === 0 && !loadingSessions" x-text="t('noSignedInDevicesTo')"></p>
             </div>
           </details>
 
@@ -975,7 +942,7 @@
           <details class="card bg-base-100 shadow md:col-span-2" @toggle="loadSessionsOnce()">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Integrations</h2>
+              <h2 class="card-title text-base" x-text="t('integrations')"></h2>
             </summary>
             <div class="card-body pt-0">
               <div class="flex items-center justify-end">
@@ -984,12 +951,7 @@
                   Refresh
                 </button>
               </div>
-              <p class="text-sm opacity-70">
-                Apps that can add bonus screen time when your child has done something — StudyGo adds
-                minutes after enough practice. The app on your phone does the checking and sends the
-                result here; nothing on this PC reaches out. You choose whether each is on and how
-                many minutes it grants.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('appsThatCanAddBonus')"></p>
               <div class="mt-2 flex flex-col gap-2" x-show="providerRows.length > 0">
                 <template x-for="row in providerRows" :key="row.name">
                   <div class="flex items-center gap-3">
@@ -1006,9 +968,9 @@
                     <input type="number" min="1" max="240" class="input input-sm w-20"
                            x-model.number="row.minutes" :aria-label="row.name"
                            @change="saveProvider(row)" />
-                    <span class="text-sm opacity-60">min</span>
-                    <button class="btn btn-ghost btn-xs" @click="startPairing(row.name)">Pair</button>
-                    <button class="btn btn-ghost btn-xs" @click="removeProvider(row.name)">Remove</button>
+                    <span class="text-sm opacity-60" x-text="t('min')"></span>
+                    <button class="btn btn-ghost btn-xs" @click="startPairing(row.name)" x-text="t('pair')"></button>
+                    <button class="btn btn-ghost btn-xs" @click="removeProvider(row.name)" x-text="t('remove')"></button>
                   </div>
                 </template>
 
@@ -1023,7 +985,7 @@
                     <p class="mt-1 text-sm opacity-70">
                       Enter your dashboard password once more. This creates a link that lets that
                       one app add screen time &mdash; it cannot do anything else, and you can end it
-                      from <em>Signed-in devices</em> at any time.
+                      from <em x-text="t('signedInDevices')"></em> at any time.
                     </p>
                     <form class="mt-2 flex flex-wrap items-center gap-2" @submit.prevent="confirmPairing()"
                           aria-label="Create a pairing link">
@@ -1034,7 +996,7 @@
                         <span x-show="pairingBusy" class="loading loading-spinner loading-xs"></span>
                         Create link
                       </button>
-                      <button class="btn btn-ghost btn-sm" type="button" @click="cancelPairing()">Cancel</button>
+                      <button class="btn btn-ghost btn-sm" type="button" @click="cancelPairing()" x-text="t('cancel')"></button>
                     </form>
                   </div>
 
@@ -1048,17 +1010,13 @@
                          this page has no markup sinks. See `qrDataUri`. -->
                     <img class="mt-2 h-48 w-48 rounded bg-white p-1" alt="Pairing QR code"
                          :src="qrDataUri(pairResult && pairResult.qr_svg)" x-show="pairResult && pairResult.qr_svg" />
-                    <p class="mt-2 text-xs opacity-60">
-                      Or type this address into the phone&rsquo;s browser:
-                    </p>
+                    <p class="mt-2 text-xs opacity-60" x-text="t('orTypeThisAddressInto')"></p>
                     <p class="break-all font-mono text-xs" x-text="pairResult && pairResult.url"></p>
-                    <button class="btn btn-ghost btn-sm mt-2" @click="cancelPairing()">Done</button>
+                    <button class="btn btn-ghost btn-sm mt-2" @click="cancelPairing()" x-text="t('done')"></button>
                   </div>
                 </div>
               </div>
-              <p class="text-sm opacity-50" x-show="providerRows.length === 0 && !loadingProviders">
-                No integrations installed yet.
-              </p>
+              <p class="text-sm opacity-50" x-show="providerRows.length === 0 && !loadingProviders" x-text="t('noIntegrationsInstalledYet')"></p>
             </div>
           </details>
 
@@ -1074,21 +1032,18 @@
                   More-time requests
                   <span class="badge badge-primary" x-text="requestBadgeCount()"></span>
                 </h2>
-                <button class="btn btn-ghost btn-sm" @click="loadTimeRequests()">Refresh</button>
+                <button class="btn btn-ghost btn-sm" @click="loadTimeRequests()" x-text="t('refresh')"></button>
               </div>
               <!-- The card is on screen and the answer is unknown, which is the state that used to
                    render as nothing at all. Say so plainly: a child may be waiting behind it. -->
               <template x-if="timeRequests === null">
-                <p class="mt-2 text-sm opacity-70">
-                  Couldn't reach the service, so whether anything is waiting is unknown. This is not
-                  the same as no requests — try Refresh, or check that Nestwatch is running.
-                </p>
+                <p class="mt-2 text-sm opacity-70" x-text="t('couldnTReachTheService')"></p>
               </template>
 
               <div class="mt-2 max-h-72 overflow-y-auto" x-show="timeRequests !== null">
                 <table class="table table-pin-rows table-sm">
                   <thead>
-                    <tr><th scope="col">Time</th><th scope="col">Minutes</th><th scope="col">Reason</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+                    <tr><th scope="col" x-text="t('time')"></th><th scope="col" x-text="t('minutes')"></th><th scope="col" x-text="t('reason')"></th><th scope="col"><span class="sr-only" x-text="t('actions')"></span></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="r in timeRequestRows" :key="r.id">
@@ -1097,8 +1052,8 @@
                         <td x-text="r.minutes"></td>
                         <td class="truncate" x-text="r.reason || '—'"></td>
                         <td class="text-right whitespace-nowrap">
-                          <button class="btn btn-success btn-xs" @click="resolveTimeRequest(r.id, 'approve')">Approve</button>
-                          <button class="btn btn-error btn-xs" @click="resolveTimeRequest(r.id, 'deny')">Deny</button>
+                          <button class="btn btn-success btn-xs" @click="resolveTimeRequest(r.id, 'approve')" x-text="t('approve')"></button>
+                          <button class="btn btn-error btn-xs" @click="resolveTimeRequest(r.id, 'deny')" x-text="t('deny')"></button>
                         </td>
                       </tr>
                     </template>
@@ -1112,7 +1067,7 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Time codes</h2>
+              <h2 class="card-title text-base" x-text="t('timeCodes')"></h2>
             </summary>
             <div class="card-body pt-0">
               <div class="flex items-center justify-end">
@@ -1121,21 +1076,18 @@
                   Refresh
                 </button>
               </div>
-              <p class="text-sm opacity-70">
-                Generate a one-time code worth N minutes and hand it over — it's redeemed on the
-                child's page, even while you're away.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('generateAOneTimeCode')"></p>
               <!-- The full URL, copyable. Naming the path alone left the parent to reconstruct
                    scheme + IP + port from memory to tell their child where to go. -->
               <div class="mt-1 flex flex-wrap items-center gap-2">
-                <span class="text-sm">Child's page:</span>
+                <span class="text-sm" x-text="t('childSPage')"></span>
                 <code class="text-xs break-all" x-text="askUrl()"></code>
                 <button class="btn btn-ghost btn-xs" @click="copyAskUrl()"
-                        aria-label="Copy the child's page link">Copy link</button>
+                        aria-label="Copy the child's page link" x-text="t('copyLink')"></button>
               </div>
               <div class="mt-1 flex flex-wrap items-end gap-2">
                 <label class="flex flex-col">
-                  <span class="text-sm mb-1">Minutes</span>
+                  <span class="text-sm mb-1" x-text="t('minutes')"></span>
                   <input type="number" min="1" max="240" x-model.number="newCodeMins"
                          class="input w-28" />
                 </label>
@@ -1147,7 +1099,7 @@
               <div class="mt-2 max-h-60 overflow-y-auto" x-show="codes.length > 0">
                 <table class="table table-pin-rows table-sm">
                   <thead>
-                    <tr><th scope="col">Code</th><th scope="col">Minutes</th><th scope="col">Created</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+                    <tr><th scope="col" x-text="t('code')"></th><th scope="col" x-text="t('minutes')"></th><th scope="col" x-text="t('created')"></th><th scope="col"><span class="sr-only" x-text="t('actions')"></span></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="c in codes" :key="c.code">
@@ -1156,16 +1108,14 @@
                         <td x-text="c.minutes"></td>
                         <td class="whitespace-nowrap" x-text="fmtTime(c.ts)"></td>
                         <td class="text-right">
-                          <button class="btn btn-ghost btn-xs" @click="copyCode(c.code)">Copy</button>
+                          <button class="btn btn-ghost btn-xs" @click="copyCode(c.code)" x-text="t('copy')"></button>
                         </td>
                       </tr>
                     </template>
                   </tbody>
                 </table>
               </div>
-              <p class="text-sm opacity-50" x-show="codes.length === 0 && !loadingCodes">
-                No active codes.
-              </p>
+              <p class="text-sm opacity-50" x-show="codes.length === 0 && !loadingCodes" x-text="t('noActiveCodes')"></p>
             </div>
           </details>
 
@@ -1173,7 +1123,7 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Recent access</h2>
+              <h2 class="card-title text-base" x-text="t('recentAccess')"></h2>
             </summary>
             <div class="card-body pt-0">
               <div class="flex items-center justify-end">
@@ -1182,13 +1132,11 @@
                   Refresh
                 </button>
               </div>
-              <p class="text-sm opacity-70">
-                Logins and actions on this PC, newest first. Watch for a sign-in you don't recognise.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('loginsAndActionsOnThis')"></p>
               <div class="mt-2 max-h-72 overflow-y-auto">
                 <table class="table table-pin-rows table-sm">
                   <thead>
-                    <tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Source</th></tr>
+                    <tr><th scope="col" x-text="t('time')"></th><th scope="col" x-text="t('event')"></th><th scope="col" x-text="t('source')"></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="(e, i) in audit" :key="i">
@@ -1199,7 +1147,7 @@
                       </tr>
                     </template>
                     <template x-if="audit.length === 0 && !loadingAudit">
-                      <tr><td colspan="3" class="text-center opacity-50">No events yet</td></tr>
+                      <tr><td colspan="3" class="text-center opacity-50" x-text="t('noEventsYet')"></td></tr>
                     </template>
                   </tbody>
                 </table>
@@ -1211,7 +1159,7 @@
           <section class="card bg-base-100 shadow md:col-span-2">
             <div class="card-body">
               <div class="flex items-center justify-between">
-                <h2 class="card-title text-base">Screen time</h2>
+                <h2 class="card-title text-base" x-text="t('screenTime')"></h2>
                 <div class="flex items-center gap-1">
                   <!-- A plain link, not a fetch: the response carries
                        `Content-Disposition: attachment`, so the browser saves it and the session
@@ -1220,7 +1168,7 @@
                        Here rather than in a settings drawer because this is the data being
                        exported — a parent who wants to keep this chart is looking at it. -->
                   <a class="btn btn-ghost btn-sm" href="/api/export" download
-                     title="Download every day this install still holds, as a JSON file">Download</a>
+                     title="Download every day this install still holds, as a JSON file" x-text="t('download')"></a>
                   <button class="btn btn-ghost btn-sm" @click="loadScreentime()" :disabled="loadingScreentime">
                     <span x-show="loadingScreentime" class="loading loading-spinner loading-xs"></span>
                     Refresh
@@ -1230,7 +1178,7 @@
 
               <template x-if="stEnforcementStale()">
                 <div role="status" class="alert alert-warning mt-2 py-2 text-sm">
-                  <span>⚠ Enforcement may not have been running — days below can be missing rather than quiet.</span>
+                  <span x-text="t('enforcementMayNotHaveBeen')"></span>
                 </div>
               </template>
 
@@ -1248,12 +1196,12 @@
               </div>
 
               <div class="mt-2 flex flex-wrap gap-4 text-sm">
-                <div><span class="opacity-70">Total</span>
+                <div><span class="opacity-70" x-text="t('total')"></span>
                   <span class="ml-1 font-semibold" x-text="stTotalLabel()"></span></div>
-                <div><span class="opacity-70">Daily average</span>
+                <div><span class="opacity-70" x-text="t('dailyAverage')"></span>
                   <span class="ml-1 font-semibold"
                         x-text="stAvgLabel()"></span></div>
-                <div><span class="opacity-70">Measured days</span>
+                <div><span class="opacity-70" x-text="t('measuredDays')"></span>
                   <span class="ml-1 font-semibold"
                         x-text="stMeasuredLabel()"></span></div>
                 <!-- The retention horizon, beside the stat that already admits an incomplete
@@ -1263,7 +1211,7 @@
                      nothing about what is stored. `x-show` on the value, not the row, so an
                      install with nothing retained shows no dangling label. -->
                 <div x-show="stHistoryLabel()" x-cloak>
-                  <span class="opacity-70">History from</span>
+                  <span class="opacity-70" x-text="t('historyFrom')"></span>
                   <span class="ml-1 font-semibold" x-text="stHistoryLabel()"></span></div>
                 <div class="opacity-70" x-text="stChangeLabel()"></div>
               </div>
@@ -1281,7 +1229,7 @@
               <template x-if="stPinned !== null">
                 <div class="mt-2 flex items-center gap-2 text-sm">
                   <span>Showing <span class="font-semibold" x-text="stPinned"></span></span>
-                  <button class="btn btn-ghost btn-xs" @click="stPinned = null">Show latest instead</button>
+                  <button class="btn btn-ghost btn-xs" @click="stPinned = null" x-text="t('showLatestInstead')"></button>
                 </div>
               </template>
 
@@ -1319,11 +1267,11 @@
                    Deliberately newest first — the opposite of the chart's oldest-first left-to-
                    right order — because a scrolling list reads better with "now" at the top; this
                    is not a mismatched bug. -->
-              <p class="mt-3 text-sm">Day by day (newest first)</p>
+              <p class="mt-3 text-sm" x-text="t('dayByDayNewestFirst')"></p>
               <div class="mt-1 max-h-40 overflow-y-auto">
                 <table class="table table-pin-rows table-sm">
                   <thead>
-                    <tr><th scope="col">Date</th><th scope="col">Minutes</th></tr>
+                    <tr><th scope="col" x-text="t('date')"></th><th scope="col" x-text="t('minutes')"></th></tr>
                   </thead>
                   <tbody>
                     <!-- The date is a button, and it drives `toggleStDay` — the same handler the
@@ -1365,8 +1313,8 @@
               <template x-if="todayTimeline.length">
                 <div class="mt-3">
                   <div class="mb-1 flex items-baseline justify-between">
-                    <span class="text-sm font-semibold">When the PC was in use today</span>
-                    <span class="text-xs opacity-60">local time</span>
+                    <span class="text-sm font-semibold" x-text="t('whenThePcWasIn')"></span>
+                    <span class="text-xs opacity-60" x-text="t('localTime')"></span>
                   </div>
                   <div class="relative h-6 w-full overflow-hidden rounded bg-base-300"
                        role="img" aria-label="Times the PC was in use today">
@@ -1519,7 +1467,7 @@
                     </template>
                   </div>
                   <template x-if="!stDayHas('apps')">
-                    <p class="mt-1 text-sm opacity-60">Nothing recorded for this day.</p>
+                    <p class="mt-1 text-sm opacity-60" x-text="t('nothingRecordedForThisDay')"></p>
                   </template>
                 </div>
               </template>
@@ -1536,7 +1484,7 @@
                     </template>
                   </div>
                   <template x-if="!stDayHas('focused')">
-                    <p class="mt-1 text-sm opacity-60">Nothing recorded for this day.</p>
+                    <p class="mt-1 text-sm opacity-60" x-text="t('nothingRecordedForThisDay')"></p>
                   </template>
                 </div>
               </template>
@@ -1559,22 +1507,22 @@
                     </template>
                   </div>
                   <template x-if="!stDayHas('pages')">
-                    <p class="mt-1 text-sm opacity-60">Nothing recorded for this day.</p>
+                    <p class="mt-1 text-sm opacity-60" x-text="t('nothingRecordedForThisDay')"></p>
                   </template>
                 </div>
               </template>
 
               <p class="mt-3 text-xs opacity-60">
-                Two different measurements. <strong>Minutes</strong> counts time this PC was
+                Two different measurements. <strong x-text="t('minutes')"></strong> counts time this PC was
                 unlocked with an app running, so a minimised app still counts;
-                <strong>focused</strong> counts only while the app was the window in front, and
+                <strong x-text="t('focused')"></strong> counts only while the app was the window in front, and
                 stops while nobody is touching the keyboard. Per-app limits are enforced against
                 the first, not the second — a game left running in the background still uses up
                 its limit. Neither figure is per-account: any account signed in at this machine
-                adds to the same total. The per-app <em>minutes</em> list only names apps that
+                adds to the same total. The per-app <em x-text="t('minutes2')"></em> list only names apps that
                 already have a limit set; the focused list names every app. A day with no focused
                 figures is one nothing was watching, which is not the same as a day nothing was
-                looked at. <strong>In the browser</strong> lists page titles as the browser showed
+                looked at. <strong x-text="t('inTheBrowser')"></strong> lists page titles as the browser showed
                 them — what a tab was called, never its address, and never a browsing history.
               </p>
             </div>
@@ -1584,7 +1532,7 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Usage history</h2>
+              <h2 class="card-title text-base" x-text="t('usageHistory')"></h2>
             </summary>
             <div class="card-body pt-0">
               <div class="flex items-center justify-end">
@@ -1593,11 +1541,11 @@
                   Refresh
                 </button>
               </div>
-              <p class="text-sm opacity-70">Screen-time and enforcement events, newest first.</p>
+              <p class="text-sm opacity-70" x-text="t('screenTimeAndEnforcementEvents')"></p>
               <div class="mt-2 max-h-72 overflow-y-auto">
                 <table class="table table-pin-rows table-sm">
                   <thead>
-                    <tr><th scope="col">Time</th><th scope="col">Event</th><th scope="col">Detail</th></tr>
+                    <tr><th scope="col" x-text="t('time')"></th><th scope="col" x-text="t('event')"></th><th scope="col" x-text="t('detail')"></th></tr>
                   </thead>
                   <tbody>
                     <template x-for="(e, i) in usage" :key="i">
@@ -1608,7 +1556,7 @@
                       </tr>
                     </template>
                     <template x-if="usage.length === 0 && !loadingUsage">
-                      <tr><td colspan="3" class="text-center opacity-50">No events yet</td></tr>
+                      <tr><td colspan="3" class="text-center opacity-50" x-text="t('noEventsYet')"></td></tr>
                     </template>
                   </tbody>
                 </table>
@@ -1620,7 +1568,7 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Trusted clock</h2>
+              <h2 class="card-title text-base" x-text="t('trustedClock')"></h2>
             </summary>
             <div class="card-body pt-0">
               <p class="text-sm opacity-70">
@@ -1630,7 +1578,7 @@
                 old zone. <code>nestwatch doctor</code> reports which zone is anchored.
               </p>
               <div class="mt-2">
-                <button class="btn btn-sm btn-ghost" @click="reAnchorClock()">Re-anchor the clock</button>
+                <button class="btn btn-sm btn-ghost" @click="reAnchorClock()" x-text="t('reAnchorTheClock')"></button>
               </div>
             </div>
           </details>
@@ -1639,13 +1587,10 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">The child's language</h2>
+              <h2 class="card-title text-base" x-text="t('theChildSLanguage')"></h2>
             </summary>
             <div class="card-body pt-0">
-              <p class="text-sm opacity-70">
-                Which language your child's own page and their on-screen countdown warnings use.
-                This dashboard stays in English.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('whichLanguageYourChildS')"></p>
               <!-- Set here rather than detected from their browser: the sentence on their page
                    explaining what this tool can see is the one that most needs to be understood,
                    and the person being watched should not be the one choosing its language. -->
@@ -1657,9 +1602,7 @@
                           @click="setChildLanguage(l.key)" x-text="l.label"></button>
                 </template>
               </div>
-              <p class="mt-2 text-xs opacity-60" x-show="childLanguage === null">
-                Couldn't read the current setting.
-              </p>
+              <p class="mt-2 text-xs opacity-60" x-show="childLanguage === null" x-text="t('couldnTReadTheCurrent')"></p>
             </div>
           </details>
 
@@ -1672,20 +1615,16 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 class="card-title text-base">Settings backup</h2>
+              <h2 class="card-title text-base" x-text="t('settingsBackup')"></h2>
             </summary>
             <div class="card-body pt-0">
-              <p class="text-sm opacity-70">
-                Your curfew, limits, app rules, routines and your child's language, as a file you
-                can keep. It holds no password and nothing about this machine, so restoring it onto
-                a different PC is safe.
-              </p>
+              <p class="text-sm opacity-70" x-text="t('yourCurfewLimitsAppRules')"></p>
               <div class="mt-2 flex flex-wrap items-center gap-2">
                 <!-- A plain link, like the history download: the response carries
                      `Content-Disposition: attachment`, so the cookie rides along on a same-origin
                      navigation and there is no JavaScript that can fail silently. -->
                 <a class="btn btn-sm btn-ghost" href="/api/policy" download
-                   title="Download your curfew, limits, rules and routines as a JSON file">Download settings</a>
+                   title="Download your curfew, limits, rules and routines as a JSON file" x-text="t('downloadSettings')"></a>
                 <input type="file" accept="application/json,.json"
                        class="file-input file-input-sm"
                        aria-label="Choose a settings file to restore"
@@ -1696,10 +1635,7 @@
                   Restore
                 </button>
               </div>
-              <p class="mt-2 text-xs opacity-70">
-                Restoring replaces your curfew, limits, rules and routines. It never changes your
-                password, the port, or the trusted clock.
-              </p>
+              <p class="mt-2 text-xs opacity-70" x-text="t('restoringReplacesYourCurfewLimits')"></p>
               <p class="mt-1 text-sm" role="status" aria-live="polite" aria-atomic="true"
                  x-show="policyMsg" x-cloak x-text="policyMsg"></p>
             </div>
@@ -1709,10 +1645,10 @@
           <details class="card bg-base-100 shadow md:col-span-2">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
-              <h2 id="changePwHeading" class="card-title text-base">Change password</h2>
+              <h2 id="changePwHeading" class="card-title text-base" x-text="t('changePassword')"></h2>
             </summary>
             <div class="card-body pt-0">
-              <p class="text-sm opacity-70">Update the control password without reinstalling.</p>
+              <p class="text-sm opacity-70" x-text="t('updateTheControlPasswordWithout')"></p>
               <!-- A real <form> with autocomplete tokens, matching the sign-in form above.
                    Two password inputs loose in a <div> are not a password change as far as the
                    browser is concerned — Chrome says so out loud ("Password field is not
@@ -1724,12 +1660,12 @@
               <form class="mt-2 flex flex-wrap items-end gap-3" aria-labelledby="changePwHeading"
                     @submit.prevent="changePassword()">
                 <label class="flex flex-col">
-                  <span class="text-sm mb-1">Current</span>
+                  <span class="text-sm mb-1" x-text="t('current')"></span>
                   <input type="password" x-model="pwCurrent" autocomplete="current-password"
                          class="input" placeholder="••••••••" />
                 </label>
                 <label class="flex flex-col">
-                  <span class="text-sm mb-1">New</span>
+                  <span class="text-sm mb-1" x-text="t('new')"></span>
                   <input type="password" x-model="pwNew" autocomplete="new-password"
                          class="input" placeholder="at least 8 characters" />
                 </label>
@@ -1754,7 +1690,7 @@
           Nestwatch <span x-text="version || '—'"></span> on this PC ·
           <a class="link"
              href="https://github.com/emrecdr/nestwatch/releases/latest"
-             target="_blank" rel="noopener noreferrer">releases</a>
+             target="_blank" rel="noopener noreferrer" x-text="t('releases')"></a>
           ·
           <button class="link" @click="checkForUpdate()" :disabled="checkingUpdate">
             <span x-show="checkingUpdate" class="loading loading-spinner loading-xs"></span>
@@ -1762,14 +1698,13 @@
           </button>
 
           <template x-if="updateState === 'current'">
-            <span class="block pt-1 text-success">✓ This is the latest release.</span>
+            <span class="block pt-1 text-success" x-text="t('thisIsTheLatestRelease')"></span>
           </template>
           <template x-if="updateState === 'newer'">
             <span class="block pt-1 text-warning">
               <span x-text="latestVersion"></span> is available — this PC has
               <span x-text="version"></span>.
-              <a class="link" :href="latestUrl" target="_blank" rel="noopener noreferrer">
-                what changed</a>
+              <a class="link" :href="latestUrl" target="_blank" rel="noopener noreferrer" x-text="t('whatChanged')"></a>
             </span>
           </template>
           <template x-if="updateState === 'ahead'">
@@ -1784,7 +1719,7 @@
 
           <span class="block pt-1 opacity-75">
             This PC never contacts the internet. The check runs in
-            <em>this</em> browser, on the device you are reading this on, and only when you
+            <em x-text="t('this')"></em> browser, on the device you are reading this on, and only when you
             press it.
           </span>
         </footer>
@@ -1794,14 +1729,14 @@
     <!-- ── Confirm: kill ────────────────────────────────────────────── -->
     <div class="modal" :class="{ 'modal-open': killTarget }">
       <div class="modal-box">
-        <h3 class="text-lg font-bold">Close app?</h3>
+        <h3 class="text-lg font-bold" x-text="t('closeApp')"></h3>
         <p class="py-2">
           Terminate <span class="font-semibold" x-text="killTargetName"></span>
           (PID <span x-text="killTargetPid"></span>)? Unsaved work may be lost.
         </p>
         <div class="modal-action">
-          <button class="btn btn-ghost" @click="killTarget = null">Cancel</button>
-          <button class="btn btn-error" @click="killProcess()">Kill</button>
+          <button class="btn btn-ghost" @click="killTarget = null" x-text="t('cancel')"></button>
+          <button class="btn btn-error" @click="killProcess()" x-text="t('kill')"></button>
         </div>
       </div>
     </div>
@@ -1809,11 +1744,11 @@
     <!-- ── Confirm: shutdown ────────────────────────────────────────── -->
     <div class="modal" :class="{ 'modal-open': confirmShutdown }">
       <div class="modal-box">
-        <h3 class="text-lg font-bold">Shut down this PC?</h3>
-        <p class="py-2">The machine will power off in a few seconds.</p>
+        <h3 class="text-lg font-bold" x-text="t('shutDownThisPc')"></h3>
+        <p class="py-2" x-text="t('theMachineWillPowerOff')"></p>
         <div class="modal-action">
-          <button class="btn btn-ghost" @click="confirmShutdown = false">Cancel</button>
-          <button class="btn btn-warning" @click="doShutdown()">Shut down</button>
+          <button class="btn btn-ghost" @click="confirmShutdown = false" x-text="t('cancel')"></button>
+          <button class="btn btn-warning" @click="doShutdown()" x-text="t('shutDown2')"></button>
         </div>
       </div>
     </div>
@@ -1840,14 +1775,10 @@
           <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
           Refresh
         </button>
-        <button class="btn btn-sm" @click="toggleBrowserFullscreen($el.closest('[role=dialog]'))">
-          ⛶ Fullscreen
-        </button>
-        <button class="btn btn-sm btn-ghost text-white" @click="closeShotFull()">✕ Close</button>
+        <button class="btn btn-sm" @click="toggleBrowserFullscreen($el.closest('[role=dialog]'))" x-text="t('fullscreen')"></button>
+        <button class="btn btn-sm btn-ghost text-white" @click="closeShotFull()" x-text="t('close')"></button>
       </div>
-      <p class="absolute bottom-3 left-0 right-0 text-center text-xs text-white/50">
-        Esc or click the backdrop to close
-      </p>
+      <p class="absolute bottom-3 left-0 right-0 text-center text-xs text-white/50" x-text="t('escOrClickTheBackdrop')"></p>
     </div>
 
     <!-- ── Toasts ───────────────────────────────────────────────────── -->

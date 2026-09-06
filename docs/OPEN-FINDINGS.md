@@ -975,14 +975,21 @@ added so the tests cannot go stale when a third language lands.
 
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
-`assets/app.js` is **2,501 lines** registering a single `Alpine.data("app", app)` with ~139
-methods, consumed by one `x-data="app"` root across 1,766 lines of markup. By comparison `src/`
-is 38 modules with a stated responsibility each. *(Measured 2026-09-02.)*
+`assets/app.js` is **3,234 lines** registering a single `Alpine.data("app", app)` with ~154
+methods, consumed by one `x-data="app"` root across 1,796 lines of markup. By comparison `src/`
+is 43 modules with a stated responsibility each. *(Measured 2026-09-07.)*
+
+**Most of the latest jump is a string table, not logic, and that distinction matters here.** The
+dashboard's own translation landed 142 keys × three languages as a `const UI` literal at the top of
+the file — roughly 430 lines of data with no branches, no state and no reason to be read while
+following a method. It inflates every line count in this entry while making the *component* no
+harder to hold in your head, which is the thing the entry is actually about. If this is ever cut,
+`UI` is the first and cheapest thing to move, and moving it would not address the finding.
 
 **The premise most reviews attach to this is false, and it was false when they wrote it.** The
 argument arrives as "a component this size cannot be tested without a browser, so split it to
 make it testable". `web/test/harness.js` has evaluated `app.js` in a `vm` context since
-`4434447`, and `web/test/app.test.js` is **2,333 lines** exercising its pure methods. Reachability
+`4434447`, and `web/test/app.test.js` is **2,525 lines** exercising its pure methods. Reachability
 was never the problem and splitting would not improve it. Anyone re-raising this should check the
 harness before repeating the testability argument.
 
