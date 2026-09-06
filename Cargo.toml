@@ -113,9 +113,21 @@ hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"
 flate2 = "1"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
 pem = "4"
-# Renders the pairing URL as a QR in the install console. `default-features = false` drops its
-# image/SVG renderers (which would pull `image`'s decode stack back in) and leaves it with ZERO
-# transitive dependencies — we only use the built-in unicode half-block renderer.
+# Renders the pairing URL as a QR — as Unicode half-blocks for the install console (`qr_code`)
+# and as SVG for the dashboard's pairing card (`qr_svg`).
+#
+# `default-features = false` leaves this with ZERO transitive dependencies. **The credit belongs to
+# one dropped feature, not three**, and the distinction is worth keeping straight because an
+# earlier version of this note did not: of `["image", "svg", "pic"]`, only `image` has a dependency
+# — `image 0.25`, whose decode stack is exactly what the entry above works to keep out. `svg` and
+# `pic` are declared `svg = []` / `pic = []` in `qrcode-0.14.1`'s manifest, so they cost nothing at
+# all, and a reuse review correctly pointed out that `svg` is therefore free to turn on.
+#
+# It stays off anyway, and `docs/DECLINED-OPTIONS.md` carries the reasoning: the crate's SVG canvas
+# opens with an XML prolog, and `qr_svg`'s output goes into a `data:` URI where that is unwanted
+# and pinned against by a test. So this line is not "we only use the unicode renderer" — it is
+# "both renderers here are ours, and the only feature worth refusing is the one with a crate
+# behind it".
 qrcode = { version = "0.14", default-features = false }
 rpassword = "7.5.4"
 # The OS random source for `token::random` — pairing tokens and redeemable time codes.

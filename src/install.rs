@@ -314,14 +314,12 @@ pub fn print_access_block(port: u16, scope: crate::pairing::Scope) {
             // fragment — a client falls back to comparing the fingerprint by eye — and that is
             // strictly better than failing an install over a QR decoration.
             let fingerprint = crate::cert::read_fingerprint(&config::data_paths().cert).ok();
-            let scanned = crate::pairing::pair_url(primary, port, &token, fingerprint.as_deref());
             // The fingerprint goes in the QR and NOT in the line underneath it, because the two
-            // are read by different things. Only a client that scans can use it; anyone reading
-            // this line is going to type it into a browser, which cannot check a fingerprint and
-            // would just be handed 95 characters of noise. Measured, printing the pinned form
-            // here takes the line from 46 columns to 145 — it wraps on an 80-column console,
-            // which is the format a person copies from.
-            let typed = crate::pairing::pair_url(primary, port, &token, None);
+            // are read by different things. `pairing::link_forms` holds that rule and the
+            // measurement behind it, so this console and the dashboard's pairing card cannot
+            // drift apart on it — which they had.
+            let (scanned, typed) =
+                crate::pairing::link_forms(primary, port, &token, fingerprint.as_deref());
             // The line says what the QR is worth, because the two kinds look identical and are
             // not: one signs a person into everything, the other authorises one app to add time.
             match &scope {

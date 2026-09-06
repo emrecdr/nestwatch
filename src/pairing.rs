@@ -205,6 +205,8 @@ pub fn qr_code(url: &str) -> Option<String> {
 /// `None` on the same condition as [`qr_code`] — a URL too long to encode — so a caller falls back
 /// to showing the link as text rather than failing the mint over a picture.
 pub fn qr_svg(url: &str) -> Option<String> {
+    use std::fmt::Write as _;
+
     use qrcode::{Color, QrCode};
 
     let code = QrCode::new(url).ok()?;
@@ -221,7 +223,14 @@ pub fn qr_svg(url: &str) -> Option<String> {
             let y = i / width + QUIET;
             // One 1×1 square per dark module, all in a single path: an SVG with a few hundred
             // <rect> elements costs the same picture and far more DOM.
-            path.push_str(&format!("M{x} {y}h1v1h-1z"));
+            //
+            // `write!` rather than `push_str(&format!(...))`: this runs once per dark module —
+            // several hundred times for a pairing URL — and the `format!` form allocates a
+            // throwaway `String` each pass only to copy it in and drop it. Writing straight into
+            // the buffer is also the idiom every other incremental string build in this crate
+            // already uses (`web.rs`, `doctor.rs`, `install.rs`, `preflight.rs`). Infallible for
+            // a `String` sink, hence the discarded result.
+            let _ = write!(path, "M{x} {y}h1v1h-1z");
         }
     }
 
@@ -269,9 +278,69 @@ pub fn pair_url(host: &str, port: u16, token: &str, fingerprint: Option<&str>) -
     }
 }
 
+/// The two forms one pairing link takes: `(scanned, typed)`.
+///
+/// **A pairing link is two strings, and this is the one place that says so.** The QR carries the
+/// certificate fingerprint; the address printed or displayed underneath it does not. They are read
+/// by different things — only a client that scans can act on a fingerprint, while anyone reading
+/// the second one is going to type it into a browser, which cannot check one and would just be
+/// handed 95 characters of noise. Measured on the console form: including it takes the line from
+/// 46 columns to 145, which wraps on the 80-column terminal a person copies from.
+///
+/// Extracted because the rule had already been broken once. `install::print_access_block` built
+/// both forms correctly and `api::pair_provider`, written later against it, built one — putting the
+/// fingerprint-bearing URL in the "or type this address" field. Two callers agreeing about what a
+/// link *is* only by both remembering the same paragraph is the arrangement that produced that,
+/// and a shared function is what ends it.
+pub fn link_forms(
+    host: &str,
+    port: u16,
+    token: &str,
+    fingerprint: Option<&str>,
+) -> (String, String) {
+    (
+        pair_url(host, port, token, fingerprint),
+        pair_url(host, port, token, None),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fingerprint belongs in exactly one of the two forms.
+    ///
+    /// Asserted in both directions on purpose: "the QR has it" alone stays true if the typed form
+    /// gains it too, which is precisely the defect this function was extracted to prevent.
+    #[test]
+    fn the_fingerprint_rides_the_scanned_form_and_not_the_typed_one() {
+        let (scanned, typed) = link_forms("10.0.0.5", 9443, "TOKEN123", Some("AA:BB"));
+        assert!(
+            scanned.contains("#fp=AA:BB"),
+            "the QR carries it: {scanned}"
+        );
+        assert!(
+            !typed.contains("#fp="),
+            "the address a person types must not: {typed}"
+        );
+    }
+
+    /// Both forms address the same install and redeem the same token — they differ only in the
+    /// fragment, which no server ever sees.
+    #[test]
+    fn both_forms_are_the_same_link() {
+        let (scanned, typed) = link_forms("host.local", 8443, "ABC", Some("FF"));
+        assert_eq!(scanned, format!("{typed}#fp=FF"));
+        assert!(typed.contains("/p/ABC"));
+    }
+
+    /// An unreadable certificate costs the QR its fragment and nothing else — the two forms
+    /// collapse to one string rather than the caller losing a link.
+    #[test]
+    fn without_a_fingerprint_the_two_forms_are_identical() {
+        let (scanned, typed) = link_forms("10.0.0.5", 9443, "T", None);
+        assert_eq!(scanned, typed);
+    }
 
     /// Returns the guard alongside the path: dropping it deletes the directory, so a caller that
     /// kept only the `PathBuf` would be handed a path into a directory that no longer exists.

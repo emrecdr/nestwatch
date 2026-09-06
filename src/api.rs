@@ -1256,25 +1256,45 @@ pub async fn pair_provider(
     let source = name.clone();
     let minted = spawn(move || {
         let paths = crate::config::data_paths();
+        // The same list `print_access_block` shows, and the first entry for the same reason: the
+        // QR is for a phone on the house network, not for whatever address this parent's browser
+        // happens to have reached us on — which may be a tunnel the phone cannot use.
+        //
+        // **Checked before minting, not after.** `print_access_block` returns here without
+        // minting, and this has to make the same choice for a second reason it does not have: a
+        // token is one-use and expires on a timer, so minting one we cannot put a usable address
+        // into would spend the parent's pairing on a link nothing can redeem. Falling back to
+        // `localhost` — which this did — encodes an address that resolves on the child's PC and
+        // nowhere else, so the QR scans, the phone fails to connect, and nothing says why.
+        let Some(host) = crate::cert::reachable_hosts().into_iter().next() else {
+            return anyhow::Ok(None);
+        };
         let token = crate::pairing::mint(
             &paths.pairing,
             crate::pairing::Scope::Integration { source },
         )
         .map_err(|e| e.context("minting a pairing token"))?;
         let fingerprint = crate::cert::read_fingerprint(&paths.cert).ok();
-        // The same list `print_access_block` shows, and the first entry for the same reason: the
-        // QR is for a phone on the house network, not for whatever address this parent's browser
-        // happens to have reached us on — which may be a tunnel the phone cannot use.
-        let host = crate::cert::reachable_hosts()
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| "localhost".to_string());
-        let url = crate::pairing::pair_url(&host, port, &token, fingerprint.as_deref());
-        let qr = crate::pairing::qr_svg(&url);
-        anyhow::Ok((token, url, qr))
+        // Both forms from the one function that defines them, which is what keeps this handler and
+        // the install console from disagreeing about what a pairing link is.
+        let (scanned, typed) =
+            crate::pairing::link_forms(&host, port, &token, fingerprint.as_deref());
+        let qr = crate::pairing::qr_svg(&scanned);
+        anyhow::Ok(Some((token, typed, qr)))
     })
-    .await?;
-    let (token, url, qr) = minted.map_err(AppError::Internal)?;
+    .await?
+    .map_err(AppError::Internal)?;
+    // A `400` rather than a `500`: the request was well-formed and the server is healthy — the
+    // house network is the thing that is not ready, and the parent is the one who can fix it. That
+    // is also why this message reaches them at all, where `AppError::Internal` would render as
+    // "internal server error" and name nothing they could act on.
+    let Some((token, url, qr)) = minted else {
+        return Err(AppError::BadRequest(
+            "this PC has no network address right now, so a pairing link would point nowhere — \
+             put it back on the home Wi-Fi and try again"
+                .to_string(),
+        ));
+    };
 
     // **The event records that a credential was made, never which one.** The audit log is readable
     // by every dashboard session and is carried out of the machine by `/api/export`; a token in it
