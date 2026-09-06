@@ -5,6 +5,14 @@ feature, was not supported, and would stay that way. Remote reach is now wanted,
 taken is **full dashboard parity over a tunnel terminated on the home router** — no second
 always-on machine, no third-party relay, no domain name.
 
+**One household has since been measured against that decision, and it ruled the termination point
+out.** The shape holds — full parity, no relay, no second always-on machine — but that house has a
+routable address and two routers in series, neither able to terminate a tunnel. Options 1 and 2
+below, the two this page recommends, were both unavailable in the first real house it met, and that
+combination is precisely what option 4 is written for. Read the recommendation as conditional on
+prerequisites 2 and 3 rather than as a default; the status note at the end records what was
+measured, and `O91` records what building option 4 runs into.
+
 What follows is the research behind that, in the order it matters: the two prerequisites that can
 rule the whole plan out before any work starts, what the LAN gate is actually holding up, why the
 chosen transport keeps most of that intact, and the one thing it does not.
@@ -350,13 +358,9 @@ on the local subnet. Widening one and not the other yields a silent failure rath
 and the narrower of the two is `#[cfg(windows)]`, so no host test can see it.
 
 **Filed as `O91`, which records the half this section first missed: the coupling is two gates wide,
-not one.** The rule is `profile=private,domain` as well as `remoteip=LocalSubnet`, and a freshly
-created tunnel adapter on Windows is frequently categorised **Public**. A peer can therefore fail
-that one rule for two independent reasons, and both are equally silent — so widening the address
-scope alone leaves the second failure live. Anyone doing this work has to widen both halves and
-confirm the adapter's category. `O91` also makes the point that this is not only a problem for the
-embedded endpoint: a parent who installs stock WireGuard for Windows today, changing no Nestwatch
-code at all, hits the same wall — a tunnel that connects and a dashboard that never loads.
+not one** — the firewall rule's *profile* as well as its address scope, each able to fail on its own
+and neither saying so. `O91` carries the detail, including the part that is not conditional on
+option 4 ever being built. It is not restated here, so there is one copy to keep true.
 
 #### How to make it genuinely optional
 
