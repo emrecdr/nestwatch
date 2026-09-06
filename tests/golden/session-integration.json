@@ -1,0 +1,12 @@
+{
+  "authenticated": true,
+  "provider": {
+    "enabled": true,
+    "minutes": 30
+  },
+  "scope": {
+    "kind": "integration",
+    "source": "studygo"
+  },
+  "version": "<version>"
+}

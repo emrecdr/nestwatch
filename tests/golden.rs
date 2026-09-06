@@ -267,4 +267,32 @@ async fn session() {
     let mut signed_in = common::body_json(response).await;
     signed_in["version"] = json!("<version>");
     golden("session-signed-in", &signed_in);
+
+    // The third shape, and the one this corpus was missing while asserting it elsewhere. The two
+    // above are what a browser sees; this is what an integration parses, and `studygo` reported
+    // the gap from the consuming side: `pairing_scope.rs` checks the shape, but a test asserts to
+    // the repository that already knows, while a golden file is what another repository can sync
+    // against. Being right locally and unavailable remotely is the seam this file exists to close.
+    //
+    // Configured before pairing because since `O92` an integration pairing is a usable credential
+    // only while that integration is installed and enabled. Pairing alone would golden a session
+    // the client can never actually hold.
+    assert_eq!(
+        common::configure_provider(&app, &cookie, "studygo", true, 30).await,
+        StatusCode::OK,
+        "the integration has to be installed before its pairing means anything"
+    );
+    let integration = common::pair_with(
+        &app,
+        nestwatch::pairing::Scope::Integration {
+            source: "studygo".into(),
+        },
+        None,
+    )
+    .await
+    .expect("pairing as an integration should mint a session");
+    let response = common::get(&app, "/session", Some(&integration)).await;
+    let mut paired = common::body_json(response).await;
+    paired["version"] = json!("<version>");
+    golden("session-integration", &paired);
 }
