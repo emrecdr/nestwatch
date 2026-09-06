@@ -188,6 +188,51 @@ pub fn qr_code(url: &str) -> Option<String> {
     )
 }
 
+/// Render `url` as an inline SVG QR code, for a browser rather than a console.
+///
+/// [`qr_code`] above renders Unicode half-blocks, which is right for the terminal `nestwatch pair`
+/// prints to and unscannable from a web page. This is the same matrix drawn as one `<path>`.
+///
+/// **Black on white, whatever the dashboard's theme is, and that is not an oversight.** A QR needs
+/// dark-on-light contrast and a quiet zone to decode; a themed code that inverted in dark mode
+/// would render beautifully and scan for nobody. The white ground is painted explicitly for the
+/// same reason — a transparent SVG would sit on whatever the card behind it is.
+///
+/// The URL is encoded as QR *data*, never interpolated into markup: the only text that reaches the
+/// SVG source is the generated path. So a caller may put this in a markup sink without the token
+/// or the hostname being able to close a tag.
+///
+/// `None` on the same condition as [`qr_code`] — a URL too long to encode — so a caller falls back
+/// to showing the link as text rather than failing the mint over a picture.
+pub fn qr_svg(url: &str) -> Option<String> {
+    use qrcode::{Color, QrCode};
+
+    let code = QrCode::new(url).ok()?;
+    let width = code.width();
+    // Four modules, which is what the spec requires; a code flush to the edge of its container
+    // decodes far less reliably.
+    const QUIET: usize = 4;
+    let side = width + QUIET * 2;
+
+    let mut path = String::new();
+    for (i, color) in code.to_colors().into_iter().enumerate() {
+        if color == Color::Dark {
+            let x = i % width + QUIET;
+            let y = i / width + QUIET;
+            // One 1×1 square per dark module, all in a single path: an SVG with a few hundred
+            // <rect> elements costs the same picture and far more DOM.
+            path.push_str(&format!("M{x} {y}h1v1h-1z"));
+        }
+    }
+
+    Some(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {side} {side}\" \
+         shape-rendering=\"crispEdges\" role=\"img\" aria-label=\"Pairing QR code\">\
+         <rect width=\"{side}\" height=\"{side}\" fill=\"#ffffff\"/>\
+         <path d=\"{path}\" fill=\"#000000\"/></svg>"
+    ))
+}
+
 /// The full pairing URL to encode: `https://<host>:<port>/p/<TOKEN>#fp=<FINGERPRINT>`.
 ///
 /// **The fingerprint rides in a fragment, and that is the whole reason this is safe to add.**

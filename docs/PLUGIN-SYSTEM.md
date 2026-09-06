@@ -268,11 +268,54 @@ fetched lazily, so a summary computed from an empty array would report "not pair
 about a perfectly good pairing merely because that card had not been opened. Absent is not empty —
 the same distinction `remaining_mins: null` exists to preserve on the server.
 
+## `F7`, and a constraint nobody chose — 2026-09-06
+
+The report that produced `F2`, `F3` and `F6` marked `F7` **decide first**, and researching it
+before building found that the thing being decided was not what the report thought.
+
+**The claim:** installing a provider is remote, but pairing one needs a console on the child's PC,
+because `pairing::mint` has one caller and `print_pairing` calls `ensure_elevated` first. True, and
+it reads as a deliberate security posture — *creating a credential requires physical access to the
+machine*. Three documents can be written from that sentence, and one of them was.
+
+**What the code says.** The comment above that call gives the reason: minting writes into the
+ACL-locked data dir, so the CLI needs elevation the way `install` does. The service runs as SYSTEM
+and can write that file whenever it likes. There was no standing decision that credential creation
+requires physical presence — there was a user-mode process that could not reach a file, and a
+security posture assembled afterwards from the shape of that limitation.
+
+**This is worth recording as a class, because it is the fourth variant of this document's own
+pattern.** The earlier three were questions left unasked next to questions answered. This one is
+different and harder to catch: a constraint arrives as an implementation detail, is observed to
+have a security-shaped effect, and is then reasoned about as though someone had chosen it. Nobody
+lied and no comment was wrong — the inference simply ran the wrong way, from mechanism to intent.
+The tell is that the justification appears only in prose *about* the code and never at the
+mechanism itself.
+
+**What the real decision turned out to be**, once that was cleared away: `pairing`'s module doc
+states an exposure model — the token is printed on a screen in the child's house, so the window is
+"while the parent is standing at the machine, and it closes the instant they scan". Minting from
+the dashboard trades that for an authentication model. Two candidate mitigations did not survive
+contact with the source:
+
+* *Add a short TTL.* Already there — `TTL_SECS` is fifteen minutes and tokens are single-use.
+* *Allow minting only from the LAN.* No such distinction exists. `security::require_lan_peer` is a
+  layer on the outer router, so every route is already LAN-gated, and `docs/REMOTE-ACCESS.md` is
+  explicit that remote access works by deciding **where the tunnel terminates** — inside the LAN. A
+  remote parent's request is local by construction.
+
+So the bound is step-up authentication, which is what GitHub requires before creating a token, and
+it is the bound that matches the actual risk: the minted credential is weaker *per request* than
+the session that asked for it, and the thing that is genuinely new is its **durability**. It also
+only became safe once `O92` gave the card revocation and `F6` gave it the list of what is paired —
+mint, see, and end now live on one surface, which is the argument architecture 4 was chosen for.
+
 **The shape all four share, stated once.** A provider is a registry entry plus a credential bound
 to it. Every finding in this document is what happens when those are two objects sharing a string:
 the entry outliving the credential (`O89`), the credential outliving the entry (`O92`), the
 credential learning more than the entry justified (`F2`), the entry being invisible to the
-credential (`F3`), and the two never shown together (`F6`).
+credential (`F3`), the two never shown together (`F6`), and the entry being creatable only from a
+place the credential's owner could not stand (`F7`).
 
 ---
 

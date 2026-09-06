@@ -1171,6 +1171,126 @@ pub async fn delete_provider(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(Deserialize)]
+pub struct PairProviderBody {
+    /// The parent's password, re-entered for this one action. See the handler.
+    password: String,
+}
+
+/// `POST /api/providers/{name}/pair` → mint a one-time pairing link for an installed integration.
+///
+/// **Why this route exists.** `pairing::mint` had exactly one caller before it — `nestwatch pair`,
+/// which calls [`crate::install::ensure_elevated`] first. So a parent installed and configured an
+/// integration from their phone and then had to walk to the child's PC and open an administrator
+/// console to finish. That step is the reason the feature goes unused, and `O92`'s revocation plus
+/// the Integrations card's device list are what made adding this safe to do: mint and revoke now
+/// live on the same card, so a credential created here is visible and endable in the same place.
+///
+/// **The elevation check it bypasses was never a decision about credentials.** Its own comment
+/// records why it is there — minting writes into the ACL-locked data dir, so the *CLI* needs
+/// elevation the way `install` does. This service already runs as SYSTEM and can write that file.
+/// There was no standing policy that creating a credential requires physical access; there was a
+/// user-mode process that could not reach a file.
+///
+/// **What is a real trade, and what replaces it.** `pairing`'s module doc states the model the
+/// console gave: the token is printed on a screen in the child's house, so "the exposure window is
+/// while the parent is standing at the machine, and it closes the instant they scan". Minting here
+/// trades that for an authentication model, and it cannot be narrowed back with a LAN check —
+/// `security::require_lan_peer` is on the outer router, and `docs/REMOTE-ACCESS.md` is explicit
+/// that remote access works by terminating a tunnel *inside* the LAN, so a remote parent is
+/// indistinguishable from a local one by design. So the bound is **step-up authentication**: the
+/// password is re-entered for this action alone, which is what GitHub requires before it will
+/// create a token. Mirrors [`change_password`]'s check exactly, including auditing the refusal.
+///
+/// The minted credential is strictly weaker per request than the session that asked for it — a
+/// dashboard session already reaches `POST /api/extra-time` at up to
+/// [`MAX_REQUEST_MINUTES`] and may repeat — but it is *durable* in a way that session is not, which
+/// is the whole reason the step-up is here rather than the route being open to any live session.
+///
+/// **The token is returned in a response body and never in a URL**, and the QR is inlined rather
+/// than served from a second route, because a route that rendered the code would need the token as
+/// a parameter — putting a live credential in a request line, a proxy log and a browser history.
+///
+/// Installed, not *enabled*: pairing a switched-off integration is a legitimate order of
+/// operations (set it up, switch it on later), and the credential simply grants nothing until the
+/// toggle moves — which is exactly what disable is documented to mean.
+pub async fn pair_provider(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<PairProviderBody>,
+) -> Result<Json<Value>, AppError> {
+    if !valid_provider_name(&name) {
+        return Err(AppError::BadRequest(format!(
+            "provider name must be 1-{MAX_SOURCE_LEN} characters of a-z, 0-9, _ or -"
+        )));
+    }
+    // Checked before the password so a typo does not cost an Argon2 verification, and it leaks
+    // nothing: a dashboard session can already list the registry from `GET /api/providers`.
+    let (installed, port, current_hash) = {
+        let cfg = crate::state::recover_read(&state.config);
+        (
+            cfg.providers.contains_key(&name),
+            cfg.port,
+            cfg.password_hash.clone(),
+        )
+    };
+    if !installed {
+        // The wording `provider_authority` uses, so a client classifies this the same way it
+        // classifies a refused grant or a refused read.
+        return Err(AppError::BadRequest(format!(
+            "no '{name}' integration is installed"
+        )));
+    }
+
+    let candidate = body.password;
+    let ok = spawn(move || crate::auth::verify_password(&candidate, &current_hash)).await?;
+    if !ok {
+        state
+            .audit
+            .record("pairing_mint_refused", json!({ "source": name }));
+        return Err(AppError::Unauthorized);
+    }
+
+    // One hop to the blocking pool for all of it: minting writes a file, the fingerprint is a
+    // read, and enumerating reachable hosts touches the network interfaces.
+    let source = name.clone();
+    let minted = spawn(move || {
+        let paths = crate::config::data_paths();
+        let token = crate::pairing::mint(
+            &paths.pairing,
+            crate::pairing::Scope::Integration { source },
+        )
+        .map_err(|e| e.context("minting a pairing token"))?;
+        let fingerprint = crate::cert::read_fingerprint(&paths.cert).ok();
+        // The same list `print_access_block` shows, and the first entry for the same reason: the
+        // QR is for a phone on the house network, not for whatever address this parent's browser
+        // happens to have reached us on — which may be a tunnel the phone cannot use.
+        let host = crate::cert::reachable_hosts()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "localhost".to_string());
+        let url = crate::pairing::pair_url(&host, port, &token, fingerprint.as_deref());
+        let qr = crate::pairing::qr_svg(&url);
+        anyhow::Ok((token, url, qr))
+    })
+    .await?;
+    let (token, url, qr) = minted.map_err(AppError::Internal)?;
+
+    // **The event records that a credential was made, never which one.** The audit log is readable
+    // by every dashboard session and is carried out of the machine by `/api/export`; a token in it
+    // would outlive its fifteen-minute window in the one place nothing expires.
+    state
+        .audit
+        .record("pairing_minted", json!({ "source": name }));
+
+    Ok(Json(json!({
+        "token": token,
+        "url": url,
+        "expires_in_secs": crate::pairing::TTL_SECS,
+        "qr_svg": qr,
+    })))
+}
+
 /// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the
 /// effective budget (base + granted extra) plus per-app usage for apps that have a limit. The
 /// numbers come from the enforcer's persisted sidecar (up to one 30s tick behind live).

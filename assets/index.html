@@ -1007,9 +1007,54 @@
                            x-model.number="row.minutes" :aria-label="row.name"
                            @change="saveProvider(row)" />
                     <span class="text-sm opacity-60">min</span>
+                    <button class="btn btn-ghost btn-xs" @click="startPairing(row.name)">Pair</button>
                     <button class="btn btn-ghost btn-xs" @click="removeProvider(row.name)">Remove</button>
                   </div>
                 </template>
+
+                <!-- Pairing this integration (F7). The password is asked for again here, for this
+                     action alone: it creates a credential that outlives the session creating it. -->
+                <div class="rounded border border-base-300 p-3" x-show="pairingFor">
+                  <p class="text-sm font-medium">
+                    Connect <span x-text="pairingFor"></span> to a phone
+                  </p>
+
+                  <div x-show="!pairResult">
+                    <p class="mt-1 text-sm opacity-70">
+                      Enter your dashboard password once more. This creates a link that lets that
+                      one app add screen time &mdash; it cannot do anything else, and you can end it
+                      from <em>Signed-in devices</em> at any time.
+                    </p>
+                    <form class="mt-2 flex flex-wrap items-center gap-2" @submit.prevent="confirmPairing()"
+                          aria-label="Create a pairing link">
+                      <input type="password" class="input input-sm flex-1" autocomplete="current-password"
+                             placeholder="Dashboard password" aria-label="Dashboard password"
+                             x-model="pairPassword" />
+                      <button class="btn btn-sm btn-primary" type="submit" :disabled="pairingBusy">
+                        <span x-show="pairingBusy" class="loading loading-spinner loading-xs"></span>
+                        Create link
+                      </button>
+                      <button class="btn btn-ghost btn-sm" type="button" @click="cancelPairing()">Cancel</button>
+                    </form>
+                  </div>
+
+                  <div x-show="pairResult">
+                    <p class="mt-1 text-sm opacity-70">
+                      Scan this with the phone that has the app on it. It works once, and it stops
+                      working after
+                      <span x-text="pairExpiryLabel(pairResult && pairResult.expires_in_secs)"></span>.
+                    </p>
+                    <!-- A data URI rather than x-html: the CSP already allows `img-src data:`, and
+                         this page has no markup sinks. See `qrDataUri`. -->
+                    <img class="mt-2 h-48 w-48 rounded bg-white p-1" alt="Pairing QR code"
+                         :src="qrDataUri(pairResult && pairResult.qr_svg)" x-show="pairResult && pairResult.qr_svg" />
+                    <p class="mt-2 text-xs opacity-60">
+                      Or type this address into the phone&rsquo;s browser:
+                    </p>
+                    <p class="break-all font-mono text-xs" x-text="pairResult && pairResult.url"></p>
+                    <button class="btn btn-ghost btn-sm mt-2" @click="cancelPairing()">Done</button>
+                  </div>
+                </div>
               </div>
               <p class="text-sm opacity-50" x-show="providerRows.length === 0 && !loadingProviders">
                 No integrations installed yet.

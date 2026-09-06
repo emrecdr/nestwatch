@@ -848,6 +848,76 @@ function app() {
       }
     },
 
+    // --- Minting a pairing from the card (`F7`) ------------------------------------------------
+    //
+    // Which provider row is mid-pairing, the password being re-entered for it, and what came back.
+    // One set of fields rather than per-row state: a parent pairs one integration at a time, and
+    // per-row state would keep a password alive on a row they navigated away from.
+    pairingFor: null,
+    pairPassword: "",
+    pairResult: null,
+    pairingBusy: false,
+
+    startPairing(name) {
+      this.pairingFor = name;
+      this.pairPassword = "";
+      this.pairResult = null;
+    },
+
+    cancelPairing() {
+      this.pairingFor = null;
+      this.pairPassword = "";
+      this.pairResult = null;
+    },
+
+    // Ask the server to mint a link, re-sending the password for this action alone.
+    //
+    // The password is cleared on every path out — success, refusal, and network failure. A field
+    // that kept it would leave the parent's password sitting in a live Alpine component for as
+    // long as the tab stays open, which is the opposite of what re-asking for it is *for*.
+    async confirmPairing() {
+      const name = this.pairingFor;
+      if (!name || this.pairingBusy) return;
+      this.pairingBusy = true;
+      const password = this.pairPassword;
+      this.pairPassword = "";
+      try {
+        const r = await fetch("/api/providers/" + encodeURIComponent(name) + "/pair", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password }),
+        });
+        if (r.ok) {
+          this.pairResult = await r.json();
+        } else {
+          this.toast(await this.rejection(r, "Could not create a pairing link"), "error");
+        }
+      } catch {
+        this.toast("Request failed", "error");
+      } finally {
+        this.pairingBusy = false;
+      }
+    },
+
+    // The QR as an <img> source rather than markup.
+    //
+    // The server sends SVG source, and the obvious way to show it is `x-html`. This app has no
+    // `x-html` anywhere, and a QR is a poor reason to introduce the first one: a data URI renders
+    // the identical picture through `img-src 'self' blob: data:`, which the CSP already allows,
+    // and an <img> cannot execute whatever it is handed.
+    qrDataUri(svg) {
+      if (!svg) return "";
+      return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+    },
+
+    // "15 minutes", from the server's number. The client must not own this threshold — the server
+    // decides when the token dies, and a hard-coded 15 here would keep saying so after a change.
+    pairExpiryLabel(secs) {
+      if (typeof secs !== "number" || secs <= 0) return "";
+      const mins = Math.round(secs / 60);
+      return mins === 1 ? "1 minute" : mins + " minutes";
+    },
+
     // --- The join (`F6`) ---------------------------------------------------------------------
     //
     // Both halves of "StudyGo: on, 25 min, paired to one phone" were already on this page, in two

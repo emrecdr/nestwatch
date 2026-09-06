@@ -86,6 +86,34 @@ handed answers the dashboard's whole day — per-app minutes, group pools, focus
 `auth::INTEGRATION_USAGE_FIELDS`, which is `extra_mins`. `Scope::Dashboard` is unchanged, because
 the same route is the browser's and the Android client's.
 
+**A pairing may now be minted from the dashboard, behind a second password check.**
+`POST /api/providers/{name}/pair` mints an `Integration`-scoped token for an installed provider.
+Until this, `pairing::mint` had one caller — `nestwatch pair`, behind `install::ensure_elevated`.
+
+That elevation check was never a policy about credentials, which is what made this decidable: its
+own comment records that minting writes into the ACL-locked data dir, so the *CLI* needs elevation
+the way `install` does. The service already runs as SYSTEM and can write that file.
+
+What *is* a real trade is the exposure model. `pairing`'s module doc states the one the console
+gave: the token is printed on a screen in the child's house, so the window is "while the parent is
+standing at the machine, and it closes the instant they scan". Minting from the dashboard replaces
+that with an authentication model, and it cannot be narrowed back with a LAN check —
+`require_lan_peer` is on the outer router, and remote access here works by terminating a tunnel
+*inside* the LAN, so a remote parent and a local one are indistinguishable by design.
+
+So the bound is **step-up authentication**: the password is re-entered for this action alone,
+mirroring `change_password`'s check including the audited refusal. The minted credential is weaker
+per request than the session that asked for it — a dashboard session already reaches
+`POST /api/extra-time` at up to `MAX_REQUEST_MINUTES`, repeatably — but it is *durable* in a way
+that session is not, and durability is what the second password buys against.
+
+Two properties are asserted rather than described. The token is returned in a response body and
+never in a URL, and the QR is inlined rather than served from a second route — a route that
+rendered it would need the token as a parameter, putting a live credential in a request line and a
+browser history. And the audit event records that a credential was made, never which one: the log
+is readable by every dashboard session and leaves the machine through `/api/export`, so a token in
+it would outlive its fifteen-minute window in the one place nothing expires.
+
 **`GET /session` reports the registry entry as well as the credential.** Authority and installation
 are two facts and reporting only one of them let a pairing screen say "working" about a link whose
 every grant was refused. It is not a widening: the endpoint already answered `authenticated` and

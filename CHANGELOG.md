@@ -44,6 +44,14 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   out was to have your child do the work and watch nothing arrive. The app can now ask up front,
   and read the minutes you set, so it can say "3 of 20 questions towards 25 minutes" instead of
   leaving the reward unnamed.
+- **You can now connect an app to a phone without walking to your child's PC.** Setting up StudyGo
+  meant configuring it from anywhere and then finishing at the machine itself, in an administrator
+  console, because that was the only place that could produce the QR code. The Integrations card
+  now has a **Pair** button that shows the code directly. It asks for your dashboard password again
+  first — the link it creates keeps working after you close the browser, so it is worth one more
+  step — and the code stops working after fifteen minutes or the first phone that scans it,
+  whichever comes first. The link can only add screen time, and *Signed-in devices* is where you end
+  it.
 
 ## [0.7.0] — 2026-09-04
 

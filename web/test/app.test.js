@@ -2384,3 +2384,67 @@ test("loadList reports whether it got an answer, so a caller can tell empty from
   const gone = loadApp({ fetch: async () => ({ ok: false, status: 401 }) });
   assert.equal(await gone.loadList("/api/sessions", "sessions"), false);
 });
+
+// --- Minting a pairing from the card (F7) -----------------------------------------------------
+
+test("qrDataUri produces an img source, not markup", () => {
+  // The server sends SVG source and the obvious way to show it is x-html. This app has no markup
+  // sinks and a QR is a poor reason to add the first one, so the picture goes through a data URI
+  // the CSP already permits (`img-src 'self' blob: data:`).
+  const app = withState({});
+  const uri = app.qrDataUri('<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1z"/></svg>');
+  assert.match(uri, /^data:image\/svg\+xml;charset=utf-8,/);
+  assert.doesNotMatch(uri, /</, "every angle bracket must be percent-encoded, or it is markup again");
+});
+
+test("qrDataUri yields nothing rather than a broken image when there is no QR", () => {
+  // `qr_svg` is null when a URL will not fit in a code, and the server still returns a usable
+  // link. An <img> pointed at "data:image/svg+xml;charset=utf-8," renders as broken.
+  const app = withState({});
+  assert.equal(app.qrDataUri(null), "");
+  assert.equal(app.qrDataUri(undefined), "");
+});
+
+test("pairExpiryLabel reads the server's number instead of restating fifteen", () => {
+  // The client must not own this threshold. A hard-coded "15 minutes" here would keep saying so
+  // after TTL_SECS changed, which is the same class of bug O72 records for RENEW_WARN_DAYS.
+  const app = withState({});
+  assert.equal(app.pairExpiryLabel(900), "15 minutes");
+  assert.equal(app.pairExpiryLabel(60), "1 minute", "singular, not '1 minutes'");
+  assert.equal(app.pairExpiryLabel(undefined), "", "say nothing rather than invent a window");
+  assert.equal(app.pairExpiryLabel(0), "");
+});
+
+test("confirmPairing clears the password on every path out, including failure", async () => {
+  // Re-asking for the password is pointless if the field then holds it for as long as the tab is
+  // open. Checked on the refusal path specifically: the success path is the one you would think
+  // to clear.
+  const app = loadApp({ fetch: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  app.toast = () => {};
+  app.pairingFor = "studygo";
+  app.pairPassword = "hunter2";
+
+  await app.confirmPairing();
+
+  assert.equal(app.pairPassword, "", "a refused attempt must not leave the password in memory");
+  assert.equal(app.pairResult, null, "and must not show a link it never received");
+});
+
+test("confirmPairing keeps what the server minted", async () => {
+  const app = loadApp({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ token: "abc", url: "https://10.0.0.5:9443/p/abc", expires_in_secs: 900 }),
+    }),
+  });
+  app.pairingFor = "studygo";
+  app.pairPassword = "correct-horse";
+
+  await app.confirmPairing();
+
+  assert.equal(app.pairPassword, "");
+  assert.equal(app.pairResult.url, "https://10.0.0.5:9443/p/abc");
+  assert.equal(app.pairingBusy, false, "the button must not stay disabled after it finished");
+});
+
