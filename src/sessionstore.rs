@@ -159,11 +159,12 @@ impl FileSessionStore {
     /// Sign out every id in `ids`, returning how many were actually there.
     ///
     /// **One write, not one per session**, which is the whole reason this exists next to
-    /// [`revoke`]. [`persist`](Self::persist) re-serializes the entire remaining map and does an
-    /// atomic write for each call, so revoking a set one id at a time costs a full pass over the
-    /// store per member. The set is small — the caller is `api::delete_provider` ending the
-    /// pairings one integration issued — so this is tidiness rather than a rescue, but a loop
-    /// that fsyncs per element is the kind of shape that stops being tidy when the set grows.
+    /// [`revoke`](Self::revoke). [`persist`](Self::persist) re-serializes the entire remaining
+    /// map and does an atomic write for each call, so revoking a set one id at a time costs a
+    /// full pass over the store per member. The set is small — the caller is
+    /// `api::delete_provider` ending the pairings one integration issued — so this is tidiness
+    /// rather than a rescue, but a loop that fsyncs per element is the kind of shape that stops
+    /// being tidy when the set grows.
     ///
     /// Takes the lock once as well, so a concurrent reader sees the whole revocation or none of
     /// it rather than a device list with half the set still in it.
