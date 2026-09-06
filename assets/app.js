@@ -864,10 +864,12 @@ function app() {
       this.pairResult = null;
     },
 
+    // Closing the panel is opening it on no row: the two differ only in which row is active, and
+    // the password and the minted link must be dropped either way. Delegating rather than
+    // repeating them means a fifth field added to this group cannot be cleared on one path and
+    // left behind on the other.
     cancelPairing() {
-      this.pairingFor = null;
-      this.pairPassword = "";
-      this.pairResult = null;
+      this.startPairing(null);
     },
 
     // Ask the server to mint a link, re-sending the password for this action alone.
@@ -882,11 +884,10 @@ function app() {
       const password = this.pairPassword;
       this.pairPassword = "";
       try {
-        const r = await fetch("/api/providers/" + encodeURIComponent(name) + "/pair", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password }),
-        });
+        const r = await this.postJSON(
+          "/api/providers/" + encodeURIComponent(name) + "/pair",
+          { password },
+        );
         if (r.ok) {
           this.pairResult = await r.json();
         } else {

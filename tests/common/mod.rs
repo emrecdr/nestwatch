@@ -209,10 +209,26 @@ pub async fn pair_with(
     scope: nestwatch::pairing::Scope,
     user_agent: Option<&str>,
 ) -> Option<String> {
-    use axum::http::{Request, header};
-    use tower::ServiceExt;
     let token = nestwatch::pairing::mint(&nestwatch::config::data_paths().pairing, scope)
         .expect("minting a pairing token");
+    redeem_token(app, &token, user_agent).await
+}
+
+/// Redeem `token` the way a phone does, returning the session cookie it produced.
+///
+/// Split out of [`pair_with`] rather than living inside it, because a token does not always come
+/// from a local `mint`. `provider_pairing.rs` redeems one that arrived over HTTP from
+/// `POST /api/providers/{name}/pair` — so it cannot call `pair_with`, and had grown its own copy
+/// of exactly these five lines. That made it the *fourth* copy of a header dance `pair_with`'s own
+/// doc says it was consolidated to end, which is a good sign the seam was in the wrong place
+/// rather than that anyone was careless.
+///
+/// `None` when no cookie came back, which is what a refused redemption looks like — callers assert
+/// on that rather than on a status, because the cookie is the thing that decides whether the
+/// caller is signed in.
+pub async fn redeem_token(app: &Router, token: &str, user_agent: Option<&str>) -> Option<String> {
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
     let mut req = Request::builder().uri(format!("/p/{token}"));
     if let Some(agent) = user_agent {
         req = req.header(header::USER_AGENT, agent);

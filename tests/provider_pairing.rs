@@ -32,18 +32,9 @@ use serde_json::{Value, json};
 
 mod common;
 use common::{
-    PASSWORD, ScratchDir, app_with_audit_file, body_json, configure_provider, get, login, send_json,
+    PASSWORD, ScratchDir, app_with_audit_file, body_json, configure_provider, get, login,
+    redeem_token, send_json,
 };
-
-/// Redeem a minted token the way a phone does, returning the session cookie it produced.
-async fn redeem(app: &axum::Router, token: &str) -> Option<String> {
-    let res = get(app, &format!("/p/{token}"), None).await;
-    res.headers()
-        .get(axum::http::header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| c.split(';').next())
-        .map(str::to_owned)
-}
 
 #[tokio::test]
 async fn a_parent_can_mint_a_pairing_without_leaving_the_dashboard() {
@@ -133,7 +124,9 @@ async fn a_parent_can_mint_a_pairing_without_leaving_the_dashboard() {
         // The whole point: it redeems, and what it redeems to is the integration — not a
         // dashboard. A mint that produced parent authority would be `O89` reopened from the
         // other end.
-        let phone = redeem(&app, &token).await.expect("the token must redeem");
+        let phone = redeem_token(&app, &token, None)
+            .await
+            .expect("the token must redeem");
         let (status, session) = send_json(&app, &phone, "GET", "/session", json!({})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
@@ -150,7 +143,7 @@ async fn a_parent_can_mint_a_pairing_without_leaving_the_dashboard() {
         // Single-use, as `pairing::redeem` promises. Worth pinning here as well as there,
         // because this route is a second way to reach that file.
         assert!(
-            redeem(&app, &token).await.is_none(),
+            redeem_token(&app, &token, None).await.is_none(),
             "a minted token is spent by the first phone that scans it"
         );
     }
