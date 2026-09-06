@@ -1266,7 +1266,9 @@ pub async fn pair_provider(
         // into would spend the parent's pairing on a link nothing can redeem. Falling back to
         // `localhost` — which this did — encodes an address that resolves on the child's PC and
         // nowhere else, so the QR scans, the phone fails to connect, and nothing says why.
-        let Some(host) = crate::cert::reachable_hosts().into_iter().next() else {
+        let hosts = crate::cert::reachable_hosts();
+        let crate::pairing::PairingAddress::Advertise(host) = crate::pairing::address_for(&hosts)
+        else {
             return anyhow::Ok(None);
         };
         let token = crate::pairing::mint(
@@ -1278,7 +1280,7 @@ pub async fn pair_provider(
         // Both forms from the one function that defines them, which is what keeps this handler and
         // the install console from disagreeing about what a pairing link is.
         let (scanned, typed) =
-            crate::pairing::link_forms(&host, port, &token, fingerprint.as_deref());
+            crate::pairing::link_forms(host, port, &token, fingerprint.as_deref());
         let qr = crate::pairing::qr_svg(&scanned);
         anyhow::Ok(Some((token, typed, qr)))
     })

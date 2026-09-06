@@ -278,6 +278,62 @@ pub fn pair_url(host: &str, port: u16, token: &str, fingerprint: Option<&str>) -
     }
 }
 
+/// What a pairing request resolves to before any token exists.
+///
+/// **A named outcome rather than an `Option`, because the failure had a wrong answer available.**
+/// `api::pair_provider` shipped with `reachable_hosts().into_iter().next().unwrap_or_else(||
+/// "localhost".to_string())` — which is what an `Option` invites: there is always something
+/// plausible to substitute, and `localhost` resolves on the child's PC and nowhere else, so the
+/// QR scanned, the phone failed to connect, and nothing said why. Making "there is no address" a
+/// variant means the caller has to answer it rather than fill it in.
+///
+/// Borrowed from the caller's list rather than owned: both callers already hold the `Vec` and
+/// neither needs it to outlive the decision.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PairingAddress<'a> {
+    /// Advertise this host. The first entry of [`crate::cert::reachable_hosts`] — the LAN address
+    /// the certificate also covers, so the parent never gets a name mismatch stacked on the trust
+    /// warning.
+    Advertise(AdvertisedHost<'a>),
+    /// This machine has no address worth putting in a link. Callers must refuse: the install
+    /// console prints how to get back on the network, and the API answers `400`.
+    Offline,
+}
+
+/// Which address a pairing link should carry, given what the machine can be reached at.
+///
+/// One line, and it exists anyway — for the reason `O93` records. The property worth pinning is
+/// not the lookup but the **refusal**: that an empty list produces no address at all rather than a
+/// loopback one, and that a caller therefore cannot mint a token it has nowhere to point. Both
+/// callers ask through here so the console and the dashboard cannot answer it differently, which
+/// is the same argument [`link_forms`] makes one function down.
+pub fn address_for(hosts: &[String]) -> PairingAddress<'_> {
+    match hosts.first() {
+        Some(host) => PairingAddress::Advertise(AdvertisedHost(host)),
+        None => PairingAddress::Offline,
+    }
+}
+
+/// A host [`address_for`] decided is worth advertising.
+///
+/// **A newtype with a private field, which is the whole mechanism.** The only way to obtain one is
+/// `address_for` returning [`PairingAddress::Advertise`], and [`link_forms`] takes this rather than
+/// a `&str` — so a caller cannot hand a pairing link a host it invented. Reintroducing the shipped
+/// defect (`.unwrap_or("localhost")`) stops being a test failure and becomes a compile error, which
+/// matters because the test could only ever watch the one path it was pointed at: a handler that
+/// bypassed `address_for` and inlined the fallback passed the whole suite, measured 2026-09-06.
+///
+/// The same argument [`Scope`] makes about redemption — there is no success value that does not say
+/// what it is worth — applied to the other half of the same link.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct AdvertisedHost<'a>(&'a str);
+
+impl std::fmt::Display for AdvertisedHost<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
 /// The two forms one pairing link takes: `(scanned, typed)`.
 ///
 /// **A pairing link is two strings, and this is the one place that says so.** The QR carries the
@@ -293,11 +349,12 @@ pub fn pair_url(host: &str, port: u16, token: &str, fingerprint: Option<&str>) -
 /// link *is* only by both remembering the same paragraph is the arrangement that produced that,
 /// and a shared function is what ends it.
 pub fn link_forms(
-    host: &str,
+    host: AdvertisedHost<'_>,
     port: u16,
     token: &str,
     fingerprint: Option<&str>,
 ) -> (String, String) {
+    let host = host.0;
     (
         pair_url(host, port, token, fingerprint),
         pair_url(host, port, token, None),
@@ -308,13 +365,44 @@ pub fn link_forms(
 mod tests {
     use super::*;
 
+    /// An offline machine yields no address — not a plausible-looking one.
+    ///
+    /// **This is `O93`'s regression test, and the assertion that matters is the second.** The
+    /// shipped defect was not a missing check; it was a fallback that produced `localhost`, which
+    /// type-checks, reads fine, and builds a QR a phone cannot use. A test asserting only
+    /// "returns Offline" would still pass if someone reintroduced the substitution one layer up,
+    /// so this also states the thing that must never come back.
+    #[test]
+    fn an_offline_machine_gets_no_pairing_address_at_all() {
+        assert_eq!(address_for(&[]), PairingAddress::Offline);
+        for wrong in ["localhost", "127.0.0.1", "::1", "0.0.0.0"] {
+            assert_ne!(
+                address_for(&[]),
+                PairingAddress::Advertise(AdvertisedHost(wrong)),
+                "an empty host list must refuse, never substitute {wrong} — a phone on the LAN \
+                 cannot reach any of these, and the QR would scan and then fail silently"
+            );
+        }
+    }
+
+    /// The first entry is the one advertised, because it is the one the certificate covers.
+    #[test]
+    fn the_first_reachable_host_is_the_one_advertised() {
+        let hosts = vec!["10.0.0.5".to_string(), "childpc".to_string()];
+        assert_eq!(
+            address_for(&hosts),
+            PairingAddress::Advertise(AdvertisedHost("10.0.0.5"))
+        );
+    }
+
     /// The fingerprint belongs in exactly one of the two forms.
     ///
     /// Asserted in both directions on purpose: "the QR has it" alone stays true if the typed form
     /// gains it too, which is precisely the defect this function was extracted to prevent.
     #[test]
     fn the_fingerprint_rides_the_scanned_form_and_not_the_typed_one() {
-        let (scanned, typed) = link_forms("10.0.0.5", 9443, "TOKEN123", Some("AA:BB"));
+        let (scanned, typed) =
+            link_forms(AdvertisedHost("10.0.0.5"), 9443, "TOKEN123", Some("AA:BB"));
         assert!(
             scanned.contains("#fp=AA:BB"),
             "the QR carries it: {scanned}"
@@ -329,7 +417,7 @@ mod tests {
     /// fragment, which no server ever sees.
     #[test]
     fn both_forms_are_the_same_link() {
-        let (scanned, typed) = link_forms("host.local", 8443, "ABC", Some("FF"));
+        let (scanned, typed) = link_forms(AdvertisedHost("host.local"), 8443, "ABC", Some("FF"));
         assert_eq!(scanned, format!("{typed}#fp=FF"));
         assert!(typed.contains("/p/ABC"));
     }
@@ -338,7 +426,7 @@ mod tests {
     /// collapse to one string rather than the caller losing a link.
     #[test]
     fn without_a_fingerprint_the_two_forms_are_identical() {
-        let (scanned, typed) = link_forms("10.0.0.5", 9443, "T", None);
+        let (scanned, typed) = link_forms(AdvertisedHost("10.0.0.5"), 9443, "T", None);
         assert_eq!(scanned, typed);
     }
 

@@ -297,7 +297,11 @@ pub fn uninstall() -> Result<()> {
 /// printing plain text. Nothing here is worth failing an install over.
 pub fn print_access_block(port: u16, scope: crate::pairing::Scope) {
     let hosts = crate::cert::reachable_hosts();
-    let Some((primary, rest)) = hosts.split_first() else {
+    // The same decision `api::pair_provider` makes, asked the same way. `rest` is this caller's
+    // alone — it lists the other addresses underneath — but *whether there is an address at all*
+    // is shared, which is the half that drifted before.
+    let crate::pairing::PairingAddress::Advertise(primary) = crate::pairing::address_for(&hosts)
+    else {
         println!(
             "\nCouldn't detect this PC's network address — is it offline? Once it's on the home\n\
              Wi-Fi, run `ipconfig`, then browse to https://<that-address>:{port}"
@@ -355,7 +359,9 @@ pub fn print_access_block(port: u16, scope: crate::pairing::Scope) {
 
     println!("  https://{primary}:{port}");
     let machine_name = crate::cert::hostname();
-    for host in rest {
+    // Everything after the advertised one. Safe to slice unconditionally: reaching this line means
+    // `address_for` returned `Advertise`, which only happens when `hosts` has a first element.
+    for host in &hosts[1..] {
         println!(
             "  https://{host}:{port}   {}",
             alternate_note(host, machine_name.as_deref())

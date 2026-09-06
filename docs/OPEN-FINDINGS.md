@@ -1791,38 +1791,3 @@ on the local subnet. Until then the two gates agree and there is nothing to do.
 **Filed by the concurrent session** working `docs/REMOTE-ACCESS.md`; the number was reserved here
 because this tree held uncommitted edits to this file. Both source claims re-verified independently
 before it was written down.
-
-### O93 · Nothing catches the pairing link pointing at `localhost`
-
-`api::pair_provider` mints a link from the first entry of `cert::reachable_hosts()`. Until this was
-fixed it fell back to the literal `"localhost"` when that list was empty, encoding an address that
-resolves on the child's PC and nowhere else: the QR scans, the phone cannot connect, and nothing
-says why. It now refuses instead, returning `400` and naming the network as the thing to fix —
-which is what `install::print_access_block` has always done, one file away.
-
-**The fix is unguarded, and that is the finding.** Measured 2026-09-06 by putting the fallback back
-and running `cargo test --all-targets`: **628 tests, all green, exit 0**. Nothing in the suite
-distinguishes a pairing link a phone can open from one it cannot.
-
-The blocker is that `cert::reachable_hosts` reads live machine state — `primary_lan_ip` opens a UDP
-socket, `hostname` reads `COMPUTERNAME`/`HOSTNAME` — so the empty case cannot be produced from a
-test on a developer machine that is online. The half that *was* extractable is now covered:
-`pairing::link_forms` is pure and carries three tests, and reintroducing the fingerprint into the
-typed form fails two of them (verified by mutation, both directions). The ordering property —
-*check for an address before minting, so an offline PC does not spend the parent's one-use token* —
-is the part still resting on one visible line and nobody changing it.
-
-**Fix.** Make the host list a parameter rather than a call. Threading it from `AppState`, or taking
-`&[String]` and letting the handler do the lookup, puts the empty case inside a test's reach; the
-decision it feeds is already a pure function.
-
-**Do not** widen `link_forms` to take the whole list and return `Option`. That was tried while
-writing this: it forces the mint *above* the check to have a token to build with, which is the
-ordering this entry exists to protect.
-
-**Trigger.** Next change to `pair_provider`, or the first time `reachable_hosts` gains a second
-caller in the API layer — at which point the injection pays for two things rather than one.
-
-This is `O75`'s class ("pure helpers are tested thoroughly; the lines that call them are not"),
-recorded separately because the uncovered line here decides whether a shipped feature works at all
-rather than how it reports.
