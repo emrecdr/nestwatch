@@ -2523,3 +2523,51 @@ test("every key the markup calls t() with is answered by the English table", () 
       `${missing.join(", ")}`,
   );
 });
+
+// A string the parent reads is never a literal at the call site.
+//
+// The Rust half enforces the same rule with `tests/translated_strings.rs`, and for the same reason
+// it gives: the two strings in that crate that were never translated were exactly the two built as
+// bare literals instead of going through a function taking the language. A literal cannot be
+// translated by a table it never reaches, and nothing about it looks wrong in review.
+//
+// Scoped to the three calls that put text in front of a person. A broad "no capitalised literals"
+// rule would flag URLs, event names and CSS classes, and a guard that cries wolf gets deleted.
+test("no dashboard string reaches a person as a literal at the call site", () => {
+  const src = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "app.js"),
+    "utf8",
+  );
+  // `toast("...")`, `rejection(r, "...")` — a literal in the message position.
+  const offenders = [
+    ...src.matchAll(/\b(toast)\(\s*"([^"]{2,})"/g),
+    ...src.matchAll(/\b(rejection)\([A-Za-z_$][\w$]*,\s*"([^"]{2,})"/g),
+  ].map((m) => `${m[1]}(): ${JSON.stringify(m[2])}`);
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `these reach a parent in English whatever language they chose — move each into the UI table ` +
+      `and call t()/tf():\n  ${offenders.join("\n  ")}`,
+  );
+});
+
+test("every UI key is used, and every used key exists", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const js = readFileSync(join(root, "assets", "app.js"), "utf8");
+  const html = readFileSync(join(root, "assets", "index.html"), "utf8");
+  const en = uiTables().en;
+
+  const used = new Set([
+    ...[...html.matchAll(/t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]),
+    ...[...js.matchAll(/\bthis\.tf?\("([A-Za-z0-9]+)"/g)].map((m) => m[1]),
+  ]);
+
+  const missing = [...used].filter((k) => !en.has(k));
+  assert.deepEqual(missing, [], `called but absent from the table: ${missing.join(", ")}`);
+
+  // A dead key is not a bug, but it is a translation someone paid for and nobody reads, and it is
+  // the shape a renamed key leaves behind.
+  const dead = [...en].filter((k) => !used.has(k));
+  assert.deepEqual(dead, [], `in the table but never used: ${dead.join(", ")}`);
+});

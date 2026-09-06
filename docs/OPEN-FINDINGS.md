@@ -975,12 +975,12 @@ added so the tests cannot go stale when a third language lands.
 
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
-`assets/app.js` is **3,234 lines** registering a single `Alpine.data("app", app)` with ~154
+`assets/app.js` is **3,389 lines** registering a single `Alpine.data("app", app)` with ~154
 methods, consumed by one `x-data="app"` root across 1,796 lines of markup. By comparison `src/`
 is 43 modules with a stated responsibility each. *(Measured 2026-09-07.)*
 
 **Most of the latest jump is a string table, not logic, and that distinction matters here.** The
-dashboard's own translation landed 142 keys × three languages as a `const UI` literal at the top of
+dashboard's own translation landed 189 keys × three languages as a `const UI` literal at the top of
 the file — roughly 430 lines of data with no branches, no state and no reason to be read while
 following a method. It inflates every line count in this entry while making the *component* no
 harder to hold in your head, which is the thing the entry is actually about. If this is ever cut,
@@ -989,7 +989,7 @@ harder to hold in your head, which is the thing the entry is actually about. If 
 **The premise most reviews attach to this is false, and it was false when they wrote it.** The
 argument arrives as "a component this size cannot be tested without a browser, so split it to
 make it testable". `web/test/harness.js` has evaluated `app.js` in a `vm` context since
-`4434447`, and `web/test/app.test.js` is **2,525 lines** exercising its pure methods. Reachability
+`4434447`, and `web/test/app.test.js` is **2,573 lines** exercising its pure methods. Reachability
 was never the problem and splitting would not improve it. Anyone re-raising this should check the
 harness before repeating the testability argument.
 
@@ -1798,3 +1798,39 @@ on the local subnet. Until then the two gates agree and there is nothing to do.
 **Filed by the concurrent session** working `docs/REMOTE-ACCESS.md`; the number was reserved here
 because this tree held uncommitted edits to this file. Both source claims re-verified independently
 before it was written down.
+
+### O94 · Server refusals reach a translated dashboard in English
+
+The dashboard now speaks English, Dutch or Turkish, and `app.js` holds every string it builds
+itself. It does not hold the ones the **server** writes.
+
+`rejection()` prefers `body.error` and falls back to the translated client string only when the
+server gave none — deliberately, and the reason is good: those messages name *which* rule was
+broken ("daily limit must be <= 10080 minutes"), where the generic fallback names only that
+something was. Losing that would send a parent to a field they had not touched, which is the exact
+defect `rejection` was written to fix. So the fallback is the thing that must not win, and the
+English message is the better answer even in the wrong language.
+
+**Measured 2026-09-07:** seven static `AppError::{BadRequest,NotFound,Forbidden}` strings, plus the
+formatted ones from `Rules::validate` and `Policy::validate`. All English, all reachable by a parent
+whose dashboard is Turkish.
+
+**This is a consequence of the design, not an oversight in it.** The dashboard language lives in
+`localStorage` and is never sent — that is what keeps a parent's console preference from touching
+`config.language`, which is the child's. The server therefore cannot know which language to answer
+in, and giving it one means either sending the preference on every request (a header the Flutter
+client would also have to learn) or moving the setting server-side, which is the coupling the whole
+design exists to avoid.
+
+**Fix, if it is ever worth it.** Give `AppError` a machine-readable code beside its prose — a
+`{"error": "...", "code": "daily_limit_too_large"}` shape — and let each client translate the code
+it understands, falling back to the prose it does not. That keeps the server monolingual, needs no
+language on the wire, and the phone app gets the same benefit for free.
+
+**Do not** simply translate the seven strings in Rust against `config.language`. That is the child's
+language: a Dutch-speaking child's install would answer a Turkish-speaking parent in Dutch, which is
+worse than English and would look like a bug in the language setting rather than in the error path.
+
+**Trigger.** The first time a parent reports a message they cannot read, or the phone app grows its
+own translations — whichever comes first. Until then this is one English sentence at the moment
+something was already refused, on a dashboard whose furniture is in the right language.

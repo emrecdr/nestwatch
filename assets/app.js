@@ -233,6 +233,54 @@ const UI = {
     fullscreen: "⛶ Fullscreen",
     close: "✕ Close",
     escOrClickTheBackdrop: "Esc or click the backdrop to close",
+  
+    tSchedNeedsBothTimes: "A schedule needs both a start and an end time",
+    tClockReAnchoredTo: "Clock re-anchored to {}.",
+    tCodeCopied: "Code copied",
+    tCopyFailedSelectManually: "Copy failed — select it manually",
+    tCouldNotApplyRoutine: "Could not apply routine",
+    tCouldNotChangePassword: "Could not change password",
+    tCouldNotCreatePairingLink: "Could not create a pairing link",
+    tCouldNotDeleteRoutine: "Could not delete routine",
+    tCouldNotExtendBedtime: "Could not extend bedtime",
+    tCouldNotGenerateACode: "Could not generate a code",
+    tCouldNotGrantTime: "Could not grant time",
+    tCouldNotRemoveIntegration: "Could not remove integration",
+    tCouldNotSaveCurfew: "Could not save curfew",
+    tCouldNotSaveIntegration: "Could not save integration",
+    tCouldNotSaveRoutine: "Could not save routine",
+    tCouldNotSaveRules: "Could not save rules",
+    tCouldNotSignDeviceOut: "Could not sign that device out",
+    tCouldNotUpdateRequest: "Could not update the request",
+    tCouldntChangeLanguage: "Couldn't change the language.",
+    tCouldntCopySelectLink: "Couldn't copy — select the link instead",
+    tCouldntReAnchorClock: "Couldn't re-anchor the clock.",
+    tCouldntReachServer: "Couldn't reach the server.",
+    tCurfewSaved: "Curfew saved",
+    tCurrentPasswordWrong: "Current password is wrong",
+    tEnterARoutineName: "Enter a routine name",
+    tFailedLoadAccessLog: "Failed to load access log",
+    tFailedLoadIntegrations: "Failed to load integrations",
+    tFailedLoadCodes: "Failed to load one-time codes",
+    tFailedLoadProcesses: "Failed to load processes",
+    tFailedLoadRoutines: "Failed to load routines",
+    tFailedLoadTimeRequests: "Failed to load time requests",
+    tFailedLoadUsageHistory: "Failed to load usage history",
+    tKillRequestFailed: "Kill request failed",
+    tLinkCopied: "Link copied",
+    tLockRequestFailed: "Lock request failed",
+    tMinutesBetween1And240: "Minutes must be between 1 and 240",
+    tPasswordChanged: "Password changed",
+    tPasswordRequestFailed: "Password request failed",
+    tRequestFailed: "Request failed",
+    tRulesSaved: "Rules saved",
+    tSaveRequestFailed: "Save request failed",
+    tScreenshotFailed: "Screenshot failed",
+    tSettingsRestored: "Settings restored",
+    tSettingsNotRestored: "Settings were not restored",
+    tShutdownRequestFailed: "Shutdown request failed",
+    tSignedOut: "Signed out {}",
+    tChildPageIsNow: "The child's page is now {}.",
   },
   nl: {
     signInToContinue: "Meld je aan om verder te gaan",
@@ -377,6 +425,54 @@ const UI = {
     fullscreen: "⛶ Volledig scherm",
     close: "✕ Sluiten",
     escOrClickTheBackdrop: "Esc of klik naast het venster om te sluiten",
+  
+    tSchedNeedsBothTimes: "Een schema heeft zowel een begin- als een eindtijd nodig",
+    tClockReAnchoredTo: "Klok opnieuw verankerd op {}.",
+    tCodeCopied: "Code gekopieerd",
+    tCopyFailedSelectManually: "Kopiëren mislukt — selecteer het handmatig",
+    tCouldNotApplyRoutine: "Kon routine niet toepassen",
+    tCouldNotChangePassword: "Kon wachtwoord niet wijzigen",
+    tCouldNotCreatePairingLink: "Kon geen koppellink maken",
+    tCouldNotDeleteRoutine: "Kon routine niet verwijderen",
+    tCouldNotExtendBedtime: "Kon bedtijd niet verlengen",
+    tCouldNotGenerateACode: "Kon geen code maken",
+    tCouldNotGrantTime: "Kon geen tijd toekennen",
+    tCouldNotRemoveIntegration: "Kon integratie niet verwijderen",
+    tCouldNotSaveCurfew: "Kon bedtijd niet opslaan",
+    tCouldNotSaveIntegration: "Kon integratie niet opslaan",
+    tCouldNotSaveRoutine: "Kon routine niet opslaan",
+    tCouldNotSaveRules: "Kon regels niet opslaan",
+    tCouldNotSignDeviceOut: "Kon dat apparaat niet afmelden",
+    tCouldNotUpdateRequest: "Kon het verzoek niet bijwerken",
+    tCouldntChangeLanguage: "Kon de taal niet wijzigen.",
+    tCouldntCopySelectLink: "Kopiëren mislukt — selecteer de link zelf",
+    tCouldntReAnchorClock: "Kon de klok niet opnieuw verankeren.",
+    tCouldntReachServer: "Kon de server niet bereiken.",
+    tCurfewSaved: "Bedtijd opgeslagen",
+    tCurrentPasswordWrong: "Huidig wachtwoord is onjuist",
+    tEnterARoutineName: "Voer een naam voor de routine in",
+    tFailedLoadAccessLog: "Kon het toegangslogboek niet laden",
+    tFailedLoadIntegrations: "Kon integraties niet laden",
+    tFailedLoadCodes: "Kon eenmalige codes niet laden",
+    tFailedLoadProcesses: "Kon processen niet laden",
+    tFailedLoadRoutines: "Kon routines niet laden",
+    tFailedLoadTimeRequests: "Kon tijdverzoeken niet laden",
+    tFailedLoadUsageHistory: "Kon gebruiksgeschiedenis niet laden",
+    tKillRequestFailed: "Sluiten mislukt",
+    tLinkCopied: "Link gekopieerd",
+    tLockRequestFailed: "Vergrendelen mislukt",
+    tMinutesBetween1And240: "Minuten moeten tussen 1 en 240 liggen",
+    tPasswordChanged: "Wachtwoord gewijzigd",
+    tPasswordRequestFailed: "Wachtwoordverzoek mislukt",
+    tRequestFailed: "Verzoek mislukt",
+    tRulesSaved: "Regels opgeslagen",
+    tSaveRequestFailed: "Opslaan mislukt",
+    tScreenshotFailed: "Schermafbeelding mislukt",
+    tSettingsRestored: "Instellingen teruggezet",
+    tSettingsNotRestored: "Instellingen zijn niet teruggezet",
+    tShutdownRequestFailed: "Afsluiten mislukt",
+    tSignedOut: "{} afgemeld",
+    tChildPageIsNow: "De pagina van je kind is nu {}.",
   },
   tr: {
     signInToContinue: "Devam etmek için giriş yapın",
@@ -521,6 +617,54 @@ const UI = {
     fullscreen: "⛶ Tam ekran",
     close: "✕ Kapat",
     escOrClickTheBackdrop: "Kapatmak için Esc'e basın ya da dışına tıklayın",
+  
+    tSchedNeedsBothTimes: "Bir program hem başlangıç hem bitiş saati ister",
+    tClockReAnchoredTo: "Saat {} olarak yeniden sabitlendi.",
+    tCodeCopied: "Kod kopyalandı",
+    tCopyFailedSelectManually: "Kopyalanamadı — elle seçin",
+    tCouldNotApplyRoutine: "Rutin uygulanamadı",
+    tCouldNotChangePassword: "Parola değiştirilemedi",
+    tCouldNotCreatePairingLink: "Eşleştirme bağlantısı oluşturulamadı",
+    tCouldNotDeleteRoutine: "Rutin silinemedi",
+    tCouldNotExtendBedtime: "Yatma vakti uzatılamadı",
+    tCouldNotGenerateACode: "Kod oluşturulamadı",
+    tCouldNotGrantTime: "Süre verilemedi",
+    tCouldNotRemoveIntegration: "Entegrasyon kaldırılamadı",
+    tCouldNotSaveCurfew: "Yatma vakti kaydedilemedi",
+    tCouldNotSaveIntegration: "Entegrasyon kaydedilemedi",
+    tCouldNotSaveRoutine: "Rutin kaydedilemedi",
+    tCouldNotSaveRules: "Kurallar kaydedilemedi",
+    tCouldNotSignDeviceOut: "O cihazın oturumu kapatılamadı",
+    tCouldNotUpdateRequest: "İstek güncellenemedi",
+    tCouldntChangeLanguage: "Dil değiştirilemedi.",
+    tCouldntCopySelectLink: "Kopyalanamadı — bağlantıyı elle seçin",
+    tCouldntReAnchorClock: "Saat yeniden sabitlenemedi.",
+    tCouldntReachServer: "Sunucuya ulaşılamadı.",
+    tCurfewSaved: "Yatma vakti kaydedildi",
+    tCurrentPasswordWrong: "Mevcut parola yanlış",
+    tEnterARoutineName: "Bir rutin adı girin",
+    tFailedLoadAccessLog: "Erişim günlüğü yüklenemedi",
+    tFailedLoadIntegrations: "Entegrasyonlar yüklenemedi",
+    tFailedLoadCodes: "Tek kullanımlık kodlar yüklenemedi",
+    tFailedLoadProcesses: "Süreçler yüklenemedi",
+    tFailedLoadRoutines: "Rutinler yüklenemedi",
+    tFailedLoadTimeRequests: "Süre istekleri yüklenemedi",
+    tFailedLoadUsageHistory: "Kullanım geçmişi yüklenemedi",
+    tKillRequestFailed: "Kapatma isteği başarısız",
+    tLinkCopied: "Bağlantı kopyalandı",
+    tLockRequestFailed: "Kilitleme isteği başarısız",
+    tMinutesBetween1And240: "Dakika 1 ile 240 arasında olmalı",
+    tPasswordChanged: "Parola değiştirildi",
+    tPasswordRequestFailed: "Parola isteği başarısız",
+    tRequestFailed: "İstek başarısız",
+    tRulesSaved: "Kurallar kaydedildi",
+    tSaveRequestFailed: "Kaydetme isteği başarısız",
+    tScreenshotFailed: "Ekran görüntüsü alınamadı",
+    tSettingsRestored: "Ayarlar geri yüklendi",
+    tSettingsNotRestored: "Ayarlar geri yüklenmedi",
+    tShutdownRequestFailed: "Kapatma isteği başarısız",
+    tSignedOut: "{} oturumu kapatıldı",
+    tChildPageIsNow: "Çocuğun sayfası artık {}.",
   },
 };
 // Register the component under a name Alpine can look up.
@@ -902,12 +1046,12 @@ function app() {
         const r = await fetch("/api/re-anchor", { method: "POST" });
         if (r.ok) {
           const j = await r.json();
-          this.toast("Clock re-anchored to " + (j.zone || (j.offset_mins + " min")) + ".", "success");
+          this.toast(this.tf("tClockReAnchoredTo", j.zone || j.offset_mins + " min"), "success");
         } else {
-          this.toast("Couldn't re-anchor the clock.", "error");
+          this.toast(this.t("tCouldntReAnchorClock"), "error");
         }
       } catch {
-        this.toast("Couldn't reach the server.", "error");
+        this.toast(this.t("tCouldntReachServer"), "error");
       }
     },
 
@@ -928,12 +1072,12 @@ function app() {
         const r = await this.postJSON("/api/language", { language: tag });
         if (r.ok) {
           this.childLanguage = (await r.json()).language;
-          this.toast("The child's page is now " + this.languageLabel(tag) + ".", "success");
+          this.toast(this.tf("tChildPageIsNow", this.languageLabel(tag)), "success");
         } else {
-          this.toast("Couldn't change the language.", "error");
+          this.toast(this.t("tCouldntChangeLanguage"), "error");
         }
       } catch {
-        this.toast("Couldn't reach the server.", "error");
+        this.toast(this.t("tCouldntReachServer"), "error");
       }
     },
 
@@ -951,6 +1095,17 @@ function app() {
       if (table && typeof table[key] === "string") return table[key];
       if (typeof UI.en[key] === "string") return UI.en[key];
       return key;
+    },
+
+    // One dashboard string with a value dropped into it.
+    //
+    // A `{}` placeholder rather than concatenation at the call site, because word order is not a
+    // constant across languages: "Signed out <device>" puts the subject last in English and Dutch
+    // and FIRST in Turkish ("<device> oturumu kapatıldı"). A prefix-plus-variable call site can
+    // only ever produce the English order, so the sentence would have been subtly wrong in one
+    // language with nothing to catch it.
+    tf(key, value) {
+      return this.t(key).replace("{}", value);
     },
 
     // Switch the dashboard's language and remember it on this device only.
@@ -1067,14 +1222,14 @@ function app() {
       try {
         const r = await this.postJSON("/api/curfew", this.curfew);
         if (r.ok) {
-          this.toast("Curfew saved", "success");
+          this.toast(this.t("tCurfewSaved"), "success");
         } else if (r.status === 400) {
-          this.toast(await this.rejection(r, "Could not save curfew"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotSaveCurfew")), "error");
         } else {
-          this.toast("Could not save curfew", "error");
+          this.toast(this.t("tCouldNotSaveCurfew"), "error");
         }
       } catch {
-        this.toast("Save request failed", "error");
+        this.toast(this.t("tSaveRequestFailed"), "error");
       } finally {
         this.savingCurfew = false;
       }
@@ -1147,9 +1302,9 @@ function app() {
     async copyAskUrl() {
       try {
         await navigator.clipboard.writeText(this.askUrl());
-        this.toast("Link copied");
+        this.toast(this.t("tLinkCopied"));
       } catch {
-        this.toast("Couldn't copy — select the link instead", "error");
+        this.toast(this.t("tCouldntCopySelectLink"), "error");
       }
     },
 
@@ -1178,22 +1333,22 @@ function app() {
       try {
         const r = await this.postJSON("/api/rules", this.rules);
         if (r.ok) {
-          this.toast("Rules saved", "success");
+          this.toast(this.t("tRulesSaved"), "success");
           this.loadToday(); // keep the Today card (budget/paused badge) in sync
         } else if (r.status === 400) {
-          this.toast(await this.rejection(r, "Could not save rules"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotSaveRules")), "error");
         } else {
-          this.toast("Could not save rules", "error");
+          this.toast(this.t("tCouldNotSaveRules"), "error");
         }
       } catch {
-        this.toast("Save request failed", "error");
+        this.toast(this.t("tSaveRequestFailed"), "error");
       } finally {
         this.savingRules = false;
       }
     },
 
     loadRoutines() {
-      return this.loadList("/api/routines", "routines", "loadingRoutines", "Failed to load routines");
+      return this.loadList("/api/routines", "routines", "loadingRoutines", this.t("tFailedLoadRoutines"));
     },
 
     // The schedule to send with a save: one window, or none.
@@ -1219,12 +1374,12 @@ function app() {
 
     async saveRoutine() {
       const name = (this.newRoutineName || "").trim();
-      if (!name) { this.toast("Enter a routine name", "error"); return; }
+      if (!name) { this.toast(this.t("tEnterARoutineName"), "error"); return; }
       const w = this.newRoutineWindow;
       // Caught here rather than at the server so the message names the box that is empty. The
       // server still rejects a malformed window — this is the friendly half, not the only half.
       if ((w.start && !w.end) || (!w.start && w.end)) {
-        this.toast("A schedule needs both a start and an end time", "error");
+        this.toast(this.t("tSchedNeedsBothTimes"), "error");
         return;
       }
       this.savingRoutine = true;
@@ -1237,12 +1392,12 @@ function app() {
           this.newRoutineWindow = { start: "", end: "", days: {} };
           this.loadRoutines();
         } else if (r.status === 400) {
-          this.toast(await this.rejection(r, "Could not save routine"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotSaveRoutine")), "error");
         } else {
-          this.toast("Could not save routine", "error");
+          this.toast(this.t("tCouldNotSaveRoutine"), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       } finally {
         this.savingRoutine = false;
       }
@@ -1256,10 +1411,10 @@ function app() {
           this.loadRules();
           this.loadToday();
         } else {
-          this.toast(await this.rejection(r, "Could not apply routine"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotApplyRoutine")), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       }
     },
 
@@ -1270,10 +1425,10 @@ function app() {
           this.toast(`Deleted "${name}"`, "success");
           this.loadRoutines();
         } else {
-          this.toast("Could not delete routine", "error");
+          this.toast(this.t("tCouldNotDeleteRoutine"), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       }
     },
 
@@ -1357,13 +1512,13 @@ function app() {
             location.reload();
             return;
           }
-          this.toast("Signed out " + who, "success");
+          this.toast(this.tf("tSignedOut", who), "success");
           this.loadSessions();
         } else {
-          this.toast(await this.rejection(r, "Could not sign that device out"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotSignDeviceOut")), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       }
     },
 
@@ -1410,10 +1565,10 @@ function app() {
         if (r.ok) {
           this.pairResult = await r.json();
         } else {
-          this.toast(await this.rejection(r, "Could not create a pairing link"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotCreatePairingLink")), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       } finally {
         this.pairingBusy = false;
       }
@@ -1468,7 +1623,7 @@ function app() {
     },
 
     async loadProviders() {
-      await this.loadList("/api/providers", "providers", "loadingProviders", "Failed to load integrations");
+      await this.loadList("/api/providers", "providers", "loadingProviders", this.t("tFailedLoadIntegrations"));
       // The API returns an object keyed by name; the template iterates an array so each row is a
       // stable value `x-model` can bind two ways. Rebuilt on every load, the same shape and reason
       // as `appLimitRows`. Sorted so the order is the parent's to predict, not the map's.
@@ -1485,7 +1640,7 @@ function app() {
     async saveProvider(row) {
       const mins = Number(row.minutes);
       if (!Number.isInteger(mins) || mins < 1 || mins > 240) {
-        this.toast("Minutes must be between 1 and 240", "error");
+        this.toast(this.t("tMinutesBetween1And240"), "error");
         this.loadProviders();
         return;
       }
@@ -1496,10 +1651,10 @@ function app() {
           this.toast(row.enabled ? `${row.name} is on` : `${row.name} is off`, "success");
           this.loadProviders();
         } else {
-          this.toast(await this.rejection(r, "Could not save integration"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotSaveIntegration")), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       } finally {
         this.savingProvider = false;
       }
@@ -1527,10 +1682,10 @@ function app() {
           this.toast(`Removed "${name}"`, "success");
           this.loadProviders();
         } else {
-          this.toast(await this.rejection(r, "Could not remove integration"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotRemoveIntegration")), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       }
     },
 
@@ -1623,7 +1778,7 @@ function app() {
         if (r.status === 401) { this.authed = false; return; }
         this.processes = await r.json();
       } catch {
-        this.toast("Failed to load processes", "error");
+        this.toast(this.t("tFailedLoadProcesses"), "error");
       } finally {
         this.loadingProcs = false;
       }
@@ -1722,7 +1877,7 @@ function app() {
         // entirely, so a stopped service, a signed-out child or a wedged helper all left the last
         // good picture on screen with the toggle still on, indefinitely.
         if (silent) this.shotStale = true;
-        else this.toast("Screenshot failed", "error");
+        else this.toast(this.t("tScreenshotFailed"), "error");
       } finally {
         if (this._shotAbort === ctrl) this._shotAbort = null;
         // Only the current capture may release the shared flags. Without this a superseded reply
@@ -1870,7 +2025,7 @@ function app() {
           this.toast(`Could not close ${p.name}`, "error");
         }
       } catch {
-        this.toast("Kill request failed", "error");
+        this.toast(this.t("tKillRequestFailed"), "error");
       }
     },
 
@@ -1880,7 +2035,7 @@ function app() {
         const r = await fetch("/api/shutdown", { method: "POST" });
         this.toast(r.ok ? "Shutting down…" : "Shutdown failed", r.ok ? "success" : "error");
       } catch {
-        this.toast("Shutdown request failed", "error");
+        this.toast(this.t("tShutdownRequestFailed"), "error");
       }
     },
 
@@ -1985,7 +2140,7 @@ function app() {
         const r = await fetch("/api/lock", { method: "POST" });
         this.toast(r.ok ? "Screen locked" : "Lock failed", r.ok ? "success" : "error");
       } catch {
-        this.toast("Lock request failed", "error");
+        this.toast(this.t("tLockRequestFailed"), "error");
       }
     },
 
@@ -1994,11 +2149,11 @@ function app() {
       try {
         const r = await this.postJSON("/api/password", { current: this.pwCurrent, new: this.pwNew });
         if (r.ok) {
-          this.toast("Password changed", "success");
+          this.toast(this.t("tPasswordChanged"), "success");
           this.pwCurrent = "";
           this.pwNew = "";
         } else if (r.status === 401) {
-          this.toast("Current password is wrong", "error");
+          this.toast(this.t("tCurrentPasswordWrong"), "error");
         } else if (r.status === 400) {
           // The server explains exactly what is wrong (how many characters it counted, or
           // which guessable pattern it matched). This used to repeat a fixed "too short",
@@ -2009,10 +2164,10 @@ function app() {
           try { detail = (await r.json())?.error || ""; } catch {}
           this.toast(detail || "That password was rejected", "error");
         } else {
-          this.toast("Could not change password", "error");
+          this.toast(this.t("tCouldNotChangePassword"), "error");
         }
       } catch {
-        this.toast("Password request failed", "error");
+        this.toast(this.t("tPasswordRequestFailed"), "error");
       } finally {
         this.savingPw = false;
       }
@@ -2157,8 +2312,8 @@ function app() {
       }
     },
 
-    loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", "Failed to load access log"); },
-    loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", "Failed to load usage history"); },
+    loadAudit() { return this.loadList("/api/audit", "audit", "loadingAudit", this.t("tFailedLoadAccessLog")); },
+    loadUsage() { return this.loadList("/api/usage", "usage", "loadingUsage", this.t("tFailedLoadUsageHistory")); },
     async loadToday() {
       await this.loadList("/api/usage/today", "today", "loadingToday");
       // Set even when the fetch failed: loadList swallows that error, and a failure is exactly
@@ -2401,18 +2556,18 @@ function app() {
         if (!r.ok) {
           const detail = await r.text();
           this.policyMsg = "Not restored: " + (detail || r.status);
-          this.toast("Settings were not restored", "error");
+          this.toast(this.t("tSettingsNotRestored"), "error");
           return;
         }
         const out = await r.json();
         this.policyMsg = out.warning || "Settings restored.";
-        this.toast("Settings restored", "success");
+        this.toast(this.t("tSettingsRestored"), "success");
         // Reload everything the document just replaced, so the page is not showing the old
         // curfew and the old limits beside a message saying they changed.
         this.loadAll();
       } catch {
         this.policyMsg = "Couldn't read that file.";
-        this.toast("Settings were not restored", "error");
+        this.toast(this.t("tSettingsNotRestored"), "error");
       } finally {
         this.restoringPolicy = false;
       }
@@ -2943,12 +3098,12 @@ function app() {
           this.noteOtherLimit(j);
           this.loadCurfew();
         } else if (r.status === 400) {
-          this.toast(await this.rejection(r, "Could not extend bedtime"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotExtendBedtime")), "error");
         } else {
-          this.toast("Could not extend bedtime", "error");
+          this.toast(this.t("tCouldNotExtendBedtime"), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       } finally {
         this.extendingCurfew = false;
       }
@@ -2964,12 +3119,12 @@ function app() {
           this.loadToday();
           this.loadUsage();
         } else if (r.status === 400) {
-          this.toast(await this.rejection(r, "Could not grant time"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotGrantTime")), "error");
         } else {
-          this.toast("Could not grant time", "error");
+          this.toast(this.t("tCouldNotGrantTime"), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       } finally {
         this.grantingExtra = false;
       }
@@ -2979,7 +3134,7 @@ function app() {
     // pixel-identical to "your child has asked for nothing". That is the one thing this screen
     // exists to tell a parent, and the failure to tell them is otherwise completely silent.
     loadTimeRequests() {
-      const done = this.loadList("/api/time-requests", "timeRequests", null, "Failed to load time requests");
+      const done = this.loadList("/api/time-requests", "timeRequests", null, this.t("tFailedLoadTimeRequests"));
       return done.finally(() => {
         this.requestsAsked = true;
         // The one place a pending count changes on its own. A parent with the dashboard open in a
@@ -2989,7 +3144,7 @@ function app() {
       });
     },
     loadCodes() {
-      return this.loadList("/api/time-codes", "codes", "loadingCodes", "Failed to load one-time codes");
+      return this.loadList("/api/time-codes", "codes", "loadingCodes", this.t("tFailedLoadCodes"));
     },
 
     async issueCode() {
@@ -3001,12 +3156,12 @@ function app() {
           this.toast(`Code ${j.code} = ${j.minutes} min`, "success");
           this.loadCodes();
         } else if (r.status === 400) {
-          this.toast(await this.rejection(r, "Could not generate a code"), "error");
+          this.toast(await this.rejection(r, this.t("tCouldNotGenerateACode")), "error");
         } else {
-          this.toast("Could not generate a code", "error");
+          this.toast(this.t("tCouldNotGenerateACode"), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       } finally {
         this.issuingCode = false;
       }
@@ -3015,9 +3170,9 @@ function app() {
     async copyCode(code) {
       try {
         await navigator.clipboard.writeText(code);
-        this.toast("Code copied", "success");
+        this.toast(this.t("tCodeCopied"), "success");
       } catch {
-        this.toast("Copy failed — select it manually", "error");
+        this.toast(this.t("tCopyFailedSelectManually"), "error");
       }
     },
 
@@ -3039,10 +3194,10 @@ function app() {
           this.loadTimeRequests();
           if (approve) this.loadUsage();
         } else {
-          this.toast("Could not update the request", "error");
+          this.toast(this.t("tCouldNotUpdateRequest"), "error");
         }
       } catch {
-        this.toast("Request failed", "error");
+        this.toast(this.t("tRequestFailed"), "error");
       }
     },
 
