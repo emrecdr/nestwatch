@@ -975,7 +975,7 @@ added so the tests cannot go stale when a third language lands.
 
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
-`assets/app.js` is **3,389 lines** registering a single `Alpine.data("app", app)` with ~154
+`assets/app.js` is **3,407 lines** registering a single `Alpine.data("app", app)` with ~154
 methods, consumed by one `x-data="app"` root across 1,796 lines of markup. By comparison `src/`
 is 43 modules with a stated responsibility each. *(Measured 2026-09-07.)*
 

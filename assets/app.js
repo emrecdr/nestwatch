@@ -89,6 +89,24 @@ applyLangAttr(readLang());
 // `t()` falls back to English per key, so a table that is missing one shows English there rather
 // than a blank element or the raw key. `web/test/app.test.js` holds every table to `en`'s shape,
 // so that fallback is a safety net and never the plan.
+//
+// # Two translation decisions that look like mistakes
+//
+// **`curfew` is "Bedtijd" / "Yatma vakti" — the same word the CHILD is told, where English keeps
+// two.** In English this card says "Curfew" while the child hears "Bedtime", and that split is
+// deliberate: `curfew::bedtime_shutdown_message` argues at length that "curfew" is the parent's
+// word for the setting and the wrong one to put in front of a child. The split does not survive
+// translation, and forcing it would make both languages worse — Dutch `avondklok` and Turkish
+// `sokağa çıkma yasağı` both mean a *civil* curfew, which is the wrong register for a family and,
+// in Dutch, freighted besides. One clear word for the parent beats a distinction the language does
+// not draw. Verified against the Rust strings: the dashboard and the child's notices use the same
+// term in both languages, so nothing a parent reads here contradicts what their child was told.
+//
+// **Eight Dutch entries are identical to their English source** (`live`, `app`, `routines`, `min`,
+// `code`, `detail`, `releases`, and `nestwatchDoctor`). Seven are ordinary Dutch words or accepted
+// borrowings; the eighth is a shell command and must never be translated. They are not untranslated
+// leftovers, and the guard that would catch real ones — every table answering every key — cannot
+// tell the two apart, so this note is the only thing that does.
 const UI = {
   en: {
     signInToContinue: "Sign in to continue",
