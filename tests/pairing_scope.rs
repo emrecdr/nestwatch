@@ -18,7 +18,10 @@ use tower::ServiceExt;
 use nestwatch::pairing::Scope;
 
 mod common;
-use common::{PASSWORD, ScratchDir, app_with, login, pair_with, state_with, test_config};
+use common::{
+    PASSWORD, ScratchDir, app_with, configure_provider, login, pair_with, send_json, state_with,
+    test_config,
+};
 
 async fn send(
     app: &axum::Router,
@@ -152,6 +155,73 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
         );
     }
 
+    // --- An integration may call the read; that is not the same as knowing all of it. -----
+    //
+    // `F2`. The allowlist above is route-scoped, and the justification for putting
+    // `GET /api/usage/today` on it was one sentence: an integration pushes a grant and reads it
+    // back, because it refuses to tell a parent a number the PC does not show (`O85`). The route
+    // it was handed to do that returns the dashboard's whole usage picture — per-app minutes,
+    // and up to `foreground::MAX_PAGES` window titles for the day.
+    //
+    // The consumer's own contract test is called "one field out of fourteen", and its
+    // `dependedOn` set is derived from its source rather than hand-kept, so it stays honest:
+    // `extra_mins` is the only field it reads off this route. Seventeen were being sent — counted
+    // from the failure this test produces when the filter is removed, not from that fixture's
+    // name, which was captured three fields ago.
+    {
+        let state = state_with(test_config());
+        let app = app_with(state);
+        let parent = login(&app, PASSWORD).await.unwrap();
+        assert_eq!(
+            configure_provider(&app, &parent, "studygo", true, 30).await,
+            StatusCode::OK
+        );
+        let phone = pair_with(
+            &app,
+            Scope::Integration {
+                source: "studygo".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+
+        let (status, narrow) = send_json(&app, &phone, "GET", "/api/usage/today", json!({})).await;
+        assert_eq!(status, StatusCode::OK, "the read-back must still work");
+        assert!(
+            narrow.get("extra_mins").is_some(),
+            "the one field the read-back exists for must survive: {narrow}"
+        );
+        // Named individually rather than by counting keys: a count passes whatever the fields
+        // are, and the point is *which* facts leave this process.
+        for leaked in [
+            "pages",
+            "per_app",
+            "groups",
+            "focused",
+            "used_mins",
+            "remaining_mins",
+        ] {
+            assert!(
+                narrow.get(leaked).is_none(),
+                "an integration reads back its own grant; it has no claim on `{leaked}`: {narrow}"
+            );
+        }
+
+        // The other half, and the reason this is a filter rather than a smaller handler: the
+        // same route is the browser dashboard's and the Android client's, both of which are
+        // `Scope::Dashboard` and read the full payload. Narrowing for one caller must not
+        // narrow it for them.
+        let (status, full) = send_json(&app, &parent, "GET", "/api/usage/today", json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        for kept in ["extra_mins", "pages", "per_app", "used_mins"] {
+            assert!(
+                full.get(kept).is_some(),
+                "a dashboard session still reads the whole day, `{kept}` included: {full}"
+            );
+        }
+    }
+
     // --- A dashboard pairing is unchanged, because a person and the Android app need it. ---
     {
         let state = state_with(test_config());
@@ -228,6 +298,12 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
         let anon = read_scope(None).await;
         assert_eq!(anon["authenticated"], json!(false));
         assert_eq!(anon["scope"], Value::Null);
+        // `.get`, not `["provider"]`: indexing a `Value` yields `Null` for a missing key, so the
+        // convenient assertion cannot tell "absent" from "null" — which is the whole distinction.
+        assert!(
+            anon.get("provider").is_none(),
+            "a caller bound to no provider is not told about one"
+        );
 
         // A dashboard pairing says so — this is the value an integration app must refuse.
         let browser = pair_with(&app, Scope::Dashboard, None).await.unwrap();
@@ -238,6 +314,11 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
             json!({ "kind": "dashboard" }),
             "an app that asked for an integration link and reads this must be able to tell it \
              was handed the parent's authority instead"
+        );
+        assert!(
+            seen.get("provider").is_none(),
+            "a dashboard session is not bound to a provider, and its `/session` answer is a \
+             golden file the Android client parses — this field must not appear in it"
         );
 
         // An integration pairing names its source. The **name** matters as much as the kind: a
@@ -252,11 +333,43 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
         )
         .await
         .unwrap();
+        let phone_cookie = phone.clone();
         let seen = read_scope(Some(phone)).await;
         assert_eq!(
             seen["scope"],
             json!({ "kind": "integration", "source": "studygo" }),
             "the source name has to travel, or a client cannot tell which integration it is"
+        );
+        // `F3`. Nothing has installed `studygo` in this section, and the honest answer to "what
+        // is this credential bound to" is then *nothing* — which is a different sentence from
+        // "switched off" and leads a parent somewhere different. Before this field the two were
+        // reachable only by pushing a grant and reading the refusal prose, which the consumer
+        // deliberately does not parse: the remedy is the same for both, and prose gets reworded
+        // and translated.
+        assert_eq!(
+            seen["provider"],
+            Value::Null,
+            "paired to an integration this PC has never installed"
+        );
+        assert!(
+            seen.as_object().is_some_and(|o| o.contains_key("provider")),
+            "and *present*: absent would mean a build without the field, which is a different \
+             thing for a client to do about"
+        );
+
+        // Installed and switched on: the entry itself, including the reward. `minutes` lives
+        // only in this registry, and the bar the child clears lives only in the provider's own
+        // app, so until this field neither side could state the whole rule.
+        let parent = login(&app, PASSWORD).await.unwrap();
+        assert_eq!(
+            configure_provider(&app, &parent, "studygo", true, 25).await,
+            StatusCode::OK
+        );
+        let seen = read_scope(Some(phone_cookie)).await;
+        assert_eq!(
+            seen["provider"],
+            json!({ "enabled": true, "minutes": 25 }),
+            "installed and on, with the minutes one met threshold is worth"
         );
     }
 

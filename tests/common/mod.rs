@@ -173,6 +173,28 @@ pub async fn post_json(
         .unwrap()
 }
 
+/// Send one request and read both halves of the answer: status *and* decoded body.
+///
+/// `get`/`post_json` hand back the `Response` because most callers want only the status. The
+/// tests that assert on a *payload* all then repeat the same four lines, and two binaries had
+/// grown a private copy under two different names. Method-dispatched here rather than at each
+/// call site so a section reads as the sequence of requests it is.
+pub async fn send_json(
+    app: &Router,
+    cookie: &str,
+    method: &str,
+    uri: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let res = if method == "GET" {
+        get(app, uri, Some(cookie)).await
+    } else {
+        post_json(app, uri, Some(cookie), body).await
+    };
+    let status = res.status();
+    (status, body_json(res).await)
+}
+
 /// Pair against a freshly minted token of `scope`, returning the session cookie it produced.
 ///
 /// Through the real `pairing::mint`, so the scope has to survive disk to mean anything: a test

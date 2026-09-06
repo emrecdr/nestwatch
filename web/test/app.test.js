@@ -2331,3 +2331,56 @@ test("routineScheduleLabel accounts for windows the editor cannot show", () => {
   });
   assert.match(label, /\+1 more/);
 });
+
+// --- The Integrations/Devices join (F6) -------------------------------------------------------
+
+test("pairingSummary says nothing until the device list has actually been fetched", () => {
+  // The trap this exists for: `sessions` starts `[]`, so a summary derived from length alone
+  // reports "not paired to any device yet" about a perfectly good pairing, purely because the
+  // Integrations card rendered before anything fetched `/api/sessions`. Absent is not empty.
+  const app = withState({ sessions: [], sessionsLoaded: false });
+  assert.equal(app.pairingSummary("studygo"), "");
+});
+
+test("pairingSummary reports an installed integration nothing has ever paired to", () => {
+  // A real state, and one a parent cannot otherwise see: the entry exists, so the card lists it,
+  // and no credential was ever minted for it, so nothing will ever grant.
+  const app = withState({ sessions: [], sessionsLoaded: true });
+  assert.equal(app.pairingSummary("studygo"), "Not paired to any device yet");
+});
+
+test("pairingSummary names the devices paired to this integration and no others", () => {
+  const app = withState({
+    sessionsLoaded: true,
+    sessions: [
+      { scope: { kind: "integration", source: "studygo" }, user_agent: "Mozilla/5.0 (Android)" },
+      { scope: { kind: "integration", source: "chores" }, user_agent: "Mozilla/5.0 (iPhone)" },
+      { scope: { kind: "dashboard" }, user_agent: "Mozilla/5.0 (Macintosh) Safari/605" },
+      // A session from before scopes existed. `scopeLabel` renders it as "sign in again"; here it
+      // must simply not be counted, and reading `.kind` off null would throw instead.
+      { scope: null, user_agent: "Mozilla/5.0 (Windows)" },
+    ],
+  });
+  const label = app.pairingSummary("studygo");
+  assert.match(label, /^Paired to /);
+  assert.match(label, /Android/);
+  assert.doesNotMatch(label, /iPhone/, "another integration's device is not this one's");
+  assert.doesNotMatch(label, /Mac/, "and neither is the parent's own browser");
+});
+
+test("loadList reports whether it got an answer, so a caller can tell empty from unfetched", async () => {
+  // `sessionsLoaded` is only trustworthy if this is. Before it returned anything, a fetch that
+  // failed and a list that is genuinely empty were the same value to every caller — which is the
+  // bug `pairingSummary` above would otherwise reintroduce in the Integrations card.
+  const ok = loadApp({ fetch: async () => ({ ok: true, status: 200, json: async () => [] }) });
+  assert.equal(await ok.loadList("/api/sessions", "sessions"), true);
+
+  const bad = loadApp({ fetch: async () => ({ ok: false, status: 500 }) });
+  bad.toast = () => {};
+  assert.equal(await bad.loadList("/api/sessions", "sessions"), false);
+
+  // A 401 is the session ending, not an answer about devices — and it must not mark the list
+  // loaded, or the card would state "not paired to any device" on the way to the login screen.
+  const gone = loadApp({ fetch: async () => ({ ok: false, status: 401 }) });
+  assert.equal(await gone.loadList("/api/sessions", "sessions"), false);
+});

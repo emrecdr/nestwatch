@@ -971,8 +971,8 @@
             </div>
           </details>
 
-          <!-- Integrations (earned-time providers) -->
-          <details class="card bg-base-100 shadow md:col-span-2">
+          <!-- Integrations (earned-time providers), joined with the credentials paired to them (F6) -->
+          <details class="card bg-base-100 shadow md:col-span-2" @toggle="loadSessionsOnce()">
             <summary class="flex cursor-pointer items-center gap-2 px-6 py-4">
               <span class="chev text-xs opacity-60" aria-hidden="true">▶</span>
               <h2 class="card-title text-base">Integrations</h2>
@@ -995,7 +995,14 @@
                   <div class="flex items-center gap-3">
                     <input type="checkbox" class="toggle toggle-sm" x-model="row.enabled"
                            :aria-label="row.name" @change="saveProvider(row)" />
-                    <span class="flex-1 truncate" x-text="row.name"></span>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate" x-text="row.name"></div>
+                      <!-- Which devices hold a credential for this integration. Empty string while
+                           the device list has not been fetched, so an unopened card says nothing
+                           rather than guessing "not paired". -->
+                      <div class="text-xs opacity-60" x-text="pairingSummary(row.name)"
+                           x-show="pairingSummary(row.name)"></div>
+                    </div>
                     <input type="number" min="1" max="240" class="input input-sm w-20"
                            x-model.number="row.minutes" :aria-label="row.name"
                            @change="saveProvider(row)" />

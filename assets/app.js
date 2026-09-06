@@ -254,6 +254,11 @@ function app() {
     // card is bound two ways.
     sessions: [],
     loadingSessions: false,
+    // Whether `sessions` is an answer or just an initial value. An empty list means "nothing is
+    // signed in"; an empty list that was never fetched means nothing at all, and the Integrations
+    // card below states one of those out loud. Kept separate from `sessions.length` because that
+    // is the one thing the two states have in common.
+    sessionsLoaded: false,
     // `null` until figures actually arrive — the card is gated on that, so there is no second flag
     // to keep in sync with this one. A zeroed literal here would be a lie the markup reads out as
     // measurement: "0 min used today" on a dashboard that may never have reached the service.
@@ -759,7 +764,10 @@ function app() {
     // signs out every device in the house. The server sends a *handle*, never a session id: the
     // id is a live credential and this list is rendered into the page.
     async loadSessions() {
-      await this.loadList("/api/sessions", "sessions", "loadingSessions", "Failed to load devices");
+      const answered = await this.loadList(
+        "/api/sessions", "sessions", "loadingSessions", "Failed to load devices",
+      );
+      if (answered) this.sessionsLoaded = true;
     },
 
     // Load the first time the card is opened, not on page load.
@@ -769,8 +777,12 @@ function app() {
     // test. This card is the one place that argument is free: it is collapsed by default, nothing
     // else reads `sessions`, and it is consulted only when a parent has a reason to. Adding it to
     // `loadAll` would have made the storm a thirteenth request for a card most visits never open.
+    // Now reached from the Integrations card as well, which needs the same list to say what a
+    // provider is paired to. Guarded on `sessionsLoaded` rather than on `sessions.length`: under
+    // the old guard a household with genuinely nothing signed in re-fetched on every open, and —
+    // more to the point — the two cards would each have paid for the same list.
     loadSessionsOnce() {
-      if (this.sessions.length > 0 || this.loadingSessions) return;
+      if (this.sessionsLoaded || this.loadingSessions) return;
       this.loadSessions();
     },
 
@@ -834,6 +846,35 @@ function app() {
       } catch {
         this.toast("Request failed", "error");
       }
+    },
+
+    // --- The join (`F6`) ---------------------------------------------------------------------
+    //
+    // Both halves of "StudyGo: on, 25 min, paired to one phone" were already on this page, in two
+    // cards that did not know about each other: the registry entry in *Integrations*, the
+    // credential in *Signed-in devices*. A provider is an entry **plus** the credential bound to
+    // it, and every finding in the seam report was a consequence of those being two objects that
+    // share a string. This is that sentence, rendered.
+    //
+    // No new endpoint and no new data — `/api/sessions` already carries `scope.source`.
+    pairedDevices(name) {
+      return this.sessions.filter(
+        (s) => s.scope && s.scope.kind === "integration" && s.scope.source === name,
+      );
+    },
+
+    // What to say under a provider's name, or "" to say nothing.
+    //
+    // **Silence until the list has actually been fetched.** `sessions` starts `[]`, so a summary
+    // computed from length alone would tell a parent "not paired to anything yet" about a
+    // perfectly good pairing, purely because this card happened to render first. That is the same
+    // absent-versus-empty mistake `loadList` documents one screen down, and the same one
+    // `remaining_mins: null` exists to prevent on the server.
+    pairingSummary(name) {
+      if (!this.sessionsLoaded) return "";
+      const paired = this.pairedDevices(name);
+      if (paired.length === 0) return "Not paired to any device yet";
+      return "Paired to " + paired.map((s) => this.deviceLabel(s.user_agent)).join(", ");
     },
 
     async loadProviders() {
@@ -1507,15 +1548,20 @@ function app() {
       if (flag) this[flag] = true;
       try {
         const r = await fetch(url);
-        if (r.status === 401) { this.authed = false; return; }
+        // `false`, not a bare return: a 401 is the session ending, not an answer about the
+        // thing that was asked for, and a caller recording "loaded" on it would state an
+        // empty card as fact on the way to the login screen.
+        if (r.status === 401) { this.authed = false; return false; }
         // Throw on a failed status so it lands in the same catch a network fault does. `if (r.ok)`
         // alone meant an errored server was indistinguishable from an empty one: the field kept
         // its old value, no toast fired, and every caller's `errMsg` was dead code for the failure
         // it actually names. Cards gated on `length > 0` then render as "nothing to show".
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         this[field] = await r.json();
+        return true;
       } catch {
         if (errMsg) this.toast(errMsg, "error");
+        return false;
       } finally {
         if (flag) this[flag] = false;
       }

@@ -226,6 +226,54 @@ the space between them each time. The general form: **a provider is a registry e
 credential bound to it.** Anything that treats those as two objects sharing a string will leak in
 whichever direction was not the subject of the last review.
 
+## The fourth question, asked 2026-09-06 — `F2`, `F3`, `F6`
+
+The section above ends by naming the pattern: each pass answered one axis completely and read as
+though it had answered the neighbour. Having named it, the next pass went looking for the
+neighbour deliberately, and there were three.
+
+**`F2` — reaching a route and knowing everything it says are separate grants, and only the first
+was decided.** `integration_may_reach` admits `GET /api/usage/today` for one stated reason: an
+integration pushes a grant and reads it back, because it refuses to tell a parent a number this PC
+does not show (`O85`). The route it was handed to do that answers the dashboard's whole day —
+seventeen fields, including per-app minutes and up to `MAX_PAGES` window titles. So the allowlist
+was route-scoped where the justification was field-scoped, and every provider that ever reaches
+this route inherits the wider answer. It now returns `auth::INTEGRATION_USAGE_FIELDS`, which is
+`extra_mins`. **`Scope::Dashboard` is untouched**: the same route is the browser's and the Android
+client's, and narrowing a shared route for one caller would break a full dashboard to bound an
+integration.
+
+That the consumer reads exactly one field was checked, not assumed — its contract test is named
+"one field out of fourteen" and derives what it depends on from its own source, and its maintainer
+ran the client's parser against both the narrowed and the full body. Worth stating because the
+first draft of this analysis asserted a *different* consumer fact that turned out to be false: it
+claimed the field would replace error-string parsing, when that client deliberately does not read
+those strings — the remedy for both refusals is identical, and matching on prose breaks the moment
+prose is reworded or translated. The claim was withdrawn on reading their source.
+
+**`F3` — the fix for `F9` created the state it needed to report.** A *disabled* provider still
+answers `/session` with `authenticated: true`, deliberately, because a switched-off integration is
+not a bad link. But every grant under that session is then refused, so a pairing screen could say
+"linked and working" while nothing a child earned ever landed. Authority and installation are two
+facts and only one was being reported. `/session` now carries the entry the credential is bound to.
+Its `minutes` half closes a smaller gap in the same seam: the reward lives in this registry and the
+bar the child clears lives in the provider's own app, so until now neither side could state the
+whole rule.
+
+**`F6` — the registry and its credentials were rendered in two cards that did not know about each
+other.** *Integrations* showed the entry, *Signed-in devices* showed the credential, and
+"StudyGo: on, 25 min, paired to one phone" was a sentence the page contained and never said. The
+join needed no new endpoint and no new data. It did need one honest distinction: the device list is
+fetched lazily, so a summary computed from an empty array would report "not paired to any device"
+about a perfectly good pairing merely because that card had not been opened. Absent is not empty —
+the same distinction `remaining_mins: null` exists to preserve on the server.
+
+**The shape all four share, stated once.** A provider is a registry entry plus a credential bound
+to it. Every finding in this document is what happens when those are two objects sharing a string:
+the entry outliving the credential (`O89`), the credential outliving the entry (`O92`), the
+credential learning more than the entry justified (`F2`), the entry being invisible to the
+credential (`F3`), and the two never shown together (`F6`).
+
 ---
 
 The recommendation as originally written follows.

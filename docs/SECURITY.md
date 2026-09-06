@@ -78,6 +78,21 @@ objects sharing a name, so a removed integration went on reading the child's day
 session cap expired. The read is the half that was missed, because `extra_time` had always asked
 the registry before granting and nothing asked it before answering.
 
+**And the read answers one field, not seventeen.** Reaching a route and learning everything it
+says are separate grants, and only the first was ever decided: `GET /api/usage/today` was put on
+that allowlist so an integration could read back the grant it had just pushed, and the route it was
+handed answers the dashboard's whole day — per-app minutes, group pools, focused windows, and up to
+`MAX_PAGES` window titles. An integration-scoped caller now receives
+`auth::INTEGRATION_USAGE_FIELDS`, which is `extra_mins`. `Scope::Dashboard` is unchanged, because
+the same route is the browser's and the Android client's.
+
+**`GET /session` reports the registry entry as well as the credential.** Authority and installation
+are two facts and reporting only one of them let a pairing screen say "working" about a link whose
+every grant was refused. It is not a widening: the endpoint already answered `authenticated` and
+`scope` to anyone holding the cookie, and a caller can only ask about the cookie it already
+presents. What it adds is `enabled` and `minutes` for the provider that caller is *already* bound
+to by name.
+
 **This was not always true, and the gap is worth stating because the shape recurs.** Through
 `0.6.0`, `auth::pair` performed the same two steps as `auth::login` and `require_auth` read one
 boolean, so a paired device held this entire table. The earned-time integration's phone app stores

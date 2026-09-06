@@ -1174,7 +1174,13 @@ pub async fn delete_provider(
 /// `GET /api/usage/today` → today's live screen-time tally: minutes used/remaining against the
 /// effective budget (base + granted extra) plus per-app usage for apps that have a limit. The
 /// numbers come from the enforcer's persisted sidecar (up to one 30s tick behind live).
-pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+///
+/// **That is the answer a dashboard gets.** An integration-scoped caller reads back only
+/// [`crate::auth::INTEGRATION_USAGE_FIELDS`] — the grant it just pushed, and not the child's day.
+pub async fn usage_today(
+    State(state): State<AppState>,
+    scope: axum::Extension<crate::pairing::Scope>,
+) -> Result<Json<Value>, AppError> {
     let today = crate::config::today();
     // `rules_at`, not `rules`: while a scheduled routine is in force it is that routine's budget
     // the enforcer counts against, so showing the base one here would put a number on the
@@ -1202,7 +1208,7 @@ pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, A
     // globals and the system clock, and keeping it at the edge is what lets `today_summary`
     // be tested in full. The certificate is at the edge for the same reason — it is a file.
     let enforcer_age_secs = crate::heartbeat::worst_age_secs();
-    Ok(Json(crate::rules::today_summary(
+    let summary = crate::rules::today_summary(
         &rules,
         today,
         extra,
@@ -1210,7 +1216,15 @@ pub async fn usage_today(State(state): State<AppState>) -> Result<Json<Value>, A
         enforcer_age_secs,
         cert_days_left,
         active_routine.as_deref(),
-    )))
+    );
+    // `F2`: an integration reads back its own grant, so it is answered with its own grant. The
+    // whole day goes only to a session entitled to the whole day. See
+    // [`crate::auth::INTEGRATION_USAGE_FIELDS`] for why the list is one field and how that was
+    // checked against the consumer rather than assumed.
+    Ok(Json(match &*scope {
+        crate::pairing::Scope::Dashboard => summary,
+        crate::pairing::Scope::Integration { .. } => crate::auth::usage_for_integration(&summary),
+    }))
 }
 
 /// `GET /status` → the child's own screen-time figures, for the `/ask` page.

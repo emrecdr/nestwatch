@@ -656,36 +656,92 @@ pub async fn pair(
 ///    the authority this would describe, and learning its name tells them nothing a single
 ///    request would not.
 ///
+/// ## `provider` — the other half of "is this working?"
+///
+/// An integration-scoped caller also reads the registry entry it is bound to: `null` when no such
+/// provider is installed, otherwise `{"enabled", "minutes"}`. Present only for that caller —
+/// nothing else here is bound to a provider — so the three answers stay distinguishable in the way
+/// the `scope` field above is careful about: **absent** is "not applicable, or a build older than
+/// this field", **null** is "asked, and this PC has no such integration", and an object is the
+/// entry itself.
+///
+/// **This exists because the fix for `F9` created the state it reports.** Since `909c053` a
+/// *disabled* provider still answers `authenticated: true`, deliberately: a switched-off
+/// integration is not a bad link, and saying otherwise would send a parent to re-mint a
+/// credential that was never the problem. But every grant under that session is then refused, so
+/// a pairing screen could say "linked and working" while nothing a child earned ever landed, and
+/// the only way to find out was to push a grant and read the refusal. Authority and installation
+/// are two facts and only one of them was being reported.
+///
+/// `minutes` is here for a second reason: the reward lives in this registry and the bar the child
+/// clears lives in the provider's own app, so neither side could state the whole rule. Voortgang
+/// turns it from "3 of 20 questions towards PC time" into "…towards 25 minutes of PC time" — the
+/// rule, not a promise about tonight.
+///
+/// A dashboard session omits the field entirely, which is also what keeps the two `/session`
+/// golden files — the ones the Android client parses — byte-identical across this change.
+///
 /// A caller with no session reads `null`. An *authenticated* caller reading `null` is holding a
 /// session minted before scopes existed — which `require_auth` refuses, so the honest answer to
 /// that pair is "re-pair", and it is distinguishable from "this build has no scopes" only by the
 /// field being present at all.
-pub async fn me(session: Session) -> Json<Value> {
+pub async fn me(State(state): State<AppState>, session: Session) -> Json<Value> {
     let authenticated = session
         .get::<bool>(AUTH_KEY)
         .await
         .ok()
         .flatten()
         .unwrap_or(false);
+    // Read once and reused below, because the answer has two fields in it now and deriving them
+    // from two reads would let them disagree about the same session.
+    let held = session
+        .get::<crate::pairing::Scope>(SCOPE_KEY)
+        .await
+        .ok()
+        .flatten();
     // What this session is allowed to do, so a client can check it got what it asked for. See
     // the `scope` note in this function's doc comment for why an *honest* client is the whole
     // audience.
-    let scope = match session.get::<crate::pairing::Scope>(SCOPE_KEY).await {
-        Ok(Some(crate::pairing::Scope::Dashboard)) => json!({ "kind": "dashboard" }),
-        Ok(Some(crate::pairing::Scope::Integration { source })) => {
+    let scope = match &held {
+        Some(crate::pairing::Scope::Dashboard) => json!({ "kind": "dashboard" }),
+        Some(crate::pairing::Scope::Integration { source }) => {
             json!({ "kind": "integration", "source": source })
         }
         // Authenticated but unscoped is a session from before scopes existed, which `require_auth`
         // refuses. Reported as null rather than omitted, so a client can tell "this build has no
         // scopes" (field absent) from "your session predates them" (field present, null) — the
         // second needs re-pairing and the first does not.
-        _ => Value::Null,
+        None => Value::Null,
     };
-    Json(json!({
+    let mut answer = json!({
         "authenticated": authenticated,
         "version": crate::VERSION,
         "scope": scope,
-    }))
+    });
+    // The registry entry this credential is bound to — added only when there *is* one to describe.
+    //
+    // **Omitted for every other caller, and that is what keeps this off a cross-repo contract.**
+    // `tests/golden/session-signed-in.json` and `-signed-out.json` are parsed by the Android
+    // client, and a golden it does not also carry counts as drift on its side (`O86`). Both are
+    // dashboard answers, so scoping the field to integration credentials leaves them byte-identical
+    // and this ships without a second repository having to move first. It is also the more honest
+    // shape: a dashboard session is not bound to a provider, so `"provider": null` there would be
+    // answering a question nobody asked, and would collide with the null that means *not
+    // installed*. Absent is "not applicable"; null is "asked, and there is none".
+    //
+    // Scoped tightly: `recover_read` hands back a std guard and this block is the whole of its
+    // life — no `.await` may sit inside it.
+    if let Some(crate::pairing::Scope::Integration { source }) = &held {
+        let entry = {
+            let cfg = crate::state::recover_read(&state.config);
+            cfg.providers.get(source).map_or(
+                Value::Null,
+                |p| json!({ "enabled": p.enabled, "minutes": p.minutes }),
+            )
+        };
+        answer["provider"] = entry;
+    }
+    Json(answer)
 }
 
 /// Session key holding the last time we refreshed the expiry (unix seconds). See [`require_auth`].
@@ -887,6 +943,43 @@ fn integration_may_reach(method: &axum::http::Method, path: &str) -> bool {
         (method.as_str(), path),
         ("POST", "/extra-time" | "/api/extra-time") | ("GET", "/usage/today" | "/api/usage/today")
     )
+}
+
+/// The fields of today's summary an integration-scoped caller may read.
+///
+/// **Reaching a route and knowing everything it answers are two different grants, and only the
+/// first was ever decided.** [`integration_may_reach`] admits `GET /api/usage/today` for one
+/// stated reason: an integration pushes a grant and then reads it back, because it refuses to
+/// tell a parent a number this PC does not show (`O85`). The route it was handed to do that with
+/// answers the dashboard's whole day — per-app minutes, group pools, focused windows, and up to
+/// [`crate::foreground::MAX_PAGES`] window titles. **Seventeen fields, to settle one question.**
+/// Seventeen is counted from a response, not restated: the consumer's fixture is named "one field
+/// out of fourteen" and its capture is older than three of the fields this now sends.
+///
+/// One field is not a guess about the consumer. Voortgang's contract test is named "one field out
+/// of fourteen" and derives the set it depends on from its own source rather than restating it,
+/// so it stays true as that client changes; asked directly, its maintainer ran `extraMinutesFrom`
+/// against `{"extra_mins":60}` and the full payload and got `60` from both. A body carrying none
+/// of these yields `null` there, not zero, and `null` cannot retract a confirmed grant.
+pub const INTEGRATION_USAGE_FIELDS: [&str; 1] = ["extra_mins"];
+
+/// Reduce today's summary to [`INTEGRATION_USAGE_FIELDS`].
+///
+/// A filter over the shared handler rather than a second, narrower one. The same route serves the
+/// browser dashboard and the Android client, both `Scope::Dashboard` and both reading the whole
+/// payload, so one producer is what keeps the two answers from drifting — a separate integration
+/// handler would be a second place to remember whenever a field is added.
+///
+/// Absent fields are omitted rather than sent as `null`: this is a smaller answer to the same
+/// question, not a claim that the rest was measured and empty.
+pub fn usage_for_integration(summary: &Value) -> Value {
+    let mut narrowed = serde_json::Map::new();
+    for field in INTEGRATION_USAGE_FIELDS {
+        if let Some(value) = summary.get(field) {
+            narrowed.insert(field.to_string(), value.clone());
+        }
+    }
+    Value::Object(narrowed)
 }
 
 pub async fn require_auth(

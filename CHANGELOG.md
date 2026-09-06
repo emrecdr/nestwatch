@@ -24,6 +24,26 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   reasoning: suspending keeps the installation and closes the door, uninstalling takes the keys.
   <br>**What to do:** nothing. An app you switch off is told it was switched off, which is the
   message it already knows how to show a parent; an app you remove is told to link again.
+- **A connected app is now told only its own answer, not your child's whole day.** An app like
+  StudyGo pushes earned minutes and then reads them back, to be sure it never tells you a number
+  this PC does not show. The reply it received to do that was the same one the dashboard gets:
+  today's budget, minutes used and left, every app with a limit, and up to forty page titles. It
+  now receives the one figure it asked about. Nothing you see changes, and the app's own maintainer
+  confirmed against their code that this is all it ever read.
+
+### Added
+
+- **The Integrations card now shows which devices are paired to each app.** Both halves were
+  already on the page — the app in *Integrations*, the device in *Signed-in devices* — in two
+  cards that did not know about each other. An installed app that nothing has ever paired to now
+  says so, which was previously invisible: it would sit there looking configured and could never
+  grant anything.
+- **A connected app can now tell "switched off" from "not installed" before it tries.** Its
+  pairing screen could report a link as working while every grant behind it was being refused,
+  because the link really was fine and the app was switched off — and the only way to find that
+  out was to have your child do the work and watch nothing arrive. The app can now ask up front,
+  and read the minutes you set, so it can say "3 of 20 questions towards 25 minutes" instead of
+  leaving the reward unnamed.
 
 ## [0.7.0] — 2026-09-04
 

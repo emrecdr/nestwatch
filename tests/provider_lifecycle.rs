@@ -34,29 +34,9 @@ use nestwatch::pairing::Scope;
 
 mod common;
 use common::{
-    PASSWORD, ScratchDir, app_with, configure_provider, login, pair_with, state_with, test_config,
+    PASSWORD, ScratchDir, app_with, configure_provider, login, pair_with, send_json, state_with,
+    test_config,
 };
-
-/// One request, returning the status and the parsed body.
-///
-/// Composed from `common`'s `get`/`post_json`/`body_json` rather than building a `Request` here:
-/// this file needs both verbs and the decoded body, which no single shared helper returns, but
-/// the request construction itself is already shared.
-async fn call(
-    app: &axum::Router,
-    cookie: &str,
-    method: &str,
-    uri: &str,
-    body: Value,
-) -> (StatusCode, Value) {
-    let res = if method == "GET" {
-        common::get(app, uri, Some(cookie)).await
-    } else {
-        common::post_json(app, uri, Some(cookie), body).await
-    };
-    let status = res.status();
-    (status, common::body_json(res).await)
-}
 
 /// A signed-in parent and an integration paired to an installed, enabled `name`.
 ///
@@ -94,7 +74,7 @@ async fn a_providers_credential_follows_the_provider() {
 
         // Baseline: the read answers while the provider is installed and on.
         assert_eq!(
-            call(&app, &phone, "GET", "/api/usage/today", json!({}))
+            send_json(&app, &phone, "GET", "/api/usage/today", json!({}))
                 .await
                 .0,
             StatusCode::OK,
@@ -106,7 +86,7 @@ async fn a_providers_credential_follows_the_provider() {
         );
 
         // The grant was already refused before this change.
-        let (status, body) = call(&app, &phone, "POST", "/api/extra-time", json!({})).await;
+        let (status, body) = send_json(&app, &phone, "POST", "/api/extra-time", json!({})).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             body["error"], "the 'studygo' integration is turned off",
@@ -115,7 +95,7 @@ async fn a_providers_credential_follows_the_provider() {
 
         // The read was not, and that is the defect. GitHub's suspend blocks *all* access; this
         // served the child's day to an integration the parent had switched off.
-        let (status, body) = call(&app, &phone, "GET", "/api/usage/today", json!({})).await;
+        let (status, body) = send_json(&app, &phone, "GET", "/api/usage/today", json!({})).await;
         assert_eq!(
             status,
             StatusCode::BAD_REQUEST,
@@ -132,10 +112,16 @@ async fn a_providers_credential_follows_the_provider() {
         // sending a parent to mint a new one would be the same mis-routing that choosing `400`
         // over `403` avoids at the grant, relocated to the pairing step.
         //
-        // It cannot currently break — `auth::me` takes no `State`, so it has no way to read the
-        // registry — but "cannot vary" is an argument and their screen depends on a fact. Pinned
-        // here so the day someone gives that handler a `State` parameter, this fails instead.
-        let (status, body) = call(&app, &phone, "GET", "/session", json!({})).await;
+        // This was first written as "it cannot currently break — `auth::me` takes no `State`, so
+        // it has no way to read the registry", pinned so that the day someone gave that handler a
+        // `State` parameter it would fail here rather than at a household. `F3` is that day, and
+        // deliberately: `me` now reads the registry to report the `provider` entry below. The
+        // consumer's maintainer asked that this be re-aimed *before* the field landed rather than
+        // repaired after it went red, because the general property ("`/session` ignores the
+        // registry") was only ever a proxy for the narrow one that actually protects a parent —
+        // **a disabled provider still reports `authenticated: true` and its own scope**. That is
+        // what is pinned now, and it survives the coupling instead of dying with it.
+        let (status, body) = send_json(&app, &phone, "GET", "/session", json!({})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             body["authenticated"],
@@ -147,6 +133,14 @@ async fn a_providers_credential_follows_the_provider() {
             json!({ "kind": "integration", "source": "studygo" }),
             "and it is still the integration it was minted for"
         );
+        // The half that was missing, and the reason a parent could be told "linked and working"
+        // by a screen while every grant behind it was refused: the credential is good and the
+        // integration is off, and until now only the first of those was reported.
+        assert_eq!(
+            body["provider"],
+            json!({ "enabled": false, "minutes": 30 }),
+            "the pairing screen can now say *why* nothing is landing, without pushing a grant"
+        );
 
         // The credential survived: switching back on restores it without re-pairing, which is
         // the whole difference between suspend and uninstall.
@@ -155,7 +149,7 @@ async fn a_providers_credential_follows_the_provider() {
             StatusCode::OK,
         );
         assert_eq!(
-            call(&app, &phone, "GET", "/api/usage/today", json!({}))
+            send_json(&app, &phone, "GET", "/api/usage/today", json!({}))
                 .await
                 .0,
             StatusCode::OK,
@@ -167,14 +161,14 @@ async fn a_providers_credential_follows_the_provider() {
     {
         let (app, parent, phone) = ready("studygo").await;
         assert_eq!(
-            call(&app, &phone, "GET", "/api/usage/today", json!({}))
+            send_json(&app, &phone, "GET", "/api/usage/today", json!({}))
                 .await
                 .0,
             StatusCode::OK,
         );
 
         assert_eq!(
-            call(
+            send_json(
                 &app,
                 &parent,
                 "POST",
@@ -189,14 +183,14 @@ async fn a_providers_credential_follows_the_provider() {
         // Unauthorized, not Forbidden: the session is gone rather than confined, and `401` is
         // the answer Voortgang turns into "link this app again".
         assert_eq!(
-            call(&app, &phone, "GET", "/api/usage/today", json!({}))
+            send_json(&app, &phone, "GET", "/api/usage/today", json!({}))
                 .await
                 .0,
             StatusCode::UNAUTHORIZED,
             "uninstalling must end the sessions it authorised, not only refuse the grant"
         );
         assert_eq!(
-            call(&app, &phone, "POST", "/api/extra-time", json!({}))
+            send_json(&app, &phone, "POST", "/api/extra-time", json!({}))
                 .await
                 .0,
             StatusCode::UNAUTHORIZED,
@@ -205,13 +199,18 @@ async fn a_providers_credential_follows_the_provider() {
         // `/session` stopped vouching for a provider that no longer exists — it reports the
         // credential honestly, and there is no longer a credential. Contrast the disabled case
         // above, which must keep answering `true`.
-        let (status, body) = call(&app, &phone, "GET", "/session", json!({})).await;
+        let (status, body) = send_json(&app, &phone, "GET", "/session", json!({})).await;
         assert_eq!(status, StatusCode::OK, "/session answers everyone");
         assert_eq!(body["authenticated"], json!(false));
         assert_eq!(body["scope"], Value::Null);
+        assert_eq!(
+            body["provider"],
+            Value::Null,
+            "and there is no entry left to describe"
+        );
 
         // And the parent's Devices card no longer offers a revoke for a device already gone.
-        let (_, rows) = call(&app, &parent, "GET", "/api/sessions", json!({})).await;
+        let (_, rows) = send_json(&app, &parent, "GET", "/api/sessions", json!({})).await;
         let integrations: Vec<&Value> = rows
             .as_array()
             .expect("sessions is an array")
@@ -225,7 +224,7 @@ async fn a_providers_credential_follows_the_provider() {
 
         // The parent's own session is untouched by either operation.
         assert_eq!(
-            call(&app, &parent, "GET", "/api/usage/today", json!({}))
+            send_json(&app, &parent, "GET", "/api/usage/today", json!({}))
                 .await
                 .0,
             StatusCode::OK,
@@ -251,7 +250,7 @@ async fn a_providers_credential_follows_the_provider() {
         .unwrap();
 
         assert_eq!(
-            call(
+            send_json(
                 &app,
                 &parent,
                 "POST",
@@ -263,7 +262,7 @@ async fn a_providers_credential_follows_the_provider() {
             StatusCode::OK,
         );
         assert_eq!(
-            call(&app, &chores, "GET", "/api/usage/today", json!({}))
+            send_json(&app, &chores, "GET", "/api/usage/today", json!({}))
                 .await
                 .0,
             StatusCode::OK,
