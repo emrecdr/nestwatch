@@ -213,6 +213,26 @@ pub struct Config {
     /// expected trust warning). Empty on configs written before this existed.
     #[serde(default)]
     pub cert_sans: Vec<String>,
+    /// Settings written by a build **newer** than this one, kept verbatim so an older binary
+    /// cannot delete them.
+    ///
+    /// The tests above cover old-file/new-code, and every field here carries `#[serde(default)]`
+    /// so that direction is safe. The other direction is the one that loses data: `load` ignores
+    /// fields it has no name for and `save` writes only the fields it knows, so an older binary
+    /// run once — after a rollback, off a USB stick, from an old install directory — rewrites the
+    /// file without every setting added since it was built. Silently, and not recovered by
+    /// upgrading again.
+    ///
+    /// [`crate::api::set_policy`] reasoned this exact hazard through for the *export* document and
+    /// answered it with a warning naming both versions. It could do that because the export
+    /// carries a version; `config.json` never has, so on the file that is actually rewritten on
+    /// every settings change there was nothing to compare and nothing to say.
+    ///
+    /// **Nothing in this crate reads this.** It is not a place to put anything; it exists so that
+    /// load → save is lossless, and it disappears on its own once a build has a real field for
+    /// whatever it is holding.
+    #[serde(flatten)]
+    pub unknown: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// Which language the **child's** surfaces speak.
@@ -760,6 +780,52 @@ mod tests {
             leftovers.is_empty(),
             "temp files left behind: {leftovers:?}"
         );
+    }
+
+    /// A config written by a **newer** build keeps its unknown settings through load → save.
+    ///
+    /// The direction the tests above cover is old-file/new-code. This is the other one, and it is
+    /// the one that loses data: `load` ignores fields it has no name for and `save` writes only
+    /// the fields it knows, so running an older binary once rewrites the file without them. There
+    /// are eleven released versions, so a parent rolling back after a bad upgrade reaches this.
+    #[test]
+    fn a_newer_configs_unknown_settings_survive_a_load_and_save() {
+        let from_the_future =
+            r#"{"port":8443,"password_hash":"$argon2id$abc","bedtime_stories":{"enabled":true}}"#;
+        let cfg: Config = serde_json::from_str(from_the_future).unwrap();
+        let written = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            written.contains("bedtime_stories"),
+            "a setting this build has no field for was dropped on save: {written}"
+        );
+    }
+
+    /// The capture map holds **only** what this build has no field for.
+    ///
+    /// `#[serde(flatten)]` onto a map has a documented failure mode (serde-rs/serde#2764) where it
+    /// also re-captures fields the struct declares, which here would mean every known setting
+    /// written twice into `config.json` — the second copy winning on the next load, forever. That
+    /// is worse than the loss this field exists to prevent, so it is pinned rather than assumed.
+    #[test]
+    fn the_capture_map_takes_nothing_the_struct_already_names() {
+        let ordinary =
+            r#"{"port":8443,"password_hash":"$argon2id$abc","language":"nl","cert_sans":["a"]}"#;
+        let cfg: Config = serde_json::from_str(ordinary).unwrap();
+        assert!(
+            cfg.unknown.is_empty(),
+            "a field this build declares was swept into the capture map: {:?}",
+            cfg.unknown.keys().collect::<Vec<_>>()
+        );
+
+        // …and the round-trip emits each key once, so nothing is duplicated on disk.
+        let written = serde_json::to_string(&cfg).unwrap();
+        for key in ["port", "password_hash", "language", "cert_sans"] {
+            assert_eq!(
+                written.matches(&format!("\"{key}\"")).count(),
+                1,
+                "{key} was written more than once: {written}"
+            );
+        }
     }
 
     #[test]
