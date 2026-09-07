@@ -120,6 +120,18 @@ const UI = {
     logOut: "Log out",
     refusedToday: "Refused today",
     thingsThisPcTriedThat: "Things this PC tried that Nestwatch declined. The limits held; nothing here needs fixing. Counted since midnight.",
+    // The rows of that card. They were built as English literals inside `refusedRows()` while the
+    // heading above them went through `t()`, so a Dutch or Turkish parent read a translated title
+    // over four English sentences. Two forms per row because the count sits in its own badge and
+    // the sentence has to agree with it; see the Turkish table for why that is not universal.
+    refusedClockOne: "clock change ignored — screen time and bedtime kept using the trusted time",
+    refusedClockMany: "clock changes ignored — screen time and bedtime kept using the trusted time",
+    refusedResetOne: "attempt to start the day over refused — today's total stood",
+    refusedResetMany: "attempts to start the day over refused — today's total stood",
+    refusedShutdownOne: "shutdown cancelled on the PC — re-issued straight away, without a fresh countdown",
+    refusedShutdownMany: "shutdowns cancelled on the PC — re-issued straight away, without a fresh countdown",
+    refusedCodeOne: "time code refused — it was not an active code, so no time was added",
+    refusedCodeMany: "time codes refused — they were not active codes, so no time was added",
     screen: "Screen",
     live: "Live",
     expand: "⤢ Expand",
@@ -312,6 +324,14 @@ const UI = {
     logOut: "Afmelden",
     refusedToday: "Vandaag geweigerd",
     thingsThisPcTriedThat: "Dingen die deze pc probeerde en die Nestwatch heeft geweigerd. De limieten hielden stand; hier hoeft niets opgelost te worden. Geteld sinds middernacht.",
+    refusedClockOne: "klokwijziging genegeerd — schermtijd en bedtijd bleven de vertrouwde tijd gebruiken",
+    refusedClockMany: "klokwijzigingen genegeerd — schermtijd en bedtijd bleven de vertrouwde tijd gebruiken",
+    refusedResetOne: "poging om de dag opnieuw te beginnen geweigerd — het totaal van vandaag bleef staan",
+    refusedResetMany: "pogingen om de dag opnieuw te beginnen geweigerd — het totaal van vandaag bleef staan",
+    refusedShutdownOne: "afsluiting op de pc geannuleerd — meteen opnieuw gegeven, zonder nieuwe aftelling",
+    refusedShutdownMany: "afsluitingen op de pc geannuleerd — meteen opnieuw gegeven, zonder nieuwe aftelling",
+    refusedCodeOne: "tijdcode geweigerd — het was geen actieve code, dus er is geen tijd bijgekomen",
+    refusedCodeMany: "tijdcodes geweigerd — het waren geen actieve codes, dus er is geen tijd bijgekomen",
     screen: "Scherm",
     live: "Live",
     expand: "⤢ Vergroten",
@@ -504,6 +524,18 @@ const UI = {
     logOut: "Çıkış yap",
     refusedToday: "Bugün reddedilenler",
     thingsThisPcTriedThat: "Bu bilgisayarın denediği ve Nestwatch'ın reddettiği şeyler. Sınırlar tuttu; burada düzeltilecek bir şey yok. Gece yarısından beri sayılıyor.",
+    // The `One` and `Many` forms below are deliberately IDENTICAL, and this is not a copy-paste
+    // slip. Turkish does not pluralise a noun that follows a numeral — "1 saat değişikliği" and
+    // "20 saat değişikliği" both take the singular — and the count sits in the badge beside these
+    // strings. Making the `Many` form plural here would be the error.
+    refusedClockOne: "saat değişikliği yok sayıldı — ekran süresi ve yatma vakti güvenilen saati kullanmayı sürdürdü",
+    refusedClockMany: "saat değişikliği yok sayıldı — ekran süresi ve yatma vakti güvenilen saati kullanmayı sürdürdü",
+    refusedResetOne: "günü yeniden başlatma girişimi reddedildi — bugünün toplamı olduğu gibi kaldı",
+    refusedResetMany: "günü yeniden başlatma girişimi reddedildi — bugünün toplamı olduğu gibi kaldı",
+    refusedShutdownOne: "bilgisayarda kapatma iptal edildi — yeni bir geri sayım olmadan hemen yeniden verildi",
+    refusedShutdownMany: "bilgisayarda kapatma iptal edildi — yeni bir geri sayım olmadan hemen yeniden verildi",
+    refusedCodeOne: "zaman kodu reddedildi — etkin bir kod değildi, bu yüzden süre eklenmedi",
+    refusedCodeMany: "zaman kodu reddedildi — etkin bir kod değildi, bu yüzden süre eklenmedi",
     screen: "Ekran",
     live: "Canlı",
     expand: "⤢ Büyüt",
@@ -764,7 +796,6 @@ function emptyScreentime() {
 // only one of the seven can reach is a convention nothing is able to follow. The six existing lines
 // are deliberately left alone -- they work, and rewriting working prose to adopt a helper is churn.
 // This is where the next one goes.
-const plural = (n, one, many) => (n === 1 ? one : many);
 
 function app() {
   return {
@@ -2408,31 +2439,23 @@ function app() {
       const r = this.today?.refused;
       if (!r) return [];
       const rows = [];
-      if (r.clock_changes > 0) {
-        rows.push({
-          key: "clock",
-          count: r.clock_changes,
-          text: plural(r.clock_changes, "clock change ignored", "clock changes ignored") +
-                " — screen time and bedtime kept using the trusted time",
-        });
-      }
-      if (r.day_resets > 0) {
-        rows.push({
-          key: "reset",
-          count: r.day_resets,
-          text: plural(r.day_resets, "attempt to start the day over refused",
-                                     "attempts to start the day over refused") +
-                " — today's total stood",
-        });
-      }
-      if (r.shutdown_cancels > 0) {
-        rows.push({
-          key: "shutdown",
-          count: r.shutdown_cancels,
-          text: plural(r.shutdown_cancels, "shutdown cancelled on the PC", "shutdowns cancelled on the PC") +
-                " — re-issued straight away, without a fresh countdown",
-        });
-      }
+      // Every key is written out as a literal argument to `this.t(...)`, one line per kind, rather
+      // than looked up from a table of key names. The guard in `web/test/app.test.js` finds used
+      // keys by scanning for exactly that shape, so a key reached through a variable is invisible
+      // to it — and a key it cannot see is one that can be dropped from the table, or left
+      // untranslated in two languages, without anything failing. The repetition is the price of
+      // the check, and it is worth it.
+      const push = (key, count, text) => {
+        if (count > 0) rows.push({ key, count, text });
+      };
+      push("clock", r.clock_changes,
+        r.clock_changes === 1 ? this.t("refusedClockOne") : this.t("refusedClockMany"));
+      push("reset", r.day_resets,
+        r.day_resets === 1 ? this.t("refusedResetOne") : this.t("refusedResetMany"));
+      push("shutdown", r.shutdown_cancels,
+        r.shutdown_cancels === 1 ? this.t("refusedShutdownOne") : this.t("refusedShutdownMany"));
+      push("code", r.time_codes_refused,
+        r.time_codes_refused === 1 ? this.t("refusedCodeOne") : this.t("refusedCodeMany"));
       return rows;
     },
     bonusLabel() { return " (incl. +" + this.today.extra_mins + " bonus)"; },

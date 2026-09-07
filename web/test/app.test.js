@@ -13,11 +13,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { withState, loadApp } from "./harness.js";
-// For the two i18n guards at the foot of this file, which read the tables as text rather than
+// For the i18n guards at the foot of this file, which read the tables and the script as text rather than
 // standing up a DOM — the same trade harness.js records for the rest of app.js.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+// The dashboard's own comment stripper, reused rather than re-implemented: the bound-method scan
+// below must not read a sentence out of a comment, and `//` inside a URL is exactly the case a
+// regex gets wrong. `strip-comments.test.js` already covers it, and importing it runs no build.
+import { stripJs } from "../scripts/strip-comments.mjs";
 
 // --- compareVersions -------------------------------------------------------
 //
@@ -2551,6 +2555,116 @@ test("no dashboard string reaches a person as a literal at the call site", () =>
       `and call t()/tf():\n  ${offenders.join("\n  ")}`,
   );
 });
+
+// The dashboard's *labels* are translated; the sentences it assembles are not.
+//
+// The guard above covers `toast()` and `rejection()`, which were the two shapes that put text in
+// front of a person when it was written. There is a third and it is the largest: a method bound
+// into the markup with `x-text`, building its answer from English literals. `refusedRows()` was one
+// — four English sentences rendered under a heading that went through `t()` — and fixing it only
+// found the rest.
+//
+// This does not demand they be fixed. It demands the list not grow, and not rot: the set is
+// asserted **exactly**, so a new bound method building English fails here, and so does leaving a
+// method listed after it has been translated. The debt is `O96`; the reason it is being pinned
+// rather than paid is written there — the 378 strings already in the tables are machine-produced
+// and unreviewed, and doubling that before anyone has read it is the more expensive mistake.
+const BUILDS_ENGLISH = [
+  "curfewStateLabel", "curfewUntilLabel", "deviceLabel", "enforcementDetail",
+  "firstSeenHeading", "firstSeenNote", "firstSeenQuietNote", "firstSeenStoppedNote",
+  "glanceCert", "glanceEnforcement", "glanceRequests", "glanceToday",
+  "pairingSummary", "scopeLabel", "shotAge", "spanLabel",
+  "stBarTitle", "stChangeLabel", "stDayLabel", "stHeading",
+  "todayBarLabel", "windowDayLabel",
+];
+
+// `appLabel` maps an executable name to the name its makers use — "chrome.exe" to "Google Chrome".
+// Those are proper nouns and translating them would be the defect, not the fix. It is named here
+// rather than left to the prose heuristic because the heuristic cannot tell a product name from a
+// sentence, and a guard that quietly reclassifies data as untranslated copy teaches people to
+// ignore it.
+const NOT_COPY = ["appLabel"];
+
+test("no bound method starts building English that no table can translate", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const html = readFileSync(join(root, "assets", "index.html"), "utf8");
+  const parsed = stripJs(readFileSync(join(root, "assets", "app.js"), "utf8"));
+  assert.ok(!parsed.unterminated, "stripJs mis-parsed app.js, so this scan read nothing reliable");
+  const src = parsed.text;
+
+  // Derived from the markup, so a method bound tomorrow is in scope without anyone adding it.
+  const bound = [
+    ...new Set([
+      ...[...html.matchAll(/x-text="([A-Za-z_$][\w$]*)\(/g)].map((m) => m[1]),
+      ...[...html.matchAll(/:(?:title|aria-label)="([A-Za-z_$][\w$]*)\(/g)].map((m) => m[1]),
+      // `x-for="r in rows()"` reaches text through a property (`x-text="r.text"`), so the method
+      // building it is invisible to the two patterns above. That is not hypothetical: it is
+      // exactly how `refusedRows()` shipped four English sentences under a translated heading,
+      // and a guard that could not have caught the case that prompted it is worth very little.
+      ...[...html.matchAll(/x-for="[^"]*\bin\s+([A-Za-z_$][\w$]*)\(/g)].map((m) => m[1]),
+    ]),
+  ]
+    .filter((n) => n !== "t" && n !== "tf" && !NOT_COPY.includes(n))
+    .sort();
+
+  assert.ok(
+    bound.length > 20,
+    `found ${bound.length} bound methods in index.html; the scan is broken, not the markup`,
+  );
+
+  const offenders = bound.filter((name) => buildsEnglish(src, name)).sort();
+  assert.deepEqual(
+    offenders,
+    [...BUILDS_ENGLISH].sort(),
+    `the set of dashboard methods building English has changed.\n` +
+      `  newly building English: ${offenders.filter((n) => !BUILDS_ENGLISH.includes(n)).join(", ") || "(none)"}\n` +
+      `  listed but now clean:   ${BUILDS_ENGLISH.filter((n) => !offenders.includes(n)).join(", ") || "(none)"}\n` +
+      `A new one means a parent reading Dutch or Turkish gets an English sentence there. ` +
+      `A clean one still listed means this list is out of date — remove it.`,
+  );
+});
+
+/** Does `name`'s method body contain an English sentence that never reaches a language table? */
+function buildsEnglish(src, name) {
+  const body = methodBody(src, name);
+  assert.ok(body !== null, `no method body found for ${name}() — the scan cannot judge it`);
+  // Blank out the key argument of `this.t("…")` / `this.tf("…")`: those ARE translated, and their
+  // keys are lowercase words that would otherwise read as prose.
+  const outside = body.replace(/this\.tf?\(\s*"(?:[^"\\]|\\.)*"/g, "this.t(K");
+  const literals = outside.match(/"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g) || [];
+  return literals.some(isProse);
+}
+
+/** The `{ … }` body of a component method, matched by brace depth. */
+function methodBody(src, name) {
+  const at = new RegExp(`^    ${name}\\(`, "m").exec(src);
+  if (!at) return null;
+  const open = src.indexOf("{", at.index);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}" && (depth -= 1) === 0) return src.slice(open, i + 1);
+  }
+  return null;
+}
+
+/**
+ * Two plain words in a row is a sentence; anything else is data.
+ *
+ * Deliberately crude, and tuned against the real file rather than invented: `${…}` holes are
+ * removed first so an interpolated sentence still reads as one, and a token carrying a hyphen, a
+ * digit or a dot is not a word — which is what keeps CSS class lists ("bg-success ring-2") and
+ * executable names ("chrome.exe") out without an allowlist per case.
+ */
+function isProse(literal) {
+  const words = literal
+    .slice(1, -1)
+    .replace(/\$\{[^}]*\}/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.replace(/[.,:;!?—–-]+$/, ""));
+  return words.some((w, i) => /^[A-Za-z]{2,}$/.test(w) && /^[A-Za-z]{2,}$/.test(words[i + 1] ?? ""));
+}
 
 test("every UI key is used, and every used key exists", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
