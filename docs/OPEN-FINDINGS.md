@@ -1834,3 +1834,83 @@ worse than English and would look like a bug in the language setting rather than
 **Trigger.** The first time a parent reports a message they cannot read, or the phone app grows its
 own translations — whichever comes first. Until then this is one English sentence at the moment
 something was already refused, on a dashboard whose furniture is in the right language.
+
+### O95 · The redeem throttle counts per address, and nothing counts across them
+
+`SubmitLimiter` keys on `peer.ip()` and nothing else, and `require_lan_peer` admits every RFC1918
+address. So the 5-per-minute limit that `timecode.rs` and `SECURITY.md` both quote their security
+margin from is a per-address quota, and the address is chosen by whoever is calling. A device on
+the home network whose owner controls its addressing collects a fresh quota for each address it
+binds.
+
+**Measured 2026-09-07.** 32^6 is 1,073,741,824; at `MAX_ACTIVE_CODES` (50) and 5/min that is the
+~8 years both documents state. A hundred source addresses makes it about a month. Neither figure
+was wrong — they answer a question about one attacker at one address, and were being read as
+statements about the endpoint. Both documents now say so.
+
+**What was done instead, and why.** Every refused submission is counted
+(`refusals::time_code_refused`) and reaches the *Refused today* card, so sustained guessing stops
+being indistinguishable from a quiet week — which is the half that was missing. A wrong *password*
+already wrote `auth_failure`; a wrong *code* wrote nothing anywhere.
+
+**What would close this** is a second ceiling that spans addresses. It is not built because it is
+not purely a security decision: a shared budget that *refuses* also decides what a legitimately
+issued code does while that budget is spent. Note the usual objection does not apply here — the
+redeem endpoint is the child's, so a child exhausting a global budget denies mainly themselves —
+but "your code stopped working and the tool will not say why" is still a product call, and it wants
+a deliberate answer rather than a default. A counter is bounded by construction; a lockout is not.
+
+### O96 · The dashboard translates its labels and not the sentences it builds
+
+Two guards police the dashboard's strings, and between them they cover the markup and two call
+shapes. Neither covers the largest category: text assembled in `app.js` and handed to the markup
+through a property.
+
+`refusedRows()` was the worked example — four English sentences rendered under a heading that went
+through `t()` — and is now fixed. It was not the only one. `bonusLabel()`, `todayBarLabel()` and
+`limitLabel()` build English the same way, as do the update-check and certificate notices.
+
+**Measured 2026-09-07, then measured properly.** The first figure here was 130 string literals
+outside the `UI` tables, from a grep — an upper bound mixing copy with data. The real number is
+**22 of the 45 methods the markup binds**: `curfewStateLabel`, `enforcementDetail`, the four
+`glance*` summaries a parent reads first on every load, `stHeading`, `stDayLabel`, `stChangeLabel`,
+`todayBarLabel`, `windowDayLabel`, `scopeLabel`, `deviceLabel`, `spanLabel`, `shotAge`,
+`pairingSummary`, the four `firstSeen*` notes, `curfewUntilLabel` and `stBarTitle`.
+
+That count is now derived by a test rather than by a person with a grep, and the derivation
+excludes the two categories the grep could not: `appLabel` returns product names (`Google Chrome`)
+which translating would break, and CSS class strings are rejected by the same rule that rejects
+`chrome.exe` — a token carrying a hyphen, digit or dot is not a word.
+
+**Why the guard missed them.** `no dashboard string reaches a person as a literal at the call site`
+scans for `toast(` and `rejection(`, which were the two shapes that existed when it was written. A
+third shape — `text:` on an object the markup renders — was invisible to it. That is the same
+failure this file records elsewhere: a check that enumerates the shapes it knows rather than
+deriving them.
+
+**Do not close this by translating everything in one sweep.** The 378 strings already in the tree
+are machine-produced and have never been read by a second speaker; that debt is recorded in the
+commit messages and should be paid down before it is doubled.
+
+**Pinned instead, in both directions.** `web/test/app.test.js` asserts the offending set *exactly*:
+a newly-bound method building English fails, and so does leaving a method listed after it has been
+translated. So the list cannot grow silently and cannot rot into a lie, and each entry is one
+work item whenever somebody does have a reviewer for the language. The `glance*` four are the
+place to start — they are the first thing on the page.
+
+### O97 · The config keeps unknown settings at the top level only
+
+`Config` now carries a `#[serde(flatten)]` capture map, so a setting a newer build wrote survives
+being loaded and saved by an older one. That covers *top-level* keys. `Rules`, `Curfew`, `Routine`,
+`Provider` and `DailyGrant` have no such map, so a field added inside one of them — `rules.foo` —
+is still dropped by an older binary exactly as before.
+
+Top-level is where most growth has landed (`routines`, `language`, `providers`, `tz_zone`,
+`cert_sans` were all top-level additions), which is why it was done first and alone. But `rules`
+has grown too, so this is a narrower fix than the field's name suggests.
+
+**What would close it** is the same three lines on each nested type. The reason to weigh it rather
+than do it: every capture map is a field serde must consider on each load, they cannot be
+`deny_unknown_fields`, and five of them make the config's shape harder to read for a reader who has
+to be told none of them are settings. Worth doing when a nested field is actually added, and
+probably not before.

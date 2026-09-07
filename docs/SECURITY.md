@@ -536,11 +536,26 @@ on every axis:
 A time code *does* grant screen time without a live parent action — that's the point (leave a
 code for when you're away). It's safe because:
 
-- **The code is the capability, and it's unguessable.** Codes are 6 Crockford-base32 characters —
-  1,073,741,824 combinations — from the OS CSPRNG. **The throttle is what makes this safe, not the
-  length.** At the 5/min per-IP rate limit, guessing one takes on the order of 400 years with a
-  single code outstanding, and about 8 years even at the 50-code cap. The alphabet omits `I`, `L`,
-  `O` and `U`, so there is no character a child can mistype into a different valid code.
+- **The code is the capability, and it's expensive to guess.** Codes are 6 Crockford-base32
+  characters — 1,073,741,824 combinations — from the OS CSPRNG. **The throttle is what makes this
+  expensive, not the length.** At the 5/min per-IP rate limit, guessing one takes on the order of
+  400 years with a single code outstanding, and about 8 years even at the 50-code cap. The alphabet
+  omits `I`, `L`, `O` and `U`, so there is no character a child can mistype into a different valid
+  code.
+  <br>**Read those two figures as per source address, because that is what the limiter counts.**
+  This bullet used to open "and it's unguessable" and call the throttle what makes it *safe*. The
+  arithmetic behind both numbers is correct and always was, but it answers a question about one
+  attacker at one address: the rate limiter keys on the peer IP alone, and the LAN allowlist admits
+  every RFC1918 address. A device on your network whose addressing its owner controls therefore
+  collects a fresh 5-per-minute quota for each address it binds, and at the 50-code cap a hundred
+  of them bring eight years down to roughly a month.
+  <br>**What answers that today is visibility, not a lower rate.** Every refused submission is
+  counted and shown on the dashboard's *Refused today* card, so a code being worked on looks
+  different from a quiet week — which, until this was added, it did not: a wrong password writes
+  `auth_failure` to the audit log, and a wrong code wrote nothing anywhere. A **global** ceiling
+  across all addresses is the obvious next control and is deliberately not built yet; the trade-off
+  is recorded in `docs/OPEN-FINDINGS.md`, because a shared ceiling that refuses also decides what a
+  legitimately issued code does while it is spent.
   <br>Shortened from eight on 2026-08-26, which is a factor of 1,024 in combinations and no
   meaningful change in feasibility — a code has to be read off a note and retyped by a child, and
   the rate limit was always the binding constraint. Two consequences worth stating plainly: the
@@ -558,6 +573,8 @@ code for when you're away). It's safe because:
 
 Net: at worst, any LAN device can add up to 5 pending lines to a queue the parent reviews, or
 redeem a code the parent already chose to hand out — it cannot see or change anything sensitive.
+Sustained guessing is the one case this does not simply absorb, and the answer to it is that the
+parent is now told it is happening.
 
 ---
 
@@ -588,8 +605,20 @@ redeem a code the parent already chose to hand out — it cannot see or change a
    are reported as unknown rather than guessed at.
 6. **Access log** — after logging in, open **Recent access** and confirm you only see your own
    sign-ins.
-7. **Child page** — open `https://<this-pc>:<port>/ask` and confirm it shows only the request
-   form: no controls, no screen, no data.
+7. **Child page** — open `https://<this-pc>:<port>/ask` and confirm it shows your child their own
+   information and nothing else. There are four sections and there should be no others: **Your
+   screen time**, **Your last 7 days**, **Ask for more time**, and **Have a code?**. What must
+   *not* be there is anything that acts on this PC or reports on anyone else — no screenshot, no
+   list of running apps, no kill or shutdown control, no settings, and nothing about another
+   person's activity.
+   <br>**This item used to say the page shows "only the request form: no controls, no screen, no
+   data".** That stopped being true when the page grew a week of the child's own totals and a count
+   of how many times they were captured today. Both are deliberate: a child who can see their own
+   usage is the design this tool argues for, and telling them when they were watched is the promise
+   the yellow capture border already makes on the desktop. The checklist simply did not follow, and
+   a verification step that describes the wrong page is one a parent ticks without reading.
+   `tests/doc_claims.rs` now derives those four headings from `assets/ask.html`, so a fifth section
+   fails the build until this line names it.
 
 ## What is recorded about the child, and what is not
 

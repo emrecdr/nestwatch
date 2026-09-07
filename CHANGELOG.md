@@ -11,6 +11,33 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Security
 
+- **A wrong time code is now counted, and shown to you.** A wrong *password* has always written
+  `auth_failure` to the audit log, with whether the lockout tripped — so you could see your password
+  being worked on. A wrong *code* wrote nothing, anywhere. Someone working through the possibilities
+  looked exactly like a quiet week. Refused codes are now counted and appear on **Refused today**,
+  under the same rule as the rest of that card: it says the code bought no time and nothing about
+  why, so a child mistyping a code you read out over the phone counts the same as anything else.
+  <br>Counted rather than logged on purpose. Whoever is submitting sets the pace, so a log line per
+  attempt would let them push every real login and shutdown out of the audit log's two generations.
+  A number cannot be made to grow the file.
+- **Corrected: the published guessing figures are per source address, not per attacker.**
+  `docs/SECURITY.md` said a time code takes "on the order of 400 years" to guess, and about 8 years
+  at the 50-code cap, and called the throttle what makes the codes *safe*. The arithmetic is right
+  and unchanged; what was wrong is what it was taken to mean. The rate limiter counts per source IP
+  and the LAN allowlist admits every private address, so a device whose addressing its owner
+  controls collects a fresh quota per address it binds — a hundred of them bring the eight years
+  down to about a month. Both documents now say this in place. A ceiling that spans addresses is
+  recorded as `O95` rather than built, because it also decides what a legitimately issued code does
+  while that ceiling is spent.
+- **A submission that is not the shape of a code no longer reads the code log.** `/redeem-code`
+  checked only that the submission was non-empty, then scanned the whole code log for it. A
+  single character matches that scan in any file that has ever held a code, so the cheapest possible
+  request took the most expensive path — parsing every line ever written, holding the redemption
+  lock while it did. Submissions are now length-checked first.
+- **Time codes are compared without an early exit,** as pairing tokens already were. The comparison
+  now lives beside the code that mints both secrets rather than in the module that happened to think
+  of it first.
+
 - **Removing an integration now signs out the app that was using it.** Until now, *Remove* on the
   Integrations card deleted the setting and left the app's pairing alive. It could no longer add
   time — but it could still read your child's day, which is today's budget, the minutes used, and
@@ -30,6 +57,21 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   today's budget, minutes used and left, every app with a limit, and up to forty page titles. It
   now receives the one figure it asked about. Nothing you see changes, and the app's own maintainer
   confirmed against their code that this is all it ever read.
+
+### Fixed
+
+- **Rolling back to an older Nestwatch no longer deletes settings the newer one added.** `config.json`
+  was read by ignoring anything the running build had no field for, and written back with only the
+  fields it knew — so running an older binary once, for any reason, silently dropped every setting
+  added since it was built, and upgrading again did not bring them back. With eleven released
+  versions this was reachable by anyone rolling back after a bad upgrade. Unknown settings are now
+  kept verbatim through a load and save. Top-level settings only; the same gap one level down is
+  recorded as `O97`.
+- **The *Refused today* rows are translated.** The card's heading and description went through the
+  language table; the four sentences underneath were English literals, so a Dutch or Turkish
+  dashboard showed a translated title over English rows. They now come from the table like
+  everything else. Other text the dashboard assembles in JavaScript is still English — measured and
+  recorded as `O96`.
 
 ### Added
 

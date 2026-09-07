@@ -580,3 +580,97 @@ fn the_bodyless_post_count_in_the_csrf_argument_is_the_real_one() {
         "only {actual} bodyless POST routes found — the router scan has drifted and proves nothing"
     );
 }
+
+/// Every heading `assets/ask.html` renders is named in `SECURITY.md`'s child-page check.
+///
+/// Item 7 of the verification checklist told a parent to open the child's page and confirm it
+/// shows "only the request form: no controls, no screen, no data". That was true when it was
+/// written. The page has since grown **Your last 7 days** and a count of how often the child was
+/// captured today, both deliberately — so the one line telling a parent what a correct page looks
+/// like described a page that no longer exists, and the failure is quiet in the worst way: the
+/// checklist still reads as passable, so it gets ticked.
+///
+/// Derived rather than enumerated, which is the whole point. Listing the four headings in a
+/// constant here would pin today's page against a copy of itself; reading them out of the markup
+/// means a **fifth** section fails this until the checklist names it too. English lives inline in
+/// `ask.html` (`ask.js` carries only the `nl` and `tr` tables), so the page really is its own
+/// source of truth for what a parent will read on screen.
+///
+/// Scoped to the child-page item rather than the whole document: a heading that happened to appear
+/// somewhere else in `SECURITY.md` would otherwise satisfy this without the checklist saying
+/// anything.
+#[test]
+fn the_child_page_checklist_names_every_section_that_page_has() {
+    let markup = repo("assets/ask.html");
+    let headings = child_page_headings(&markup);
+
+    // Fail closed. If the scan stops matching the markup it must say so, not report success on an
+    // empty list — the trap `tests/scanner_guards.rs` exists to police.
+    assert!(
+        headings.len() >= 3,
+        "found {} headings in ask.html; the scan is broken, not the page: {headings:?}",
+        headings.len()
+    );
+
+    let item = child_page_checklist_item(&repo("docs/SECURITY.md"));
+    for heading in &headings {
+        let heading = collapse_whitespace(heading);
+        assert!(
+            item.contains(heading.as_str()),
+            "`assets/ask.html` shows a section called {heading:?} and SECURITY.md's child-page \
+             check does not mention it. A parent following that checklist is being told to \
+             confirm a page that is not the one they will see.\n\nThe item says:\n{item}"
+        );
+    }
+}
+
+/// The visible text of every `<h1>`/`<h2>` in the child page that carries a translation key.
+///
+/// The key is what distinguishes a section heading from decoration: everything the page shows a
+/// child is translated, so an untranslated heading would be a defect of its own rather than a
+/// section this checklist has to describe.
+fn child_page_headings(markup: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tag in ["<h1", "<h2"] {
+        let mut from = 0usize;
+        while let Some(i) = markup[from..].find(tag) {
+            let at = from + i;
+            let Some(gt) = markup[at..].find('>') else {
+                break;
+            };
+            let open_end = at + gt + 1;
+            let Some(lt) = markup[open_end..].find('<') else {
+                break;
+            };
+            let text = markup[open_end..open_end + lt].trim();
+            if markup[at..open_end].contains("data-i18n=") && !text.is_empty() {
+                out.push(text.to_owned());
+            }
+            from = open_end;
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The text of the numbered **Child page** item, up to the start of the next one.
+///
+/// Whitespace is collapsed, and that is load-bearing rather than tidying. Markdown wraps prose at
+/// the column, so this item really does contain `**Your\n   screen time**` — a substring search for
+/// the heading a reader sees on screen fails against the bytes on disk. The first run of this guard
+/// failed for exactly that reason, on a document that was already correct.
+fn child_page_checklist_item(security: &str) -> String {
+    let start = security
+        .find("**Child page**")
+        .expect("SECURITY.md no longer has a `**Child page**` checklist item");
+    let rest = &security[start..];
+    // Items are separated by a blank line; the next section heading ends the list.
+    let end = rest.find("\n\n").unwrap_or(rest.len());
+    collapse_whitespace(&rest[..end])
+}
+
+/// Runs of whitespace to a single space, so wrapped prose compares as it reads.
+fn collapse_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
