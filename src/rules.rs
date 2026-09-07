@@ -2903,7 +2903,7 @@ mod tests {
                 refused: crate::refusals::Refused {
                     clock_changes: 4,
                     day_resets: 1,
-                    shutdown_cancels: 0,
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -2931,6 +2931,7 @@ mod tests {
                 clock_changes: 3,
                 day_resets: 2,
                 shutdown_cancels: 1,
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -2962,8 +2963,8 @@ mod tests {
             day: Some(day()),
             refused: crate::refusals::Refused {
                 clock_changes: 2,
-                day_resets: 0,
                 shutdown_cancels: 5,
+                ..Default::default()
             },
             ..Default::default()
         };

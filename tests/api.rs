@@ -572,6 +572,39 @@ async fn redeem_code_is_lan_gated_not_auth_gated() {
     assert_eq!(body_json(res).await["ok"], json!(false));
 }
 
+/// A refused code is *counted*, which is the half that did not exist.
+///
+/// A wrong password writes `auth_failure` to the audit log, so a parent can see their password
+/// being worked on. A wrong code wrote nothing anywhere, so someone working through the
+/// possibilities was indistinguishable from a quiet week. This pins the wiring from the handler to
+/// the counter the *Refused today* card reads.
+#[tokio::test]
+async fn a_refused_time_code_is_counted() {
+    // Start from a known floor. `>= 1` and not `== 1` below because these counters are process
+    // globals and another test in this binary also drives a refused redemption; an exact count
+    // would be a race rather than a fact.
+    let _ = nestwatch::refusals::drain();
+
+    let res = test_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/redeem-code")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"code":"ZZZZZZ"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["ok"], json!(false));
+
+    assert!(
+        nestwatch::refusals::drain().time_codes_refused >= 1,
+        "a code that bought nothing must reach the card the parent reads"
+    );
+}
+
 #[tokio::test]
 async fn routines_require_auth() {
     let app = test_app();

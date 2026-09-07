@@ -49,10 +49,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-/// Distinct clock changes refused, day resets refused, shutdown cancellations answered.
+/// Distinct clock changes refused, day resets refused, shutdown cancellations answered, time
+/// codes refused.
 static CLOCK_CHANGES: AtomicU32 = AtomicU32::new(0);
 static DAY_RESETS: AtomicU32 = AtomicU32::new(0);
 static SHUTDOWN_CANCELS: AtomicU32 = AtomicU32::new(0);
+static TIME_CODES: AtomicU32 = AtomicU32::new(0);
 
 /// One day's refusals, as stored and as reported.
 ///
@@ -83,6 +85,24 @@ pub struct Refused {
     /// here that requires no settings screen at all — just a command. Counted by both enforcers.
     #[serde(default)]
     pub shutdown_cancels: u32,
+    /// Times a submitted time code was not an active code and bought nothing.
+    ///
+    /// The odd one out here: the other three are found by an enforcer on its own tick, and this
+    /// one arrives as an unauthenticated request anyone on the LAN can make. That is the reason it
+    /// belongs — `/redeem-code` is the only endpoint where refusing is the *expected* answer and
+    /// nothing recorded that it had happened, so a code being guessed at looked exactly like a
+    /// quiet day. The parent's password already had this: a wrong one writes `auth_failure` to the
+    /// audit. A wrong code wrote nothing anywhere.
+    ///
+    /// A counter and not an audit row, for the reason the module header gives — the submitter sets
+    /// the pace, so a row per attempt would let them roll the audit log off disk. A count cannot
+    /// be made to grow the file.
+    ///
+    /// Says nothing about intent. A child mistyping a code their parent read out over the phone
+    /// increments this exactly like a script working through the space, which is the same stance
+    /// the clock counter takes and the reason this card can be shown to the child too.
+    #[serde(default)]
+    pub time_codes_refused: u32,
 }
 
 impl Refused {
@@ -91,6 +111,7 @@ impl Refused {
         self.clock_changes
             .saturating_add(self.day_resets)
             .saturating_add(self.shutdown_cancels)
+            .saturating_add(self.time_codes_refused)
     }
 
     /// Whether there is anything at all to show. The dashboard renders nothing when there is not,
@@ -104,6 +125,9 @@ impl Refused {
         self.clock_changes = self.clock_changes.saturating_add(other.clock_changes);
         self.day_resets = self.day_resets.saturating_add(other.day_resets);
         self.shutdown_cancels = self.shutdown_cancels.saturating_add(other.shutdown_cancels);
+        self.time_codes_refused = self
+            .time_codes_refused
+            .saturating_add(other.time_codes_refused);
     }
 }
 
@@ -131,6 +155,11 @@ pub fn shutdown_cancel_seen() {
     bump(&SHUTDOWN_CANCELS);
 }
 
+/// A submitted time code bought nothing. Called from [`crate::api::redeem_code`].
+pub fn time_code_refused() {
+    bump(&TIME_CODES);
+}
+
 /// Take everything counted since the last call, leaving the counters at zero.
 ///
 /// `swap` rather than a read-then-clear: two reads cannot both see the same increment, and nothing
@@ -142,6 +171,7 @@ pub fn drain() -> Refused {
         clock_changes: CLOCK_CHANGES.swap(0, Ordering::Relaxed),
         day_resets: DAY_RESETS.swap(0, Ordering::Relaxed),
         shutdown_cancels: SHUTDOWN_CANCELS.swap(0, Ordering::Relaxed),
+        time_codes_refused: TIME_CODES.swap(0, Ordering::Relaxed),
     }
 }
 
@@ -166,12 +196,14 @@ mod tests {
         clock_change_rejected();
         day_reset_refused();
         shutdown_cancel_seen();
+        time_code_refused();
 
         let first = drain();
         assert_eq!(first.clock_changes, 2);
         assert_eq!(first.day_resets, 1);
         assert_eq!(first.shutdown_cancels, 1);
-        assert_eq!(first.total(), 4);
+        assert_eq!(first.time_codes_refused, 1);
+        assert_eq!(first.total(), 5);
 
         // The whole point of `swap`: a second reader gets nothing rather than the same counts
         // again, so a tick that runs twice cannot double the day's figure.
@@ -197,6 +229,7 @@ mod tests {
             clock_changes: u32::MAX,
             day_resets: u32::MAX,
             shutdown_cancels: u32::MAX,
+            time_codes_refused: u32::MAX,
         };
         assert_eq!(r.total(), u32::MAX, "the summary must not wrap either");
 
@@ -204,6 +237,7 @@ mod tests {
             clock_changes: 5,
             day_resets: 5,
             shutdown_cancels: 5,
+            time_codes_refused: 5,
         });
         assert_eq!(r.clock_changes, u32::MAX);
         assert!(r.any());
@@ -215,11 +249,13 @@ mod tests {
             clock_changes: 1,
             day_resets: 2,
             shutdown_cancels: 3,
+            time_codes_refused: 4,
         };
         r.merge(Refused {
             clock_changes: 10,
             day_resets: 20,
             shutdown_cancels: 30,
+            time_codes_refused: 40,
         });
         assert_eq!(
             r,
@@ -227,9 +263,10 @@ mod tests {
                 clock_changes: 11,
                 day_resets: 22,
                 shutdown_cancels: 33,
+                time_codes_refused: 44,
             }
         );
-        assert_eq!(r.total(), 66);
+        assert_eq!(r.total(), 110);
     }
 
     /// A stored tally written before this field existed must still parse, and must read as a day

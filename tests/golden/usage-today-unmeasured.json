@@ -15,7 +15,8 @@
   "refused": {
     "clock_changes": 0,
     "day_resets": 0,
-    "shutdown_cancels": 0
+    "shutdown_cancels": 0,
+    "time_codes_refused": 0
   },
   "refused_total": 0,
   "remaining_mins": null,

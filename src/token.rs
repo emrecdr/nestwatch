@@ -43,6 +43,25 @@ pub fn random(len: usize) -> String {
         .collect()
 }
 
+/// Compare two secrets without an early exit.
+///
+/// `==` on `str` short-circuits at the first differing byte, and in both callers the attacker
+/// controls one side entirely — in principle a prefix oracle.
+///
+/// It lives **here**, beside `random` and `normalize`, because both secrets it guards are minted
+/// by `random`: keeping the comparison next to the mint is what stops one caller getting it and
+/// the other not. That is not hypothetical. Pairing digests were compared this way, with a comment
+/// explaining why, while time codes — the secret the *child* has a motive to guess — were compared
+/// with `==`, because the reasoning lived in the module that had it rather than with the thing
+/// being reasoned about.
+///
+/// The length check is deliberately not constant-time: both callers compare fixed-length values,
+/// so a length is not a secret here.
+pub fn eq_ct(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Canonicalize typed input to the stored form: uppercase, keeping only alphanumerics, so a
 /// child can type `abcd-1234`, `ABCD 1234`, or `abcd1234` and all three match.
 pub fn normalize(s: &str) -> String {
@@ -74,6 +93,16 @@ mod tests {
         let a = random(16);
         let b = random(16);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn eq_ct_agrees_with_equality_on_every_case_that_matters() {
+        assert!(eq_ct("ABC123", "ABC123"));
+        assert!(!eq_ct("ABC123", "ABC124"), "differs in the last byte");
+        assert!(!eq_ct("ABC123", "XBC123"), "differs in the first byte");
+        assert!(!eq_ct("ABC123", "ABC12"), "shorter");
+        assert!(!eq_ct("ABC12", "ABC123"), "longer");
+        assert!(eq_ct("", ""));
     }
 
     #[test]

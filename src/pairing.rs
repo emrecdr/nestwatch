@@ -95,17 +95,6 @@ fn digest(token: &str) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Compare two hex digests without an early exit.
-///
-/// `==` on `str` short-circuits at the first differing byte, and the attacker controls one side
-/// entirely — in principle a prefix oracle that recovers the stored hash. Not reachable for this
-/// adversary through TLS, `spawn_blocking` jitter and a 5/60s throttle, but it's one line, and
-/// the password path already promises constant-time comparison.
-fn digests_match(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 /// Mint a pairing token, persist its hash to `path`, and return the plaintext to display.
 ///
 /// Replaces any previous pending token, so minting again invalidates the earlier QR — running
@@ -155,7 +144,7 @@ pub fn redeem(path: &Path, supplied: &str) -> Option<Scope> {
         return None;
     }
     // Compare digests, not the tokens themselves — the stored side is a hash by design.
-    if !digests_match(&digest(&supplied), &pending.hash) {
+    if !token::eq_ct(&digest(&supplied), &pending.hash) {
         return None;
     }
     // Consume inside the gate, so the next scan of this QR finds nothing. It is [`REDEEM_GATE`]

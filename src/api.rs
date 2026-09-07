@@ -1905,8 +1905,17 @@ pub async fn redeem_code(
         .count_and_check(peer.ip(), std::time::Instant::now())?;
     let codes = state.time_codes.clone();
     let input = body.code;
-    let granted = spawn(move || codes.redeem(&input)).await?;
-    let Some(minutes) = granted else {
+    let outcome = spawn(move || codes.redeem(&input)).await?;
+    let crate::timecode::Redemption::Granted(minutes) = outcome else {
+        // Counted rather than audited, and the module header for `refusals` says why: the person
+        // submitting sets the pace, so a row per attempt would let them roll the audit log — and
+        // its single backup — off disk, destroying the record of every real login and shutdown.
+        //
+        // Recorded at all because until now it was not. A wrong *password* writes `auth_failure`
+        // with whether the lockout tripped, so a parent can see their password being worked on. A
+        // wrong *code* wrote nothing, anywhere — and the code is the secret the child is the one
+        // with a motive to guess.
+        crate::refusals::time_code_refused();
         return Ok(Json(json!({ "ok": false })));
     };
     let today = crate::config::today();

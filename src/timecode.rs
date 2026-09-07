@@ -8,10 +8,25 @@
 //! auto-restarting service and each code is single-use.
 //!
 //! Security: codes are 6 Crockford-base32 characters — 1,073,741,824 combinations — drawn from the
-//! OS CSPRNG. Brute-force guessing through the redeem endpoint is infeasible because of the
-//! **throttle**, not the length: at its 5-per-minute per-IP limit that is roughly 408 years of
-//! guessing with one code outstanding, and about 8 years at [`MAX_ACTIVE_CODES`]. The plaintext
-//! codes live only in the SYSTEM+Administrators-only data dir, unreadable to the child.
+//! OS CSPRNG. Brute-force guessing through the redeem endpoint is held off by the **throttle**,
+//! not the length: at its 5-per-minute per-IP limit that is roughly 408 years of guessing with one
+//! code outstanding, and about 8 years at [`MAX_ACTIVE_CODES`]. The plaintext codes live only in
+//! the SYSTEM+Administrators-only data dir, unreadable to the child.
+//!
+//! **Both of those figures assume the guesser gets one bucket, and the bucket is the source
+//! address.** [`crate::timereq::SubmitLimiter`] keys on the peer IP and nothing else, and the LAN
+//! allowlist admits all of RFC1918 — so a device on the home network whose addressing its owner
+//! controls collects a fresh 5-per-minute quota for every address it binds. At fifty codes
+//! outstanding, a hundred addresses turn those eight years into about a month. The arithmetic was
+//! never wrong; it answered a question about one attacker at one address, and then got read as a
+//! statement about the endpoint.
+//!
+//! What changed is not the rate. It is that guessing can no longer happen **quietly**: every
+//! refused submission bumps [`crate::refusals::Refused::time_codes_refused`], which rides the
+//! daily rollup onto the parent's *Refused today* card. A global ceiling that *refused* was
+//! considered and is recorded in `docs/OPEN-FINDINGS.md` rather than built — it would change what
+//! a legitimately issued code does during a lockout window, which is a decision about the product
+//! and not about the arithmetic.
 //!
 //! Six rather than eight is a deliberate trade (2026-08-26): eight was 1,024x more combinations and
 //! correspondingly more to read off a note and retype without error, and the length was never what
@@ -37,6 +52,23 @@ pub const MAX_ACTIVE_CODES: usize = 50;
 /// implementation detail: a phone sizes an input box and a reveal mask against it, and this crate
 /// is `publish = false`, so there is no external API surface to keep narrow.
 pub const CODE_LEN: usize = 6;
+
+/// What a redemption did.
+///
+/// The two refusals answer the child identically — no minutes, no detail — so this distinction
+/// exists for *us*. Without it the shape gate in [`TimeCodes::redeem`] cannot be tested: a
+/// submission rejected on sight and one looked up and not found both return "nothing", so a test
+/// asserting "no minutes" passes whether the gate fires or not. That is not a hypothetical; the
+/// first version of that test was written, run, and shown to pass with the gate reverted.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Redemption {
+    /// An active code, now spent. Carries the minutes it was worth.
+    Granted(u32),
+    /// Not the shape of a code. Refused before the log was opened.
+    NotACode,
+    /// The right shape, and not an active code.
+    NoSuchCode,
+}
 
 /// An active (issued, not-yet-redeemed) code as surfaced to the parent UI.
 #[derive(Debug, Serialize)]
@@ -112,12 +144,22 @@ impl TimeCodes {
         out
     }
 
-    /// Redeem `input` (normalized: case-insensitive, punctuation/space ignored). Returns the
-    /// minutes granted and marks the code used, or `None` if it isn't an active code.
-    pub fn redeem(&self, input: &str) -> Option<u32> {
+    /// Redeem `input` (normalized: case-insensitive, punctuation/space ignored). Marks the code
+    /// used and returns what happened — see [`Redemption`] for why the two refusals are distinct.
+    pub fn redeem(&self, input: &str) -> Redemption {
         let code = crate::token::normalize(input);
-        if code.is_empty() {
-            return None;
+        // A submission that is not the shape of a code never reaches the log.
+        //
+        // This was `code.is_empty()`, which let through anything non-empty — a single character
+        // included. The substring gate below matches one character in any file that has ever held
+        // a code, so the cheapest possible request took the most expensive path: `active()` parses
+        // every line the log has ever held, and the redeem mutex is held across it. The gate was
+        // added *because* wrong guesses are the expected steady state; it only does that job if a
+        // wrong guess has to be the right shape first.
+        //
+        // Checked before the gate is taken, so a malformed request does not contend for it either.
+        if code.len() != CODE_LEN {
+            return Redemption::NotACode;
         }
         // Hold the gate across find → append so a single-use code can't be consumed twice by
         // concurrent redemptions (each would otherwise see it as still active and grant minutes).
@@ -136,11 +178,17 @@ impl TimeCodes {
         // goes through `active()` unchanged. Mutation-checked: forcing this to `false` fails the
         // redemption tests rather than passing silently.
         if !self.log.any_line_contains(&code) {
-            return None;
+            return Redemption::NoSuchCode;
         }
-        let found = self.active().into_iter().find(|c| c.code == code)?;
+        let Some(found) = self
+            .active()
+            .into_iter()
+            .find(|c| crate::token::eq_ct(&c.code, &code))
+        else {
+            return Redemption::NoSuchCode;
+        };
         self.log.record("redeemed", json!({ "code": code }));
-        Some(found.minutes)
+        Redemption::Granted(found.minutes)
     }
 }
 
@@ -178,8 +226,10 @@ mod tests {
     ///
     /// Six characters of this 32-symbol alphabet is 1,073,741,824 combinations. Against the redeem
     /// endpoint's 5-per-minute per-IP limit that is ~408 years of guessing with one code
-    /// outstanding, and ~8 years at `MAX_ACTIVE_CODES`. Eight characters was 1,024x more and
-    /// correspondingly harder to type; the throttle, not the length, is what makes this infeasible.
+    /// outstanding, and ~8 years at `MAX_ACTIVE_CODES` — both **per source address**, which is a
+    /// smaller claim than it reads as; the module header works through what a caller that picks
+    /// its own address does to those numbers. Eight characters was 1,024x more and correspondingly
+    /// harder to type; the throttle, not the length, is what makes this expensive.
     #[test]
     fn a_code_is_six_characters_long() {
         let (codes, _dir) = store();
@@ -204,18 +254,48 @@ mod tests {
 
         // Redeeming with messy formatting still works and grants the minutes.
         let messy = format!("{}-{}", &code[..4], &code[4..]).to_lowercase();
-        assert_eq!(codes.redeem(&messy), Some(30));
-        // Single-use: gone from active, and a second redeem fails.
+        assert_eq!(codes.redeem(&messy), Redemption::Granted(30));
+        // Single-use: gone from active, and a second redeem fails. `NoSuchCode` and not
+        // `NotACode` — a spent code is still the right shape, and its line is still in the log,
+        // so this is the path that reads the file and finds nothing active.
         assert!(codes.active().is_empty());
-        assert_eq!(codes.redeem(&code), None);
+        assert_eq!(codes.redeem(&code), Redemption::NoSuchCode);
+    }
+
+    /// Only a submission the right shape is looked up at all.
+    ///
+    /// The prefix case is the one that matters: `&code[..CODE_LEN - 1]` is a substring of a
+    /// genuinely active code, so the log-scan shortcut cannot reject it and the full parse runs.
+    /// The guard is about *shape*, not about being unknown — which is what makes the cheapest
+    /// wrong guess as cheap for us as it is for whoever sent it.
+    #[test]
+    fn only_a_full_length_submission_is_looked_up() {
+        let (codes, _dir) = store();
+        let code = codes.issue(30).unwrap();
+
+        let too_long = format!("{code}X");
+        for wrong in ["", "A", &code[..CODE_LEN - 1], too_long.as_str()] {
+            assert_eq!(
+                codes.redeem(wrong),
+                Redemption::NotACode,
+                "{wrong:?} is not {CODE_LEN} characters, so it must be refused on shape — \
+                 NoSuchCode here means the log was read to answer it"
+            );
+        }
+
+        // …and the guard has not made the real code unredeemable.
+        assert_eq!(codes.redeem(&code), Redemption::Granted(30));
     }
 
     #[test]
     fn redeem_unknown_code_is_none() {
         let (codes, _dir) = store();
         codes.issue(15).unwrap();
-        assert_eq!(codes.redeem("NOTACODE"), None);
-        assert_eq!(codes.redeem(""), None);
+        // Both are the wrong length, so both are refused on shape.
+        assert_eq!(codes.redeem("NOTACODE"), Redemption::NotACode);
+        assert_eq!(codes.redeem(""), Redemption::NotACode);
+        // Right shape, no such code: this is the one that reaches the log.
+        assert_eq!(codes.redeem("ZZZZZZ"), Redemption::NoSuchCode);
         assert_eq!(
             codes.active().len(),
             1,
@@ -254,7 +334,10 @@ mod tests {
         }
         let wins = handles
             .into_iter()
-            .filter_map(|h| h.join().unwrap())
+            .filter_map(|h| match h.join().unwrap() {
+                Redemption::Granted(m) => Some(m),
+                _ => None,
+            })
             .count();
         assert_eq!(wins, 1, "a single-use code must redeem exactly once");
         assert!(codes.active().is_empty());
@@ -265,6 +348,6 @@ mod tests {
         let codes = TimeCodes::disabled();
         assert!(codes.issue(10).is_some(), "returns a code");
         assert!(codes.active().is_empty(), "but nothing persisted");
-        assert_eq!(codes.redeem(&"A".repeat(CODE_LEN)), None);
+        assert_eq!(codes.redeem(&"A".repeat(CODE_LEN)), Redemption::NoSuchCode);
     }
 }

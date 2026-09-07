@@ -35,9 +35,10 @@
   "refused": {
     "clock_changes": 2,
     "day_resets": 1,
-    "shutdown_cancels": 3
+    "shutdown_cancels": 3,
+    "time_codes_refused": 4
   },
-  "refused_total": 6,
+  "refused_total": 10,
   "remaining_mins": 80,
   "used_mins": 55
 }

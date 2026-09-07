@@ -206,6 +206,9 @@ fn usage_today() {
             clock_changes: 2,
             day_resets: 1,
             shutdown_cancels: 3,
+            // Non-zero for the reason the comment above gives: a new counter defaulted to 0 here
+            // would golden the key and never the number.
+            time_codes_refused: 4,
         },
     };
     golden(
