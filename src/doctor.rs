@@ -320,6 +320,81 @@ fn capture_check(build: u32) -> Check {
 ///
 /// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
 /// than restated so there is one definition and one set of tests for it.
+/// What the system drive's BitLocker protection status means for this tool's guarantees.
+///
+/// Pure and taking the reading as an argument, for the reason [`clock_check`] gives: the WMI class
+/// behind it exists only on Windows, so a function that read it itself could be tested nowhere this
+/// suite runs.
+///
+/// # Why this is a check at all
+///
+/// Everything this tool says about tamper-resistance rests on one sentence, repeated across the
+/// README, `SECURITY.md` and the header of `jsonl.rs`: the data directory is locked to SYSTEM and
+/// Administrators, so a standard-user child cannot read or delete it. That is true for exactly as
+/// long as **Windows is the thing deciding**. Boot a USB stick and NTFS is a filesystem like any
+/// other, and the ACL is a note in a metadata field nobody is enforcing.
+///
+/// The loss is not the password. `config.json` holds an Argon2id hash at the OWASP floor
+/// `auth::hash_password` documents, and a strong password survives being copied. It is the **TLS
+/// private key**: copy that and you can stand up an impostor dashboard on the LAN whose
+/// fingerprint matches the one the parent was told to verify, which is the whole of the
+/// trust-on-first-use story in §2 of `SECURITY.md`. Nothing rotates that key but a re-install.
+/// Writing `usage_state.json` offline is the cheaper version — the day's tally resets, and the
+/// refusal counters cannot record it, because nothing was refused while the machine was off.
+///
+/// Disk encryption is the only control that closes this, which is what makes it worth a line here
+/// rather than a paragraph nobody reads.
+///
+/// # Why it is a warning and not a failure
+///
+/// It is a property of the machine, and a parent on Windows Home without the hardware for Device
+/// Encryption cannot simply turn it on. A `fail` they cannot act on is one they learn to skim, and
+/// the Public-network line further down is the one that must survive that habit.
+///
+/// Its only non-test caller is inside `#[cfg(windows)] platform_checks`, so off Windows it is dead
+/// by definition — kept compiled for the same reason [`capture_check`] is, so the decision stays
+/// testable where the tests actually run.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn disk_encryption_check(protection: Option<u8>) -> Check {
+    // Win32_EncryptableVolume.ProtectionStatus: 0 off, 1 on, 2 unknown (volume locked). Numeric on
+    // purpose — the same reason the Administrators check queries a SID: `manage-bde -status` prints
+    // "Protection On", and that string is localised, so parsing it fails on the Dutch and Turkish
+    // installs this product already ships translations for.
+    const OFFLINE: &str = "The data folder is locked to SYSTEM and Administrators, which holds \
+while Windows\n\
+         is running. It is not a defence against starting another operating system from\n\
+         a USB stick and reading the disk directly — and that path also copies the TLS\n\
+         private key, after which an impostor dashboard on your network would show the\n\
+         very fingerprint you were told to check.";
+
+    match protection {
+        Some(1) => ok("system drive is encrypted — the data folder resists an offline read"),
+        Some(0) => warn(
+            "system drive is NOT encrypted",
+            format!(
+                "{OFFLINE}\n\
+                 Turn on BitLocker, or Device encryption on Windows Home:\n\
+                 Settings > Privacy & security > Device encryption."
+            ),
+        ),
+        // A locked volume. Rare on a running machine, and it is genuinely not an answer either
+        // way, so it must not be reported as one.
+        Some(_) => warn(
+            "cannot tell whether the system drive is encrypted (volume reports 'unknown')",
+            format!("{OFFLINE}\nCheck by hand:  manage-bde -status"),
+        ),
+        // Elevation is what this needs, and `run` only asks when it has it — so reaching here
+        // means the query itself failed, on a machine where it should have worked.
+        None => warn(
+            "couldn't read the system drive's encryption status",
+            format!(
+                "{OFFLINE}\n\
+                 Check by hand:  manage-bde -status"
+            ),
+        ),
+    }
+}
+
 fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool) -> Option<Check> {
     use crate::install::InstallKind;
 
@@ -844,6 +919,37 @@ fn platform_checks(report: &mut Report) {
             )),
         }
     }
+
+    // Only when elevated. The MicrosoftVolumeEncryption namespace is administrator-only, so an
+    // unelevated run would report "couldn't read" every single time — a warning that is wrong
+    // whenever it appears is one a parent learns to skip, which is the mistake `clock_check`
+    // records having already made once on dev hosts. `run` has already said the report is partial.
+    if crate::install::is_elevated() {
+        // `Where-Object` rather than a WQL `-Filter`, to keep the drive letter out of a quoted
+        // query string: `$env:SystemDrive` is `C:` on most machines and is not always C.
+        //
+        // `Select-Object -ExpandProperty` on a numeric property, matching `network_profiles` — the
+        // value crosses this boundary as a number precisely so no localised word has to.
+        let status = std::process::Command::new(crate::syspath::powershell())
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance -Namespace root/CIMV2/Security/MicrosoftVolumeEncryption \
+                 -ClassName Win32_EncryptableVolume | Where-Object DriveLetter -eq \
+                 $env:SystemDrive | Select-Object -ExpandProperty ProtectionStatus",
+            ])
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| {
+                String::from_utf8_lossy(&out.stdout)
+                    .trim()
+                    .parse::<u8>()
+                    .ok()
+            });
+
+        report.section("Disk").push(disk_encryption_check(status));
+    }
 }
 
 #[cfg(not(windows))]
@@ -1144,6 +1250,60 @@ mod tests {
             "doctor must ask whether this machine can capture; without this call the check is \
              dead code and a pre-1903 machine reads as entirely healthy"
         );
+    }
+
+    /// An encrypted system drive is the one state that needs no explanation, so it gets none —
+    /// and it must be `Ok`, or a healthy Windows install can never print "All good."
+    #[test]
+    fn an_encrypted_system_drive_is_reported_as_fine() {
+        let c = disk_encryption_check(Some(1));
+        assert_eq!(c.level, Level::Ok);
+    }
+
+    /// The case the check exists for. The wording has to name what an unencrypted disk actually
+    /// costs, because "not encrypted" alone reads as generic security advice on a tool whose whole
+    /// pitch is that nothing leaves the house.
+    #[test]
+    fn an_unencrypted_system_drive_warns_and_names_the_key_that_is_exposed() {
+        let c = disk_encryption_check(Some(0));
+        assert_eq!(c.level, Level::Warn);
+        let fix = c.fix.as_deref().unwrap_or_default();
+        assert!(
+            fix.contains("private key") && fix.contains("fingerprint"),
+            "the fix must say that the TLS key travels with the disk and that the fingerprint a \
+             parent verified would still match a copy — that is the loss, not the password hash; \
+             got:\n{fix}"
+        );
+        // "Windows Home", not "Device encryption": the phrase appears twice, once as guidance and
+        // once inside the Settings path, so asserting the bare feature name passed even with the
+        // guidance deleted. Found by mutating it and watching this test stay green.
+        assert!(
+            fix.contains("Windows Home"),
+            "Windows Home has no BitLocker entry, so naming only BitLocker sends half of all \
+             parents looking for a setting they do not have; got:\n{fix}"
+        );
+    }
+
+    /// Two different unknowns, and neither may be reported as the good answer.
+    ///
+    /// `Some(2)` is a locked volume; `None` is a query that failed. Both used to be easy to
+    /// collapse into "off", which would tell a parent with a perfectly encrypted disk to go and
+    /// encrypt it — the false alarm that gets a check deleted.
+    #[test]
+    fn a_status_that_cannot_be_read_is_never_reported_as_either_answer() {
+        for reading in [Some(2), None] {
+            let c = disk_encryption_check(reading);
+            assert_eq!(c.level, Level::Warn, "reading {reading:?}");
+            assert!(
+                !c.text.contains("NOT encrypted"),
+                "an unreadable status must not be stated as an unencrypted one: {}",
+                c.text
+            );
+            assert!(
+                c.fix.as_deref().unwrap_or_default().contains("manage-bde"),
+                "a check that cannot answer must hand over the command that can: reading {reading:?}"
+            );
+        }
     }
 
     #[test]

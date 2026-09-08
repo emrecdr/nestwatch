@@ -587,6 +587,36 @@ That is the failure mode worth a few minutes.
       **Running apps** and is still subject to its limit. Losing sight of elevated processes would
       be an evasion route, not a cosmetic bug.
 
+## E6. The disk-encryption line in `doctor` (Windows-only code that has never run)
+
+`doctor` now reports whether the system drive is encrypted, under a **Disk** heading. It is there
+because every claim this project makes about the data folder being locked to SYSTEM +
+Administrators holds only while Windows is adjudicating: boot a USB stick and the ACL is a metadata
+field nobody is enforcing, and the TLS private key travels with the disk.
+
+**Why this section exists.** The reading is a `Get-CimInstance` call against
+`Win32_EncryptableVolume`, it is `#[cfg(windows)]`, and **it has never executed anywhere**. The
+decision it feeds is unit-tested on every platform; the query is not. It is off the enforcement
+path entirely — the worst case is a wrong line in a report — but a wrong line in the report a
+parent runs to decide whether they are safe is worth five minutes.
+
+- [ ] **It appears at all, and only when elevated.** Run `nestwatch doctor` from an elevated
+      console. There must be a **Disk** section. Run it again *unelevated*: the section must be
+      **absent**, not present saying "couldn't read" — the namespace is administrator-only, so an
+      unelevated run would print that warning every single time, and a warning that is always wrong
+      is one you stop reading.
+- [ ] **It agrees with Windows.** Compare against `manage-bde -status` (elevated). Protection On
+      must give the green line; Protection Off must give the caution. If they disagree, the query
+      is reading the wrong volume — most likely a machine whose system drive is not `C:`.
+- [ ] **The caution names Windows Home.** If the drive is unencrypted, the fix text must mention
+      **Device encryption** *and* **Windows Home**, because Home has no BitLocker control panel and
+      half of all parents will be on it.
+- [ ] **A failure reads as "don't know", never as "not encrypted".** Hard to force honestly; if you
+      can, break the query (rename the namespace in the command and rebuild) and confirm the line
+      says it *couldn't read* the status and hands over `manage-bde -status`. Reporting an
+      unreadable status as an unencrypted one would send a parent with a perfectly encrypted disk
+      off to encrypt it.
+
 ## F. Resilience
 
 - [ ] **Signing in survives a restart:** with the dashboard open and logged in on your phone,

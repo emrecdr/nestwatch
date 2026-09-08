@@ -1002,6 +1002,29 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   question about the specific device, not a settled property of this software, so do not assume a
   reboot cannot get around it. The specifics, the fix, and the check are tracked outside this
   public repository — see `docs/private/OPERATIONAL-FINDINGS.md`.
+- **The data folder's ACL holds only while Windows is running, and this document used to say so
+  without the qualifier.** Every claim here and in the README about the data directory being locked
+  to SYSTEM + Administrators — including the one in the header of `src/jsonl.rs` — describes
+  Windows adjudicating access. Start another operating system from a USB stick and NTFS is an
+  ordinary filesystem; the ACL is a metadata field with nobody enforcing it. This is not the same
+  as the "local administrator" line below: that adversary has a Windows account, and this one has
+  none.
+  <br>**What it costs is not mainly the password.** `config.json` holds an Argon2id hash at the
+  OWASP floor §3 documents, and a strong password survives being copied. The sharper loss is the
+  **TLS private key**: copy it and an impostor dashboard on your LAN presents the very fingerprint
+  §2 told you to verify, which is the whole of trust-on-first-use here. Nothing rotates that key
+  but re-running `install`. Cheaper still, `usage_state.json` can be edited offline to reset the
+  day's tally, and the refusal counters cannot record it — nothing was *refused*, because the
+  machine that would have refused was off.
+  <br>**Full-disk encryption is the control that closes this**, and `doctor` now reports whether
+  the system drive has it (BitLocker, or Device encryption on Windows Home). It is reported as a
+  caution rather than a failure because it is a property of the machine: a Home edition without
+  the hardware for Device Encryption cannot simply turn it on, and a warning nobody can act on is
+  one they learn to skim past.
+  <br>The check reads `Win32_EncryptableVolume.ProtectionStatus` — a number, not the localised
+  text `manage-bde -status` prints, for the same reason the Administrators check queries a SID.
+  **It has never run on Windows hardware**; the decision it feeds is unit-tested on every
+  platform, and a query that fails reports "couldn't read" rather than "not encrypted".
 - **The watcher pipe is bounded on every axis, and each bound had to be argued separately.** The
   helper reporting focused time runs inside the child's session, so `foreground.rs` treats its
   output as hostile: `MAX_LINE` caps a line, `clamp` caps the seconds any entry may claim,

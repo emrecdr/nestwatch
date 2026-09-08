@@ -60,12 +60,6 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
-- **The child's *Redeem* button had 3.05:1 contrast in the light theme.** daisyUI's light palette
-  pairs `secondary-content` with `secondary` at #f9e4f0 on #f43098, against WCAG AA's 4.5:1 for
-  text that size. It was the only `secondary` surface in the product and it sat on the child's own
-  page. It now uses `accent` — 5.08:1 in light, 8.21:1 in dim, and still plainly distinct from the
-  *Send request* button beside it. Every semantic surface the pages actually paint is now measured
-  against both themes on every push; the sweep found this one and nothing else.
 - **The full-size screenshot view is now a real dialog, and the keyboard cannot walk out of it.**
   It was a `<div>` asserting `role="dialog"` and `aria-modal="true"` — a promise to a screen reader
   that the rest of the page is unavailable — with nothing in the product making it true: there was
@@ -82,6 +76,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   done nothing. That was caught by opening the real markup in a browser and comparing against a
   plain `<div>` as a control, which is the first time anything in this project has rendered one of
   its own pages.
+- **The child's *Redeem* button had 3.05:1 contrast in the light theme.** daisyUI's light palette
+  pairs `secondary-content` with `secondary` at #f9e4f0 on #f43098, against WCAG AA's 4.5:1 for
+  text that size. It was the only `secondary` surface in the product and it sat on the child's own
+  page. It now uses `accent` — 5.08:1 in light, 8.21:1 in dim, and still plainly distinct from the
+  *Send request* button beside it. Every semantic surface the pages actually paint is now measured
+  against both themes on every push; the sweep found this one and nothing else.
 - **The overlay's *Refresh* button was the literal word, in English.** Its two neighbours on the
   same row went through the language table, and the key it needed was already there and already
   translated — only this caller had been missed, so a Dutch parent read *Vernieuwen* on one refresh
@@ -105,6 +105,28 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Added
 
+- **`doctor` now reports whether the system drive is encrypted.** Everything this tool says about
+  the data folder being locked to SYSTEM and Administrators describes *Windows* adjudicating
+  access. Start another operating system from a USB stick and NTFS is an ordinary filesystem, and
+  the ACL is a metadata field nobody is enforcing. The sharpest loss there is not the password —
+  that hash is at the OWASP floor — but the TLS private key, because an impostor dashboard holding
+  a copy presents the very fingerprint you were told to verify. Reported as a caution rather than a
+  failure: it is a property of the machine, and a Windows Home edition without the hardware for
+  Device Encryption cannot simply turn it on. `docs/SECURITY.md` carries the residual risk, which
+  it previously stated without the qualifier.
+  <br>The status is read as a number from `Win32_EncryptableVolume`, not parsed from
+  `manage-bde -status`, whose output is localised — the same reason the Administrators check
+  queries a SID. The decision is unit-tested on every platform; the query itself is Windows-only
+  and **has never executed**, so it is in `docs/WINDOWS-TESTING.md` as §E6, and a query that fails
+  reports "couldn't read" rather than "not encrypted".
+- **Three guards over the dashboard's markup, all adopted while already green.** Nothing in this
+  repository has ever rendered these pages — the Node suite is deliberately DOM-free and the Rust
+  side reads the markup as text — so a property that only exists once a browser lays the page out
+  was checked by nothing. These three check what source text can: that no element claims modal
+  semantics only a `<dialog>` can deliver, that all 116 methods the markup binds to actually exist
+  on the component (Alpine renders nothing at all for one that does not, with no error), and that
+  every colour pair the pages paint reaches WCAG AA in both themes. The first two locked in
+  properties that already held; the third found the *Redeem* button above.
 - **The Integrations card now shows which devices are paired to each app.** Both halves were
   already on the page — the app in *Integrations*, the device in *Signed-in devices* — in two
   cards that did not know about each other. An installed app that nothing has ever paired to now
