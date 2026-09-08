@@ -1914,3 +1914,84 @@ than do it: every capture map is a field serde must consider on each load, they 
 `deny_unknown_fields`, and five of them make the config's shape harder to read for a reader who has
 to be told none of them are settings. Worth doing when a nested field is actually added, and
 probably not before.
+
+### O98 · The config has no version, so a downgrade cannot be warned about — only survived
+
+`O97` covers what a downgrade *loses*. This covers what it cannot *say*.
+
+`api.rs::set_policy` reasoned this exact hazard through for the **export** document and
+answered it with a warning naming both versions. It could do that because the export carries a
+version field. `config.json` has never carried one, so on the file that is actually rewritten on
+every settings change there is nothing to compare and nothing to report. `Config`'s own doc comment
+says so, in the paragraph introducing the capture map.
+
+**Verified 2026-09-08 by reading both.** The export path has a version to compare; `Config` has no
+version field of any kind, and the `#[serde(flatten)]` map added for `O97` is explicitly documented
+as not a place to put anything.
+
+**What this changes and what it does not.** With the capture map in place a downgrade is now
+lossless for top-level keys, so this is no longer about data. It is about silence: an older binary
+run once — after a rollback, off a USB stick, from an old install directory — rewrites the settings
+of a household and says nothing, and the parent has no way to learn that the build they just ran is
+older than the file it just wrote. The export path treats that as worth a warning. The config path
+cannot form the sentence.
+
+**What would close it** is one integer written on save and read on load, compared against the
+running build, warning when the file is from the future. The reason to weigh rather than do: it adds
+a field to a file eleven released versions already read without one, so the first build that writes
+it makes every older build see an unknown key — which the capture map now preserves, but only for
+builds new enough to have it. Worth doing when there is a second reason to touch the file's shape.
+
+### O99 · Nothing correlates a request to anything, and `tracing` is already paid for
+
+`tracing`, `tracing-subscriber` and `tracing-appender` are dependencies, and the subscriber is
+initialised with an `EnvFilter`. What is missing is any per-request record: no span, no method, no
+path, no status, no latency, no identifier that ties a log line to the request that produced it.
+
+**Verified 2026-09-08 by reading the router.** The layers on it are `session_layer`,
+`require_same_origin`, `require_lan_peer`, `set_security_headers`, and a `DefaultBodyLimit` on the
+two child routes. There is no tracing layer among them.
+
+**Why this matters here more than it would elsewhere.** This service runs unattended on a family PC
+for months. The audit log is deliberately a *security* record — `audit.rs` argues at length for
+keeping it partitioned and bounded by human action — so it is the wrong instrument for "what was
+this process doing when it went wrong", and it is the only instrument there is. A parent reporting a
+fault has nothing to send.
+
+**The obvious fix is the expensive one.** `tower-http` is **not in the dependency tree at all**
+(checked against `Cargo.lock`), so `TraceLayer` costs a new direct dependency on a project that
+gates its supply chain weekly and counts 396 crates. A `middleware::from_fn` that opens a span
+around the inner call costs no dependency, since `tracing` is already there, and would be about
+fifteen lines beside the four middlewares already registered.
+
+**What has to be decided first, and is why this is filed rather than fixed.** What may be recorded.
+A path like `/api/providers/studygo` names an integration; query strings and the child's page titles
+must never reach a log that is not the audit log. Whoever does this has to choose the fields
+deliberately rather than adopt a default formatter, which is a decision about a family's privacy and
+not a plumbing task.
+
+### O100 · The screenshot overlay announces itself as modal and does not behave as one
+
+The full-size screenshot overlay in `index.html` carries `role="dialog"`, `aria-modal="true"` and an
+`aria-label`, closes on Escape, and dismisses on a backdrop click. What it never does is move focus.
+
+**Verified 2026-09-08 by reading the markup.** There is no `.focus()` anywhere in `assets/`, no
+`inert` on the page behind it, and the element is a `div` rather than a `<dialog>` — so nothing
+focuses the overlay when it opens, nothing stops Tab walking out of it into the page underneath, and
+nothing restores focus to the button that opened it when it closes.
+
+**`aria-modal="true"` makes this worse rather than neutral.** It tells assistive technology that the
+rest of the page is unavailable, which is a promise the markup does not keep: a screen-reader user is
+told they are in a dialog and can then tab into content the attribute says is not there. WCAG 2.2
+requires both that a component can be exited by keyboard — which Escape satisfies — and that focus is
+not lost or obscured, which is the half missing here.
+
+**What would close it, and why it is filed rather than done.** The current recommendation is a native
+`<dialog>` opened with `showModal()`, which gives focus containment, Escape and an inert background
+from the browser instead of from hand-written code. That is the right fix and it is not a small one
+here: the overlay is an Alpine `x-show` binding under the CSP build, so `showModal()` and `close()`
+have to be driven from methods in `app.js` rather than from an expression, backdrop dismissal moves
+to `::backdrop`, and `web.rs`'s CSP-expression guard constrains what the markup may say. None of that
+is hard, but all of it is behaviour no test in this repository can observe — the suite has no browser
+— so it wants verifying by hand on a real page rather than reasoning about. Writing an unverified
+focus trap would trade a documented gap for an undocumented one.
