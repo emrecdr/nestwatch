@@ -49,7 +49,7 @@ const OUT = join(here, "..", ".scan");
  * never finds a closing `-->` leaves the text alone, so there is no state this can end in that
  * means "mis-parse" — unlike the scanner, which can run off the end of a string.
  */
-function stripHtml(src) {
+export function stripHtml(src) {
   return { text: src.replace(/<!--[\s\S]*?-->/g, ""), unterminated: false };
 }
 

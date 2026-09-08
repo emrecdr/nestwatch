@@ -21,7 +21,21 @@ import { dirname, join } from "node:path";
 // The dashboard's own comment stripper, reused rather than re-implemented: the bound-method scan
 // below must not read a sentence out of a comment, and `//` inside a URL is exactly the case a
 // regex gets wrong. `strip-comments.test.js` already covers it, and importing it runs no build.
-import { stripJs } from "../scripts/strip-comments.mjs";
+import { stripHtml, stripJs } from "../scripts/strip-comments.mjs";
+
+// One spelling of the path to a shipped asset, matching `contrast.test.js`. It was written out
+// four different ways in this file.
+const asset = (name) =>
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", name), "utf8");
+
+// Every `t('key')` the markup calls. At module scope because two guards below need it and the
+// lookbehind had to be fixed in both of them.
+//
+// That lookbehind is load-bearing: without it, `t` matches the last letter of any identifier
+// ending in one. `$el.closest('dialog')` reported `dialog` as a missing translation key — a false
+// positive on markup that calls no translator at all, and the kind that gets a guard deleted
+// rather than fixed. `closest`, `insertAt`, `at`, `split` are all one edit away.
+const T_IN_MARKUP = /(?<![A-Za-z0-9_$])t\('([A-Za-z0-9]+)'\)/g;
 
 // --- compareVersions -------------------------------------------------------
 //
@@ -2582,10 +2596,7 @@ test("confirmPairing keeps what the server minted", async () => {
 /** The `UI` object literal from app.js, as `{tag: Set(keys)}`. Read as text: app.js is a browser
  *  script and standing up a DOM to check a data table is a larger decision than the check needs. */
 function uiTables() {
-  const src = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "app.js"),
-    "utf8",
-  );
+  const src = asset("app.js");
   const start = src.indexOf("const UI = {");
   assert.notEqual(start, -1, "could not find the UI table in app.js");
   let depth = 0, end = start;
@@ -2650,17 +2661,17 @@ test("every dashboard string exists in every language the selector offers", () =
 // `[lints]` block makes and states: a rule adopted green costs one commit, and the same rule
 // adopted red costs an argument about whether to keep it.
 test("every method the markup calls exists on the component", () => {
-  const html = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "index.html"),
-    "utf8",
-  );
+  const html = asset("index.html");
   // Comments first: this tree is dense with prose naming methods that were removed or renamed,
-  // and a guard that reads its own documentation as a call site cries wolf.
-  const stripped = html.replace(/<!--[\s\S]*?-->/g, "");
+  // and a guard that reads its own documentation as a call site cries wolf. The dashboard's own
+  // stripper, for the reason the import above gives — this had a second copy of that regex.
+  const stripped = stripHtml(html).text;
 
   // Alpine's three attribute spellings: the directive (`x-show`), the `x-on` shorthand (`@click`)
   // and the `x-bind` shorthand (`:class`). Modifiers ride on the name and need no handling.
-  const ATTR = /(?:x-[a-z:.-]+|@[a-z:.-]+|:[a-z-]+)\s*=\s*"([^"]*)"/g;
+  // Both quote styles: `src/web.rs`'s `alpine_directives` documents matching only `="` as the
+  // flaw that "would go on 'working' in silence the day someone writes `x-text='…'`".
+  const ATTR = /(?:x-[a-z:.-]+|@[a-z:.-]+|:[a-z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
   // An identifier followed by `(`, excluding member calls (`Math.round(`) and Alpine magics
   // (`$el`, `$event`) — neither resolves against the component, so neither is this guard's
   // business. That exclusion is what removes the need for a builtin allow-list.
@@ -2668,7 +2679,7 @@ test("every method the markup calls exists on the component", () => {
 
   const called = new Set();
   for (const attr of stripped.matchAll(ATTR)) {
-    for (const call of attr[1].matchAll(CALL)) called.add(call[1]);
+    for (const call of (attr[1] ?? attr[2]).matchAll(CALL)) called.add(call[1]);
   }
 
   // A broken extractor must not be able to pass by finding nothing.
@@ -2689,15 +2700,8 @@ test("every method the markup calls exists on the component", () => {
 });
 
 test("every key the markup calls t() with is answered by the English table", () => {
-  const html = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "index.html"),
-    "utf8",
-  );
-  // The lookbehind is load-bearing: without it, `t` matches the last letter of any identifier
-  // ending in one. `$el.closest('dialog')` reported `dialog` as a missing translation key — a
-  // false positive on markup that calls no translator at all, and the kind that gets a guard
-  // deleted rather than fixed. `closest`, `insertAt`, `at`, `split` are all one edit away.
-  const used = [...html.matchAll(/(?<![A-Za-z0-9_$])t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]);
+  const html = asset("index.html");
+  const used = [...html.matchAll(T_IN_MARKUP)].map((m) => m[1]);
   assert.ok(used.length > 100, `expected the markup to call t() throughout, found ${used.length}`);
   const en = uiTables().en;
   const missing = [...new Set(used)].filter((k) => !en.has(k));
@@ -2719,10 +2723,7 @@ test("every key the markup calls t() with is answered by the English table", () 
 // Scoped to the three calls that put text in front of a person. A broad "no capitalised literals"
 // rule would flag URLs, event names and CSS classes, and a guard that cries wolf gets deleted.
 test("no dashboard string reaches a person as a literal at the call site", () => {
-  const src = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "app.js"),
-    "utf8",
-  );
+  const src = asset("app.js");
   // `toast("...")`, `rejection(r, "...")` — a literal in the message position.
   const offenders = [
     ...src.matchAll(/\b(toast)\(\s*"([^"]{2,})"/g),
@@ -2848,13 +2849,12 @@ function isProse(literal) {
 }
 
 test("every UI key is used, and every used key exists", () => {
-  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-  const js = readFileSync(join(root, "assets", "app.js"), "utf8");
-  const html = readFileSync(join(root, "assets", "index.html"), "utf8");
+  const js = asset("app.js");
+  const html = asset("index.html");
   const en = uiTables().en;
 
   const used = new Set([
-    ...[...html.matchAll(/(?<![A-Za-z0-9_$])t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]),
+    ...[...html.matchAll(T_IN_MARKUP)].map((m) => m[1]),
     ...[...js.matchAll(/\bthis\.tf?\("([A-Za-z0-9]+)"/g)].map((m) => m[1]),
   ]);
 
