@@ -789,14 +789,6 @@ function emptyScreentime() {
   };
 }
 
-// One-or-many, for sentences the parent reads.
-//
-// At module scope rather than inside the one function that needed it. This file already chooses
-// between a singular and a plural noun in six other places, each written out by hand, and a helper
-// only one of the seven can reach is a convention nothing is able to follow. The six existing lines
-// are deliberately left alone -- they work, and rewriting working prose to adopt a helper is churn.
-// This is where the next one goes.
-
 function app() {
   return {
     theme: readTheme(),
@@ -2142,6 +2134,19 @@ function app() {
       }
     },
 
+    // An element of the screenshot overlay, looked up per call rather than held: the component is
+    // built before Alpine has walked the DOM, so a reference captured in the constructor would be
+    // null forever.
+    //
+    // Guarded the way `syncTitle` is, and for the same reason — `web/test/harness.js` evaluates
+    // this file in a `vm` with no `document` at all, and `openShotFull` is covered there ("expanding
+    // a frame that is already full does not capture the desktop again"). A bare `document` here
+    // would turn that test's subject into a ReferenceError.
+    byId(id) {
+      if (typeof document === "undefined") return null;
+      return document.getElementById(id);
+    },
+
     // Open the full-size view, refetching at full tier first.
     //
     // The thumbnail and this overlay bind the same `shotUrl`, so while Live is running that value
@@ -2155,33 +2160,11 @@ function app() {
     // "full" for as long as the overlay is open. It used to return a preview regardless of what was
     // on screen, so the frame fetched here survived at most one refresh interval. See `liveTier`
     // for what that costs and why it is bounded.
-    // The <dialog> the overlay lives in. Looked up per call rather than held: the component is
-    // built before Alpine has walked the DOM, so a reference captured in the constructor would be
-    // null forever.
-    //
-    // Guarded the way `syncTitle` is, and for the same reason — `web/test/harness.js` evaluates
-    // this file in a `vm` with no `document` at all, and `openShotFull` is covered there ("expanding
-    // a frame that is already full does not capture the desktop again"). A bare `document` here
-    // would turn that test's subject into a ReferenceError.
-    shotFullEl() {
-      if (typeof document === "undefined") return null;
-      return document.getElementById("shot-full");
-    },
-
-    // The surface inside the dialog: what gets dimmed, what a click dismisses on, and what goes
-    // fullscreen. Separate from `shotFullEl` because **a <dialog> cannot go fullscreen** — the
-    // Fullscreen API's element-ready check excludes it, and `requestFullscreen()` on one rejects
-    // with "Dialog elements are invalid".
-    shotSurfaceEl() {
-      if (typeof document === "undefined") return null;
-      return document.getElementById("shot-surface");
-    },
-
     openShotFull() {
       this.shotFull = true;
       // `showModal` throws InvalidStateError on a dialog that is already open, and the button that
       // reaches here is not the only path in.
-      const el = this.shotFullEl();
+      const el = this.byId("shot-full");
       if (el && !el.open) el.showModal();
       // Only when the frame on screen is not already a full one. Pressing "Take screenshot" and
       // then Expand used to commission a second complete capture — helper process, whole desktop,
@@ -2196,7 +2179,7 @@ function app() {
     // fires no second event, which is what stops the `@close` handler recursing into itself.
     closeShotFull() {
       this.shotFull = false;
-      const el = this.shotFullEl();
+      const el = this.byId("shot-full");
       if (el && el.open) el.close();
       if (typeof document !== "undefined" && document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
@@ -2207,17 +2190,21 @@ function app() {
     // purpose: the overlay always works, while requestFullscreen needs a user gesture and
     // can be refused outright by policy. If it fails the overlay is still up and usable,
     // so the failure costs nothing and does not need reporting.
+    // The surface inside the dialog, never the dialog: **a <dialog> cannot go fullscreen** — the
+    // Fullscreen API's element-ready check excludes it, and `requestFullscreen()` on one rejects
+    // with "Dialog elements are invalid".
+    //
     // Takes no element any more. It used to be handed `$el.closest('[role=dialog]')` from the
-    // markup, which was a <div> and worked — and then became a real <dialog>, which cannot go
-    // fullscreen at all, so the button did nothing and the rejection below hid it. Looking the
-    // surface up here keeps the choice of element next to the comment explaining it.
+    // markup, which was a <div> and worked — and then became a real <dialog>, so the button did
+    // nothing and the rejection below hid it. Looking the surface up here keeps the choice of
+    // element next to the comment explaining it.
     toggleBrowserFullscreen() {
       if (typeof document === "undefined") return;
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
         return;
       }
-      const el = this.shotSurfaceEl();
+      const el = this.byId("shot-surface");
       if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
     },
 
@@ -2482,17 +2469,17 @@ function app() {
       // to it — and a key it cannot see is one that can be dropped from the table, or left
       // untranslated in two languages, without anything failing. The repetition is the price of
       // the check, and it is worth it.
-      const push = (key, count, text) => {
-        if (count > 0) rows.push({ key, count, text });
+      // The one-or-many branch lives here rather than at each call site, so a counter is named
+      // once instead of three times — the shape where a copy-paste leaves `day_resets` reading
+      // `refusedShutdownOne`. Both keys are evaluated either way; `t` is a table lookup that
+      // falls back to English and then to the key itself, so it has nothing to be lazy about.
+      const push = (key, count, one, many) => {
+        if (count > 0) rows.push({ key, count, text: count === 1 ? one : many });
       };
-      push("clock", r.clock_changes,
-        r.clock_changes === 1 ? this.t("refusedClockOne") : this.t("refusedClockMany"));
-      push("reset", r.day_resets,
-        r.day_resets === 1 ? this.t("refusedResetOne") : this.t("refusedResetMany"));
-      push("shutdown", r.shutdown_cancels,
-        r.shutdown_cancels === 1 ? this.t("refusedShutdownOne") : this.t("refusedShutdownMany"));
-      push("code", r.time_codes_refused,
-        r.time_codes_refused === 1 ? this.t("refusedCodeOne") : this.t("refusedCodeMany"));
+      push("clock", r.clock_changes, this.t("refusedClockOne"), this.t("refusedClockMany"));
+      push("reset", r.day_resets, this.t("refusedResetOne"), this.t("refusedResetMany"));
+      push("shutdown", r.shutdown_cancels, this.t("refusedShutdownOne"), this.t("refusedShutdownMany"));
+      push("code", r.time_codes_refused, this.t("refusedCodeOne"), this.t("refusedCodeMany"));
       return rows;
     },
     bonusLabel() { return " (incl. +" + this.today.extra_mins + " bonus)"; },
