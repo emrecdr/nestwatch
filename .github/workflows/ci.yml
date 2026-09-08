@@ -193,6 +193,100 @@ jobs:
           tool: cargo-deny@0.20.2
       - run: cargo deny check advisories sources licenses bans
 
+  # Mutation testing, scoped to what the commit actually changed.
+  #
+  # This project's stated proof standard is that a guard is only proven by mutating the code and
+  # watching the guard fail. That has been done by hand, one `sed` at a time, and `OPEN-FINDINGS`
+  # records the failure that invites: a run was reported as "the mutant survived, so the test is
+  # vacuous" when the pattern meant to introduce the mutant had silently matched nothing. An
+  # experiment whose negative result and whose non-execution look identical is not an experiment.
+  # This job removes that failure mode; it does not introduce the practice.
+  #
+  # **Scoped to the diff because the whole tree is not affordable.** Measured on this codebase:
+  # 1,972 mutants, and 17 of them took 7 minutes wall-clock — so a full run is roughly 13.5 hours.
+  # `--in-diff` tests only mutants on lines the commit touched, which is minutes. The documented
+  # trade is real and worth stating: this misses mutants in code the commit did not touch, so it
+  # proves the guards over *new* work rather than over the codebase.
+  #
+  # **Blocking, not advisory.** A surviving mutant is a specific, located, actionable claim — "this
+  # line can be changed and nothing notices" — unlike a coverage percentage, which is why a
+  # coverage *gate* is declined in `DECLINED-OPTIONS.md` and this is not. When a mutant is genuinely
+  # equivalent (a change with no observable behaviour, so no test could kill it) mark that function
+  # `#[cfg_attr(test, mutants::skip)]` with a comment saying why, rather than widening the job.
+  mutants:
+    # Not on the weekly run (nothing changed since the last one, so the diff is empty) and not on
+    # tags (a tag points at a commit `push` already tested; re-testing it proves nothing new).
+    if: >-
+      (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
+      || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # `--in-diff` compares against a commit that must be in the clone. The default shallow
+          # fetch has one commit and no base, which yields an empty diff and a job that passes by
+          # examining nothing — the shape this repository refuses everywhere else.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+      # Pinned to a commit for the same reason as the supply-chain job above: this action downloads
+      # and executes binaries. The tool is version-pinned too, so a cargo-mutants release cannot
+      # change what this gate accepts without a commit here.
+      - uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2
+        with:
+          tool: cargo-mutants@27.1.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # The baseline runs the WHOLE suite, and `web::tests::every_class_*` read `assets/app.css`,
+      # which is generated and gitignored. Without this the baseline fails on a fresh checkout and
+      # every mutant is reported unviable — a red job that says nothing about the tests.
+      - name: Build frontend CSS
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+      # The base to diff against differs by event, and getting it wrong fails quietly rather than
+      # loudly — a too-narrow diff yields fewer mutants and a green job, which is the shape this
+      # gate exists to refuse. On a push that is `event.before`, the tip BEFORE the push: `HEAD~1`
+      # would silently test only the last commit of a three-commit push. `event.before` is all
+      # zeros when a branch is new and has no previous tip, so that case falls back to the first
+      # parent and says so.
+      - name: Collect the diff to test
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            base="$BEFORE"
+          else
+            echo "No previous tip for this ref — falling back to the first parent of HEAD."
+            base="HEAD~1"
+          fi
+          echo "Diffing against $base"
+          git diff "$base"...HEAD -- '*.rs' | tee git.diff
+      # An empty diff means the commit changed no Rust. cargo-mutants would still pay the full
+      # baseline (15s build + 156s test, measured) to then test nothing, so skip explicitly.
+      - name: Test the mutants the diff introduces
+        run: |
+          if [ ! -s git.diff ]; then
+            echo "No Rust changed in this diff — nothing to mutate."
+            exit 0
+          fi
+          cargo mutants --no-shuffle -vV --in-place --in-diff git.diff
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-out
+          path: mutants.out
+          if-no-files-found: ignore
+
   # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push), and not
   # on the weekly run: `test (windows-latest)` already builds and tests on Windows there, so this
   # job would only re-package an artifact nobody downloads. A scheduled run reports `github.ref`
