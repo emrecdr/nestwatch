@@ -27,21 +27,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { contrastRatio, luminance, oklchToLinearSrgb, themes } from "./contrast.mjs";
+import { contrastRatio, hex, luminance, themes } from "./contrast.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const asset = (name) => readFileSync(join(here, "..", "..", "assets", name), "utf8");
-
-const hex = (str) =>
-  "#" +
-  oklchToLinearSrgb(str)
-    .map((c) => {
-      const e = c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
-      return Math.round(Math.min(1, Math.max(0, e)) * 255)
-        .toString(16)
-        .padStart(2, "0");
-    })
-    .join("");
 
 // ── The maths, pinned against values known independently of this code ──────────────────────────
 
@@ -68,16 +57,27 @@ test("a colour this module cannot read reports nothing rather than a plausible n
 
 // ── The policy ─────────────────────────────────────────────────────────────────────────────────
 
-/** The daisyUI semantic roles this product actually paints, read from what ships. */
-function rolesInUse() {
+/**
+ * The daisyUI semantic roles this product actually paints, read from what ships.
+ *
+ * Both halves are derived. The *vocabulary* comes from the theme itself — every token for which
+ * the stylesheet defines both a surface and a matching `-content` — rather than being listed
+ * here, and the scan matches any utility ending in one of those roles rather than an enumerated
+ * set of prefixes. The enumerated version missed `toggle-primary`, `toggle-warning` and
+ * `border-warning`, all painted by the shipped markup: it was only ever green because those three
+ * roles happened to be reachable through a prefix that was on the list. That is precisely how
+ * `secondary` — the one role that failed — was reachable only through `btn-secondary`.
+ */
+function rolesInUse(colors) {
+  const roles = Object.keys(colors).filter((k) => !k.endsWith("-content") && colors[`${k}-content`]);
   const source = [asset("index.html"), asset("ask.html"), asset("app.js")].join("\n");
-  const ROLE = /\b(?:btn|bg|alert|badge|text|progress)-(primary|secondary|accent|neutral|info|success|warning|error)\b/g;
+  const ROLE = new RegExp(`\\b[a-z]+(?:-[a-z]+)*?-(${roles.join("|")})\\b`, "g");
   return new Set([...source.matchAll(ROLE)].map((m) => m[1]));
 }
 
 test("every surface the pages paint meets WCAG AA in both themes", () => {
   const blocks = themes(asset("app.css"));
-  const used = rolesInUse();
+  const used = rolesInUse(blocks[0].colors);
 
   // A reader that stopped finding themes, or a scan that stopped finding roles, must not be able
   // to pass by checking nothing at all.
@@ -86,9 +86,15 @@ test("every surface the pages paint meets WCAG AA in both themes", () => {
 
   const failures = [];
   for (const { selector, colors } of blocks) {
-    // base-100/base-content is every page's body text, so it is checked whether or not a role
-    // happens to name it.
-    const pairs = [["base-100", "base-content"], ...[...used].map((r) => [r, `${r}-content`])];
+    // Every base tier the theme defines, against base-content — that is the page's own body text,
+    // so it is checked whether or not a role happens to name it. All of `base-100`, `base-200` and
+    // `base-300` are painted by the markup; pinning only `base-100` left the cards and the drawer
+    // that use the other two unmeasured.
+    const tiers = Object.keys(colors).filter((k) => /^base-\d+$/.test(k));
+    const pairs = [
+      ...tiers.map((t) => [t, "base-content"]),
+      ...[...used].map((r) => [r, `${r}-content`]),
+    ];
     for (const [bg, fg] of pairs) {
       if (!colors[bg] || !colors[fg]) continue;
       const ratio = contrastRatio(colors[bg], colors[fg]);

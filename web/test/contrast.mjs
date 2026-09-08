@@ -45,21 +45,45 @@ export function oklchToLinearSrgb(str) {
 }
 
 const encode = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
-const decode = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+const clamp01 = (c) => Math.min(1, Math.max(0, c));
 
 /**
  * WCAG relative luminance of an `oklch()` colour.
  *
- * Clamped through the sRGB encoding rather than in linear light, because that is what a display
- * does with an out-of-gamut colour: the browser encodes, the panel clips. Clamping the linear
- * values instead gives a different — and wrong — answer for saturated colours, which is exactly
- * the region every accent in a theme lives in.
+ * Out-of-gamut channels are clamped, which is what a panel does with a colour it cannot show.
+ *
+ * This used to clamp by encoding to sRGB, clamping there and decoding back, on the stated grounds
+ * that clamping in linear light "gives a different — and wrong — answer for saturated colours".
+ * That reason was false, and the round-trip it justified was a no-op: the transfer function is
+ * monotone with `encode(0) === 0` and `encode(1) === 1`, so a per-channel clamp commutes with it.
+ * Measured before removing it — over c in [-2, 3] at 1e-5, and across all 47 colour tokens in the
+ * shipped stylesheet, the largest difference was 4.4e-16, which is float noise and not a colour.
+ * What *would* differ is gamut **mapping** — scaling a whole colour back into range rather than
+ * clipping each channel. This deliberately does not do that, because a display does not either.
  */
 export function luminance(str) {
   const linear = oklchToLinearSrgb(str);
   if (linear === null) return null;
-  const [r, g, b] = linear.map((c) => decode(Math.min(1, Math.max(0, encode(c)))));
+  const [r, g, b] = linear.map(clamp01);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * The sRGB hex a display would show for an `oklch()` colour, or `null` if it cannot be read.
+ *
+ * Exported rather than written out in the test, so the fixture pinning `oklch(62.8% .2577 29.23)`
+ * to `#ff0000` exercises the same `encode` the rest of this module uses. The test had a private
+ * copy of the transfer function, so that fixture pinned the copy and not the converter — leaving
+ * open exactly the "plausible number" hole this module's header warns about.
+ */
+export function hex(str) {
+  const linear = oklchToLinearSrgb(str);
+  if (linear === null) return null;
+  const byte = (c) =>
+    Math.round(clamp01(encode(c)) * 255)
+      .toString(16)
+      .padStart(2, "0");
+  return "#" + linear.map(byte).join("");
 }
 
 /** WCAG contrast ratio between two `oklch()` colours, or null if either cannot be read. */
