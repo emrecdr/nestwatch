@@ -153,7 +153,11 @@ async fn earned_grants_latch_replay_and_validate() {
                 45,
                 "the second robot grant added nothing"
             );
-            assert_eq!(cfg.earned.get("studygo"), Some(&today));
+            assert_eq!(
+                cfg.earned.get("studygo").map(|entry| entry.date),
+                Some(today),
+                "the source stays latched for the day"
+            );
         }
 
         // A *different* source is its own latch.
@@ -661,5 +665,379 @@ async fn earned_grants_latch_replay_and_validate() {
             40,
             "the two pushes landed and the malformed parent grant did not"
         );
+    }
+
+    // --- A daily ceiling lets one source push more than once, and still bounds it. --------
+    //
+    // The opt-in half of the same rule, and every section above is the proof of its default:
+    // without `daily_cap_mins` a source grants once a day, exactly as it always has. With one,
+    // the same source may push until the ceiling is reached — what a signal arriving in pieces
+    // through an afternoon needs, and what a single latch cannot express.
+    //
+    // The property that decides whether this is safe is the *last* push, not the first. A latch
+    // bounded a bad client to one reward; a ceiling has to bound it to a number the parent chose,
+    // including when a push straddles the line.
+    {
+        let (app, cookie, config) = fresh_app().await;
+
+        // 20 a push, 50 a day. Chosen so the ceiling lands *mid-push*: the third grant must be
+        // worth 10 rather than 20. A design that only refused pushes starting past the ceiling
+        // would pay out 60 here and still look correct against round numbers.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": true, "minutes": 20, "daily_cap_mins": 50 }),
+            )
+            .await
+            .status(),
+            StatusCode::OK,
+            "a provider may be installed with a ceiling"
+        );
+
+        for (push, expected) in [(1, 20), (2, 20), (3, 10)] {
+            let (_, body) = grant(&app, &cookie, json!({ "source": "reading" }), None).await;
+            assert_eq!(body["ok"], json!(true), "push {push} should still grant");
+            assert_eq!(
+                body["minutes"],
+                json!(expected),
+                "push {push} is worth the remainder once the ceiling is within reach, and the \
+                 body has to say the number that actually landed"
+            );
+        }
+
+        let (_, body) = grant(&app, &cookie, json!({ "source": "reading" }), None).await;
+        assert_eq!(
+            body["ok"],
+            json!(false),
+            "the ceiling stops the fourth push"
+        );
+        assert_eq!(
+            body["reason"],
+            json!("daily_cap_reached"),
+            "and distinguishes a spent allowance from a day already claimed"
+        );
+        {
+            let cfg = nestwatch::state::recover_read(&config);
+            assert_eq!(
+                cfg.extra.for_day(today),
+                50,
+                "exactly the ceiling landed — not a fourth reward on top of it"
+            );
+            assert_eq!(
+                cfg.earned.get("reading").and_then(|entry| entry.minutes),
+                Some(50),
+                "the entry measures what it granted, which is what the ceiling is judged against"
+            );
+        }
+
+        // **A ceiling survives the dashboard's own upsert, which has never heard of it.**
+        // `assets/app.js::loadProviders` rebuilds each row as {name, enabled, minutes} and posts
+        // that row back on any change, so an entry-replacing upsert would erase the ceiling the
+        // first time a parent used the on/off toggle — a setting destroyed by a client that does
+        // not know it exists. This is the same rule `a_newer_configs_unknown_settings_survive_a_
+        // load_and_save` keeps for the config file, applied to the writer instead.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": true, "minutes": 20 }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).providers["reading"].daily_cap_mins,
+            Some(50),
+            "a body that never mentions the ceiling must not remove it"
+        );
+
+        // An explicit null is how it comes off, so a ceiling stays removable without a second
+        // route — the distinction `absent_or_null` exists to carry, exercised end to end.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": true, "minutes": 20, "daily_cap_mins": null }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).providers["reading"].daily_cap_mins,
+            None,
+            "an explicit null clears the ceiling"
+        );
+
+        // **The provider next door is untouched.** `studygo` has no ceiling, so it keeps the
+        // original rule and the original refusal string, in the same process and the same day as
+        // a provider that does. This is the assertion that says adding the field changed nothing
+        // for anyone who has not asked for it.
+        let (_, first) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(first["ok"], json!(true));
+        let (_, second) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(second["ok"], json!(false));
+        assert_eq!(
+            second["reason"],
+            json!("already_granted_today"),
+            "a provider with no ceiling keeps the original refusal, word for word"
+        );
+        {
+            let cfg = nestwatch::state::recover_read(&config);
+            assert!(
+                cfg.earned["studygo"].minutes.is_none(),
+                "and its entry stays untracked, so its config keeps the shape an older build wrote"
+            );
+        }
+    }
+
+    // --- Facts decide the reward, and the ladder lives here rather than in the client. ----
+    //
+    // The other half of moving judgement onto this machine. `83f0ce3` took the *reward* off the
+    // push; this takes the *threshold* off it too, so a parent can move the bar without anyone
+    // shipping a new client. A push now says what the child did, and this side says what it is
+    // worth.
+    {
+        let (app, cookie, config) = fresh_app().await;
+
+        // The two-step ladder a household actually asks for, with the ceiling set to the top
+        // rung. That pairing is the point: the day then totals exactly the best tier reached,
+        // however many pushes it took to get there.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 30,
+                    "daily_cap_mins": 30,
+                    "tiers": [
+                        { "questions": 10, "minutes_practised": 20, "reward_mins": 16 },
+                        { "questions": 15, "minutes_practised": 30, "reward_mins": 30 }
+                    ]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        // Below every rung: refused, and deliberately not an error. A client that reports what it
+        // sees and lets this side judge is the whole design, so "not yet" has to be an ordinary
+        // 200 answer — otherwise that client is back to pre-judging.
+        let (status, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 9, "minutes": 19 } }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "failing to clear the bar is an answer, not a failure"
+        );
+        assert_eq!(body["ok"], json!(false));
+        assert_eq!(body["reason"], json!("below_threshold"));
+
+        // The lower rung, reached on questions alone — the child who works quickly.
+        let (_, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 12, "minutes": 0 } }),
+            None,
+        )
+        .await;
+        assert_eq!(body["ok"], json!(true));
+        assert_eq!(body["minutes"], json!(16), "the lower rung is worth 16");
+
+        // The upper rung, reached later on minutes alone — the child who works slowly. The
+        // ceiling turns this into a top-up rather than a second full payment.
+        let (_, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 0, "minutes": 30 } }),
+            None,
+        )
+        .await;
+        assert_eq!(body["ok"], json!(true));
+        assert_eq!(
+            body["minutes"],
+            json!(14),
+            "reaching the upper rung after the lower one pays the difference"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            30,
+            "so the day totals the best tier reached, not the sum of the rungs"
+        );
+
+        // **A push reporting nothing is worth the single reward, tiers or no tiers.** The
+        // compatibility half: today's client sends no `progress`, and it has to keep working
+        // against a provider somebody later gave a ladder to.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/chores",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 10,
+                    "tiers": [{ "questions": 99, "minutes_practised": 99, "reward_mins": 25 }]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let (_, body) = grant(&app, &cookie, json!({ "source": "chores" }), None).await;
+        assert_eq!(body["ok"], json!(true));
+        assert_eq!(
+            body["minutes"],
+            json!(10),
+            "no progress reported means the single reward, not a tier it never claimed"
+        );
+
+        // Tiers survive the dashboard's upsert, for the reason the ceiling does.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": true, "minutes": 30 }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config).providers["reading"]
+                .tiers
+                .len(),
+            2,
+            "a body that never mentions tiers must not remove them"
+        );
+
+        // A tier asking for nothing could never be met, so it is refused rather than stored as
+        // configuration that reads like a rule and behaves like a blank.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 30,
+                    "tiers": [{ "questions": 0, "minutes_practised": 0, "reward_mins": 5 }]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST,
+            "a tier stating no condition is refused at the door"
+        );
+        // **A tier may state one condition.** Mutation testing found this gap: the check above is
+        // `questions == 0 && minutes_practised == 0`, and every earlier case here set both to zero
+        // — which `&&` and `||` reject alike. So nothing distinguished "asks for neither" from
+        // "asks for one", and a one-sided tier being refused would have passed the whole suite.
+        // A ladder of "ten questions, never mind how long it took" is an ordinary thing to want.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 30,
+                    "tiers": [{ "questions": 10, "minutes_practised": 0, "reward_mins": 16 }]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK,
+            "a tier asking only about questions is a rule, not a blank"
+        );
+
+        // The tier cap, from both sides — also a mutation-testing find: nothing exercised it, so
+        // `>` could have been `==` or `>=` and the suite would not have moved. Both directions are
+        // needed. Exactly MAX_TIERS must be accepted (which `>=` would refuse) and one more must
+        // be refused (which `==` would let through at any other count).
+        let rung = |n: u32| json!({ "questions": n, "minutes_practised": 0, "reward_mins": 5 });
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 30,
+                    "tiers": [rung(1), rung(2), rung(3), rung(4)]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK,
+            "exactly MAX_TIERS rungs is allowed"
+        );
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 30,
+                    "tiers": [rung(1), rung(2), rung(3), rung(4), rung(5)]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST,
+            "one past MAX_TIERS is refused"
+        );
+        // The two threshold bounds, from both sides each. They exist because a threshold nobody
+        // could reach in a day is a rule that silently never fires while reading exactly like one
+        // that does — the 0/0 case arriving from the other end. `web.rs`'s minutes-limit guard is
+        // what forced them: it refuses to let a number box on the dashboard restate a limit no
+        // endpoint enforces, and its panic says so outright.
+        let tier_at = |q: u32, m: u32| {
+            json!({
+                "enabled": true,
+                "minutes": 30,
+                "tiers": [{ "questions": q, "minutes_practised": m, "reward_mins": 5 }]
+            })
+        };
+        for (body, want, what) in [
+            (tier_at(1000, 0), StatusCode::OK, "questions at the limit"),
+            (
+                tier_at(1001, 0),
+                StatusCode::BAD_REQUEST,
+                "questions one past",
+            ),
+            (
+                tier_at(0, 1440),
+                StatusCode::OK,
+                "practised minutes at the limit",
+            ),
+            (
+                tier_at(0, 1441),
+                StatusCode::BAD_REQUEST,
+                "practised minutes one past",
+            ),
+        ] {
+            assert_eq!(
+                common::post_json(&app, "/api/providers/reading", Some(&cookie), body)
+                    .await
+                    .status(),
+                want,
+                "{what}"
+            );
+        }
     }
 }

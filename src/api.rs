@@ -597,6 +597,35 @@ pub struct ExtraTimeBody {
     /// a robot names itself (`studygo`) so the audit log stays honest.
     #[serde(default)]
     source: Option<String>,
+    /// What the child actually did, for a provider that has reward tiers configured.
+    ///
+    /// **Facts, not a verdict.** Until now a push carried the client's *conclusion* — it sent the
+    /// request only when it judged the bar met — so the bar lived in the client and the reward
+    /// lived here, and neither side could state the whole rule. Reporting the work instead lets
+    /// this machine hold both halves, which means a parent can move the bar from here without
+    /// anyone shipping a new client.
+    ///
+    /// Absent is the original contract and stays fully supported: with no tiers configured, or
+    /// nothing reported, a push is worth the provider's single reward exactly as before.
+    ///
+    /// It does not make the client more trusted. A client willing to inflate these numbers was
+    /// already willing to push when it had not earned anything; what bounds either is
+    /// `daily_cap_mins`, not the honesty of the report.
+    #[serde(default)]
+    progress: Option<Progress>,
+}
+
+/// What a push reports about the work behind it. See [`ExtraTimeBody::progress`].
+#[derive(Deserialize, Clone, Copy)]
+pub struct Progress {
+    /// Questions answered today.
+    #[serde(default)]
+    questions: u32,
+    /// Minutes *practised* today — deliberately not the same thing as the `minutes` beside it in
+    /// the body, which is a reward a parent is granting. Nested so the two can never be read for
+    /// one another.
+    #[serde(default)]
+    minutes: u32,
 }
 
 /// Body of `POST /api/curfew/extend`.
@@ -893,6 +922,10 @@ pub async fn extra_time(
 
     let today = crate::config::today();
     let robot = source != "parent";
+    // Flattened out of the body here so the closure captures a `Copy` pair rather than borrowing
+    // it, and so the parent path cannot accidentally consult it: a parent grants a stated number
+    // and has no threshold to clear.
+    let reported = body.progress.map(|p| (p.questions, p.minutes));
     // The reward: a parent's own grant is worth what they asked for; a provider's is worth what
     // the parent configured for that provider *on this machine*, never what the push claimed — so
     // a spoofed or compromised client cannot choose its own minutes. Resolved inside the config
@@ -901,7 +934,10 @@ pub async fn extra_time(
     let mut minutes = asked;
     // Checked and latched inside the one place config is mutated, so two concurrent grants from
     // the same source serialize on `config_save_lock` and the second sees the first's latch.
-    let mut granted = true;
+    //
+    // `None` means the grant happened. The three refusals are all ordinary outcomes rather than
+    // errors, and only the first can be reached by a provider that has opted into nothing.
+    let mut refused: Option<&'static str> = None;
     {
         let source = source.clone();
         try_update_config(&state, |c| {
@@ -912,21 +948,96 @@ pub async fn extra_time(
                 // again here because this one is inside the write guard: it is atomic with the
                 // day latch below, and it is the only check at all for a `Scope::Dashboard`
                 // caller naming a `source` in its body, which never reaches that middleware arm.
-                match c.provider_authority(&source) {
-                    Ok(p) => minutes = p.minutes,
+                let ceiling = match c.provider_authority(&source) {
+                    Ok(p) => match p.reward_for(reported) {
+                        Some(reward) => {
+                            minutes = reward;
+                            p.daily_cap_mins
+                        }
+                        // Work was reported and it meets no tier. Not an error: a client that
+                        // pushes whatever it sees and lets this machine judge is exactly what
+                        // tiers are for, so "not yet" has to be an ordinary answer rather than a
+                        // 400. Unreachable for a provider with no tiers configured.
+                        None => {
+                            refused = Some("below_threshold");
+                            return Ok(());
+                        }
+                    },
                     Err(message) => return Err(AppError::BadRequest(message)),
+                };
+                // Read out as an owned value, not held as a borrow: the map is mutated a few
+                // lines below, and `Option<Option<u32>>` says the two things that matter
+                // separately — whether this source has an entry for today at all, and whether
+                // that entry's amount was ever measured.
+                let spent = c
+                    .earned
+                    .get(&source)
+                    .filter(|entry| entry.date == today)
+                    .map(|entry| entry.minutes);
+                match (ceiling, spent) {
+                    // The original rule, and the one every config that has not opted in takes:
+                    // one grant per source per day, whatever it was worth.
+                    (None, Some(_)) => {
+                        refused = Some("already_granted_today");
+                        return Ok(());
+                    }
+                    // A ceiling is configured, but this source's earlier grant today was never
+                    // measured — an older build wrote it, or the ceiling was added after it
+                    // landed. Refusing is the conservative reading; `EarnedDay::minutes` gives
+                    // the argument for why the alternative hands out a second full reward.
+                    (Some(_), Some(None)) => {
+                        refused = Some("daily_cap_reached");
+                        return Ok(());
+                    }
+                    (Some(cap), Some(Some(used))) => {
+                        let room = cap.saturating_sub(used);
+                        if room == 0 {
+                            refused = Some("daily_cap_reached");
+                            return Ok(());
+                        }
+                        // The last grant of a day is worth the remainder, not the full reward.
+                        //
+                        // **Deliberately not the rejection an over-quota API call would get**,
+                        // and the difference is that a provider never asks for an amount:
+                        // `ExtraTimeBody.minutes` is vestigial on this path, so there is no
+                        // request to half-fulfil. The client asserts a threshold was met and
+                        // this machine answers what that is worth today, which near the ceiling
+                        // is the remainder. Rejecting instead would take the work and pay
+                        // nothing for it — the failure this whole feature exists to avoid.
+                        //
+                        // The ceiling still binds exactly: `used + minutes <= cap` by
+                        // construction here and in the arm below, so `tracked` can never pass
+                        // `cap` however many times a client pushes.
+                        minutes = minutes.min(room);
+                    }
+                    // A ceiling below the single-grant reward still binds on the first push.
+                    (Some(cap), None) => minutes = minutes.min(cap),
+                    (None, None) => {}
                 }
-                if c.earned.get(&source) == Some(&today) {
-                    granted = false;
-                    return Ok(());
-                }
-                if c.earned.values().filter(|day| **day == today).count() >= MAX_EARNED_SOURCES {
+                // Only a **new** source can hit the ceiling on distinct sources. The original
+                // rule made a second push from a counted source unreachable, so the check never
+                // had to exclude one; a ceiling makes it ordinary, and without this clause a
+                // household at the limit would start refusing exactly the sources it had already
+                // admitted.
+                if spent.is_none()
+                    && c.earned.values().filter(|e| e.date == today).count() >= MAX_EARNED_SOURCES
+                {
                     return Err(AppError::BadRequest(
                         "too many earned-time sources today".into(),
                     ));
                 }
-                c.earned.retain(|_, day| *day == today);
-                c.earned.insert(source, today);
+                c.earned.retain(|_, entry| entry.date == today);
+                // Measured only where a ceiling governs it. Writing `Some` unconditionally would
+                // change the shape of a config that never opted in, which is the single thing
+                // `EarnedDay`'s hand-written serde impls exist to prevent.
+                let tracked = ceiling.map(|_| spent.flatten().unwrap_or(0) + minutes);
+                c.earned.insert(
+                    source,
+                    crate::config::EarnedDay {
+                        date: today,
+                        minutes: tracked,
+                    },
+                );
             }
             c.extra.add(today, minutes);
             Ok(())
@@ -934,7 +1045,7 @@ pub async fn extra_time(
         .await?;
     }
 
-    let response = if granted {
+    let response = if refused.is_none() {
         state.audit.record(
             "extra_time_granted",
             json!({ "minutes": minutes, "source": source }),
@@ -951,7 +1062,13 @@ pub async fn extra_time(
         // Not audited: with a valid session this outcome is free to trigger repeatedly, and it
         // records nothing a reader of the *grant* line does not already know. Same reasoning as
         // the rate-limited branch of `login` — the fifth site of that defect class.
-        json!({ "ok": false, "reason": "already_granted_today" })
+        // Distinct reasons because the three facts differ: *come back tomorrow*, *today's
+        // allowance is spent*, and *this did not clear the bar*. Adding values — not keys — keeps
+        // the body's key set identical, which is what the contract section of `earned_grant.rs`
+        // pins and what Voortgang parses; that client treats every refusal alike, so a value it
+        // has not seen costs it nothing. A client that wants to behave well can now tell a
+        // refusal worth retrying after more practice from one that will stand until midnight.
+        json!({ "ok": false, "reason": refused })
     };
     if let Some(key) = replay_key {
         recover_lock(&state.grant_replays).record(
@@ -1052,10 +1169,50 @@ pub fn valid_provider_name(name: &str) -> bool {
     name != "parent" && valid_source(name)
 }
 
+/// Deserialize a field that has to tell *absent* from *explicitly null*.
+///
+/// `Option<Option<T>>` on its own does not. Serde maps a JSON `null` onto the **outer** `None`,
+/// which is the identical value an absent field produces, so the two states collapse and the
+/// distinction this type exists to carry is silently lost. Forcing the inner option to take the
+/// null leaves `#[serde(default)]` as the only producer of the outer `None`.
+///
+/// Four lines rather than a dependency: `serde_with::rust::double_option` is the crate answer to
+/// the same problem, and this is the whole of what it does for one field.
+fn absent_or_null<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 pub struct ProviderBody {
     enabled: bool,
     minutes: u32,
+    /// Optional daily ceiling, in three states rather than two.
+    ///
+    /// **Absent means "leave it alone", and that is load-bearing rather than tidy.** The dashboard
+    /// rebuilds each integration row from `{name, enabled, minutes}` and posts the row back on any
+    /// change (`assets/app.js::loadProviders`), so a body that replaced the whole entry would erase
+    /// a ceiling the first time a parent touched the on/off toggle — a setting destroyed by a
+    /// client that has never heard of it.
+    ///
+    /// This codebase already holds that principle one layer down:
+    /// `config::tests::a_newer_configs_unknown_settings_survive_a_load_and_save` keeps settings a
+    /// build has no field for. Same rule, same reason, applied to the writer instead of the file.
+    ///
+    /// `null` still clears it, so a ceiling remains removable without a second route.
+    #[serde(default, deserialize_with = "absent_or_null")]
+    daily_cap_mins: Option<Option<u32>>,
+    /// Reward tiers. Absent leaves them as they are, for the reason `daily_cap_mins` gives
+    /// above; an empty array is how they come off.
+    ///
+    /// A plain `Option<Vec<_>>` suffices where the ceiling needed `absent_or_null`, because a
+    /// list already has a spelling for "none" that is not `null`. Same three states, one fewer
+    /// mechanism.
+    #[serde(default)]
+    tiers: Option<Vec<crate::config::Tier>>,
 }
 
 /// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes } }`.
@@ -1095,10 +1252,50 @@ pub async fn set_provider(
         )));
     }
     require_minutes(body.minutes, MAX_REQUEST_MINUTES)?;
-    let provider = crate::config::Provider {
-        enabled: body.enabled,
-        minutes: body.minutes,
-    };
+    // Bounded by the same ceiling a single grant is, because it bounds the same thing — minutes
+    // added to one day — and a second limit that disagreed would be a second thing to reason
+    // about. `require_minutes` also refuses zero, which would otherwise be a confusing second
+    // spelling of `enabled: false`.
+    if let Some(Some(cap)) = body.daily_cap_mins {
+        require_minutes(cap, MAX_REQUEST_MINUTES)?;
+    }
+    if let Some(tiers) = &body.tiers {
+        if tiers.len() > crate::config::MAX_TIERS {
+            return Err(AppError::BadRequest(format!(
+                "at most {} reward tiers",
+                crate::config::MAX_TIERS
+            )));
+        }
+        for tier in tiers {
+            require_minutes(tier.reward_mins, MAX_REQUEST_MINUTES)?;
+            // A tier stating no condition can never be met, so it is dead configuration that
+            // reads like a rule. Refused at the door rather than silently ignored, because the
+            // parent who wrote it believes they set a bar.
+            if tier.questions == 0 && tier.minutes_practised == 0 {
+                return Err(AppError::BadRequest(
+                    "a reward tier must ask for questions, minutes, or both".into(),
+                ));
+            }
+            // The other end of the same defect. A threshold nobody could reach in a day is a rule
+            // that silently never fires, which reads exactly like one that does — and the boxes
+            // on the dashboard restate these two numbers, so `web.rs`'s minutes-limit guard has
+            // something to hold them to.
+            if tier.questions > crate::config::MAX_TIER_QUESTIONS {
+                return Err(AppError::BadRequest(format!(
+                    "a tier may ask for at most {} questions",
+                    crate::config::MAX_TIER_QUESTIONS
+                )));
+            }
+            if tier.minutes_practised > crate::config::MAX_TIER_MINUTES {
+                return Err(AppError::BadRequest(format!(
+                    "a tier may ask for at most {} practised minutes",
+                    crate::config::MAX_TIER_MINUTES
+                )));
+            }
+        }
+    }
+    let (enabled, minutes, ceiling) = (body.enabled, body.minutes, body.daily_cap_mins);
+    let tiers = body.tiers;
     // Cap check + upsert under one write guard, the shape `save_routine` uses and for the same
     // reason. **Reconfiguring a provider that already exists is always allowed** — only a new
     // name can hit the cap. Without that, a parent sitting at the ceiling could not turn an
@@ -1110,7 +1307,32 @@ pub async fn set_provider(
                 crate::config::MAX_PROVIDERS
             )));
         }
-        c.providers.insert(name.clone(), provider);
+        // Resolved here rather than before the guard, because "what it had" is only true while
+        // holding it. See `ProviderBody::daily_cap_mins` for why absent is not a clear.
+        let daily_cap_mins = match ceiling {
+            Some(explicit) => explicit,
+            None => c
+                .providers
+                .get(&name)
+                .and_then(|existing| existing.daily_cap_mins),
+        };
+        let tiers = match &tiers {
+            Some(replacement) => replacement.clone(),
+            None => c
+                .providers
+                .get(&name)
+                .map(|existing| existing.tiers.clone())
+                .unwrap_or_default(),
+        };
+        c.providers.insert(
+            name.clone(),
+            crate::config::Provider {
+                enabled,
+                minutes,
+                daily_cap_mins,
+                tiers,
+            },
+        );
         Ok(())
     })
     .await?;

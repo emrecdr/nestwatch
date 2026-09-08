@@ -376,3 +376,128 @@ the rule that `ok` and `reason` cannot disagree. A fixture could not go in `test
 for the reason given above — that directory is a contract with one specific repo, whose
 checker counts an unrecognised file as drift — and where shared fixtures should live is
 still open as `O86`, needing a decision in both repositories rather than one.
+
+## A ceiling instead of a latch — 2026-09-08
+
+The registry above grants **once per source per day**, and that rule was right for the only client
+it had: Voortgang pushes when a parent opens it, so a second push in a day was a retry rather than
+a second earning. Designing a *gate* — practice governs PC time, checked repeatedly through an
+afternoon — asked the neighbouring question this document keeps failing to ask on the first pass,
+and this time it was asked before anything shipped: **a signal that arrives in pieces cannot be
+credited by a rule that fires once.**
+
+`Provider::daily_cap_mins` is the answer, and it is deliberately the smaller change of the two
+available. The latch is not removed; it is what a provider still gets when the field is absent,
+which is every provider that exists today. Set the field and the same source may push until the
+ceiling is reached.
+
+**The bound got stronger, not weaker, which is the part worth stating plainly.** A latch bounds a
+compromised or buggy client to *one reward*; a ceiling bounds it to *a number the parent set*.
+Neither trusts the push — the reward has come from this machine since `83f0ce3` — so the ceiling
+inherits that property and adds an explicit total to it. `used + minutes <= cap` holds by
+construction on both arms that grant, so no sequence of pushes can pass the ceiling.
+
+**Nothing changes for an installation that does not opt in, and that is enforced rather than
+intended.** `daily_cap_mins` is `skip_serializing_if`, and `EarnedDay` — the type that replaced the
+bare `NaiveDate` in `Config::earned` — has hand-written serde impls that write the *old* spelling
+whenever no amount is tracked. So a household with no ceiling keeps a byte-identical `config.json`
+and a byte-identical `GET /api/providers`, and its file stays readable by an older build.
+`config::tests::nothing_written_changes_shape_until_a_ceiling_is_set` is that promise as an
+assertion, and it was confirmed to bite by deleting the `skip_serializing_if` and watching it fail.
+
+`#[serde(untagged)]` carries a documented hazard — two variants sharing a shape, where the first
+that parses silently wins. These two cannot collide, one being a JSON string and the other an
+object, but "cannot" is the kind of claim this project has been wrong about before, so
+`serde_reads_both_spellings` measures it.
+
+**One decision was made against the industry default, and the reasoning matters more than the
+choice.** When a push would carry a provider past its ceiling, the grant is *clamped to the
+remainder* rather than refused. Quota guidance is near-unanimous that an over-quota request should
+be rejected — but that guidance is about a request that asked for something, and a provider never
+asks: `ExtraTimeBody.minutes` is vestigial on the robot path and is not read. The client asserts a
+threshold was met; this machine answers what that is worth today. Refusing would take a child's
+completed work and pay nothing for it, which is the failure the feature exists to prevent.
+
+The refusal reason splits accordingly: `already_granted_today` keeps its exact wording for the
+latch, and `daily_cap_reached` is new and reachable only where a ceiling is configured. The body's
+*key set* is unchanged, which is what `earned_grant.rs` pins and what Voortgang parses — and that
+client treats every refusal identically, so a value it has not seen costs it nothing. The split is
+not decoration: quota guidance is explicit that a client should not retry a spent daily allowance
+until midnight, and a poller cannot implement that against a single undifferentiated refusal.
+
+**A fifth instance of this document's own pattern, caught before it shipped rather than after.**
+The four above are each a question left unasked beside a question answered. This one was found by
+deliberately asking it: *who else writes a provider entry?* The answer is the dashboard, and
+`assets/app.js::loadProviders` rebuilds every integration row as `{name, enabled, minutes}` and
+posts that row back on any change. A replace-the-entry upsert would therefore have erased a ceiling
+the first time a parent used the on/off toggle — a setting destroyed by the one client that has
+never heard of it, silently, with every test green.
+
+So `ProviderBody::daily_cap_mins` carries three states rather than two: **absent means unchanged**,
+`null` clears, a number sets. That is not a new principle here —
+`config::tests::a_newer_configs_unknown_settings_survive_a_load_and_save` already keeps settings
+this build has no field for, via the `#[serde(flatten)]` capture map. The same rule, moved from the
+file to the writer. Any field added to this endpoint after today inherits the protection.
+
+The mechanism has one trap worth recording, because it is invisible and the type looks right without
+it: `Option<Option<T>>` alone does **not** distinguish absent from null. Serde maps a JSON `null`
+onto the *outer* `None`, which is exactly what an absent field produces, so the two states collapse
+and the distinction is lost with no error anywhere. `absent_or_null` forces the inner option to take
+the null. It is four lines rather than the `serde_with` dependency that exists to solve this.
+
+## Facts instead of a verdict — 2026-09-08
+
+The ceiling above made repeated grants possible, which is what a ladder needs; this is the ladder,
+and the two shipped together because separating them would have meant designing the wrong thing
+first. A tier scheme built before facts would have had the *client* assert which rung it reached —
+a verdict — and that mechanism becomes dead weight the moment the push carries the work instead.
+
+`Provider::tiers` is a list of `{questions, minutes_practised, reward_mins}`, and
+`ExtraTimeBody::progress` is what the child actually did. The push says the work; this machine says
+what it is worth.
+
+**This finishes a move `83f0ce3` started and left half-done.** That commit took the *reward* off the
+push, on the argument that a compromised client must not choose its own number — and it was right,
+but it left the *threshold* in the client, so the bar lived over there and the reward lived here and
+neither side could state the whole rule. `F3` recorded the visible symptom (a pairing screen could
+say "linked and working" while nothing a child earned ever landed) and fixed the reporting. This
+fixes the split itself. A parent can now move the bar from this machine without anyone shipping a
+new client, which is what a registry entry being *data* was supposed to mean.
+
+**It buys no trust, and the doc should not imply otherwise.** A client willing to inflate
+`progress` was already willing to push when it had earned nothing; reporting numbers rather than a
+conclusion changes who holds the rule, not who is believed. What bounds a lying client is
+`daily_cap_mins`, exactly as before.
+
+**Three design points that are one comparison away from being wrong.**
+
+*Either condition carries a tier*, not both — *fifteen questions or half an hour*. A child who works
+slowly and carefully reaches it on minutes, one who works quickly reaches it on questions, and
+requiring both would penalise each for the way they work. That is the same objection that keeps
+accuracy out of this calculation, which the reward side had already settled: gating on it "punishes
+struggling and rewards picking easy topics".
+
+*A zero threshold states no condition*, rather than one that is trivially satisfied. `questions >= 0`
+holds on an empty day, so the naive reading pays out a half-filled tier for doing nothing — the most
+expensive possible meaning for a field somebody left blank. A tier asking for neither is refused at
+the door rather than stored, because it reads like a rule and behaves like a blank.
+
+*The best matching tier wins, not the first*, so the answer does not depend on the order a parent
+happened to type them in.
+
+**A refusal that is not an error.** Reported work meeting no tier answers `200` with
+`below_threshold`, not `400`. The whole point is a client that pushes what it sees and lets this
+side judge; making "not yet" an error would send it straight back to pre-judging, which is the
+arrangement this change exists to end. The body's key set is unchanged, so the cross-repo contract
+holds — and a client that wants to behave well can now tell a refusal worth retrying after more
+practice from one that stands until midnight.
+
+**The two features compose into the rule a household actually states.** Set the ceiling to the top
+rung's reward and a day totals *exactly the best tier the child reached*, however many pushes it
+took: clear the lower rung for 16, clear the upper one later, and the second grant pays the 14-minute
+difference rather than another full reward. That property is pinned in `earned_grant.rs` rather than
+left as an observation, because it is the whole of why these two changes belong in one increment.
+
+**What this still does not do.** No gate exists to use any of it, and no UI sets either field — a
+ceiling and a ladder are reachable only through the API today. This is the registry being made
+capable of a gate from the side that can move without the other repository agreeing to anything.

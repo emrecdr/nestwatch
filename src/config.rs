@@ -96,6 +96,28 @@ pub const MAX_ROUTINE_NAME: usize = 40;
 /// hole.
 pub const MAX_PROVIDERS: usize = 12;
 
+/// Largest number of reward tiers one provider may carry (bounds the config).
+///
+/// The same job [`MAX_PROVIDERS`] does. Four rather than two because the shape a household
+/// actually asks for is "most of it" and "all of it", and a third step between them is a
+/// reasonable thing to want; far beyond that the tiers stop being a rule a child can hold in
+/// their head, which is the real limit and not one a constant can enforce.
+pub const MAX_TIERS: usize = 4;
+
+/// Largest question count a reward tier may ask for.
+///
+/// Not a capacity limit — it bounds *dead configuration*. A tier asking for more questions than a
+/// child could answer in a day can never be met, so it is the same defect as a tier asking for
+/// nothing, arriving from the other end. Both are refused where they are written rather than left
+/// to behave like a rule that silently never fires.
+pub const MAX_TIER_QUESTIONS: u32 = 1000;
+
+/// Largest practised-minutes threshold a reward tier may ask for: one day.
+///
+/// The same argument as [`MAX_TIER_QUESTIONS`], and here the ceiling is arithmetic rather than
+/// judgement — a threshold above 1440 asks for more minutes than the day contains.
+pub const MAX_TIER_MINUTES: u32 = 24 * 60;
+
 /// A saved, named preset of usage [`Rules`](crate::rules::Rules) — e.g. "Homework", "Weekend" —
 /// that the parent can apply to the live rules with one click.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,6 +166,190 @@ pub struct Provider {
     /// Minutes one met-threshold push is worth. The parent's policy, applied
     /// on this machine rather than trusted from the client.
     pub minutes: u32,
+    /// Optional ceiling on the minutes this provider may grant across one
+    /// local day, however many times it pushes.
+    ///
+    /// `None` is the default, is how every config written before this field
+    /// loads, and keeps the original rule exactly: **one grant per source per
+    /// day**, worth [`Provider::minutes`]. Set it and the same provider may
+    /// push repeatedly until the ceiling is reached — which is what a signal
+    /// arriving in pieces through the day needs, and what a single latch
+    /// cannot express.
+    ///
+    /// **The ceiling replaces the latch as the bound on a compromised
+    /// client, and is strictly the better one.** A latch bounds a bad push to
+    /// "one reward"; a ceiling bounds it to a number the parent chose. Both
+    /// refuse to trust the push itself, which is the property
+    /// `docs/PLUGIN-SYSTEM.md` argues for.
+    ///
+    /// Skipped when absent rather than written as `null`, so an install that
+    /// never opts in keeps a byte-identical `config.json` and a byte-identical
+    /// `GET /api/providers` — the guarantee that this whole field is designed
+    /// around.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_cap_mins: Option<u32>,
+    /// Reward tiers, evaluated against what a push reports about the work
+    /// behind it.
+    ///
+    /// Empty — the default, and how every existing config loads — means this
+    /// provider has exactly one reward, [`Provider::minutes`], and a client's
+    /// decision to push at all is the assertion that it was earned. That is
+    /// the original contract and it is unchanged.
+    ///
+    /// Non-empty moves the judgement to this machine: the push says what the
+    /// child *did*, and which reward that is worth is decided here, from the
+    /// parent's configuration. It is the same move `83f0ce3` made for the
+    /// reward amount, applied to the threshold that earns it — and it is what
+    /// lets a parent change the bar without touching the client that reports
+    /// against it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<Tier>,
+}
+
+/// One step of a provider's reward ladder: what the child has to have done, and what it earns.
+///
+/// A threshold of `0` states no condition rather than a trivially satisfied one — see
+/// [`Tier::met`], where the difference is the whole of the type's behaviour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tier {
+    /// Questions answered, or `0` for "this tier does not ask about questions".
+    #[serde(default)]
+    pub questions: u32,
+    /// Minutes *practised* — not minutes rewarded — or `0` for "does not ask".
+    #[serde(default)]
+    pub minutes_practised: u32,
+    /// What meeting this tier is worth, in minutes of screen time.
+    pub reward_mins: u32,
+}
+
+impl Tier {
+    /// Whether reported work meets this tier.
+    ///
+    /// **Either condition suffices**, which is the rule as households state it: *fifteen
+    /// questions or half an hour*. A child who works slowly and carefully reaches it on minutes;
+    /// one who works quickly reaches it on questions. Requiring both would punish each of them
+    /// for the way they work, which is the same objection that keeps accuracy out of this
+    /// calculation entirely.
+    ///
+    /// **A zero threshold is not a condition**, so a tier that sets neither can never be met. The
+    /// alternative reading — `questions >= 0`, trivially true — would make an unconfigured tier
+    /// pay out on an empty day, which is the most expensive possible meaning for a field someone
+    /// left blank.
+    pub fn met(&self, questions: u32, minutes_practised: u32) -> bool {
+        (self.questions > 0 && questions >= self.questions)
+            || (self.minutes_practised > 0 && minutes_practised >= self.minutes_practised)
+    }
+}
+
+impl Provider {
+    /// What one push is worth, given whatever it reported about the work behind it.
+    ///
+    /// `None` means *nothing was earned* and is distinct from `Some(0)`, which cannot arise:
+    /// `require_minutes` refuses a zero reward at the point a tier is configured. A caller must
+    /// therefore treat `None` as a refusal to grant, not as a grant of nothing.
+    ///
+    /// **Both fallbacks land on the original behaviour, and that is deliberate.** A provider with
+    /// no tiers is worth [`Provider::minutes`] however much detail a push carries, and a push that
+    /// reports nothing is worth [`Provider::minutes`] however many tiers are configured. So this
+    /// only ever changes the answer where a parent has configured a ladder *and* the client has
+    /// said enough to place the child on it; every other combination is what shipped before.
+    ///
+    /// The best matching tier wins rather than the first, so the answer does not depend on the
+    /// order a parent happened to enter them in.
+    pub fn reward_for(&self, progress: Option<(u32, u32)>) -> Option<u32> {
+        match (progress, self.tiers.as_slice()) {
+            (_, []) | (None, _) => Some(self.minutes),
+            (Some((questions, practised)), tiers) => tiers
+                .iter()
+                .filter(|tier| tier.met(questions, practised))
+                .map(|tier| tier.reward_mins)
+                .max(),
+        }
+    }
+}
+
+/// What one grant source has already been given on one local day.
+///
+/// Replaces the bare `NaiveDate` [`Config::earned`] used to hold. The date
+/// alone answered the only question the original rule asked — *has this
+/// source granted today?* — and a ceiling has to ask a second one: *how
+/// much?*
+///
+/// **Both spellings load, and the old one is still what gets written unless a
+/// ceiling is configured.** See [`EarnedDay::minutes`]; the serde impls below
+/// are hand-written for exactly that reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EarnedDay {
+    /// The local day these minutes belong to. An entry for any other day is
+    /// stale, and the grant handler prunes it before inserting.
+    pub date: NaiveDate,
+    /// Minutes granted to this source on [`EarnedDay::date`], or `None` when
+    /// the amount is not being tracked.
+    ///
+    /// `None` arises two ways and means the same thing in both: an entry
+    /// written by a build older than this field, or an entry written by this
+    /// build for a provider with no ceiling configured. Either way the rule
+    /// that applies is the original one — *this source has granted today, and
+    /// that is the end of it*.
+    ///
+    /// **`None` is read as "the ceiling is already reached", never as zero.**
+    /// A parent who adds a ceiling halfway through a day would otherwise hand
+    /// that source a second full grant, because an untracked earlier grant
+    /// would look like no grant at all — which is precisely the farming the
+    /// latch exists to prevent.
+    pub minutes: Option<u32>,
+}
+
+impl Serialize for EarnedDay {
+    /// Writes the bare date when no amount is tracked, and only then the
+    /// richer object.
+    ///
+    /// This is what keeps the promise on [`Provider::daily_cap_mins`]: a
+    /// household that never sets a ceiling never sees its `config.json`
+    /// change shape, and its file stays readable by an older build. The
+    /// object form appears the first time a ceiling actually governs a grant.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self.minutes {
+            None => self.date.serialize(serializer),
+            Some(minutes) => {
+                use serde::ser::SerializeStruct;
+                let mut entry = serializer.serialize_struct("EarnedDay", 2)?;
+                entry.serialize_field("date", &self.date)?;
+                entry.serialize_field("minutes", &minutes)?;
+                entry.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EarnedDay {
+    /// Accepts both spellings.
+    ///
+    /// `untagged` is the sanctioned tool here rather than a shortcut: its
+    /// documented hazard is two variants sharing a shape, where serde silently
+    /// takes the first that parses. These two cannot collide — one is a JSON
+    /// string and the other a JSON object — and `serde_reads_both_spellings`
+    /// pins that rather than leaving it to this comment.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            /// How every build before the ceiling wrote it.
+            Legacy(NaiveDate),
+            Tracked {
+                date: NaiveDate,
+                #[serde(default)]
+                minutes: Option<u32>,
+            },
+        }
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Legacy(date) => Self {
+                date,
+                minutes: None,
+            },
+            Repr::Tracked { date, minutes } => Self { date, minutes },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -160,16 +366,20 @@ pub struct Config {
     /// Extra minutes granted to *today's* budget (via an approved time request).
     #[serde(default)]
     pub extra: DailyGrant,
-    /// The local day each non-`parent` grant source last granted, so an earned
-    /// bonus (a phone pushing "practice done") lands **once per source per
-    /// day** — judged against *this* machine's trusted clock, never a day the
-    /// pushing device computed, for the same reason [`crate::clock`] exists.
+    /// What each non-`parent` grant source has been given today — judged
+    /// against *this* machine's trusted clock, never a day the pushing device
+    /// computed, for the same reason [`crate::clock`] exists.
+    ///
+    /// Without a [`Provider::daily_cap_mins`] this is the original rule
+    /// unchanged: an earned bonus lands **once per source per day**. With one,
+    /// the entry accumulates and the source may push again until the ceiling
+    /// is reached. [`EarnedDay`] carries both cases.
     ///
     /// Self-pruning: the grant handler drops entries for other days before
     /// inserting, so the map never outgrows one day's sources. `parent` is
     /// deliberately absent — a human pressing the button twice means it twice.
     #[serde(default)]
-    pub earned: std::collections::BTreeMap<String, NaiveDate>,
+    pub earned: std::collections::BTreeMap<String, EarnedDay>,
     /// Installed integrations that may push earned bonus time. A provider is
     /// *data*, not code: a name, an on/off switch, and the reward its signal
     /// is worth — the "declarative plugin" of `docs/PLUGIN-SYSTEM.md`.
@@ -628,6 +838,205 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: a provider with the two-step ladder a household actually asks for.
+    fn laddered() -> Provider {
+        Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: Some(30),
+            tiers: vec![
+                Tier {
+                    questions: 10,
+                    minutes_practised: 20,
+                    reward_mins: 16,
+                },
+                Tier {
+                    questions: 15,
+                    minutes_practised: 30,
+                    reward_mins: 30,
+                },
+            ],
+        }
+    }
+
+    /// Either condition carries a tier, and neither is required.
+    #[test]
+    fn a_tier_takes_either_condition() {
+        let tier = Tier {
+            questions: 15,
+            minutes_practised: 30,
+            reward_mins: 30,
+        };
+        assert!(tier.met(15, 0), "questions alone are enough");
+        assert!(tier.met(0, 30), "minutes alone are enough");
+        assert!(tier.met(20, 45), "both is obviously enough");
+        assert!(!tier.met(14, 29), "just short on both is short");
+    }
+
+    /// A blank threshold states no condition, rather than one that is trivially true.
+    ///
+    /// The expensive misreading: `questions >= 0` holds on an empty day, so a tier a parent left
+    /// half-filled would pay out for doing nothing. Pinned because the correct behaviour here is
+    /// one comparison away from the worst possible one.
+    #[test]
+    fn a_zero_threshold_is_not_a_condition() {
+        let questions_only = Tier {
+            questions: 10,
+            minutes_practised: 0,
+            reward_mins: 16,
+        };
+        assert!(!questions_only.met(0, 999), "minutes must not carry it");
+        assert!(questions_only.met(10, 0));
+
+        let blank = Tier {
+            questions: 0,
+            minutes_practised: 0,
+            reward_mins: 16,
+        };
+        assert!(
+            !blank.met(999, 999),
+            "a tier asking for nothing can never be met"
+        );
+    }
+
+    /// The best matching tier decides, so the answer does not depend on entry order.
+    #[test]
+    fn the_best_matching_tier_wins_not_the_first() {
+        let mut provider = laddered();
+        assert_eq!(
+            provider.reward_for(Some((20, 40))),
+            Some(30),
+            "clearing both tiers is worth the higher one"
+        );
+        provider.tiers.reverse();
+        assert_eq!(
+            provider.reward_for(Some((20, 40))),
+            Some(30),
+            "and still the higher one when they are listed the other way round"
+        );
+        assert_eq!(
+            provider.reward_for(Some((12, 0))),
+            Some(16),
+            "clearing only the lower tier is worth the lower reward"
+        );
+    }
+
+    /// Nothing earned is `None`, and a caller must not read it as a grant of zero.
+    #[test]
+    fn work_below_every_tier_earns_nothing() {
+        assert_eq!(laddered().reward_for(Some((9, 19))), None);
+    }
+
+    /// Both roads back to the original behaviour.
+    ///
+    /// This is the compatibility guarantee for tiers, in the same shape as the ceiling's: a
+    /// provider that configures no ladder, and a push that reports nothing, both land on the
+    /// single reward that shipped before any of this existed.
+    #[test]
+    fn a_provider_without_tiers_is_worth_what_it_always_was() {
+        let plain = Provider {
+            enabled: true,
+            minutes: 25,
+            daily_cap_mins: None,
+            tiers: Vec::new(),
+        };
+        assert_eq!(
+            plain.reward_for(Some((0, 0))),
+            Some(25),
+            "no tiers means the single reward, however detailed the push"
+        );
+        assert_eq!(plain.reward_for(None), Some(25));
+        assert_eq!(
+            laddered().reward_for(None),
+            Some(30),
+            "and a push reporting nothing is the single reward, however many tiers exist"
+        );
+    }
+
+    /// Both spellings of an [`EarnedDay`] load, and mean what they should.
+    ///
+    /// The one property `#[serde(untagged)]` cannot be trusted on by inspection: its documented
+    /// failure is two variants sharing a shape, where the first that parses silently wins. These
+    /// two are a JSON string and a JSON object, so they cannot collide — but "cannot" is the kind
+    /// of claim this project has been bitten by, so it is measured here instead of asserted in a
+    /// comment.
+    #[test]
+    fn serde_reads_both_spellings() {
+        let legacy: std::collections::BTreeMap<String, EarnedDay> =
+            serde_json::from_str(r#"{"studygo":"2026-09-08"}"#).expect("a bare date must load");
+        assert_eq!(
+            legacy["studygo"],
+            EarnedDay {
+                date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
+                minutes: None,
+            },
+            "a config written before the ceiling existed must load as an untracked grant"
+        );
+
+        let tracked: std::collections::BTreeMap<String, EarnedDay> =
+            serde_json::from_str(r#"{"studygo":{"date":"2026-09-08","minutes":16}}"#)
+                .expect("the tracked form must load");
+        assert_eq!(tracked["studygo"].minutes, Some(16));
+
+        // A tracked entry that predates `minutes` within the object form. Not a shape this build
+        // writes, but `#[serde(default)]` promises it loads, and the promise is free to keep.
+        let partial: EarnedDay =
+            serde_json::from_str(r#"{"date":"2026-09-08"}"#).expect("minutes must be optional");
+        assert_eq!(partial.minutes, None);
+    }
+
+    /// An install that never sets a ceiling never changes the shape of its own config.
+    ///
+    /// This is the whole backward-compatibility guarantee in one assertion: the new field is
+    /// skipped rather than written as `null`, and an untracked grant is still written as the bare
+    /// date every earlier build wrote. So adding the ceiling to the codebase does not, by itself,
+    /// rewrite anybody's `config.json` — or change what `GET /api/providers` answers.
+    #[test]
+    fn nothing_written_changes_shape_until_a_ceiling_is_set() {
+        let provider = Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: None,
+            tiers: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_string(&provider).unwrap(),
+            r#"{"enabled":true,"minutes":30}"#,
+            "a provider with no ceiling must serialise exactly as it did before the field existed"
+        );
+
+        let untracked = EarnedDay {
+            date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
+            minutes: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&untracked).unwrap(),
+            r#""2026-09-08""#,
+            "an untracked grant must still be written as the bare date an older build can read"
+        );
+    }
+
+    /// Once a ceiling governs a grant, the richer spelling appears — and survives a round trip.
+    #[test]
+    fn a_tracked_entry_round_trips() {
+        let provider = Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: Some(45),
+            tiers: Vec::new(),
+        };
+        let json = serde_json::to_string(&provider).unwrap();
+        assert!(json.contains(r#""daily_cap_mins":45"#), "got {json}");
+
+        let tracked = EarnedDay {
+            date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
+            minutes: Some(16),
+        };
+        let back: EarnedDay = serde_json::from_str(&serde_json::to_string(&tracked).unwrap())
+            .expect("the tracked form must round trip");
+        assert_eq!(back, tracked);
+    }
 
     /// [`Language::ALL`] really does list every variant.
     ///

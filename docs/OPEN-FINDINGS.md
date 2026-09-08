@@ -1496,6 +1496,14 @@ Bounded and not a security issue: the caller is authenticated, and an authentica
 larger levers than this (`POST /api/shutdown`). The cost is a pointless disk write and an enforcer
 tick per refused retry, which for a phone scheduler retrying through the day is a handful.
 
+**`Provider::daily_cap_mins` moved the frequency this estimate rests on, without meeting the trigger
+below.** A refusal used to be the second push of a day and nothing after it; under a ceiling the
+refusals are every push once the allowance is spent, which for a poller checking on a timer is the
+common case rather than the rare one. That changes "a handful" into "one write per poll for the rest
+of the day" — still bounded, still not a security issue, and still without a measurement on the
+target hardware, which is what the trigger actually asks for. Recorded here rather than re-filed:
+the defect is unchanged, only the arithmetic around it.
+
 **Not fixed deliberately.** The clean fix is a "no change, do not save" signal out of the mutate
 closure, and `try_update_config` is the single choke point every config write in the service passes
 through — the one place where an extra branch is most expensive to get wrong. That is not a trade
