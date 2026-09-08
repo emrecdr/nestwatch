@@ -248,6 +248,8 @@ const MODAL_CLAIMS: [&str; 5] = [
     "role='alertdialog'",
 ];
 
+/// # Invariant 2 — modal semantics an element cannot deliver
+///
 /// A modal that is not a `<dialog>` is a modal with no focus trap.
 ///
 /// The full-size screenshot overlay used to be a `<div>` carrying `role="dialog"` and
@@ -278,6 +280,21 @@ const MODAL_CLAIMS: [&str; 5] = [
 /// It cannot tell that a `<dialog>` is opened with `showModal()` rather than `show()` — the
 /// non-modal form, which traps nothing. That call lives in `app.js` and is guarded by the reading
 /// of whoever changes it. Nor does it check focus order, which no source scan can.
+///
+/// **And it only sees a modal that says so.** The heading above is broader than the scan: this
+/// finds elements that *spell out* the ARIA attributes, so a modal that simply behaves like one
+/// passes. Two do, today — `index.html:1730` and `:1745`, daisyUI's legacy
+/// `<div class="modal" :class="{ 'modal-open': … }">` form, wrapping the **Kill** and
+/// **Shut down** confirmations. They carry no `role` and no `aria-modal`, so every word above
+/// applies to them and none of it is checked: no focus trap, no focus restore, and — unlike the
+/// overlay this was written for — no `Esc` at all (`keydown.escape` appears nowhere in the page).
+/// They are the two destructive controls in the product.
+///
+/// Widening the scan to `class="modal"` on a non-`<dialog>` is about four lines, and it would
+/// fail on those two the moment it landed. That is the point: the fix is to convert them, which
+/// needs `showModal()`/`close()` plumbing and hand verification in a real browser, because
+/// nothing here renders the page. Filed rather than done, and recorded here so the guard is not
+/// read as covering ground it does not.
 #[test]
 fn no_element_claims_modal_semantics_without_being_a_dialog() {
     let mut offenders = Vec::new();

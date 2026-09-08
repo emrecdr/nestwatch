@@ -4,8 +4,10 @@
 //!
 //! Writes are best-effort: a failure is logged and dropped, never propagated — logging must not
 //! be able to break the control path. The file lives inside the data dir that `install` locks to
-//! SYSTEM + Administrators, so a standard-user child can't read or delete it (the `(OI)(CI)`
-//! inheritance flags cover files created later).
+//! SYSTEM + Administrators, so a standard-user child can't read or delete it *through Windows*
+//! (the `(OI)(CI)` inheritance flags cover files created later). An ACL is enforced by the running
+//! operating system and by nothing else: booting the machine from a USB stick reads these logs
+//! directly. See the residual-risk list in `docs/SECURITY.md`.
 //!
 //! # These logs are deliberately not durable across power loss
 //!
