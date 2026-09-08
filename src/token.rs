@@ -103,6 +103,25 @@ mod tests {
         assert!(!eq_ct("ABC123", "ABC12"), "shorter");
         assert!(!eq_ct("ABC12", "ABC123"), "longer");
         assert!(eq_ct("", ""));
+
+        // Two differences that cancel. Every case above differs in exactly ONE byte, and on a
+        // single differing byte an OR-fold and an XOR-fold give the same answer — so none of them
+        // can tell the accumulator apart from one that XORs. Mutation testing found that: replacing
+        // `|` with `^` in the fold left this test green while `eq_ct` accepted any two strings
+        // whose byte differences cancel out, a transposition among them.
+        //
+        // `ABCD1234` against `BACD1234` is not an abstract input. `normalize` produces exactly this
+        // shape — eight alphanumerics — and a time code is the secret the child has a motive to
+        // guess, which is the argument this function's own doc comment makes for existing.
+        assert!(
+            !eq_ct("ABCD1234", "BACD1234"),
+            "two bytes transposed: the differences cancel under XOR, so an accumulator that XORs \
+             instead of ORing would call these equal"
+        );
+        assert!(
+            !eq_ct("AB", "BA"),
+            "the same cancellation at the shortest length that can show it"
+        );
     }
 
     #[test]
