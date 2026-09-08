@@ -308,18 +308,6 @@ fn capture_check(build: u32) -> Check {
     )
 }
 
-/// Compare the build that is *installed* against the build running this check.
-///
-/// They are routinely different and nothing else on the machine says so. Copying a new binary onto
-/// the PC is not installing it, so a parent who downloads an update and runs `doctor` from the
-/// download directory gets a clean bill of health about a service still running the old code —
-/// which is the report they will trust when deciding whether a fix is present.
-///
-/// `installed` is whether there is an install for a missing record to describe; on a machine with
-/// no config, "no version record" would only repeat "not installed" one line further down.
-///
-/// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
-/// than restated so there is one definition and one set of tests for it.
 /// What the system drive's BitLocker protection status means for this tool's guarantees.
 ///
 /// Pure and taking the reading as an argument, for the reason [`clock_check`] gives: the WMI class
@@ -366,6 +354,10 @@ while Windows\n\
          a USB stick and reading the disk directly — and that path also copies the TLS\n\
          private key, after which an impostor dashboard on your network would show the\n\
          very fingerprint you were told to check.";
+    // Both unreadable cases end the same way. Spelled once so that editing the advice cannot
+    // silently change it in one arm only — the two were byte-identical and written differently,
+    // which reads as a deliberate difference and is not one.
+    const BY_HAND: &str = "\nCheck by hand:  manage-bde -status";
 
     match protection {
         Some(1) => ok("system drive is encrypted — the data folder resists an offline read"),
@@ -381,20 +373,29 @@ while Windows\n\
         // way, so it must not be reported as one.
         Some(_) => warn(
             "cannot tell whether the system drive is encrypted (volume reports 'unknown')",
-            format!("{OFFLINE}\nCheck by hand:  manage-bde -status"),
+            format!("{OFFLINE}{BY_HAND}"),
         ),
         // Elevation is what this needs, and `run` only asks when it has it — so reaching here
         // means the query itself failed, on a machine where it should have worked.
         None => warn(
             "couldn't read the system drive's encryption status",
-            format!(
-                "{OFFLINE}\n\
-                 Check by hand:  manage-bde -status"
-            ),
+            format!("{OFFLINE}{BY_HAND}"),
         ),
     }
 }
 
+/// Compare the build that is *installed* against the build running this check.
+///
+/// They are routinely different and nothing else on the machine says so. Copying a new binary onto
+/// the PC is not installing it, so a parent who downloads an update and runs `doctor` from the
+/// download directory gets a clean bill of health about a service still running the old code —
+/// which is the report they will trust when deciding whether a fix is present.
+///
+/// `installed` is whether there is an install for a missing record to describe; on a machine with
+/// no config, "no version record" would only repeat "not installed" one line further down.
+///
+/// The ordering rule ("0.10 is above 0.2") is [`crate::install::classify_install`]'s, reused rather
+/// than restated so there is one definition and one set of tests for it.
 fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool) -> Option<Check> {
     use crate::install::InstallKind;
 

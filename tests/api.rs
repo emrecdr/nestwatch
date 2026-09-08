@@ -585,17 +585,8 @@ async fn a_refused_time_code_is_counted() {
     // would be a race rather than a fact.
     let _ = nestwatch::refusals::drain();
 
-    let res = test_app()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/redeem-code")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"code":"ZZZZZZ"}"#))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let app = test_app();
+    let res = post_json(&app, "/redeem-code", None, json!({ "code": "ZZZZZZ" })).await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(body_json(res).await["ok"], json!(false));
 
