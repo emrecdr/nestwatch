@@ -83,7 +83,14 @@
                    inputmode="latin" autocapitalize="characters" spellcheck="false"
                    placeholder="A1B2C3" class="input uppercase tracking-widest" />
           </label>
-          <button id="codeBtn" data-i18n="redeem" type="submit" class="btn btn-secondary mt-2">Redeem</button>
+          <!-- `accent` and not `secondary`, which this was: daisyUI's light theme pairs
+               `secondary-content` with `secondary` at 3.05:1 (#f9e4f0 on #f43098), and WCAG AA
+               asks 4.5:1 for text this size. It was the only `secondary` surface in the product,
+               and it was on the child's page — the reader with the least ability to work around
+               it. `accent` is 5.08:1 in light and 8.21:1 in dim, and stays plainly distinct from
+               the `primary` of "Send request" in both. Measured and pinned by
+               web/test/contrast.test.js. -->
+          <button id="codeBtn" data-i18n="redeem" type="submit" class="btn btn-accent mt-2">Redeem</button>
           <p id="codeMsg" role="alert" aria-live="assertive" aria-atomic="true"
              class="mt-1 text-center text-sm"></p>
         </form>

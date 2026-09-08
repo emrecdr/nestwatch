@@ -60,6 +60,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **The child's *Redeem* button had 3.05:1 contrast in the light theme.** daisyUI's light palette
+  pairs `secondary-content` with `secondary` at #f9e4f0 on #f43098, against WCAG AA's 4.5:1 for
+  text that size. It was the only `secondary` surface in the product and it sat on the child's own
+  page. It now uses `accent` — 5.08:1 in light, 8.21:1 in dim, and still plainly distinct from the
+  *Send request* button beside it. Every semantic surface the pages actually paint is now measured
+  against both themes on every push; the sweep found this one and nothing else.
 - **The full-size screenshot view is now a real dialog, and the keyboard cannot walk out of it.**
   It was a `<div>` asserting `role="dialog"` and `aria-modal="true"` — a promise to a screen reader
   that the rest of the page is unavailable — with nothing in the product making it true: there was
