@@ -655,6 +655,7 @@ mod tests {
     /// losing an attribute, only by ceasing to be a number input.
     #[test]
     fn every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces() {
+        use crate::config::{MAX_TIER_MINUTES, MAX_TIER_QUESTIONS};
         use crate::curfew::MAX_WARN_SECS;
         use crate::rules::MAX_BUDGET_MINS;
         use crate::timecode::MAX_CODE_MINUTES;
@@ -710,6 +711,30 @@ mod tests {
                 "x-model.number=\"row.minutes\"",
                 MAX_REQUEST_MINUTES,
                 "an integration's earned reward",
+            ),
+            (
+                "index.html",
+                "x-model=\"row.cap\"",
+                MAX_REQUEST_MINUTES,
+                "an integration's daily ceiling",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"tier.questions\"",
+                MAX_TIER_QUESTIONS,
+                "a reward tier's question threshold",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"tier.minutesPractised\"",
+                MAX_TIER_MINUTES,
+                "a reward tier's practised-minutes threshold",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"tier.rewardMins\"",
+                MAX_REQUEST_MINUTES,
+                "a reward tier's reward",
             ),
             (
                 "ask.html",

@@ -193,6 +193,18 @@ const UI = {
     signOut: "Sign out",
     noSignedInDevicesTo: "No signed-in devices to show.",
     integrations: "Integrations",
+    rewardRules: "Reward rules",
+    mostPerDay: "Most per day",
+    blankMeansNoMaximum: "blank means no daily maximum",
+    rewardTiers: "Reward tiers",
+    questionsShort: "Questions",
+    questionsOrShort: "questions, or",
+    minutesPractisedShort: "Minutes practised",
+    minutesPractisedEarns: "minutes practised, earns",
+    rewardMinutesShort: "Reward in minutes",
+    removeTier: "Remove tier",
+    addTier: "Add tier",
+    eitherConditionMeetsATier: "Either condition is enough. The highest tier reached decides the reward.",
     appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here; nothing on this PC reaches out. You choose whether each is on and how many minutes it grants.",
     min: "min",
     pair: "Pair",
@@ -393,6 +405,18 @@ const UI = {
     signOut: "Afmelden",
     noSignedInDevicesTo: "Geen aangemelde apparaten om te tonen.",
     integrations: "Integraties",
+    rewardRules: "Beloningsregels",
+    mostPerDay: "Maximaal per dag",
+    blankMeansNoMaximum: "leeg betekent geen dagmaximum",
+    rewardTiers: "Beloningsniveaus",
+    questionsShort: "Vragen",
+    questionsOrShort: "vragen, of",
+    minutesPractisedShort: "Geoefende minuten",
+    minutesPractisedEarns: "minuten geoefend, levert",
+    rewardMinutesShort: "Beloning in minuten",
+    removeTier: "Niveau verwijderen",
+    addTier: "Niveau toevoegen",
+    eitherConditionMeetsATier: "Eén van beide voorwaarden is genoeg. Het hoogst behaalde niveau bepaalt de beloning.",
     appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen; niets op deze pc neemt zelf contact op. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft.",
     min: "min",
     pair: "Koppelen",
@@ -597,6 +621,18 @@ const UI = {
     signOut: "Oturumu kapat",
     noSignedInDevicesTo: "Gösterilecek giriş yapmış cihaz yok.",
     integrations: "Entegrasyonlar",
+    rewardRules: "Ödül kuralları",
+    mostPerDay: "Günde en fazla",
+    blankMeansNoMaximum: "boş bırakılırsa günlük üst sınır yok",
+    rewardTiers: "Ödül kademeleri",
+    questionsShort: "Soru",
+    questionsOrShort: "soru veya",
+    minutesPractisedShort: "Çalışılan dakika",
+    minutesPractisedEarns: "dakika çalışma şunu kazandırır:",
+    rewardMinutesShort: "Dakika cinsinden ödül",
+    removeTier: "Kademeyi kaldır",
+    addTier: "Kademe ekle",
+    eitherConditionMeetsATier: "İki koşuldan biri yeterlidir. Ulaşılan en yüksek kademe ödülü belirler.",
     appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir; bu bilgisayardaki hiçbir şey dışarı bağlanmaz. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz.",
     min: "dk",
     pair: "Eşleştir",
@@ -1672,6 +1708,18 @@ function app() {
         name,
         enabled: this.providers[name].enabled,
         minutes: this.providers[name].minutes,
+        // The server omits `daily_cap_mins` when there is no ceiling, and an empty string is what
+        // a number input shows for "nothing". Keeping the two spellings apart matters on save:
+        // "" is sent as an explicit null, which is how a ceiling is removed.
+        cap: this.providers[name].daily_cap_mins === undefined ? "" : this.providers[name].daily_cap_mins,
+        // snake_case on the wire, camelCase in the row, converted at both edges rather than in the
+        // markup — a binding cannot rename a field, and `tier.minutes_practised` in a directive
+        // would read as a typo the first time someone met it.
+        tiers: (this.providers[name].tiers || []).map((t) => ({
+          questions: t.questions,
+          minutesPractised: t.minutes_practised,
+          rewardMins: t.reward_mins,
+        })),
       }));
     },
 
@@ -1687,7 +1735,17 @@ function app() {
       }
       this.savingProvider = true;
       try {
-        const r = await this.postJSON(`/api/providers/${encodeURIComponent(row.name)}`, { enabled: row.enabled, minutes: mins });
+        // This client now knows about every field, so it round-trips all of them. The server's
+        // "absent means unchanged" rule still guards clients that do not — and any field added
+        // after today, which this one will omit until somebody teaches it.
+        const body = { enabled: row.enabled, minutes: mins };
+        body.daily_cap_mins = row.cap === "" || row.cap === null ? null : Number(row.cap);
+        body.tiers = (row.tiers || []).map((t) => ({
+          questions: Number(t.questions) || 0,
+          minutes_practised: Number(t.minutesPractised) || 0,
+          reward_mins: Number(t.rewardMins) || 0,
+        }));
+        const r = await this.postJSON(`/api/providers/${encodeURIComponent(row.name)}`, body);
         if (r.ok) {
           this.toast(row.enabled ? `${row.name} is on` : `${row.name} is off`, "success");
           this.loadProviders();
@@ -1699,6 +1757,26 @@ function app() {
       } finally {
         this.savingProvider = false;
       }
+    },
+
+    // Add a rung to a provider's ladder, with defaults the server will accept.
+    //
+    // Defaulted rather than blank on purpose. A tier asking for neither questions nor minutes is
+    // refused by the server — correctly, since it could never be met — so an empty new row would
+    // greet the parent with an error for having pressed Add. These defaults are a rule that works
+    // on the way in, and every field is editable.
+    addTier(row) {
+      if (!row.tiers) row.tiers = [];
+      if (row.tiers.length >= 4) return;
+      row.tiers.push({ questions: 10, minutesPractised: 0, rewardMins: 15 });
+      this.saveProvider(row);
+    },
+
+    // Drop a rung. Saved immediately, like every other control on this row, so the page never
+    // shows a ladder the server does not have.
+    removeTier(row, index) {
+      row.tiers.splice(index, 1);
+      this.saveProvider(row);
     },
 
     // Remove an integration outright, which the on/off toggle does not do: a disabled provider

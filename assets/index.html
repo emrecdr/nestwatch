@@ -954,23 +954,68 @@
               <p class="text-sm opacity-70" x-text="t('appsThatCanAddBonus')"></p>
               <div class="mt-2 flex flex-col gap-2" x-show="providerRows.length > 0">
                 <template x-for="row in providerRows" :key="row.name">
-                  <div class="flex items-center gap-3">
-                    <input type="checkbox" class="toggle toggle-sm" x-model="row.enabled"
-                           :aria-label="row.name" @change="saveProvider(row)" />
-                    <div class="min-w-0 flex-1">
-                      <div class="truncate" x-text="row.name"></div>
-                      <!-- Which devices hold a credential for this integration. Empty string while
-                           the device list has not been fetched, so an unopened card says nothing
-                           rather than guessing "not paired". -->
-                      <div class="text-xs opacity-60" x-text="pairingSummary(row.name)"
-                           x-show="pairingSummary(row.name)"></div>
+                  <div>
+                    <div class="flex items-center gap-3">
+                      <input type="checkbox" class="toggle toggle-sm" x-model="row.enabled"
+                             :aria-label="row.name" @change="saveProvider(row)" />
+                      <div class="min-w-0 flex-1">
+                        <div class="truncate" x-text="row.name"></div>
+                        <!-- Which devices hold a credential for this integration. Empty string while
+                             the device list has not been fetched, so an unopened card says nothing
+                             rather than guessing "not paired". -->
+                        <div class="text-xs opacity-60" x-text="pairingSummary(row.name)"
+                             x-show="pairingSummary(row.name)"></div>
+                      </div>
+                      <input type="number" min="1" max="240" class="input input-sm w-20"
+                             x-model.number="row.minutes" :aria-label="row.name"
+                             @change="saveProvider(row)" />
+                      <span class="text-sm opacity-60" x-text="t('min')"></span>
+                      <button class="btn btn-ghost btn-xs" @click="startPairing(row.name)" x-text="t('pair')"></button>
+                      <button class="btn btn-ghost btn-xs" @click="removeProvider(row.name)" x-text="t('remove')"></button>
                     </div>
-                    <input type="number" min="1" max="240" class="input input-sm w-20"
-                           x-model.number="row.minutes" :aria-label="row.name"
-                           @change="saveProvider(row)" />
-                    <span class="text-sm opacity-60" x-text="t('min')"></span>
-                    <button class="btn btn-ghost btn-xs" @click="startPairing(row.name)" x-text="t('pair')"></button>
-                    <button class="btn btn-ghost btn-xs" @click="removeProvider(row.name)" x-text="t('remove')"></button>
+
+                    <!-- The ceiling and the ladder, folded away.
+                         Disclosed rather than hidden: most households want one reward and no
+                         maximum, which is what the row above already says, so putting these two
+                         behind a labelled summary keeps the common case one line. `details` rather
+                         than an `x-show` toggle for the same reason the cards on this page use it —
+                         the disclosure semantics and the keyboard behaviour come from the element. -->
+                    <details class="ml-9">
+                      <summary class="cursor-pointer py-1 text-xs opacity-60" x-text="t('rewardRules')"></summary>
+                      <div class="mb-2 flex flex-col gap-2 pl-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm" x-text="t('mostPerDay')"></span>
+                          <input type="number" min="1" max="240" class="input input-sm w-20"
+                                 x-model="row.cap" :aria-label="t('mostPerDay')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-sm opacity-60" x-text="t('min')"></span>
+                          <span class="text-xs opacity-60" x-text="t('blankMeansNoMaximum')"></span>
+                        </div>
+
+                        <span class="text-sm" x-text="t('rewardTiers')"></span>
+                        <template x-for="(tier, ti) in row.tiers" :key="ti">
+                          <div class="flex flex-wrap items-center gap-2">
+                            <input type="number" min="0" max="1000" class="input input-sm w-16"
+                                   x-model.number="tier.questions" :aria-label="t('questionsShort')"
+                                   @change="saveProvider(row)" />
+                            <span class="text-xs opacity-60" x-text="t('questionsOrShort')"></span>
+                            <input type="number" min="0" max="1440" class="input input-sm w-16"
+                                   x-model.number="tier.minutesPractised" :aria-label="t('minutesPractisedShort')"
+                                   @change="saveProvider(row)" />
+                            <span class="text-xs opacity-60" x-text="t('minutesPractisedEarns')"></span>
+                            <input type="number" min="1" max="240" class="input input-sm w-16"
+                                   x-model.number="tier.rewardMins" :aria-label="t('rewardMinutesShort')"
+                                   @change="saveProvider(row)" />
+                            <span class="text-xs opacity-60" x-text="t('min')"></span>
+                            <button class="btn btn-ghost btn-xs" :aria-label="t('removeTier')"
+                                    @click="removeTier(row, ti)">&#10005;</button>
+                          </div>
+                        </template>
+                        <button class="btn btn-ghost btn-xs w-fit" x-show="row.tiers.length < 4"
+                                @click="addTier(row)" x-text="t('addTier')"></button>
+                        <p class="text-xs opacity-60" x-text="t('eitherConditionMeetsATier')"></p>
+                      </div>
+                    </details>
                   </div>
                 </template>
 
