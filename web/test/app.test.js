@@ -1094,8 +1094,54 @@ test("every theme button carries a name, not only a glyph", () => {
 // frozen live view and a motionless child are the same picture.
 
 /** An app whose fetch records the URLs asked for and returns a blob, so captures "succeed". */
+// The <dialog> the screenshot overlay lives in, as much of one as `openShotFull`/`closeShotFull`
+// actually touch: `open`, `showModal()`, `close()`.
+//
+// Real enough to hold the two rules that matter. `showModal()` on an already-open dialog throws
+// `InvalidStateError` in a browser, so it throws here — a guard dropped from app.js fails the test
+// rather than only failing on a parent's phone. `close()` on a closed dialog is a no-op in a
+// browser, so it is one here, which is what makes `closeShotFull` safe to reach from the Close
+// button, a backdrop click and the dialog's own `close` event.
+function fakeDialog() {
+  return {
+    open: false,
+    modalCalls: 0,
+    closeCalls: 0,
+    showModal() {
+      if (this.open) throw new Error("InvalidStateError: showModal on an open dialog");
+      this.open = true;
+      this.modalCalls += 1;
+    },
+    close() {
+      if (!this.open) return;
+      this.open = false;
+      this.closeCalls += 1;
+    },
+    // A <dialog> cannot go fullscreen: the Fullscreen API's element-ready check excludes it, and a
+    // real browser rejects with "Dialog elements are invalid". Modelled here because handing this
+    // element to the Fullscreen button is exactly the mistake that was made and shipped green —
+    // `toggleBrowserFullscreen` swallows the rejection, so nothing else would ever say so.
+    requestFullscreen() {
+      return Promise.reject(new TypeError("Dialog elements are invalid"));
+    },
+  };
+}
+
+// The element inside the dialog that holds the layout, and the one that CAN go fullscreen.
+function fakeSurface() {
+  return {
+    fullscreenCalls: 0,
+    requestFullscreen() {
+      this.fullscreenCalls += 1;
+      return Promise.resolve();
+    },
+  };
+}
+
 function appRecordingShots(overrides = {}) {
   const calls = [];
+  const dialog = fakeDialog();
+  const surface = fakeSurface();
   const app = loadApp({
     fetch: async (url) => (calls.push(url), { ok: true, status: 200, blob: async () => ({}) }),
     URL: { createObjectURL: () => "blob:x", revokeObjectURL: () => {} },
@@ -1110,6 +1156,9 @@ function appRecordingShots(overrides = {}) {
       hidden: false,
       documentElement: { setAttribute() {}, removeAttribute() {} },
       addEventListener() {},
+      getElementById: (id) =>
+        id === "shot-full" ? dialog : id === "shot-surface" ? surface : null,
+      fullscreenElement: null,
     },
     matchMedia: () => ({ matches: false, addEventListener() {} }),
     setInterval: () => 1,
@@ -1117,7 +1166,7 @@ function appRecordingShots(overrides = {}) {
     ...overrides,
   });
   app.toast = () => {};
-  return { app, calls };
+  return { app, calls, dialog, surface };
 }
 
 test("a live frame asks for the preview tier and a human's click asks for full", async () => {
@@ -1266,6 +1315,73 @@ test("choosing a cadence re-arms the timer without buying another capture", asyn
     "clicking a slower cadence to make the live view cheaper must not itself commission a " +
       "capture — and the one it used to commission was full tier, the most expensive of all",
   );
+});
+
+// The overlay is a native <dialog> opened with showModal(), which is where the focus trap, the
+// inert background and Esc come from. It used to be a <div> asserting `role="dialog"` and
+// `aria-modal="true"` with no focus management behind either, so Tab walked out of it into the
+// Kill and Shut down buttons behind an opaque backdrop.
+//
+// `tests/markup_csp.rs` holds the markup half — that neither attribute is written out, since a
+// <dialog> carries both implicitly and a <div> carrying them is lying. These three hold the half
+// that lives in JavaScript: that the element is actually put into the modal state, and taken back
+// out of it however the parent chose to leave.
+test("expanding a frame opens the dialog modally, not merely visibly", () => {
+  const { app, dialog } = appRecordingShots();
+
+  assert.equal(dialog.open, false, "closed before anything is clicked");
+  app.openShotFull();
+
+  assert.equal(dialog.modalCalls, 1, "showModal() is what brings the focus trap; show() does not");
+  assert.equal(dialog.open, true);
+  assert.equal(app.shotFull, true, "the component state still follows, for liveTier()");
+});
+
+test("closing the overlay leaves the modal state however the parent got there", () => {
+  const { app, dialog } = appRecordingShots();
+
+  app.openShotFull();
+  app.closeShotFull();
+  assert.equal(dialog.open, false, "the Close button and the backdrop both route here");
+  assert.equal(dialog.closeCalls, 1);
+
+  // Esc is handled by the browser: it closes the dialog itself and then fires `close`, which the
+  // markup routes back into this same method. Reaching it on an already-closed dialog must be a
+  // no-op rather than a second close, or the handler recurses through its own event.
+  app.closeShotFull();
+  assert.equal(dialog.closeCalls, 1, "close() on a closed dialog fires no second close event");
+  assert.equal(app.shotFull, false);
+});
+
+// The Fullscreen button must never be handed the <dialog> itself.
+//
+// This is the defect that made the whole dialog conversion worth testing in a browser. The button
+// used to receive `$el.closest('[role=dialog]')`, which resolved to a <div> and worked. Turning
+// that <div> into a real <dialog> silently broke it: the Fullscreen API's element-ready check
+// excludes `dialog`, `requestFullscreen()` rejects with "Dialog elements are invalid", and
+// `toggleBrowserFullscreen` swallows the rejection — so the button did nothing at all, and every
+// test in this repository still passed.
+//
+// `fakeDialog` now rejects the way a browser does, so pointing this back at the dialog fails here
+// rather than on a parent's phone.
+test("the Fullscreen button targets the surface, not the dialog that cannot go fullscreen", async () => {
+  const { app, dialog, surface } = appRecordingShots();
+
+  app.openShotFull();
+  app.toggleBrowserFullscreen();
+  await Promise.resolve();
+
+  assert.equal(surface.fullscreenCalls, 1, "the surface inside the dialog is the fullscreenable element");
+  assert.equal(dialog.open, true, "going fullscreen must not close the overlay");
+});
+
+test("re-opening an overlay that is already open does not throw InvalidStateError", () => {
+  const { app, dialog } = appRecordingShots();
+
+  app.openShotFull();
+  app.openShotFull(); // a second click on Expand, or a re-entrant call from the live timer
+  assert.equal(dialog.modalCalls, 1, "showModal() on an open dialog throws in a real browser");
+  assert.equal(dialog.open, true);
 });
 
 test("expanding a frame that is already full does not capture the desktop again", async () => {
@@ -2511,12 +2627,77 @@ test("every dashboard string exists in every language the selector offers", () =
   }
 });
 
+// Every method the markup calls has to exist on the component.
+//
+// Alpine resolves a bare `foo()` in a binding against the component object. When it is not there
+// the CSP build resolves it to `undefined` and the binding renders **nothing** — no exception, no
+// console message, an empty card that looks exactly like a card with nothing to report. That is
+// the same silent-failure shape `tests/markup_csp.rs` was written for, and this codebase spends
+// more effort avoiding it than almost anything else ("measured" vs absent, `focus_missing`, a
+// session marker drawn with no width).
+//
+// Renaming a method in `app.js` and missing one of its callers in `index.html` is the whole
+// failure, and there are 116 call sites.
+//
+// **Resolved against the real component, not a regex over `app.js`.** The harness already
+// evaluates the file exactly as a `<script src>` would, so `typeof app[name] === "function"` is
+// the same question Alpine asks at runtime. A first attempt matched method definitions with a
+// regex and reported 29 false positives, because `async` shorthand methods do not look like
+// `name(`. A scanner that needs a whitelist of things to ignore is one nobody trusts; this one
+// needs none.
+//
+// Adopted while already green — all 116 resolve today — which is the bargain `Cargo.toml`'s
+// `[lints]` block makes and states: a rule adopted green costs one commit, and the same rule
+// adopted red costs an argument about whether to keep it.
+test("every method the markup calls exists on the component", () => {
+  const html = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "index.html"),
+    "utf8",
+  );
+  // Comments first: this tree is dense with prose naming methods that were removed or renamed,
+  // and a guard that reads its own documentation as a call site cries wolf.
+  const stripped = html.replace(/<!--[\s\S]*?-->/g, "");
+
+  // Alpine's three attribute spellings: the directive (`x-show`), the `x-on` shorthand (`@click`)
+  // and the `x-bind` shorthand (`:class`). Modifiers ride on the name and need no handling.
+  const ATTR = /(?:x-[a-z:.-]+|@[a-z:.-]+|:[a-z-]+)\s*=\s*"([^"]*)"/g;
+  // An identifier followed by `(`, excluding member calls (`Math.round(`) and Alpine magics
+  // (`$el`, `$event`) — neither resolves against the component, so neither is this guard's
+  // business. That exclusion is what removes the need for a builtin allow-list.
+  const CALL = /(?<![.$\w])([A-Za-z_][\w$]*)\s*\(/g;
+
+  const called = new Set();
+  for (const attr of stripped.matchAll(ATTR)) {
+    for (const call of attr[1].matchAll(CALL)) called.add(call[1]);
+  }
+
+  // A broken extractor must not be able to pass by finding nothing.
+  assert.ok(
+    called.size > 80,
+    `only ${called.size} bound calls found; the extractor is broken, not the markup`,
+  );
+
+  const app = loadApp();
+  const missing = [...called].filter((name) => typeof app[name] !== "function").sort();
+  assert.deepEqual(
+    missing,
+    [],
+    `index.html binds to ${missing.length} name(s) that are not methods on the component. Alpine ` +
+      `resolves each to undefined and renders nothing at all — no error, no console message, an ` +
+      `empty element indistinguishable from one with nothing to say: ${missing.join(", ")}`,
+  );
+});
+
 test("every key the markup calls t() with is answered by the English table", () => {
   const html = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "..", "..", "assets", "index.html"),
     "utf8",
   );
-  const used = [...html.matchAll(/t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]);
+  // The lookbehind is load-bearing: without it, `t` matches the last letter of any identifier
+  // ending in one. `$el.closest('dialog')` reported `dialog` as a missing translation key — a
+  // false positive on markup that calls no translator at all, and the kind that gets a guard
+  // deleted rather than fixed. `closest`, `insertAt`, `at`, `split` are all one edit away.
+  const used = [...html.matchAll(/(?<![A-Za-z0-9_$])t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]);
   assert.ok(used.length > 100, `expected the markup to call t() throughout, found ${used.length}`);
   const en = uiTables().en;
   const missing = [...new Set(used)].filter((k) => !en.has(k));
@@ -2673,7 +2854,7 @@ test("every UI key is used, and every used key exists", () => {
   const en = uiTables().en;
 
   const used = new Set([
-    ...[...html.matchAll(/t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]),
+    ...[...html.matchAll(/(?<![A-Za-z0-9_$])t\('([A-Za-z0-9]+)'\)/g)].map((m) => m[1]),
     ...[...js.matchAll(/\bthis\.tf?\("([A-Za-z0-9]+)"/g)].map((m) => m[1]),
   ]);
 

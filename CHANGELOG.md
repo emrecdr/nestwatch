@@ -60,6 +60,30 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **The full-size screenshot view is now a real dialog, and the keyboard cannot walk out of it.**
+  It was a `<div>` asserting `role="dialog"` and `aria-modal="true"` — a promise to a screen reader
+  that the rest of the page is unavailable — with nothing in the product making it true: there was
+  no focus management anywhere in the dashboard. Focus never entered the overlay, so it stayed on
+  the button that opened it, on an element the page had just declared unavailable. `Tab` walked out
+  of the picture into the page behind the black backdrop, which carries **Kill** and **Shut down**.
+  Closing dropped focus to the top of the document. It is now a native `<dialog>` opened with
+  `showModal()`, which brings the focus trap, the inert background, `Esc` and the top layer, and
+  carries both attributes implicitly — so they are gone rather than restated. A guard fails if
+  either is ever written out again.
+  <br>The picture now sits on a surface inside the dialog rather than in the dialog itself,
+  because **a `<dialog>` cannot go fullscreen**: the Fullscreen API excludes it, so the *Fullscreen*
+  button — which had been handed the overlay element all along — would have rejected silently and
+  done nothing. That was caught by opening the real markup in a browser and comparing against a
+  plain `<div>` as a control, which is the first time anything in this project has rendered one of
+  its own pages.
+- **The overlay's *Refresh* button was the literal word, in English.** Its two neighbours on the
+  same row went through the language table, and the key it needed was already there and already
+  translated — only this caller had been missed, so a Dutch parent read *Vernieuwen* on one refresh
+  button and *Refresh* on another.
+- **A translation guard was matching the wrong thing.** The scan for keys the markup passes to
+  `t()` had no boundary before the `t`, so it read the last letter of any identifier ending in one:
+  `$el.closest('dialog')` was reported as a missing translation key. A false positive on markup
+  that calls no translator at all, and the kind that gets a guard deleted rather than fixed.
 - **Rolling back to an older Nestwatch no longer deletes settings the newer one added.** `config.json`
   was read by ignoring anything the running build had no field for, and written back with only the
   fields it knew — so running an older binary once, for any reason, silently dropped every setting

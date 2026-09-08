@@ -1762,24 +1762,59 @@
          thumbnail binds to, so the toggle updates this view too. Those refreshes arrive at the
          FULL tier while this overlay is up: `liveTier()` follows the surface on screen, so the
          picture stays readable instead of being replaced by a stretched preview. -->
-    <div x-show="shotFull" x-cloak
-         class="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-2"
-         @click="closeShotFull()"
-         @keydown.escape.window="closeShotFull()"
-         role="dialog" aria-modal="true" aria-label="Screenshot, full size">
-      <!-- .stop so clicking the picture does not dismiss it; only the backdrop does. -->
+    <!-- A native <dialog>, opened with showModal() from `openShotFull` — never `x-show`.
+         It used to be a <div> asserting `role="dialog" aria-modal="true"`, which is a promise to
+         assistive technology that the rest of the page is unavailable, and nothing in the document
+         kept it: there was no focus management anywhere in this file. Focus never entered the
+         overlay, Tab walked out of it into the Kill and Shut down buttons behind an opaque
+         backdrop, and closing dropped focus to <body>. showModal() brings the focus trap, the
+         inert background, Esc and the top layer, and carries both attributes implicitly — so they
+         are gone from here rather than restated. `tests/markup_csp.rs` fails if either returns.
+
+         `hidden open:flex` rather than a bare `flex`: a closed <dialog> is hidden by the UA
+         stylesheet, and any author `display` rule beats a UA one — so `class="flex"` alone would
+         leave this on screen while closed. The `open:` variant is `&:is([open], ...)`, which
+         outranks `.hidden` only while the dialog is actually open.
+         No `z-50`: the top layer is above every stacking context by definition. -->
+    <dialog id="shot-full"
+            class="hidden open:flex fixed inset-0 m-0 h-full max-h-none w-full max-w-none bg-transparent p-0"
+            @close="closeShotFull()"
+            aria-label="Screenshot, full size">
+      <!-- The dialog holds no layout of its own; this surface does, and it exists for one reason:
+           **a <dialog> cannot go fullscreen.** The Fullscreen API's element-ready check excludes
+           `dialog` outright, so `requestFullscreen()` on it rejects with "Dialog elements are
+           invalid" — measured in a browser, against a plain <div> as a control, after the first
+           version of this change handed the dialog itself to the Fullscreen button and silently
+           broke it (`toggleBrowserFullscreen` swallows the rejection). Nothing caught that: no
+           test in this repository renders a page.
+           It also owns the dimming and the click-to-dismiss, because a click on the area around
+           the picture now targets this element rather than the dialog. -->
+      <div id="shot-surface"
+           class="relative flex h-full w-full items-center justify-center bg-black/90 p-2"
+           @click="closeShotFull()">
+      <!-- .stop so clicking the picture does not dismiss it; only the surface around it does. -->
       <img :src="shotUrl" alt="screen of the monitored PC"
            class="max-h-full max-w-full object-contain" @click.stop />
       <div class="absolute right-4 top-4 flex gap-2" @click.stop>
+        <!-- The label was the literal "Refresh" while its two neighbours used `t()`, so a Dutch
+             parent read "Vernieuwen" on the requests card and "Refresh" here. The key existed and
+             was translated in all three tables; only this caller had been missed. -->
         <button class="btn btn-sm" @click="takeScreenshot()" :disabled="loadingShot">
           <span x-show="loadingShot" class="loading loading-spinner loading-xs"></span>
-          Refresh
+          <span x-text="t('refresh')"></span>
         </button>
-        <button class="btn btn-sm" @click="toggleBrowserFullscreen($el.closest('[role=dialog]'))" x-text="t('fullscreen')"></button>
-        <button class="btn btn-sm btn-ghost text-white" @click="closeShotFull()" x-text="t('close')"></button>
+        <!-- No argument: the element to fullscreen is the surface above, and app.js looks it up.
+             It used to be passed as `$el.closest(...)`, which is how it came to be handed a
+             <dialog> the moment this became one. -->
+        <button class="btn btn-sm" @click="toggleBrowserFullscreen()" x-text="t('fullscreen')"></button>
+        <!-- autofocus, so showModal() lands on the way out rather than on "Refresh". Without it the
+             spec picks the first focusable child, which would announce a capture button to someone
+             who has just opened a picture. Verified in a browser: focus lands here. -->
+        <button class="btn btn-sm btn-ghost text-white" autofocus @click="closeShotFull()" x-text="t('close')"></button>
       </div>
       <p class="absolute bottom-3 left-0 right-0 text-center text-xs text-white/50" x-text="t('escOrClickTheBackdrop')"></p>
-    </div>
+      </div>
+    </dialog>
 
     <!-- ── Toasts ───────────────────────────────────────────────────── -->
     <div class="toast toast-end">

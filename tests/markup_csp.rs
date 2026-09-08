@@ -1,5 +1,14 @@
-//! Guards the invariant that no Alpine expression in the markup uses syntax the CSP build cannot
-//! parse.
+//! Guards two invariants over `assets/*.html` that only a browser would otherwise reveal: no
+//! Alpine expression uses syntax the CSP build cannot parse, and no element claims modal semantics
+//! it cannot deliver.
+//!
+//! Both are here for one reason, worth stating once rather than twice: **nothing in this repository
+//! ever renders these pages.** `web/test/harness.js` says so in as many words — the Node suite is
+//! deliberately DOM-free, and the Rust side reads the markup as text. So a property that only
+//! exists once a browser has laid the page out is checked by a source scan or by nothing at all.
+//! Both scans below are the former, and both are honest that they are not the latter.
+//!
+//! # Invariant 1 — syntax the CSP build cannot parse
 //!
 //! # The class this exists for
 //!
@@ -46,6 +55,8 @@
 
 use std::path::{Path, PathBuf};
 
+use nestwatch::srcscan::line_of;
+
 /// Every `assets/*.html`, as (relative name, contents).
 ///
 /// Read from disk rather than `include_str!` so that adding a third page is covered without
@@ -80,7 +91,14 @@ fn markup() -> Vec<(String, String)> {
     out
 }
 
-/// `text` with every `<!-- ... -->` removed.
+/// `text` with every `<!-- ... -->` replaced by the newlines it spanned.
+///
+/// **Newlines are kept rather than dropped, so that offsets into the result still name the right
+/// line of the original file.** Removing them outright was the first version, and it made
+/// `no_element_claims_modal_semantics_without_being_a_dialog` report `index.html line 1456` for an
+/// element that is on line 1769 — a guard that names the wrong line sends its reader to innocent
+/// code, and this tree is 40% comment by design, so the drift is hundreds of lines rather than a
+/// rounding error. Nothing here reads the stripped text as markup to render; only as a haystack.
 ///
 /// **Load-bearing, not tidiness.** `index.html` carries a comment reading "A data URI rather than
 /// x-html: the CSP already allows ..." — prose *about* the constraint, sitting next to the code that
@@ -96,7 +114,12 @@ fn strip_comments(text: &str) -> String {
         out.push_str(&rest[..start]);
         let after = &rest[start + 4..];
         match after.find("-->") {
-            Some(end) => rest = &after[end + 3..],
+            Some(end) => {
+                for _ in after[..end].bytes().filter(|b| *b == b'\n') {
+                    out.push('\n');
+                }
+                rest = &after[end + 3..];
+            }
             None => return out,
         }
     }
@@ -209,6 +232,81 @@ fn no_markup_expression_uses_syntax_the_csp_build_cannot_parse() {
          expression into a method or getter in assets/app.js, where all four are ordinary \
          JavaScript, and call that from the attribute. The block at the bottom of app.js exists \
          for exactly this.",
+        offenders.join("\n  ")
+    );
+}
+
+/// The attributes that *assert* modal semantics, each of which a native `<dialog>` already carries.
+///
+/// Spelled with their quotes so that prose about the rule — an `aria-modal` named in a sentence —
+/// is not itself a breach. Comments are stripped before the scan anyway; this is the second layer.
+const MODAL_CLAIMS: [&str; 5] = [
+    "aria-modal",
+    "role=\"dialog\"",
+    "role='dialog'",
+    "role=\"alertdialog\"",
+    "role='alertdialog'",
+];
+
+/// A modal that is not a `<dialog>` is a modal with no focus trap.
+///
+/// The full-size screenshot overlay used to be a `<div>` carrying `role="dialog"` and
+/// `aria-modal="true"`, shown with `x-show`. Both are *assertions to assistive technology* —
+/// `aria-modal` says the rest of the page is unavailable — and nothing in the document made either
+/// one true. Searching `assets/app.js` and `assets/ask.js` for `.focus()`, `activeElement`, `inert`
+/// and `showModal` returned **nothing**: there was no focus management anywhere in the product.
+///
+/// Three things followed, and none of them needed a bug report to be real:
+///
+/// * Focus never entered the overlay. It stayed on the button that opened it — an element
+///   `aria-modal` had just declared unavailable — so a screen-reader user was told the background
+///   was hidden while their focus sat inside it, and nothing was announced.
+/// * `Tab` walked out of the overlay into the page behind an opaque backdrop, which carries
+///   **Kill** and **Shut down**.
+/// * `x-show` hides with `display: none`, so closing dropped focus to `<body>` and the next `Tab`
+///   restarted at the top of the document.
+///
+/// A native `<dialog>` opened with `showModal()` has the focus trap, the inert background, `Esc`
+/// and top-layer rendering built in — and carries `role=dialog` and `aria-modal` *implicitly*.
+/// That implicitness is what makes this scan a sound test rather than a style rule: finding either
+/// attribute **spelled out** means one of exactly two things, and both are worth failing on.
+/// Either the element is a `<dialog>`, and the attribute is redundant; or it is not, and the
+/// attribute is a promise the markup cannot keep.
+///
+/// # What it does not claim
+///
+/// It cannot tell that a `<dialog>` is opened with `showModal()` rather than `show()` — the
+/// non-modal form, which traps nothing. That call lives in `app.js` and is guarded by the reading
+/// of whoever changes it. Nor does it check focus order, which no source scan can.
+#[test]
+fn no_element_claims_modal_semantics_without_being_a_dialog() {
+    let mut offenders = Vec::new();
+    let mut scanned = 0usize;
+
+    for (name, body) in markup() {
+        let body = strip_comments(&body);
+        scanned += body.len();
+        for claim in MODAL_CLAIMS {
+            for (at, _) in body.match_indices(claim) {
+                offenders.push(format!("{name} line {}: {claim}", line_of(&body, at)));
+            }
+        }
+    }
+
+    // A reader that has stopped finding the pages must not be able to pass by finding nothing.
+    // The two shipped pages are ~65 KB together; a floor well under that catches a broken reader
+    // without pinning a number that ordinary editing would have to chase.
+    assert!(
+        scanned > 20_000,
+        "only {scanned} bytes of markup scanned; the reader is broken, not the pages"
+    );
+
+    assert!(
+        offenders.is_empty(),
+        "these elements assert modal semantics that only a native <dialog> can deliver:\n  {}\n\n\
+         Use `<dialog>` and open it with `showModal()`. It carries both attributes implicitly, so \
+         writing them out is either redundant or false — and it brings the focus trap, the inert \
+         background and Esc, none of which `x-show` on a <div> provides.",
         offenders.join("\n  ")
     );
 }

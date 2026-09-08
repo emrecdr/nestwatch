@@ -2155,8 +2155,34 @@ function app() {
     // "full" for as long as the overlay is open. It used to return a preview regardless of what was
     // on screen, so the frame fetched here survived at most one refresh interval. See `liveTier`
     // for what that costs and why it is bounded.
+    // The <dialog> the overlay lives in. Looked up per call rather than held: the component is
+    // built before Alpine has walked the DOM, so a reference captured in the constructor would be
+    // null forever.
+    //
+    // Guarded the way `syncTitle` is, and for the same reason — `web/test/harness.js` evaluates
+    // this file in a `vm` with no `document` at all, and `openShotFull` is covered there ("expanding
+    // a frame that is already full does not capture the desktop again"). A bare `document` here
+    // would turn that test's subject into a ReferenceError.
+    shotFullEl() {
+      if (typeof document === "undefined") return null;
+      return document.getElementById("shot-full");
+    },
+
+    // The surface inside the dialog: what gets dimmed, what a click dismisses on, and what goes
+    // fullscreen. Separate from `shotFullEl` because **a <dialog> cannot go fullscreen** — the
+    // Fullscreen API's element-ready check excludes it, and `requestFullscreen()` on one rejects
+    // with "Dialog elements are invalid".
+    shotSurfaceEl() {
+      if (typeof document === "undefined") return null;
+      return document.getElementById("shot-surface");
+    },
+
     openShotFull() {
       this.shotFull = true;
+      // `showModal` throws InvalidStateError on a dialog that is already open, and the button that
+      // reaches here is not the only path in.
+      const el = this.shotFullEl();
+      if (el && !el.open) el.showModal();
       // Only when the frame on screen is not already a full one. Pressing "Take screenshot" and
       // then Expand used to commission a second complete capture — helper process, whole desktop,
       // resize, encode, pipe, 15s watchdog — for bytes the browser already had.
@@ -2165,9 +2191,14 @@ function app() {
 
     // Close the full-size view, and leave real fullscreen if we entered it -- otherwise the
     // browser stays fullscreen over a dashboard the parent can no longer see the chrome of.
+    // Reached three ways — the Close button, a backdrop click, and the dialog's own `close` event
+    // after Esc — so it has to be idempotent. `close()` on an already-closed dialog is a no-op and
+    // fires no second event, which is what stops the `@close` handler recursing into itself.
     closeShotFull() {
       this.shotFull = false;
-      if (document.fullscreenElement) {
+      const el = this.shotFullEl();
+      if (el && el.open) el.close();
+      if (typeof document !== "undefined" && document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
       }
     },
@@ -2176,12 +2207,18 @@ function app() {
     // purpose: the overlay always works, while requestFullscreen needs a user gesture and
     // can be refused outright by policy. If it fails the overlay is still up and usable,
     // so the failure costs nothing and does not need reporting.
-    toggleBrowserFullscreen(el) {
+    // Takes no element any more. It used to be handed `$el.closest('[role=dialog]')` from the
+    // markup, which was a <div> and worked — and then became a real <dialog>, which cannot go
+    // fullscreen at all, so the button did nothing and the rejection below hid it. Looking the
+    // surface up here keeps the choice of element next to the comment explaining it.
+    toggleBrowserFullscreen() {
+      if (typeof document === "undefined") return;
       if (document.fullscreenElement) {
         document.exitFullscreen().catch(() => {});
-      } else if (el?.requestFullscreen) {
-        el.requestFullscreen().catch(() => {});
+        return;
       }
+      const el = this.shotSurfaceEl();
+      if (el?.requestFullscreen) el.requestFullscreen().catch(() => {});
     },
 
     async doLock() {
