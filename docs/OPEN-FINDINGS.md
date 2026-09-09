@@ -1978,32 +1978,6 @@ must never reach a log that is not the audit log. Whoever does this has to choos
 deliberately rather than adopt a default formatter, which is a decision about a family's privacy and
 not a plumbing task.
 
-### O100 · The screenshot overlay announces itself as modal and does not behave as one
-
-The full-size screenshot overlay in `index.html` carries `role="dialog"`, `aria-modal="true"` and an
-`aria-label`, closes on Escape, and dismisses on a backdrop click. What it never does is move focus.
-
-**Verified 2026-09-08 by reading the markup.** There is no `.focus()` anywhere in `assets/`, no
-`inert` on the page behind it, and the element is a `div` rather than a `<dialog>` — so nothing
-focuses the overlay when it opens, nothing stops Tab walking out of it into the page underneath, and
-nothing restores focus to the button that opened it when it closes.
-
-**`aria-modal="true"` makes this worse rather than neutral.** It tells assistive technology that the
-rest of the page is unavailable, which is a promise the markup does not keep: a screen-reader user is
-told they are in a dialog and can then tab into content the attribute says is not there. WCAG 2.2
-requires both that a component can be exited by keyboard — which Escape satisfies — and that focus is
-not lost or obscured, which is the half missing here.
-
-**What would close it, and why it is filed rather than done.** The current recommendation is a native
-`<dialog>` opened with `showModal()`, which gives focus containment, Escape and an inert background
-from the browser instead of from hand-written code. That is the right fix and it is not a small one
-here: the overlay is an Alpine `x-show` binding under the CSP build, so `showModal()` and `close()`
-have to be driven from methods in `app.js` rather than from an expression, backdrop dismissal moves
-to `::backdrop`, and `web.rs`'s CSP-expression guard constrains what the markup may say. None of that
-is hard, but all of it is behaviour no test in this repository can observe — the suite has no browser
-— so it wants verifying by hand on a real page rather than reasoning about. Writing an unverified
-focus trap would trade a documented gap for an undocumented one.
-
 ### O101 · The gate has no voice: nothing tells the child what the probe found or what would earn more
 
 `probe::run_once` grants and refuses in silence. The plan this was built to (`PLUGIN-SYSTEM.md`,
@@ -2029,3 +2003,42 @@ and the dashboard cannot separate them. `rules` and `curfew` solved the same pro
 `heartbeat::Enforcer` and the *enforcement alive* banner. Adding a third variant is small; deciding
 what the banner says when only this loop is dead, and whether `doctor` should report it, is the part
 left open.
+
+### O103 · The mutants job cannot finish a push that carries a backlog, and it fails as *cancelled* rather than red
+
+`ci.yml`'s `mutants` job carries `timeout-minutes: 30` and tests the mutants **the diff introduces**,
+where the diff for a push is `github.event.before`...`HEAD`. That is the right scope for a push of one
+commit and the wrong scope for a push of twenty-one, because the budget is fixed and the diff is not.
+
+**Observed, not predicted.** Run `34334562215` (2026-09-09, the first push since 2026-09-07, carrying
+21 commits): the job started at 09:24:59, reported `Found 77 mutants`, an unmutated baseline of
+53s build + 76s test, an auto-set per-mutant timeout of 384s — and was killed at 09:55:16, exactly
+30m17s in, with `cargo-mutants`, `cargo` and a test binary terminated as orphan processes. At the
+baseline's own 129s per mutant, 77 of them is about two and a half hours. It was never going to
+finish, and no amount of caching closes a gap that size.
+
+**The dangerous half is how it reads.** Every other job in that run passed — both test legs, `fmt`,
+`supply-chain`, `windows-release`. A job killed by `timeout-minutes` is recorded as **cancelled**,
+so the run's conclusion is `cancelled` rather than `failure`: grey, not red, and the word a reader
+supplies for it is *somebody stopped it*. This is the same shape as the guards this repository keeps
+finding — a check that cannot fail, reported as though it had run.
+
+**Why it has never been noticed.** `docs/` has said for weeks that the mutants job "has never run
+outside this machine". This is why: it is triggered, it starts, and it dies at the budget. The local
+runs are the only ones that have ever produced a verdict.
+
+**What is genuinely open**, since the fix is a trade rather than an oversight — the job was
+deliberately scoped to a diff so it would stay cheap, and every option spends something:
+
+- Raise `timeout-minutes` and accept a long job on backlog pushes, which costs runner minutes on
+  exactly the pushes that are already slow.
+- Keep the budget and make a timeout **fail** rather than cancel, so at least it is visible. Cheapest,
+  and it changes a false negative into a true red.
+- Bound the *work* instead of the clock — cargo-mutants has `--shard`, so a fixed slice per run
+  finishes in budget and the coverage accumulates across pushes.
+- Diff against `HEAD~1` rather than `github.event.before`, which makes the mutant count track the
+  last commit instead of the push size. Cheapest to reason about, and it silently skips whatever the
+  other twenty commits changed.
+
+Not decided here, and not this file's call: `ci.yml` belongs to whoever is holding it. Filed so the
+choice is made deliberately rather than by the job continuing to die quietly.
