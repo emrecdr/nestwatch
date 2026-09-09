@@ -2051,9 +2051,33 @@ commit and the wrong scope for a push of twenty-one, because the budget is fixed
 **Observed, not predicted.** Run `34334562215` (2026-09-09, the first push since 2026-09-07, carrying
 21 commits): the job started at 09:24:59, reported `Found 77 mutants`, an unmutated baseline of
 53s build + 76s test, an auto-set per-mutant timeout of 384s — and was killed at 09:55:16, exactly
-30m17s in, with `cargo-mutants`, `cargo` and a test binary terminated as orphan processes. At the
-baseline's own 129s per mutant, 77 of them is about two and a half hours. It was never going to
-finish, and no amount of caching closes a gap that size.
+30m17s in, with `cargo-mutants`, `cargo` and a test binary terminated as orphan processes. It was never going to finish, and no amount of
+caching closes a gap that size.
+
+**Corrected 2026-09-09, from the cancelled job's own `mutants.out`** — the upload step is
+`if: always()`, so the artifact survived the cancellation. This entry first reasoned from the
+baseline's 129s as though it were the per-mutant cost, which overstates it: the baseline pays a full
+build *and* a full test run, while each mutant after it re-runs only the test phase. The real
+figures, from the 40 mutants that completed before the wall: **66.5s median per viable mutant**
+(mean 59.0s), 2.7s per unviable one, and 130s for the baseline. So 77 mutants is about 75-80
+minutes, not two and a half hours — still 2.5x over the budget, so the conclusion is unchanged and
+the multiplier is now the right one to choose a budget against.
+
+Of those 40: 27 caught, 13 unviable, **0 missed and 0 timed out**. Nothing survived among what ran.
+
+**And the cost lands where it hurts most.** The next push, `000c188`, carried the probe feature —
+new code, a new module, and the largest single body of Rust this repository has added in months.
+Its mutants job timed out too, having reached **15 of that diff's mutants: 2 caught, 13 unviable,
+0 missed**. Two mutants of judgement on a feature that generated dozens. So the budget does not
+merely fail to finish; it silently under-covers whatever is newest, which is the code with the
+least other evidence behind it. What actually covers that feature is a local run and the ten
+misses closed by hand from it — none of which CI knows about or would have found.
+
+**The durable fact is not the backlog.** A 21-commit push will not recur once origin is level, but
+the per-mutant cost will: 66.5s on a GitHub runner against the ~24.7s local measurement the
+30-minute budget was set from means **CI is 2.7x slower than the estimate in the comment above the
+job**. After the baseline and setup, roughly 1,550s remain, which is about **23 viable mutants** per
+run. Any single commit that generates more than that times out, backlog or no backlog.
 
 **The dangerous half is how it reads.** Every other job in that run passed — both test legs, `fmt`,
 `supply-chain`, `windows-release`. A job killed by `timeout-minutes` is recorded as **cancelled**,
