@@ -66,12 +66,8 @@ pub enum ProbeOutcome {
     Failed(String),
 }
 
-/// The last run of one provider's probe, kept in memory for the dashboard.
-///
-/// In memory only, deliberately: a restart forgets it, and the first tick after a restart runs
-/// every due probe again, which is the right thing for a service that may have been down for
-/// hours. The persisted facts — what was earned — live in the config, where `Config::earn` put
-/// them.
+/// The last run of one provider's probe, kept in memory for the dashboard. See [`ProbeState`] for
+/// why in memory is the right place for it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeStatus {
     pub at: DateTime<FixedOffset>,
@@ -183,10 +179,11 @@ fn practice_earned_message(minutes: u32, lang: crate::config::Language) -> Strin
 /// due probe and re-offers the day's reminder once. Both are the right thing after a service has
 /// been down for hours, and the facts that must survive — what was actually earned — live in the
 /// config where [`crate::config::Config::earn`] put them.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ProbeState {
-    /// The last run, or `None` before the first one.
-    pub last: Option<ProbeStatus>,
+    /// The last run. Not optional: an entry in this map *is* a run, written only after one has
+    /// happened, so there is no state in which a provider has a record and no result in it.
+    pub last: ProbeStatus,
     /// The local day this provider last got its reminder *delivered* to the child. Absent until
     /// one lands, so an undeliverable notice is retried at the next check rather than counted as
     /// said — the same distinction `rules.rs` draws before recording a countdown warning.
@@ -338,7 +335,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 if !provider.enabled || provider.exhausted_for(today, cfg.earned.get(name)) {
                     return None;
                 }
-                let last = status.get(name).and_then(|s| s.last.as_ref()).map(|s| s.at);
+                let last = status.get(name).map(|entry| entry.last.at);
                 due(now, last, probe.every_mins).then(|| (name.clone(), probe.clone()))
             })
             .collect()
@@ -374,20 +371,23 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 tracing::warn!(provider = %name, error = %error, "probe failed")
             }
         }
+        // Read after `run_one` rather than carried from the snapshot above, which costs one
+        // uncontended lock and buys the property that this stays correct if anything ever runs a
+        // second scheduler: the value it reads is the one that is true now, not before the await.
         let reminded_before = crate::api::recover_lock(&state.probe_status)
             .get(&name)
-            .and_then(|state| state.reminded_on);
+            .and_then(|entry| entry.reminded_on);
         // What, if anything, the child hears. Decided from a config snapshot released before the
         // await below, and `true` marks the reminder — the one that is rationed.
         let (lang, speak) = {
             let cfg = crate::state::recover_read(&state.config);
             let lang = cfg.language;
-            let speak = match (&outcome, reported) {
+            let speak: Option<String> = match (&outcome, reported) {
                 // Every grant is announced. A rule that only ever says "not yet" is the
                 // controlling frame this feature is written to avoid, and the ceiling already
                 // bounds how many times this can happen.
                 (ProbeOutcome::Granted(minutes), _) => {
-                    Some((practice_earned_message(*minutes, lang), false))
+                    Some(practice_earned_message(*minutes, lang))
                 }
                 // Short of the bar, and not yet told today. The other two refusals mean the day
                 // is already paid, so there is nothing to aim at and nothing to say.
@@ -397,27 +397,29 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                     cfg.providers
                         .get(&name)
                         .and_then(|provider| provider.next_rung((done.questions, done.minutes)))
-                        .map(|tier| (practice_reminder_message(&name, tier, done, lang), true))
+                        .map(|tier| practice_reminder_message(&name, tier, done, lang))
                 }
                 _ => None,
             };
             (lang, speak)
         };
+        // Only the reminder is rationed, and which one this was is already written in `outcome` —
+        // carrying a second flag alongside the sentence would be a fact stored twice.
         let mut reminded_on = reminded_before;
-        if let Some((body, is_reminder)) = speak {
+        if let Some(body) = speak {
             let delivered = crate::control::notify_child(&state.control, &body, lang).await;
-            if is_reminder && delivered {
+            if delivered && matches!(outcome, ProbeOutcome::Refused("below_threshold")) {
                 reminded_on = Some(today);
             }
         }
         crate::api::recover_lock(&state.probe_status).insert(
             name,
             ProbeState {
-                last: Some(ProbeStatus {
+                last: ProbeStatus {
                     at: now,
                     reported,
                     outcome,
-                }),
+                },
                 reminded_on,
             },
         );
@@ -486,6 +488,9 @@ async fn run_one(
         // The provider was switched off or removed between the snapshot and the judgement, or
         // the config could not be saved. Either way nothing was granted.
         (Err(e), _) => ProbeOutcome::Failed(e.to_string()),
+        // Unreachable: `try_update_config` answers `Ok` only after the closure above returned
+        // `Ok`, and that closure sets `verdict` before it does. Stated as an outcome rather than
+        // an `expect`, because a panic here would be inside the service that enforces the rules.
         (Ok(()), None) => ProbeOutcome::Failed("the registry gave no verdict".into()),
     };
     (Some(progress), outcome)
@@ -493,10 +498,16 @@ async fn run_one(
 
 /// Run [`run_once`] once a minute for the life of the service.
 ///
-/// A plain interval, not a `heartbeat` enforcer: this loop enforces nothing, and its silent
-/// death is *the base budget* — the outcome the design chose for every failure. What a parent
-/// needs to see is not "the scheduler is alive" but "this provider's last run was at …", which
-/// is what [`ProbeStatus::at`] on the dashboard says.
+/// A plain interval, not a `heartbeat` enforcer: this loop enforces nothing, and its silent death
+/// is *the base budget* — the outcome the design chose for every failure. What a parent needs to
+/// see is not "the scheduler is alive" but "this provider's last run was at …", which is what
+/// [`ProbeStatus::at`] on the dashboard says.
+///
+/// **That argument is weaker than it was when it was written, and `O102` now says so.** It was
+/// made when a dead scheduler cost only minutes the child had not earned. It now also costs the
+/// daily reminder and the announcement of a grant — a child-facing feature whose absence is
+/// invisible to *both* people, because the parent sees a stale `at` that equally means "nothing
+/// was due" and the child simply never hears the rule.
 pub async fn run_scheduler(state: AppState) {
     let mut ticker = tokio::time::interval(SCHEDULER_TICK);
     // See the note in `rules`: without this a resume from sleep replays every missed tick.
@@ -591,12 +602,7 @@ mod tests {
                 "{lang:?} must state what he has done: {text}"
             );
         }
-        let unique: std::collections::BTreeSet<&String> = said.iter().collect();
-        assert_eq!(
-            unique.len(),
-            said.len(),
-            "each language needs its own wording, not a shared English one: {said:?}"
-        );
+        crate::testutil::assert_each_language_differs(&said);
     }
 
     /// A tier that asks only one of the two states only that one.
@@ -646,12 +652,7 @@ mod tests {
         for (lang, text) in crate::config::Language::ALL.iter().zip(&said) {
             assert!(text.contains("16"), "{lang:?} must say how much: {text}");
         }
-        let unique: std::collections::BTreeSet<&String> = said.iter().collect();
-        assert_eq!(
-            unique.len(),
-            said.len(),
-            "each language needs its own: {said:?}"
-        );
+        crate::testutil::assert_each_language_differs(&said);
     }
 
     /// The provider name is a path segment, so it is validated here as well as at the door.

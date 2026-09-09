@@ -826,11 +826,6 @@ mod tests {
                 "{lang:?} must not reuse the enforcer's heading"
             );
         }
-        let unique: std::collections::BTreeSet<&&str> = titles.iter().collect();
-        assert_eq!(
-            unique.len(),
-            titles.len(),
-            "each language needs its own: {titles:?}"
-        );
+        crate::testutil::assert_each_language_differs(&titles);
     }
 }

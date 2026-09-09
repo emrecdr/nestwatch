@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::{Config, Language};
-use crate::control::{ControlError, RunningProcess, SystemControl};
+use crate::control::{ControlError, RunningProcess, SystemControl, notify_child};
 use crate::countdown::Countdown;
 use crate::curfew::{MAX_WARN_SECS, default_warn_secs};
 
@@ -1615,7 +1615,7 @@ pub async fn run_rules_enforcer(
                 }
                 RuleAction::AppStopped { app, reason } => {
                     let msg = with_hint(app_stopped_message(&app, &reason, lang), hint.as_deref());
-                    let notified = crate::control::notify_child(&control, &msg, lang).await;
+                    let notified = notify_child(&control, &msg, lang).await;
                     // Recorded whether or not the notice was delivered, and that is the one place
                     // this deliberately differs from `TimeWarning` above.
                     //
@@ -1639,7 +1639,7 @@ pub async fn run_rules_enforcer(
                 }
                 RuleAction::Warn => has_warn = true,
                 RuleAction::LockWarning => {
-                    crate::control::notify_child(
+                    notify_child(
                         &control,
                         &with_hint(lock_warning_message(rules.warn_secs, lang), hint.as_deref()),
                         lang,
@@ -1650,7 +1650,7 @@ pub async fn run_rules_enforcer(
                     // Record the heads-up only if the OS actually took the message. A countdown
                     // the child never saw must not look, in the history, like one they did.
                     let msg = with_hint(budget_countdown_message(mins, lang), hint.as_deref());
-                    if crate::control::notify_child(&control, &msg, lang).await {
+                    if notify_child(&control, &msg, lang).await {
                         usage_log.record(
                             "budget_countdown",
                             serde_json::json!({
@@ -1670,7 +1670,7 @@ pub async fn run_rules_enforcer(
         // `log_transition` calls below, which flip `warning`.
         if has_warn && !warning {
             let msg = with_hint(limit_reached_message(lang).to_string(), hint.as_deref());
-            crate::control::notify_child(&control, &msg, lang).await;
+            notify_child(&control, &msg, lang).await;
         }
 
         // Log budget events once per episode (on the transition into enforcement).

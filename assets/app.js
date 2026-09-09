@@ -1045,13 +1045,13 @@ function app() {
     // this is data the parent toggles rather than code the service loads.
     providers: {},
     providerRows: [],
-    // The parent's own words, on their way to his screen. `messageResult` is a translated
-    // sentence rather than a flag so the markup can render it directly; `messageDelivered` colours
-    // it. Both stay empty until something has actually been sent.
+    // The parent's own words, on their way to his screen. `messageDelivered` is tri-state: null
+    // until something has been sent, then true or false. One field rather than two, and no
+    // translated sentence held in state — a stored sentence would still be in the old language
+    // after `setLang`, which re-renders everything else.
     messageText: "",
     sendingMessage: false,
-    messageResult: "",
-    messageDelivered: false,
+    messageDelivered: null,
     loadingProviders: false,
     savingProvider: false,
     // Signed-in devices (O77). An array straight from the server, already sorted newest-first, so
@@ -1799,6 +1799,18 @@ function app() {
     // How much room is left in the box, so a parent is not surprised by the cap mid-sentence.
     // The bound matches `api::MAX_MESSAGE_CHARS`, and `maxlength` on the textarea enforces it —
     // this only reports it.
+    // Whether the last message reached his screen, as a sentence. Built at render time from the
+    // language table rather than stored, so switching language re-translates it.
+    messageStatus() {
+      if (this.messageDelivered === null) return "";
+      // Two plain `t()` calls rather than one with a computed key. The key-usage guard reads the
+      // literal inside `t(` and cannot see a key assembled at runtime, so a ternary *inside* the
+      // call makes both keys look unused — which is exactly the drift that guard is for, and it
+      // said so the first time this was written the other way.
+      if (this.messageDelivered) return this.t("tMessageShown");
+      return this.t("tMessageNotShown");
+    },
+
     messageLeft() {
       return this.tf("tCharactersLeft", MAX_MESSAGE_CHARS - this.messageText.length);
     },
@@ -1813,13 +1825,12 @@ function app() {
       const text = this.messageText.trim();
       if (!text || this.sendingMessage) return;
       this.sendingMessage = true;
-      this.messageResult = "";
+      this.messageDelivered = null;
       try {
         const r = await this.postJSON("/api/message", { text });
         if (r.ok) {
           const body = await r.json();
           this.messageDelivered = body.delivered === true;
-          this.messageResult = this.messageDelivered ? this.t("tMessageShown") : this.t("tMessageNotShown");
           if (this.messageDelivered) this.messageText = "";
         } else {
           this.toast(await this.rejection(r, this.t("tCouldNotSendMessage")), "error");

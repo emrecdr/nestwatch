@@ -38,9 +38,10 @@ const MESSAGE_BINDINGS: [&str; 3] = ["msg", "body", "title"];
 
 /// The calls that put text in front of the child.
 ///
-/// `control::notify(` earns its place separately from `notify_child(`: the latter is `rules.rs`'s
-/// own wrapper, but `curfew.rs` calls the underlying helper directly for the bedtime countdown, so
-/// listing only the wrapper left the child's *other* notification path unwatched.
+/// `control::notify(` earns its place separately from `notify_child(`: the latter is the titled
+/// wrapper in `control`, used by the rules enforcer and the probe scheduler, but `curfew.rs` and
+/// `api::send_message` call the underlying helper directly — one for the bedtime countdown, one to
+/// carry a parent's own heading — so listing only the wrapper left those paths unwatched.
 /// Written as token sequences rather than as one string, and the split point is the whole reason.
 ///
 /// `rustfmt` breaks a method chain **before** the dot, so the tolerant match has to look for

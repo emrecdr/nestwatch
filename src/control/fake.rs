@@ -275,14 +275,7 @@ impl SystemControl for FakeControl {
 
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
         tracing::info!(%title, %body, "[fake] notify_user (no-op on this platform)");
-        // Recorded before the scripted result is consulted: a message the OS refused was still
-        // *attempted*, and a test asserting that nothing was said must be able to tell the two
-        // apart.
-        let scripted = self
-            .notify_result
-            .lock()
-            .expect("fake notify result poisoned")
-            .clone();
+
         // Capped keeping the OLDEST, for the same reason `shutdown` above gives: assertions index
         // from the front, so dropping from the front would silently renumber what a test reads.
         let mut log = self
@@ -292,7 +285,14 @@ impl SystemControl for FakeControl {
         if log.len() < NOTIFY_LOG_CAP {
             log.push((title, body));
         }
-        scripted.map_err(ControlError::Op)
+        // Recorded before the scripted result is consulted, and in that order: a message the OS
+        // refused was still *attempted*, and a test asserting that nothing was said has to be able
+        // to tell those two apart.
+        self.notify_result
+            .lock()
+            .expect("fake notify result poisoned")
+            .clone()
+            .map_err(ControlError::Op)
     }
 
     /// Scripted when a test asked for it; otherwise the file is genuinely run, as this user. That

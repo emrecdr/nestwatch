@@ -1230,8 +1230,8 @@ pub async fn list_providers(State(state): State<AppState>) -> Result<Json<Value>
         if let Some(at) = deposited.get(&name) {
             entry["secret_at"] = json!(at);
         }
-        if let Some(last) = status.get(&name).and_then(|state| state.last.as_ref()) {
-            entry["probe_status"] = last.to_json();
+        if let Some(probe) = status.get(&name) {
+            entry["probe_status"] = probe.last.to_json();
         }
         out.insert(name, entry);
     }

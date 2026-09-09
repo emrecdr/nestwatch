@@ -17,6 +17,48 @@ use nestwatch::state::{AppState, recover_read, recover_write};
 mod common;
 use common::{ScratchDir, state_with, test_config};
 
+/// The laddered `studygo` provider these sections use: two rungs, a ceiling at the top one, and a
+/// probe every fifteen minutes.
+///
+/// A function rather than a second copy of the literal. The two copies this replaces were
+/// byte-identical and two hundred lines apart, and the later section asserts against *their*
+/// numbers — `contains("10")`, `contains("16")` — so editing one ladder would have left the other
+/// half of this test quietly asserting a fixture nothing else used.
+fn laddered_studygo() -> Provider {
+    Provider {
+        enabled: true,
+        minutes: 30,
+        daily_cap_mins: Some(30),
+        tiers: vec![
+            Tier {
+                questions: 10,
+                minutes_practised: 20,
+                reward_mins: 16,
+            },
+            Tier {
+                questions: 15,
+                minutes_practised: 30,
+                reward_mins: 30,
+            },
+        ],
+        probe: Some(Probe {
+            exe: "studygo-probe".into(),
+            every_mins: 15,
+        }),
+    }
+}
+
+/// The push-only provider beside it: no ladder, no ceiling, no probe.
+fn plain_chores() -> Provider {
+    Provider {
+        enabled: true,
+        minutes: 20,
+        daily_cap_mins: None,
+        tiers: Vec::new(),
+        probe: None,
+    }
+}
+
 fn at(s: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(s).unwrap()
 }
@@ -27,7 +69,7 @@ fn status_of(state: &AppState, name: &str) -> ProbeStatus {
         .lock()
         .unwrap()
         .get(name)
-        .and_then(|state| state.last.clone())
+        .map(|entry| entry.last.clone())
         .unwrap_or_else(|| panic!("no probe status for {name}"))
 }
 
@@ -43,40 +85,8 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
 
     let fake = Arc::new(FakeControl::new());
     let mut cfg = test_config();
-    cfg.providers.insert(
-        "studygo".into(),
-        Provider {
-            enabled: true,
-            minutes: 30,
-            daily_cap_mins: Some(30),
-            tiers: vec![
-                Tier {
-                    questions: 10,
-                    minutes_practised: 20,
-                    reward_mins: 16,
-                },
-                Tier {
-                    questions: 15,
-                    minutes_practised: 30,
-                    reward_mins: 30,
-                },
-            ],
-            probe: Some(Probe {
-                exe: "studygo-probe".into(),
-                every_mins: 15,
-            }),
-        },
-    );
-    cfg.providers.insert(
-        "chores".into(),
-        Provider {
-            enabled: true,
-            minutes: 20,
-            daily_cap_mins: None,
-            tiers: Vec::new(),
-            probe: None,
-        },
-    );
+    cfg.providers.insert("studygo".into(), laddered_studygo());
+    cfg.providers.insert("chores".into(), plain_chores());
     let mut state = state_with(cfg);
     state.control = fake.clone();
     let t0 = at("2026-09-08T16:00:00+02:00");
@@ -247,30 +257,7 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
     {
         let fake = Arc::new(FakeControl::new());
         let mut cfg = test_config();
-        cfg.providers.insert(
-            "studygo".into(),
-            Provider {
-                enabled: true,
-                minutes: 30,
-                daily_cap_mins: Some(30),
-                tiers: vec![
-                    Tier {
-                        questions: 10,
-                        minutes_practised: 20,
-                        reward_mins: 16,
-                    },
-                    Tier {
-                        questions: 15,
-                        minutes_practised: 30,
-                        reward_mins: 30,
-                    },
-                ],
-                probe: Some(Probe {
-                    exe: "studygo-probe".into(),
-                    every_mins: 15,
-                }),
-            },
-        );
+        cfg.providers.insert("studygo".into(), laddered_studygo());
         let mut state = state_with(cfg);
         state.control = fake.clone();
 
@@ -333,14 +320,22 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
         // draw before recording one.
         let day_after = t0 + Duration::days(2);
         fake.fail_notifications("no interactive session");
+        // Scripted once for both runs: `FakeControl::run_probe` clones its answer rather than
+        // taking it, so a second identical call would configure nothing.
         fake.script_probe(Ok(br#"{"questions":2,"minutes":2}"#.to_vec()));
         probe::run_once(&state, day_after).await;
-        let attempted = fake.notification_bodies().len();
-        fake.script_probe(Ok(br#"{"questions":2,"minutes":2}"#.to_vec()));
-        probe::run_once(&state, day_after + Duration::minutes(15)).await;
         assert_eq!(
             fake.notification_bodies().len(),
-            attempted + 1,
+            4,
+            "attempted, and refused by the OS"
+        );
+        probe::run_once(&state, day_after + Duration::minutes(15)).await;
+        // A literal rather than the previous reading plus one: an expected value taken from the
+        // thing under test agrees with it however wrong it is, and this file writes its counts out
+        // everywhere else for that reason.
+        assert_eq!(
+            fake.notification_bodies().len(),
+            5,
             "an undelivered reminder must be tried again, not marked as said"
         );
     }
@@ -348,16 +343,7 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
     // --- Nothing configured means nothing happens --------------------------------------------
     let fake = Arc::new(FakeControl::new());
     let mut cfg = test_config();
-    cfg.providers.insert(
-        "chores".into(),
-        Provider {
-            enabled: true,
-            minutes: 20,
-            daily_cap_mins: None,
-            tiers: Vec::new(),
-            probe: None,
-        },
-    );
+    cfg.providers.insert("chores".into(), plain_chores());
     let mut state = state_with(cfg);
     state.control = fake.clone();
     probe::run_once(&state, t0).await;

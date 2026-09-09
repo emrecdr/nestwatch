@@ -2019,7 +2019,16 @@ not a plumbing task.
 ### O102 · A dead probe scheduler looks exactly like a probe that is not due
 
 `probe::run_scheduler` deliberately stamps no `heartbeat` — its doc says why: it enforces nothing,
-and its silent death is the base budget by design. The consequence for the parent is that a
+and its silent death is the base budget by design.
+
+**That justification got weaker on 2026-09-09 and this entry should say so.** It was written when a
+dead scheduler cost only minutes the child had not earned. Since the gate gained a voice it also
+costs the daily reminder and the announcement of a grant — a child-facing feature whose absence is
+invisible to *both* people at once: the parent sees a stale `probe_status.at`, which equally means
+"nothing was due", and the child simply never hears the rule. So the cheap half of the fix (a
+`heartbeat::Enforcer::Probe` variant stamped in the loop, with the age surfaced on the integrations
+card rather than folded into the enforcement banner, since a dead probe loop is not stopped
+enforcement) is now worth more than it was when this was filed. The consequence for the parent is that a
 `probe_status.at` going stale has two readings, *the scheduler is dead* and *nothing has been due*,
 and the dashboard cannot separate them. `rules` and `curfew` solved the same problem with
 `heartbeat::Enforcer` and the *enforcement alive* banner. Adding a third variant is small; deciding
@@ -2062,6 +2071,12 @@ the per-mutant cost will: 66.5s on a GitHub runner against the ~24.7s local meas
 30-minute budget was set from means **CI is 2.7x slower than the estimate in the comment above the
 job**. After the baseline and setup, roughly 1,550s remain, which is about **23 viable mutants** per
 run. Any single commit that generates more than that times out, backlog or no backlog.
+
+**And `cancelled` now means at least three different things in this repository**, none
+distinguishable from the run list: a job killed by `timeout-minutes`, a run superseded by a later
+push through `concurrency.cancel-in-progress` (observed on `6f50e10`, where nothing failed), and an
+actual human stop. Only the first is a problem. That is an argument for the second option below —
+making a timeout *fail* — independent of whatever budget is chosen.
 
 **The dangerous half is how it reads.** Every other job in that run passed — both test legs, `fmt`,
 `supply-chain`, `windows-release`. A job killed by `timeout-minutes` is recorded as **cancelled**,
@@ -2120,3 +2135,46 @@ a channel whose one property they do not want, and the alternative is documented
 already half-present in this repository. Left open because the registration touches `install`, and
 an install-time step that can fail silently is exactly the class this project spends the most
 effort avoiding.
+
+### O105 · Five text boxes on the served pages have no server bound, and the guard cannot see them
+
+`web.rs`'s new length guard scans tags that *carry* `maxlength`, so a box without one is invisible
+to it. Its sibling, the minutes guard, deliberately keys on `type="number"` instead, and its doc
+says why: "an input cannot leave this test's attention by losing an attribute, only by ceasing to be
+a number input." The newer test reintroduced the failure mode the older one was rewritten to close.
+
+**The concrete gap.** `index.html`'s blocklist entry, per-app name, group name, group apps list, and
+the probe executable name carry no `maxlength` — and none of them has a per-string server bound
+either. `Rules::validate` bounds `MAX_RULE_ENTRIES`, which is the *count*. So the guard's own panic
+message — *"if it has no server limit, that is the thing to fix, not this test"* — describes a case
+its scan structurally cannot reach.
+
+**Two changes, and the second is the one that matters.** The scan should iterate every `<textarea>`
+and every `<input>` whose type is `text` or `number`, from one table keyed by page, attribute and
+constant — which also merges the two guards into one. And each of those five fields needs a server
+bound to be held to. They are parent-supplied and land in `config.json`, so the risk is a file that
+grows rather than an attack, but "the parent can make the config arbitrarily large" is not a
+property anyone chose.
+
+### O106 · A refusal reason is a bare string, so a new one is silently never spoken
+
+`Config::earn` answers `Earn::Refused(&'static str)` with one of three literals. Those values are a
+cross-repo contract — they reach the wire as `{ok: false, reason}` and Voortgang branches on them —
+and **the wire values must not change**. But a stable encoding is not an argument for a
+stringly-typed *internal* representation, and `probe.rs` is the first consumer to branch on the
+reason in Rust rather than pass it along.
+
+That branch is non-exhaustive by construction: `Refused("below_threshold")` earns the child a
+reminder and `_ => None` silently absorbs everything else. Add a fourth refusal — a per-provider
+cooldown, say, or "disabled between the snapshot and the judgement" — and the child is simply never
+told, with nothing at any layer forcing the author to decide whether they should be. The compiler
+cannot help, and no test notices an *addition*.
+
+**The change:** `enum RefusedReason` with a `wire()` returning today's exact literals, carried by
+both `Earn::Refused` and `ProbeOutcome::Refused`, plus one test pinning all three values — which
+makes the cross-repo contract explicit instead of implicit across three scattered `Refused("…")`
+call sites. A new variant then fails to compile at every site that has to answer "does he hear about
+this?"
+
+Not done here because it is an architecture change to a path that shipped in 0.8.0 an hour earlier,
+and it belongs in its own commit with its own verification rather than bundled into a cleanup pass.

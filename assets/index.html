@@ -359,7 +359,7 @@
                 <!-- Whether it reached his screen, which is the difference between being ignored
                      and nobody being there. Blank until something has been sent. -->
                 <span class="text-xs" :class="messageDelivered ? 'text-success' : 'text-warning'"
-                      x-show="messageResult" x-cloak x-text="messageResult"></span>
+                      x-show="messageDelivered !== null" x-cloak x-text="messageStatus()"></span>
               </div>
             </div>
           </section>

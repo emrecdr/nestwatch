@@ -808,13 +808,17 @@ mod tests {
 
         // Marker → the constant that box is restating. Keyed on `x-model` for the same reason the
         // minutes table is: reordering the form cannot silently repoint a row at another field.
+        // Keyed by page as well as marker, like the minutes table above: without the page, a
+        // marker that appeared on both would match whichever was scanned first.
         let fields = [
             (
+                "index.html",
                 "x-model=\"messageText\"",
                 MAX_MESSAGE_CHARS,
                 "a message to the child",
             ),
             (
+                "index.html",
                 "x-model=\"newRoutineName\"",
                 MAX_ROUTINE_NAME,
                 "a routine's name",
@@ -822,6 +826,7 @@ mod tests {
             // The child's own boxes, on the page they reach without signing in. Keyed on their
             // ids rather than an `x-model`, because `ask.html` is plain markup with no Alpine.
             (
+                "ask.html",
                 "id=\"reason\"",
                 crate::timereq::MAX_REASON_CHARS,
                 "the reason a child gives for asking",
@@ -830,6 +835,7 @@ mod tests {
             // `timecode::redeem` refuses anything that is not `CODE_LEN`. So the box matching it
             // is not pedantry — every character past it is one that cannot possibly help.
             (
+                "ask.html",
                 "id=\"code\"",
                 crate::timecode::CODE_LEN,
                 "a time code the child types in",
@@ -839,14 +845,19 @@ mod tests {
         let mut seen = 0;
         for (name, page) in PAGES {
             let html = strip_html_comments(page);
-            for tag in html.split('<').skip(1) {
-                let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+            // `opening_tags`, not `split('<')`. The naive form is what this module's own scanner
+            // was rewritten away from: `index.html` carries thirteen `>` characters inside
+            // attribute values (`x-show="providerRows.length > 0"`, the Tailwind `[&>*]:min-w-0`),
+            // so cutting at the first one reads half a tag. The two scans agree today, which is
+            // exactly why a second implementation is worth removing before they stop agreeing.
+            for tag in opening_tags(&html) {
                 if !tag.contains("maxlength=\"") {
                     continue;
                 }
                 seen += 1;
-                let Some(&(_, limit, what)) =
-                    fields.iter().find(|(marker, _, _)| tag.contains(marker))
+                let Some(&(_, _, limit, what)) = fields
+                    .iter()
+                    .find(|(page, marker, _, _)| *page == name && tag.contains(marker))
                 else {
                     panic!(
                         "{name} carries a `maxlength` this test does not recognise, so nothing is \
@@ -869,11 +880,21 @@ mod tests {
             fields.len()
         );
 
-        // And the script that reports the remaining room uses the same number, because a
-        // countdown that disagrees with the box it describes is worse than no countdown.
+        // And the script that reports the remaining room uses the same number.
+        //
+        // **Both halves, because a declaration guarded alone is a decoy** — the lesson
+        // `the_budget_the_dashboard_calls_low_is_the_childs_first_warning` already records one
+        // screen down. Pinning `const MAX_MESSAGE_CHARS = 500;` reads as protection precisely
+        // because somebody took the trouble to write it, and it stays green if the countdown is
+        // rewritten to a literal or deleted outright. So the *use* is pinned too.
         assert!(
             APP_JS.contains(&format!("const MAX_MESSAGE_CHARS = {MAX_MESSAGE_CHARS};")),
             "app.js's MAX_MESSAGE_CHARS must equal the server's {MAX_MESSAGE_CHARS}"
+        );
+        assert!(
+            APP_JS.contains("MAX_MESSAGE_CHARS - this.messageText.length"),
+            "app.js declares MAX_MESSAGE_CHARS and no longer counts against it, so the constant \
+             above is pinned and unread"
         );
     }
 
