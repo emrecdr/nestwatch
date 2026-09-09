@@ -198,6 +198,78 @@ pub async fn shutdown(State(state): State<AppState>) -> Result<Json<Value>, AppE
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Most characters a parent may put on the child's screen in one message.
+///
+/// Counted in characters rather than bytes, the same way `auth`'s password length is and for the
+/// same household reason — a Dutch or Turkish sentence is not one byte per letter. Generous for a
+/// note and bounded because the box is system-modal: it appears over whatever he is doing, so a
+/// wall of text is a worse interruption than a line.
+pub const MAX_MESSAGE_CHARS: usize = 500;
+
+#[derive(Deserialize)]
+pub struct MessageBody {
+    /// The parent's own words. Optional in the type so a body without it is answered with a
+    /// sentence rather than serde's 422, which is the convention `ExtraTimeBody` follows.
+    text: Option<String>,
+}
+
+/// `POST /api/message` → put the parent's own words on the child's screen.
+///
+/// **The one direction this service never had.** Everything the child reads is written by the
+/// system — the countdown, bedtime, an app being closed, the practice notices — and everything the
+/// parent hears from him arrives through the request page. Neither Microsoft Family Safety nor
+/// Qustodio offers this: their parent-to-child path is entirely mediated by a screen-time request,
+/// so there is no established design to copy and no established expectation that it exists.
+///
+/// **It reuses the notification path the enforcers already use**, which on Windows is
+/// `WTSSendMessageW` targeted at the child's session — the mechanism Microsoft documents for
+/// showing a message from a service, and the one this codebase has used since the first countdown
+/// warning. A toast in the Action Center would persist instead of vanishing, which is the better
+/// answer to "he was away from the desk", but a service in Session 0 cannot raise one without a
+/// companion process registered as a toast source; that is a project, not a parameter, and it is
+/// recorded as such rather than half-built here.
+///
+/// **The answer says whether it was shown.** `control::notify` reports whether the OS took the
+/// message, and that is the difference between *he is ignoring me* and *he is not logged in* —
+/// worth more to the parent typing it than a bare `ok`. An undelivered message is not an error:
+/// nothing went wrong, there was simply nobody there.
+///
+/// The words are **not** translated. The household's language decides the heading, because that is
+/// the system talking; what is inside is whatever the parent wrote.
+pub async fn send_message(
+    State(state): State<AppState>,
+    Json(body): Json<MessageBody>,
+) -> Result<Json<Value>, AppError> {
+    let text = body.text.unwrap_or_default();
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(AppError::BadRequest(
+            "a message needs something in it".into(),
+        ));
+    }
+    if text.chars().count() > MAX_MESSAGE_CHARS {
+        return Err(AppError::BadRequest(format!(
+            "a message may be at most {MAX_MESSAGE_CHARS} characters"
+        )));
+    }
+    let lang = crate::state::recover_read(&state.config).language;
+    let delivered = crate::control::notify(
+        &state.control,
+        crate::control::parent_message_title(lang),
+        text,
+    )
+    .await;
+    // The text is recorded, not just the fact of it. These are the parent's own words in the
+    // parent's own log, bounded above and written at the pace of somebody typing — and "what did I
+    // say to him on Tuesday" is a question this log can now answer. `docs/SECURITY.md` says so
+    // where it lists what the machine keeps.
+    state.audit.record(
+        "message_sent",
+        json!({ "delivered": delivered, "text": text }),
+    );
+    Ok(Json(json!({ "ok": true, "delivered": delivered })))
+}
+
 /// `POST /api/lock` → lock the screen (softer than shutdown; password to resume).
 pub async fn lock(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     blocking(state.control.clone(), |c| c.lock_workstation()).await?;

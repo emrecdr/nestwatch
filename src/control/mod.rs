@@ -421,12 +421,34 @@ pub(crate) async fn notify_child(
     body: &str,
     lang: crate::config::Language,
 ) -> bool {
-    let title = match lang {
+    notify(control, child_notice_title(lang), body).await
+}
+
+/// The heading every *system* notice to the child wears: countdowns, bedtime, an app being
+/// closed, and the practice notices.
+pub(crate) fn child_notice_title(lang: crate::config::Language) -> &'static str {
+    match lang {
         crate::config::Language::En => "Screen time",
         crate::config::Language::Nl => "Schermtijd",
         crate::config::Language::Tr => "Ekran süresi",
-    };
-    notify(control, title, body).await
+    }
+}
+
+/// The heading a parent's own words arrive under.
+///
+/// **Deliberately not [`child_notice_title`].** Every other box this service raises is the machine
+/// talking about screen time; this one is a person. A child who cannot tell those apart at a
+/// glance learns to dismiss both the same way, which costs the parent the one channel that is
+/// theirs rather than the system's.
+///
+/// The *heading* is translated and the message is not: the household picked a language and the
+/// system speaks it, but the words inside are whatever the parent typed.
+pub(crate) fn parent_message_title(lang: crate::config::Language) -> &'static str {
+    match lang {
+        crate::config::Language::En => "Message from your parent",
+        crate::config::Language::Nl => "Bericht van je ouder",
+        crate::config::Language::Tr => "Ebeveyninden mesaj",
+    }
 }
 
 /// Fit `img` to `tier` and encode it as JPEG. Shared by the real and fake controllers so the
@@ -780,5 +802,35 @@ mod tests {
         );
         let err = run_local_probe(&path, b"", PROBE_TIMEOUT, MAX_PROBE_OUTPUT).unwrap_err();
         assert!(err.to_string().contains("exit"), "got {err}");
+    }
+
+    /// The title a parent's own message arrives under, in every language, and never the one the
+    /// enforcer uses.
+    ///
+    /// The child has to be able to tell a person from the machine at a glance. Every other box
+    /// this service raises is the system talking about screen time; this one is a human being, and
+    /// giving it the same heading would make the two indistinguishable at exactly the moment the
+    /// difference matters.
+    #[test]
+    fn a_parents_message_is_titled_as_a_person_not_as_the_system() {
+        use crate::config::Language;
+        let titles: Vec<&str> = Language::ALL
+            .iter()
+            .map(|&l| parent_message_title(l))
+            .collect();
+        for (lang, title) in Language::ALL.iter().zip(&titles) {
+            assert!(!title.is_empty(), "{lang:?} has no title");
+            assert_ne!(
+                *title,
+                child_notice_title(*lang),
+                "{lang:?} must not reuse the enforcer's heading"
+            );
+        }
+        let unique: std::collections::BTreeSet<&&str> = titles.iter().collect();
+        assert_eq!(
+            unique.len(),
+            titles.len(),
+            "each language needs its own: {titles:?}"
+        );
     }
 }

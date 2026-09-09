@@ -336,6 +336,34 @@
             </div>
           </section>
 
+          <!-- Say something to him.
+               Placed under the live view on purpose: the two belong together — you look at the
+               screen, then you say something about it. It is also the only control on this page
+               whose text is the parent's rather than the system's, which is why the box carries a
+               character count instead of silently truncating. See `api::send_message` for why the
+               answer reports whether it was actually shown. -->
+          <section class="card bg-base-100 shadow">
+            <div class="card-body">
+              <h2 class="card-title text-base" x-text="t('saySomething')"></h2>
+              <p class="text-sm opacity-70" x-text="t('saySomethingHint')"></p>
+              <textarea class="textarea w-full" rows="2" maxlength="500"
+                        x-model="messageText" :aria-label="t('saySomething')"
+                        :placeholder="t('saySomethingPlaceholder')"></textarea>
+              <div class="flex flex-wrap items-center gap-3">
+                <button class="btn btn-primary btn-sm" @click="sendMessage()"
+                        :disabled="sendingMessage || !messageText">
+                  <span x-show="sendingMessage" class="loading loading-spinner loading-xs"></span>
+                  <span x-text="t('send')"></span>
+                </button>
+                <span class="text-xs opacity-60" x-text="messageLeft()"></span>
+                <!-- Whether it reached his screen, which is the difference between being ignored
+                     and nobody being there. Blank until something has been sent. -->
+                <span class="text-xs" :class="messageDelivered ? 'text-success' : 'text-warning'"
+                      x-show="messageResult" x-cloak x-text="messageResult"></span>
+              </div>
+            </div>
+          </section>
+
           <!-- Processes -->
           <section class="card bg-base-100 shadow">
             <div class="card-body">

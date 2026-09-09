@@ -115,6 +115,14 @@ const UI = {
     noLimitSetToday: "No limit set today",
     todaySUsageUnavailable: "Today's usage unavailable",
     enforcementMayBeStopped: "enforcement may be stopped",
+    saySomething: "Say something to him",
+    saySomethingHint: "Appears on his screen straight away, in your words. It sits over whatever he is doing and clears itself after about half a minute, so it is a nudge rather than a note he will find later.",
+    saySomethingPlaceholder: "Dinner in ten minutes.",
+    send: "Send",
+    tMessageShown: "Shown on his screen",
+    tMessageNotShown: "Not shown — nobody is signed in at that PC right now",
+    tCouldNotSendMessage: "Could not send that message",
+    tCharactersLeft: "{} characters left",
     lock: "🔒 Lock",
     shutDown: "⏻ Shut down",
     logOut: "Log out",
@@ -351,6 +359,14 @@ const UI = {
     noLimitSetToday: "Vandaag geen limiet ingesteld",
     todaySUsageUnavailable: "Gebruik van vandaag niet beschikbaar",
     enforcementMayBeStopped: "handhaving is mogelijk gestopt",
+    saySomething: "Zeg iets tegen hem",
+    saySomethingHint: "Verschijnt meteen op zijn scherm, in jouw woorden. Het komt over waar hij mee bezig is en verdwijnt na ongeveer een halve minuut vanzelf, dus het is een seintje en geen briefje dat hij later terugvindt.",
+    saySomethingPlaceholder: "Over tien minuten eten.",
+    send: "Versturen",
+    tMessageShown: "Op zijn scherm getoond",
+    tMessageNotShown: "Niet getoond — er is nu niemand aangemeld op die pc",
+    tCouldNotSendMessage: "Kon dat bericht niet versturen",
+    tCharactersLeft: "Nog {} tekens",
     lock: "🔒 Vergrendel",
     shutDown: "⏻ Afsluiten",
     logOut: "Afmelden",
@@ -583,6 +599,14 @@ const UI = {
     noLimitSetToday: "Bugün için sınır yok",
     todaySUsageUnavailable: "Bugünkü kullanım alınamadı",
     enforcementMayBeStopped: "uygulama durmuş olabilir",
+    saySomething: "Ona bir şey söyle",
+    saySomethingHint: "Kendi sözlerinizle hemen ekranında belirir. Yaptığı işin üzerine gelir ve yaklaşık yarım dakika sonra kendiliğinden kaybolur; yani sonradan bulacağı bir not değil, anlık bir uyarıdır.",
+    saySomethingPlaceholder: "On dakikaya yemek var.",
+    send: "Gönder",
+    tMessageShown: "Ekranında gösterildi",
+    tMessageNotShown: "Gösterilemedi — şu anda o bilgisayarda oturum açan yok",
+    tCouldNotSendMessage: "Bu mesaj gönderilemedi",
+    tCharactersLeft: "{} karakter kaldı",
     lock: "🔒 Kilitle",
     shutDown: "⏻ Kapat",
     logOut: "Çıkış yap",
@@ -1015,6 +1039,13 @@ function app() {
     // this is data the parent toggles rather than code the service loads.
     providers: {},
     providerRows: [],
+    // The parent's own words, on their way to his screen. `messageResult` is a translated
+    // sentence rather than a flag so the markup can render it directly; `messageDelivered` colours
+    // it. Both stay empty until something has actually been sent.
+    messageText: "",
+    sendingMessage: false,
+    messageResult: "",
+    messageDelivered: false,
     loadingProviders: false,
     savingProvider: false,
     // Signed-in devices (O77). An array straight from the server, already sorted newest-first, so
@@ -1757,6 +1788,41 @@ function app() {
       const paired = this.pairedDevices(name);
       if (paired.length === 0) return "Not paired to any device yet";
       return "Paired to " + paired.map((s) => this.deviceLabel(s.user_agent)).join(", ");
+    },
+
+    // How much room is left in the box, so a parent is not surprised by the cap mid-sentence.
+    // The bound matches `api::MAX_MESSAGE_CHARS`, and `maxlength` on the textarea enforces it —
+    // this only reports it.
+    messageLeft() {
+      return this.tf("tCharactersLeft", 500 - this.messageText.length);
+    },
+
+    // Put what the parent typed on the child's screen, and say whether it got there.
+    //
+    // The answer carries `delivered` because "nobody is signed in" and "he ignored it" look
+    // identical from here otherwise, and only one of them is worth sending again. The box is
+    // cleared only on a delivered message: if it did not land, the words are still there to send
+    // once he is back.
+    async sendMessage() {
+      const text = this.messageText.trim();
+      if (!text || this.sendingMessage) return;
+      this.sendingMessage = true;
+      this.messageResult = "";
+      try {
+        const r = await this.postJSON("/api/message", { text });
+        if (r.ok) {
+          const body = await r.json();
+          this.messageDelivered = body.delivered === true;
+          this.messageResult = this.messageDelivered ? this.t("tMessageShown") : this.t("tMessageNotShown");
+          if (this.messageDelivered) this.messageText = "";
+        } else {
+          this.toast(await this.rejection(r, this.t("tCouldNotSendMessage")), "error");
+        }
+      } catch {
+        this.toast(this.t("tRequestFailed"), "error");
+      } finally {
+        this.sendingMessage = false;
+      }
     },
 
     async loadProviders() {

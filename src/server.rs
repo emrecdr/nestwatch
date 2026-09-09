@@ -28,6 +28,7 @@
 //!     POST /api/re-anchor
 //!     GET  POST /api/language
 //!     POST /api/extra-time
+//!     POST /api/message       (the parent's own words, on the child's screen)
 //!     GET  /api/providers
 //!     POST /api/providers/{name}  POST /api/providers/{name}/delete
 //!     POST /api/providers/{name}/pair   (mints a pairing link; re-asks for the password)
@@ -101,6 +102,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/processes/{pid}/kill", post(api::kill_process))
         .route("/shutdown", post(api::shutdown))
         .route("/lock", post(api::lock))
+        .route("/message", post(api::send_message))
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
         .route("/curfew/extend", post(api::extend_curfew))
         .route("/audit", get(api::audit))

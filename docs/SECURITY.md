@@ -703,6 +703,15 @@ than a process name and less than a browsing history:
 second counts, and nothing else. A new field fails it, so the paragraph above cannot drift from
 the code without somebody noticing.
 
+**Messages you send him are recorded, and they are the one thing here that is yours rather than
+his.** `POST /api/message` writes an audit line carrying the text you sent and whether the machine
+showed it. That is a deliberate choice rather than an oversight: they are your own words in your own
+log, bounded at `api::MAX_MESSAGE_CHARS`, written at the pace of somebody typing, and the question
+*what did I say to him on Tuesday* is one this file should be able to answer. It does mean the audit
+log — which `GET /api/export` and `GET /api/audit` both carry off the machine — now contains
+household conversation as well as security events. Nothing he writes is recorded, because there is
+no reply channel to record.
+
 **A forwarded StudyGo session, if a parent set up a probe.** `POST /api/providers/{name}/secret`
 stores whatever the phone (or the parent) deposits — for StudyGo, the child's own session token,
 good for roughly ten days — as a file under `secrets/` in the ACL-locked data dir. It is never

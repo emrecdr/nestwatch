@@ -19,6 +19,118 @@ use common::{
     state_with, test_app, test_config, test_state,
 };
 
+/// A parent can put their own words on the child's screen, and is told whether they landed.
+///
+/// The one direction this service never had. Everything the child reads is written by the system
+/// — countdowns, bedtime, the practice notices — and everything the *parent* hears from him comes
+/// through the request page. This closes the loop the other way.
+#[tokio::test]
+async fn a_parent_can_put_their_own_words_on_the_childs_screen() {
+    let fake = std::sync::Arc::new(nestwatch::control::FakeControl::new());
+    let mut state = state_with(test_config());
+    state.control = fake.clone();
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let res = post_json(
+        &app,
+        "/api/message",
+        Some(&cookie),
+        json!({ "text": "Dinner in ten minutes." }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(res).await,
+        json!({ "ok": true, "delivered": true })
+    );
+
+    let said = fake.notifications();
+    assert_eq!(said.len(), 1, "{said:?}");
+    assert_eq!(
+        said[0].1, "Dinner in ten minutes.",
+        "sent verbatim, not reworded"
+    );
+    assert_ne!(
+        said[0].0, "Screen time",
+        "a person's message must not wear the enforcer's heading"
+    );
+}
+
+/// Whether the machine actually showed it is the answer, not a detail.
+///
+/// A parent typing into a box deserves to know that nobody was at the PC, which is the difference
+/// between "he is ignoring me" and "he is not logged in". The same distinction the countdown
+/// warnings already draw before recording that the child was told.
+#[tokio::test]
+async fn a_message_that_could_not_be_shown_says_so() {
+    let fake = std::sync::Arc::new(nestwatch::control::FakeControl::new());
+    fake.fail_notifications("no interactive session");
+    let mut state = state_with(test_config());
+    state.control = fake.clone();
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let res = post_json(
+        &app,
+        "/api/message",
+        Some(&cookie),
+        json!({ "text": "Come and eat." }),
+    )
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "an undelivered message is not an error"
+    );
+    assert_eq!(
+        body_json(res).await,
+        json!({ "ok": true, "delivered": false })
+    );
+}
+
+/// The bound is on characters, and both sides of it are checked.
+#[tokio::test]
+async fn a_message_must_be_something_and_must_not_be_everything() {
+    let app = app_with(state_with(test_config()));
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let send =
+        |text: Value| post_json(&app, "/api/message", Some(&cookie), json!({ "text": text }));
+
+    for empty in ["", "   ", "\n\t "] {
+        assert_eq!(
+            send(json!(empty)).await.status(),
+            StatusCode::BAD_REQUEST,
+            "{empty:?} is not a message"
+        );
+    }
+    assert_eq!(
+        post_json(&app, "/api/message", Some(&cookie), json!({}))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST,
+        "a missing text is not an empty one"
+    );
+
+    let limit = nestwatch::api::MAX_MESSAGE_CHARS;
+    assert_eq!(
+        send(json!("x".repeat(limit))).await.status(),
+        StatusCode::OK,
+        "exactly the limit is a message"
+    );
+    assert_eq!(
+        send(json!("x".repeat(limit + 1))).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    // Counted in characters, not bytes — the same rule the password length check follows, and the
+    // reason it matters here is that this box is for a household that writes Dutch and Turkish.
+    assert_eq!(
+        send(json!("é".repeat(limit))).await.status(),
+        StatusCode::OK,
+        "a message at the limit in multi-byte characters is still at the limit"
+    );
+}
+
 #[tokio::test]
 async fn api_requires_auth() {
     let app = test_app();

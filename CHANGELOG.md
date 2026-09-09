@@ -11,6 +11,21 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Added
 
+- **You can say something to him yourself.** Every message that has ever appeared on his screen was
+  written by this program — the countdown, bedtime, an app being closed, and as of this release the
+  practice notices. A box under the live view now sends *your* words instead, and the answer says
+  whether they were actually shown or whether nobody is signed in at that PC, which is the
+  difference between being ignored and nobody being there.
+  <br>Three decisions worth knowing. It arrives under a heading that names you rather than the
+  system, because a child who cannot tell a person from a countdown learns to dismiss both. The
+  heading is translated and your words are not — the household picked a language, but what you
+  write is yours. And it is a nudge rather than a note: the box sits over whatever he is doing and
+  clears itself after about half a minute, so it will not be waiting when he comes back to the
+  desk. A version that persists in the notification centre is possible and is a larger piece of
+  work, recorded rather than half-built.
+  <br>Bounded at 500 characters, counted in characters rather than bytes so a Dutch or Turkish
+  sentence is measured the way it reads. What you sent is written to the audit log — your own words
+  in your own log — so *what did I say to him on Tuesday* is a question it can answer.
 - **The gate now says something to your son.** Until this, a probe granted or refused in silence:
   his time extended, or it did not, with no explanation attached. Two sentences now reach him on
   his own screen, through the same notification path the screen-time warnings already use. When a

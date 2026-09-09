@@ -125,6 +125,11 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
                 json!({ "secret": "not mine to set" }),
             ),
             ("POST", "/api/curfew/extend", json!({ "minutes": 60 })),
+            (
+                "POST",
+                "/api/message",
+                json!({ "text": "not yours to send" }),
+            ),
             ("GET", "/api/screenshot", json!({})),
             (
                 "POST",

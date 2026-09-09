@@ -977,6 +977,27 @@ is launched directly, not through `cmd.exe`.
 - [ ] **Nothing runs while he is signed out or locked.** Lock the session and wait past the
       interval: the *Checked at* time must not move.
 
+### H9. A message you typed (never run on Windows)
+
+The same `WTSSendMessageW` path the countdown warnings use, so the mechanism is not new — what is
+new is that the text comes from a box on your dashboard, and that the answer claims to know whether
+it was shown.
+
+- [ ] **It arrives, verbatim, under your heading.** With HIM signed in and unlocked, type
+      *"Dinner in ten minutes."* under the live view and press Send. The box on his screen must show
+      exactly that, titled *Message from your parent* — not *Screen time*. The dashboard must say
+      **shown on his screen**.
+- [ ] **The delivered flag is honest.** Sign him out, leaving the machine at the sign-in screen, and
+      send another. The dashboard must say **nobody is signed in at that PC right now**, and the
+      text must stay in the box so it can be sent again. This is the assertion that cannot be tested
+      off Windows: `FakeControl` is scripted to fail, but only the real `WTSSendMessageW` decides
+      what a signed-out console actually returns.
+- [ ] **It clears itself.** Send one and leave it. It must disappear after about thirty seconds
+      without anyone clicking, which is `NOTIFY_TIMEOUT_SECS` — and is the reason the dashboard
+      calls this a nudge rather than a note.
+- [ ] **A long message does not become a wall.** Send 500 characters. It must display without
+      pushing the buttons off screen, and 501 must be refused by the dashboard before it is sent.
+
 ## Troubleshooting
 
 - **Can't connect from another device** → network is likely "Public"; set it to Private, or

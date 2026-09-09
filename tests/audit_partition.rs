@@ -42,7 +42,7 @@ use common::{PASSWORD, app_with_audit_file, body_json, crate_sources, get, login
 /// to do with the module they live in: the first is only recorded when the submission was
 /// **accepted**, and acceptance is capped at `timereq::MAX_PENDING` until a parent resolves one; the
 /// second is only recorded on a **valid** code, of which at most `timecode::MAX_ACTIVE_CODES` exist.
-const CLASSIFIED: [(&str, bool); 36] = [
+const CLASSIFIED: [(&str, bool); 37] = [
     // auth.rs — the only module where an unauthenticated caller reaches a writer.
     ("\"auth_failure\"", true), // no credential at all; 5/min/IP from the login limiter
     ("\"pair_failed\"", true),  // no credential; coalesced onto the lockout, so 1/min/IP
@@ -60,6 +60,10 @@ const CLASSIFIED: [(&str, bool); 36] = [
     ("\"policy_imported\"", false),
     ("\"shutdown_issued\"", false),
     ("\"lock_issued\"", false),
+    // POST /api/message, behind require_auth. Paced by a parent typing, and bounded per call by
+    // `api::MAX_MESSAGE_CHARS`, so neither the rate nor the size of these lines is anyone else's
+    // to choose.
+    ("\"message_sent\"", false),
     ("\"curfew_change\"", false),
     ("\"curfew_extended\"", false),
     ("\"language_changed\"", false),
