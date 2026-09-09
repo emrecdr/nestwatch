@@ -768,12 +768,20 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in 0.5.0 — none of it has run on Windows
+## H. New in 0.5.0 through 0.8.0 — none of it has run on Windows
 
-**Released 2026-08-31 as `v0.5.0`, with every item in this section still unchecked.** That is a
-deliberate decision rather than an oversight, and it is recorded in the `Cut 0.5.0` commit as well
-as here: the binary is on the download page and the behaviour below has never executed on the
-platform it was written for.
+**Four releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
+2026-08-31, `v0.6.0`, `v0.7.0`, and `v0.8.0` on 2026-09-09. That is a deliberate decision rather
+than an oversight, and it is recorded in each release commit as well as here: the binary is on the
+download page and the behaviour below has never executed on the platform it was written for.
+
+**The heading spans a range because nothing has left this section.** The rule below says to move
+verified items out at each release, and no item has ever been verified — no commit in this
+repository's history has ever recorded a ticked box in this file, in any section. So H has
+accumulated rather than turned over: 38 items across §H1–§H8, where it held 32 at `v0.7.0`. The one
+thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
+(§H8) instead of being added to the list later or not at all, which is the failure `O87` records
+against 0.6.0 and 0.7.0.
 
 Everything in this section was written, tested and reviewed on a Mac. The parts that talk to
 Windows are compile- and lint-verified for the target and have **never executed**. Each item below

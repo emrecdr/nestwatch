@@ -385,16 +385,28 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.7.0` (2026-09-04) is the newest published release — it
-scopes what a pairing QR is worth, lists and revokes signed-in devices one at a time, caps how long
-a session can live however often it is used, and tells you when your router has made the access log
-unable to tell devices apart. It carries **no new Windows-only code**: `src/control/windows.rs` is
-unchanged since `v0.5.1`, and the diff from `v0.6.0` adds no `#[cfg(windows)]` block at all. What it
-does change is the authentication surface, which is why every device must be paired again. Both shipped with tiers 1 and 2 green and **tier 3 unrun**: the 32 items in section H of the checklist — covering the bedtime extension, the
-enforcer wake, the translated shutdown notices and the ask link — have not been executed on a
-Windows machine. That is stated here rather than only in the changelog, because tier 3 is the tier
-the sentence above says every serious bug has lived in, and a reader deciding whether to install
-this is entitled to know which tier the newest features sit in.
+**Where the current release stands.** `v0.8.0` (2026-09-09) is the newest published release — it
+lets this PC ask an integration what your child has done, counts a wrong time code where it used to
+count nothing, makes the full-size screenshot a dialog the keyboard cannot walk out of, and reports
+whether the system drive is encrypted. It also relaxes one promise, on purpose and only if you ask
+it to — the second of the two exceptions named at the top of this file, under **Check from this
+PC** on the Integrations card.
+
+**Unlike the two before it, this release adds Windows-only code — the first since `v0.5.1`.** That
+is the single most useful sentence here, because it is the opposite of what `v0.7.0` could say. The
+probe runs the check program *as your child*, which on Windows means launching it into the
+interactive session the way the screenshot helper does, and that is tier 3 by definition: the
+`#[cfg(windows)]` module `session.rs` gains 129 lines, and both Windows implementations of the probe
+call are new. Measured against `v0.7.0`, not asserted.
+
+**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for four releases: section H of the
+checklist now carries 38 items across §H1–§H8 — the bedtime extension, the enforcer wake, the
+translated shutdown notices, the ask link, the child's page in Dutch, and now the probe — and none
+has been executed on a Windows machine. No box anywhere in that file has ever been ticked in a
+commit. That is stated here rather than only in the changelog, because tier 3 is the tier the
+sentence above says every serious bug has lived in, and a reader deciding whether to install this is
+entitled to know which tier the newest features sit in — this time more than usual, because for the
+first time in three releases the newest feature is *in* that tier rather than beside it.
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were

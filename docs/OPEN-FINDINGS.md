@@ -70,7 +70,7 @@ or rewritten rather than annotated, per the rules above.
 
 ## Release state
 
-**`v0.7.0`, published 2026-09-04.** Everything below is open against a release that is on the
+**`v0.8.0`, published 2026-09-09.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -79,33 +79,57 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 `x86_64-pc-windows-gnu`, and a published SBOM plus binary attestation that were both checked against
 the downloaded artifacts.
 
-What it was **not** verified by: running on the machine it is for. The 32 items in section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) cover everything headline in 0.5.0 — the bedtime extension,
-the enforcer wake, the translated shutdown notices and the ask link — and none of them has executed
-on Windows. The three gates that were green when it shipped are the same three that were green when
-`install` failed on real hardware and again when `remove_file` turned out not to be exclusive. That
-is not an argument for distrusting them; it is the reason the section below exists and the reason
-the checklist is the only method here with a track record.
+What it was **not** verified by: running on the machine it is for. Section H of
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **38 items across §H1–§H8** — the bedtime
+extension, the enforcer wake, the translated shutdown notices, the ask link, the child's page in
+Dutch, and now the provider probe — and none of them has executed on Windows. Measured 2026-09-09,
+and worth stating exactly: **no commit in this repository's history has ever recorded a ticked item
+in that file**, in any section, so the 209 boxes it carries are all still open. The three gates that
+were green when it shipped are the same three that were green when `install` failed on real hardware
+and again when `remove_file` turned out not to be exclusive. That is not an argument for distrusting
+them; it is the reason the section below exists and the reason the checklist is the only method here
+with a track record.
+
+**0.8.0 is the first release since `v0.5.1` to add Windows-only code, and that is this release's
+headline risk.** The provider probe runs the check program *as the child*, which on Windows means
+launching it into the interactive session the way the screenshot helper already does. Measured
+2026-09-09 with `git diff v0.7.0..HEAD`: the `#[cfg(windows)]` module `session.rs` gains 129 lines,
+and both Windows implementations of `SystemControl::run_probe` are new — `control/windows.rs` (+5)
+and `control/service_control.rs` (+7). `control/windows.rs` is the file 0.7.0's README could
+truthfully call unchanged since `v0.5.1`; it no longer is. So the tier this project's own README
+calls the one every serious bug has lived in has grown for the first time in three releases, and
+§H8 is its only checklist item.
 
 **And neither 0.6.0's nor 0.7.0's headline features are in the checklist at all** — which is worse
-than being in it unrun, because an unrun item is at least counted. Section H is scoped to 0.5.0 by
-its title. Measured 2026-09-02 and re-measured 2026-09-04: `integration`, `provider`, `StudyGo`,
-`earned`, `idempot`, `revoke`, `signed-in` and `masquerad` each return **zero** matches in
-`WINDOWS-TESTING.md`, nothing exercises the absolute session cap, and the sole Routines item (§E2)
-exercises the *manual* save-and-apply path that predates both releases. Tracked as `O87`.
+than being in it unrun, because an unrun item is at least counted. Tracked as `O87`.
+
+**Re-measured 2026-09-09, and the keyword test this entry leaned on twice now needs reading with
+care.** Three of its eight terms match at last — `integration` (1), `provider` (2), `StudyGo` (1) —
+but every one of those matches is inside **§H8, which covers the probe shipping in this release**,
+not any 0.6.0 or 0.7.0 feature. The five terms that actually track the gap are unmoved at **zero**:
+`earned`, `idempot`, `revoke`, `signed-in`, `masquerad`. Nothing exercises the absolute session cap,
+and the sole Routines item (§E2) still exercises the *manual* save-and-apply path that predates both
+releases. So re-running the measurement as it was written would report progress where there is none.
+A keyword count is a proxy for coverage, and this is the proxy coming apart from the thing it
+proxies — recorded here rather than quietly re-run.
 
 **For 0.7.0 that gap sits on the authentication surface, which is the part worth saying out loud.**
 Scoped pairing, per-device revocation and the absolute cap all decide whether a person gets in, they
-fail closed by design, and the way back from a mistake is an elevated console on the child's PC. The
-release also carries the one breaking change this project has shipped — every existing session is
-refused, so every device must be paired again — and that upgrade path has itself never run on
+fail closed by design, and the way back from a mistake is an elevated console on the child's PC.
+0.7.0 also carried the one breaking change this project has shipped — every existing session was
+refused, so every device had to be paired again — and that upgrade path has itself never run on
 Windows. Nothing here says the code is wrong; it says the gates that were green when `install` failed
 on real hardware are the same three that are green now.
 
-The enforcer wake is the one to run first. Its entire value is a timing property — an abort arriving
-in well under a second where it previously took up to 30 — measured once, on macOS, where `shutdown`
-is a no-op. On Windows it is a real `shutdown.exe` with a real pending timer, and whether the abort
-beats a 60-second countdown there is unknown.
+The enforcer wake is still the one to run first. Its entire value is a timing property — an abort
+arriving in well under a second where it previously took up to 30 — measured once, on macOS, where
+`shutdown` is a no-op. On Windows it is a real `shutdown.exe` with a real pending timer, and whether
+the abort beats a 60-second countdown there is unknown.
+
+§H8 is the one to run second, because it is the only item in the file covering code that is new to
+this tier. The probe's Windows path shares `CreateProcessAsUserW` with the screenshot helper, which
+has itself never run here either, so a failure there would take both features down and neither has
+a green run to distinguish them.
 
 ---
 
@@ -1607,6 +1631,19 @@ predates the release. Section H, where new work goes, is titled **"New in 0.5.0"
 twice and `session` eighteen times; every one is unrelated — a firewall rule "scoped to
 `private,domain`", a Session 0 reference. Checked, not assumed.)
 
+**Re-measured 2026-09-09 at the 0.8.0 release, and the count moved for a reason that is not
+progress.** Three terms now match — `integration` **1**, `provider` **2**, `StudyGo` **1** — and
+every match is inside the new **§H8**, which covers 0.8.0's provider probe. None of the six features
+this entry is about gained an item. The five terms that track them are unchanged at **0**: `earned`,
+`idempot`, `revoke`, `signed-in`, `masquerad`. The lesson is about the measurement rather than the
+gap: a keyword count is a proxy for coverage, and a proxy that another feature can satisfy will
+report a closing gap that has not moved. Read the five, not the eight.
+
+**0.8.0 did the thing 0.6.0 and 0.7.0 did not**, which is worth recording because it is the fix
+working: its headline feature arrived with §H8 attached, written to section H's standard and titled
+*"never run on Windows"*. That does not close this entry — the six remain absent — but it means the
+gap stopped growing at this release for the first time since it was filed.
+
 **They shipped in `0.7.0` on 2026-09-04, so this is no longer a warning about future work.** The
 0.6.0 half of this entry became a gap by being forgotten at release; the 0.7.0 half was written
 down while it was still unreleased and shipped anyway, which is the more useful failure to record —
@@ -1616,7 +1653,8 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-opens by saying 32 things have never executed, so the gap has a size and a reader can weigh it. A
+carries 38 items that have never executed (measured 2026-09-09; it was 32 when this was written), so
+the gap has a size and a reader can weigh it. A
 feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and
 left unchecked, 0.6.0's were never written down. The two together are the tier-3 surface, and only
