@@ -31,6 +31,7 @@
 //!     GET  /api/providers
 //!     POST /api/providers/{name}  POST /api/providers/{name}/delete
 //!     POST /api/providers/{name}/pair   (mints a pairing link; re-asks for the password)
+//!     POST /api/providers/{name}/secret (deposits the credential the provider's probe runs with)
 //!     GET  POST /api/rules
 //!     GET  POST /api/policy   (household settings: download / restore)
 //!     GET  POST /api/routines
@@ -115,6 +116,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/providers/{name}", post(api::set_provider))
         .route("/providers/{name}/delete", post(api::delete_provider))
         .route("/providers/{name}/pair", post(api::pair_provider))
+        .route("/providers/{name}/secret", post(api::set_provider_secret))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/policy", get(api::get_policy).post(api::set_policy))
         .route("/routines", get(api::list_routines).post(api::save_routine))
@@ -244,6 +246,16 @@ pub async fn serve_with_handle(
             tracing::error!(
                 "rules enforcer exited unexpectedly — usage rules are no longer enforced"
             );
+        });
+    }
+
+    // Provider probes, when a parent has configured any. `probe` says what this costs a household
+    // that has none: one config read a minute.
+    {
+        let state = state.clone();
+        tokio::spawn(async move {
+            crate::probe::run_scheduler(state).await;
+            tracing::error!("probe scheduler exited unexpectedly — provider probes will not run");
         });
     }
 

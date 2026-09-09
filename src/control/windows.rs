@@ -212,4 +212,9 @@ impl SystemControl for WindowsControl {
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
         crate::session::notify_active_session(&title, &body)
     }
+
+    /// The interactive process is already the user, so the probe is an ordinary child process.
+    fn run_probe(&self, exe: &std::path::Path, input: Vec<u8>) -> Result<Vec<u8>, ControlError> {
+        super::run_local_probe(exe, &input, super::PROBE_TIMEOUT, super::MAX_PROBE_OUTPUT)
+    }
 }

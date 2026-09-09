@@ -942,6 +942,33 @@ meant +15 and the only route back is editing the window. Do not file that as a d
       no *until* time — `/ask` never reveals the curfew schedule, because a bedtime handed to the
       child is a map for planning around it. They simply notice the machine did not shut down.
 
+### H8. The provider probe (never run on Windows)
+
+The only thing on this machine that runs a program as HIM on a schedule, and the only thing that
+makes it contact anyone. `session::run_probe_in_session` reuses the capture helper's launch with a
+second pipe for stdin; none of it has executed. A batch file will not do for any of these: the probe
+is launched directly, not through `cmd.exe`.
+
+- [ ] **A probe runs and its answer lands.** Copy a small program into `C:\Program Files\HostHealth\`
+      that reads stdin and prints `{"questions":12,"minutes":5}`. On the Integrations card, under
+      *Check from this PC*, enter its file name and `5` minutes, and deposit any text as the secret
+      (`POST /api/providers/studygo/secret` with `{"secret":"x"}`). Within a minute of HIM being
+      signed in and unlocked the line under the row must read *Checked at … · 12 questions ·
+      5 min practised · +N min*, and *Today* must show the grant. Proves: the token, both pipes, the
+      launch as HIM, the parse, and the judge.
+- [ ] **The secret reaches stdin and nothing else.** A probe that prints the length of what it read
+      must report the deposited secret's length. While it runs, Task Manager's command-line column
+      for the probe must not show the secret.
+- [ ] **A hung probe is killed, and the service does not wait for its children.** A probe that
+      starts a child process and sleeps: about a minute after the run the row must show *Check
+      failed: probe did not finish within 60s*, and the dashboard must answer throughout.
+- [ ] **A flooding probe is refused.** One that prints 20 KB: *Check failed: probe wrote more than
+      4096 bytes*.
+- [ ] **A probe he swapped is not the one that runs.** As HIM, try to overwrite the probe in Program
+      Files: access denied. That is the ACL from §B doing this feature's whole job.
+- [ ] **Nothing runs while he is signed out or locked.** Lock the session and wait past the
+      interval: the *Checked at* time must not move.
+
 ## Troubleshooting
 
 - **Can't connect from another device** → network is likely "Public"; set it to Private, or

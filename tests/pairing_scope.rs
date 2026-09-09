@@ -49,7 +49,7 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
 
-    // --- An integration pairing reaches its two routes and nothing else. ----------------
+    // --- An integration pairing reaches its three routes and nothing else. --------------
     {
         let state = state_with(test_config());
         let config = state.config.clone();
@@ -91,6 +91,18 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
             "and to read the grant back — this is `O85`'s mitigation, and the route an \
              allowlist written from 'the phone pushes grants' silently omits"
         );
+        assert_eq!(
+            send(
+                &app,
+                &phone,
+                "POST",
+                "/api/providers/studygo/secret",
+                json!({ "secret": "session-token" })
+            )
+            .await,
+            StatusCode::OK,
+            "and to deposit the session it holds, for the probe this machine runs on its behalf"
+        );
 
         // Everything else. These are the capabilities `docs/SECURITY.md`'s blast-radius table
         // lists, and before this change the same cookie reached every one of them.
@@ -107,6 +119,11 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
                 json!({ "enabled": true, "minutes": 240 }),
             ),
             ("POST", "/api/providers/studygo/delete", json!({})),
+            (
+                "POST",
+                "/api/providers/chores/secret",
+                json!({ "secret": "not mine to set" }),
+            ),
             ("POST", "/api/curfew/extend", json!({ "minutes": 60 })),
             ("GET", "/api/screenshot", json!({})),
             (

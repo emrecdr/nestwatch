@@ -11,6 +11,10 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Security
 
+- **The no-outbound promise now has one named, opt-in exception.** See *An integration can now be
+  checked from the PC itself* under Added, and the *Outbound connections* section of
+  `docs/SECURITY.md`. `README.md`'s "no outbound connection at all" sentence names it too, because a
+  promise relaxed only in a design document is broken everywhere else it is read.
 - **A wrong time code is now counted, and shown to you.** A wrong *password* has always written
   `auth_failure` to the audit log, with whether the lockout tripped — so you could see your password
   being worked on. A wrong *code* wrote nothing, anywhere. Someone working through the possibilities
@@ -105,6 +109,22 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Added
 
+- **An integration can now be checked from the PC itself.** Until now every earned grant arrived
+  from the phone, and a phone in a pocket cannot ask every fifteen minutes what a child has done.
+  Under *Check from this PC* on the Integrations card a parent can name a program in the Nestwatch
+  folder and an interval; the service runs it **as the child**, hands it the session the phone
+  forwarded (`POST /api/providers/{name}/secret`, a third route the phone's pairing may reach for its
+  own name only), reads back two numbers and judges them by the same reward rules a push gets. The
+  row shows when it last checked, what it found, what that earned or why nothing was, and how old
+  the phone's session is. A probe is a file name, never a path, resolved inside the folder the child
+  cannot write to; it is killed after a minute, refused past 4 KiB, and never believed about anything
+  but its two numbers. Nothing changes for a household that names none.
+  <br>This is the first thing here that makes the monitored PC contact anyone, and the security model
+  says so in its outbound section: the request is made by a process running as the child, under the
+  child's own account, at a parent-chosen interval no faster than five minutes, and only while he is
+  signed in and has not already earned the day's ceiling. The service itself still contacts nothing.
+  The Windows half — launching into his session with a second pipe for the secret — is compile-checked
+  for the target and **has never executed**; `docs/WINDOWS-TESTING.md` §H8.
 - **`doctor` now reports whether the system drive is encrypted.** Everything this tool says about
   the data folder being locked to SYSTEM and Administrators describes *Windows* adjudicating
   access. Start another operating system from a USB stick and NTFS is an ordinary filesystem, and

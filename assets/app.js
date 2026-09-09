@@ -205,7 +205,27 @@ const UI = {
     removeTier: "Remove tier",
     addTier: "Add tier",
     eitherConditionMeetsATier: "Either condition is enough. The highest tier reached decides the reward.",
-    appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here; nothing on this PC reaches out. You choose whether each is on and how many minutes it grants.",
+    appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here. You choose whether each is on and how many minutes it grants — and, under Check from this PC, whether this PC asks on its own instead.",
+    checkFromThisPc: "Check from this PC",
+    probeExplained: "Name a program in the Nestwatch folder and this PC runs it as your child on a schedule, with the session your phone forwarded, and judges what it reports by the rules above. Leave it blank to keep the checking on the phone.",
+    probeProgram: "Program in the Nestwatch folder",
+    probeEvery: "Check interval in minutes",
+    everyPrefix: "every",
+    probeNotRunYet: "Not checked yet",
+    probeCheckedAt: "Checked at {}",
+    probeQuestions: "{} questions",
+    probeMinutesPractised: "{} min practised",
+    probeGranted: "+{} min",
+    probeRefused: "Nothing added: {}",
+    probeError: "Check failed: {}",
+    refusedAlreadyGranted: "already earned today",
+    refusedDailyCap: "today's maximum reached",
+    refusedBelowBar: "below the bar",
+    noSessionYet: "No session from the phone yet",
+    sessionToday: "Session from the phone: today",
+    sessionDaysAgo: "Session from the phone: {} days ago",
+    tProbeEveryBetween5And240: "Check interval must be between 5 and 240 minutes",
+    tProbeNameInvalid: "The program is a file name in the Nestwatch folder, not a path",
     min: "min",
     pair: "Pair",
     remove: "Remove",
@@ -417,7 +437,27 @@ const UI = {
     removeTier: "Niveau verwijderen",
     addTier: "Niveau toevoegen",
     eitherConditionMeetsATier: "Eén van beide voorwaarden is genoeg. Het hoogst behaalde niveau bepaalt de beloning.",
-    appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen; niets op deze pc neemt zelf contact op. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft.",
+    appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft — en onder Controleren vanaf deze pc of deze pc het in plaats daarvan zelf vraagt.",
+    checkFromThisPc: "Controleren vanaf deze pc",
+    probeExplained: "Noem een programma in de Nestwatch-map en deze pc voert het volgens schema uit als je kind, met de sessie die je telefoon doorgaf, en beoordeelt wat het meldt volgens de regels hierboven. Laat het leeg om de controle op de telefoon te houden.",
+    probeProgram: "Programma in de Nestwatch-map",
+    probeEvery: "Controle-interval in minuten",
+    everyPrefix: "elke",
+    probeNotRunYet: "Nog niet gecontroleerd",
+    probeCheckedAt: "Gecontroleerd om {}",
+    probeQuestions: "{} vragen",
+    probeMinutesPractised: "{} min geoefend",
+    probeGranted: "+{} min",
+    probeRefused: "Niets toegevoegd: {}",
+    probeError: "Controle mislukt: {}",
+    refusedAlreadyGranted: "vandaag al verdiend",
+    refusedDailyCap: "dagmaximum bereikt",
+    refusedBelowBar: "onder de lat",
+    noSessionYet: "Nog geen sessie van de telefoon",
+    sessionToday: "Sessie van de telefoon: vandaag",
+    sessionDaysAgo: "Sessie van de telefoon: {} dagen geleden",
+    tProbeEveryBetween5And240: "Het controle-interval moet tussen 5 en 240 minuten liggen",
+    tProbeNameInvalid: "Het programma is een bestandsnaam in de Nestwatch-map, geen pad",
     min: "min",
     pair: "Koppelen",
     remove: "Verwijderen",
@@ -633,7 +673,27 @@ const UI = {
     removeTier: "Kademeyi kaldır",
     addTier: "Kademe ekle",
     eitherConditionMeetsATier: "İki koşuldan biri yeterlidir. Ulaşılan en yüksek kademe ödülü belirler.",
-    appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir; bu bilgisayardaki hiçbir şey dışarı bağlanmaz. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz.",
+    appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz — ve Bu bilgisayardan kontrol et altında, bunun yerine bu bilgisayarın kendisinin sormasına.",
+    checkFromThisPc: "Bu bilgisayardan kontrol et",
+    probeExplained: "Nestwatch klasöründe bir program adı verin; bu bilgisayar onu çocuğunuz adına, telefonunuzun ilettiği oturumla düzenli aralıklarla çalıştırır ve bildirdiklerini yukarıdaki kurallara göre değerlendirir. Kontrolü telefonda tutmak için boş bırakın.",
+    probeProgram: "Nestwatch klasöründeki program",
+    probeEvery: "Kontrol aralığı (dakika)",
+    everyPrefix: "her",
+    probeNotRunYet: "Henüz kontrol edilmedi",
+    probeCheckedAt: "Kontrol saati: {}",
+    probeQuestions: "{} soru",
+    probeMinutesPractised: "{} dk çalışıldı",
+    probeGranted: "+{} dk",
+    probeRefused: "Eklenmedi: {}",
+    probeError: "Kontrol başarısız: {}",
+    refusedAlreadyGranted: "bugün zaten kazanıldı",
+    refusedDailyCap: "günlük üst sınıra ulaşıldı",
+    refusedBelowBar: "çıtanın altında",
+    noSessionYet: "Telefondan henüz oturum yok",
+    sessionToday: "Telefondan oturum: bugün",
+    sessionDaysAgo: "Telefondan oturum: {} gün önce",
+    tProbeEveryBetween5And240: "Kontrol aralığı 5 ile 240 dakika arasında olmalı",
+    tProbeNameInvalid: "Program, Nestwatch klasöründeki bir dosya adıdır, yol değil",
     min: "dk",
     pair: "Eşleştir",
     remove: "Kaldır",
@@ -1720,7 +1780,54 @@ function app() {
           minutesPractised: t.minutes_practised,
           rewardMins: t.reward_mins,
         })),
+        // The probe, flattened the same way: a blank name is "none", which is what the box shows
+        // and what `saveProvider` turns back into an explicit null. The status and the session's
+        // age are read-only and only ever present once something has happened.
+        probeExe: this.providers[name].probe ? this.providers[name].probe.exe : "",
+        probeEvery: this.providers[name].probe ? this.providers[name].probe.every_mins : 15,
+        probeStatus: this.providers[name].probe_status || null,
+        secretAt: this.providers[name].secret_at || null,
       }));
+    },
+
+    // What the last check found and whether the phone's session is still there, in one line under
+    // the row. Every fragment comes from the language tables: this is bound with `x-text`, and the
+    // guard in app.test.js pins the set of methods allowed to assemble English at exactly the ones
+    // that already do.
+    probeSummary(row) {
+      if (!row.probeExe) return "";
+      const parts = [];
+      const status = row.probeStatus;
+      if (!status) {
+        parts.push(this.t("probeNotRunYet"));
+      } else {
+        const at = new Date(status.at);
+        const hhmm = String(at.getHours()).padStart(2, "0") + ":" + String(at.getMinutes()).padStart(2, "0");
+        parts.push(this.tf("probeCheckedAt", hhmm));
+        if (typeof status.questions === "number") {
+          parts.push(this.tf("probeQuestions", status.questions));
+          parts.push(this.tf("probeMinutesPractised", status.minutes));
+        }
+        if (typeof status.granted === "number") {
+          parts.push(this.tf("probeGranted", status.granted));
+        } else if (status.refused) {
+          const reasons = {
+            already_granted_today: this.t("refusedAlreadyGranted"),
+            daily_cap_reached: this.t("refusedDailyCap"),
+            below_threshold: this.t("refusedBelowBar"),
+          };
+          parts.push(this.tf("probeRefused", reasons[status.refused] || status.refused));
+        } else if (status.error) {
+          parts.push(this.tf("probeError", status.error));
+        }
+      }
+      if (!row.secretAt) {
+        parts.push(this.t("noSessionYet"));
+      } else {
+        const days = Math.floor((Date.now() - new Date(row.secretAt).getTime()) / 86_400_000);
+        parts.push(days < 1 ? this.t("sessionToday") : this.tf("sessionDaysAgo", days));
+      }
+      return parts.join(" · ");
     },
 
     // Persist one integration's on/off and reward. The upsert endpoint needs both fields, so a
@@ -1733,6 +1840,23 @@ function app() {
         this.loadProviders();
         return;
       }
+      // The probe's own two rules, checked here so the parent reads the sentence rather than a
+      // 400: a bare file name (the server refuses anything with a separator, a drive letter or
+      // whitespace) and an interval the scheduler will honour.
+      const probeExe = (row.probeExe || "").trim();
+      if (probeExe) {
+        if (/[\\/:\s]/.test(probeExe) || probeExe.startsWith(".")) {
+          this.toast(this.t("tProbeNameInvalid"), "error");
+          this.loadProviders();
+          return;
+        }
+        const every = Number(row.probeEvery);
+        if (!Number.isInteger(every) || every < 5 || every > 240) {
+          this.toast(this.t("tProbeEveryBetween5And240"), "error");
+          this.loadProviders();
+          return;
+        }
+      }
       this.savingProvider = true;
       try {
         // This client now knows about every field, so it round-trips all of them. The server's
@@ -1740,6 +1864,8 @@ function app() {
         // after today, which this one will omit until somebody teaches it.
         const body = { enabled: row.enabled, minutes: mins };
         body.daily_cap_mins = row.cap === "" || row.cap === null ? null : Number(row.cap);
+        // A blank name is an explicit null, the way a blank ceiling is: it takes the probe off.
+        body.probe = probeExe ? { exe: probeExe, every_mins: Number(row.probeEvery) } : null;
         body.tiers = (row.tiers || []).map((t) => ({
           questions: Number(t.questions) || 0,
           minutes_practised: Number(t.minutesPractised) || 0,

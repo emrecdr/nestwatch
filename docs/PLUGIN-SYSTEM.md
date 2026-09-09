@@ -501,3 +501,107 @@ left as an observation, because it is the whole of why these two changes belong 
 **What this still does not do.** No gate exists to use any of it, and no UI sets either field — a
 ceiling and a ladder are reachable only through the API today. This is the registry being made
 capable of a gate from the side that can move without the other repository agreeing to anything.
+
+## A probe, and the machine's first outbound request — 2026-09-09
+
+The registry could judge work by 2026-09-08 and nothing on the PC could gather it: every grant still
+arrived from the phone, and a phone in a pocket cannot ask every fifteen minutes. This is the half of
+the gate that asks — Steps 4 and 5 of the plan — and it is the first thing this project has built that
+makes the monitored PC contact anyone, so the constraint it bends is stated first.
+
+**C2 is relaxed, opt-in, and never for the service.** A provider may name a `Probe`: a bare file name
+in the program directory and an interval. Once a minute `probe::run_scheduler` asks which probes are
+due; for each, the service launches the file **as the child** (`SystemControl::run_probe`, on Windows
+through the same `CreateProcessAsUserW` path as the screenshot helper), hands it the provider's
+deposited secret on stdin, reads back `{"questions": N, "minutes": M}`, and passes the two numbers to
+`Config::earn` — the same judge a push from the phone meets. The request to the third party is made
+by that process, under the child's own account, with the child's own session. The service still
+contacts nothing, `src/` still contains no HTTP client, and a config that names no probe costs one
+config read a minute and no controller call. `SECURITY.md` says the same in its outbound section and
+`README.md` in its no-outbound sentence, because a promise relaxed only in the design document is a
+promise broken everywhere else it is read.
+
+**C1 holds, and the ACL is what holds it.** The probe is a *file name*, never a path, and
+`Probe::validate` refuses anything else — no separator of either platform, no drive letter, no leading
+dot. It is resolved inside the program directory, which `install::harden_program_dir` locks to SYSTEM
+and Administrators with Users read-and-execute: the child can run it and cannot replace it. A path
+would have let a parent point at the desktop, where he can. Nothing the probe prints is believed beyond
+two integers, and those go through the ceiling and the ladder exactly as a push does, so the worst a
+defeated probe buys is what a lying phone already could — bounded by `daily_cap_mins` — and the
+designed outcome of every other fault (no Wi-Fi, an expired session, a killed process, a probe that
+hangs) is *the base budget*, which is also what not practising earns.
+
+**The secret has its own file, its own route, and its own scope rule.**
+`POST /api/providers/{name}/secret` deposits the session; `probe::store_secret` writes it under
+`secrets/` in the ACL-locked data dir, never into `config.json`, because that file leaves the machine
+through `/api/policy` and `/api/export`. The integration allowlist gained its third route and it is
+scoped to the caller's own name — `integration_may_reach` compares the path segment to the scope's
+`source`, so a pairing minted for one provider cannot overwrite another's credential, and nothing an
+integration can reach reads a secret back. Uninstalling forgets it, the way uninstalling already
+revokes the pairing.
+
+**Bounds, because the writer runs as the child.** `control::PROBE_TIMEOUT` kills a probe after a
+minute and `control::MAX_PROBE_OUTPUT` refuses more than 4 KiB; a probe that exits non-zero has said
+nothing this side may use. One defect the tests caught before it shipped is worth recording: killing a
+hung shell script left its `sleep` holding the pipe, and the runner's join then waited the full thirty
+seconds past a timeout of a third of one. Both runners now wait on the *output* for what is left of the
+timeout rather than on the reader thread, which is what `a_probe_that_outruns_the_timeout_is_killed`
+pins. Mutation testing over the finished
+diff and over `probe.rs` then reported misses in four shapes, and only the first was the shape
+expected.
+
+*A limit tested from one side.* `secret.len() > MAX_SECRET_BYTES`, `output.len() > max_output` and
+the fake's `calls.len() < PROBE_LOG_CAP` were each satisfied equally well by `>=`, because every
+test asked what happens past the limit and none asked what happens *at* it. The same lesson
+`MAX_TIERS` taught the day before.
+
+*A constant whose value nothing depended on.* `MAX_SECRET_BYTES` is `8 * 1024`, and turning that
+`*` into a `+` — 1032 bytes — passed everything, because every test spells the limit by name, which
+is correct of them. What that mutant breaks is not a test but the feature: a StudyGo session is a
+JWT of a kilobyte or two, so the limit would have refused every real token while every bound test
+stayed green. The fix is a test that stores a 2 KiB token, which is an assertion about the thing
+being held rather than about the number.
+
+*An assertion that computed both sides from the code under test.* Replacing `probe_dir()`'s whole
+body with an empty path was missed, because the only test that used it compared
+`probe_dir().join(exe)` against `probe_dir().join(exe)` — which agrees with itself however wrong it
+is. This is the one of the four that is a security property: an empty directory resolves the probe
+against the service's working directory rather than the ACL-locked program directory, which is the
+entire argument for accepting a bare file name in the first place. It is now asserted to be
+absolute and to end in the right component.
+
+*Three functions that never distinguished absent from unreachable.* `read_secret`,
+`secret_deposited_at` and `delete_secret` each match `ErrorKind::NotFound` specifically; widening
+that guard to every error, narrowing it to none, and inverting it were all missed. The API layer is
+what hid the first two — `list_providers` reads the deposit time through `.ok().flatten()`, so an
+error and an absence render identically. The costs differ, and the third is the one worth naming: a
+probe running with an empty credential instead of recording a failed run is the silent-failure shape
+the status line exists to prevent, while a deletion that could not happen reporting *there was
+nothing to delete* would have `delete_provider` audit a surviving credential as one that was never
+there — and destroying that credential is exactly what uninstalling promises. Both directions are
+now asserted for all three, against a fault induced by putting a file where the `secrets` directory
+belongs.
+
+**What the parent sees.** `GET /api/providers` lists `secret_at` — when, never what — and the last
+`probe_status`, only where they apply, so a household that opted into neither reads the same bytes it
+always did. The dashboard folds the probe under *Check from this PC* beside the reward rules and
+renders one translated line under the row: when it last checked, what it found, what that earned or
+why nothing was, and how old the phone's session is. A dead link shows as a stale line rather than as
+a quiet child.
+
+**Step 1's answers, which shaped Step 3 without building it.** `dart compile exe` refuses the
+Voortgang package outright — *'dart compile' does not support build hooks; packages with build hooks:
+objective_c, sqlite3* — and the probe imports neither. The pure-Dart closure of fetch→parse→count is
+sixteen files and one dependency (`http`); copied out unchanged it compiles in a second and prints
+the same `{"questions":3,"minutes":4}` from the recorded fixture that the phone computes. So the probe
+is a packaging question on that side (a hook-free core package), not a rewrite. And `--target-os`
+reaches only Linux targets, so the Windows executable has to be built on Windows — a `windows-latest`
+job, in practice. Whether StudyGo exposes work *in progress* (`topic.exercise_id` beside
+`exercise_progress_percentage`) is still unanswered; it needs a live session, and it decides only how
+good the signal is, not whether the mechanism works.
+
+**What this still does not do.** Nothing is said to the child: the notices the plan describes —
+*fifteen questions or half an hour adds thirty; so far: none* — are `O101`. The scheduler has no
+heartbeat (`O102`); a parent reads liveness off each provider's own `probe_status.at`. And none of the
+Windows half has executed: `session::run_probe_in_session` is compile- and lint-checked for the
+target and listed in `WINDOWS-TESTING.md` §H8.

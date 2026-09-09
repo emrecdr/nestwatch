@@ -64,4 +64,11 @@ impl SystemControl for ServiceControl {
         // desktop even though we're in Session 0 — no helper needed.
         self.inner.notify_user(title, body)
     }
+
+    /// Launched into the child's session like the screenshot helper, for the reason
+    /// `SystemControl::run_probe` gives: the process that talks to a third party runs as the
+    /// child, never as this service.
+    fn run_probe(&self, exe: &std::path::Path, input: Vec<u8>) -> Result<Vec<u8>, ControlError> {
+        crate::session::run_probe_in_session(exe, input)
+    }
 }

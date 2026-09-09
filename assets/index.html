@@ -1016,6 +1016,30 @@
                         <p class="text-xs opacity-60" x-text="t('eitherConditionMeetsATier')"></p>
                       </div>
                     </details>
+
+                    <!-- Checking from this PC, folded away for the same reason the rules are: most
+                         households never set it. Naming a program here is the one thing on this page
+                         that makes the PC run something as the child, and the only thing that makes it
+                         contact anyone — see docs/PLUGIN-SYSTEM.md, "A probe, and the machine's first
+                         outbound request". The line underneath is what a parent has instead of
+                         inferring a broken link from a quiet child. -->
+                    <details class="ml-9">
+                      <summary class="cursor-pointer py-1 text-xs opacity-60" x-text="t('checkFromThisPc')"></summary>
+                      <div class="mb-2 flex flex-col gap-2 pl-2">
+                        <p class="text-xs opacity-60" x-text="t('probeExplained')"></p>
+                        <div class="flex flex-wrap items-center gap-2">
+                          <input type="text" class="input input-sm w-56" placeholder="studygo-probe.exe"
+                                 x-model="row.probeExe" :aria-label="t('probeProgram')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-sm" x-text="t('everyPrefix')"></span>
+                          <input type="number" min="5" max="240" class="input input-sm w-20"
+                                 x-model.number="row.probeEvery" :aria-label="t('probeEvery')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-sm opacity-60" x-text="t('min')"></span>
+                        </div>
+                        <p class="text-xs opacity-60" x-text="probeSummary(row)" x-show="probeSummary(row)"></p>
+                      </div>
+                    </details>
                   </div>
                 </template>
 

@@ -10,7 +10,9 @@
 //! them via `tokio::task::spawn_blocking` so the async runtime is never stalled, and the
 //! trait stays `dyn`-compatible without needing `async-trait`.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -156,6 +158,20 @@ pub enum ControlError {
     Op(String),
 }
 
+/// How long a provider probe may run before it is killed.
+///
+/// Generous, because it makes a network request over a child's Wi-Fi; bounded, because it is
+/// launched by the service on a timer, and one that never returned would stall every later run
+/// behind it.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Most bytes a provider probe may write.
+///
+/// The answer is two integers in a JSON object. The writer runs as the child, and
+/// `foreground::MAX_LINE` is the argument for why a bound on a child-written pipe is not optional:
+/// the reader is the SYSTEM service that enforces the rules.
+pub const MAX_PROBE_OUTPUT: u64 = 4096;
+
 /// The set of remote operations the server can perform on the host machine.
 pub trait SystemControl: Send + Sync + 'static {
     /// Capture the primary monitor at `tier` and return JPEG-encoded bytes ([`SHOT_MIME`]).
@@ -209,6 +225,158 @@ pub trait SystemControl: Send + Sync + 'static {
     /// surprise. Best-effort and **non-blocking**: it returns immediately (the message
     /// auto-dismisses) and never waits for the user to click.
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError>;
+
+    /// Run `exe` as the signed-in child with `input` on its stdin, and return what it wrote to
+    /// stdout — a provider's probe (`config::Probe`).
+    ///
+    /// **As the child, deliberately.** It is the one process here that talks to a third party,
+    /// and it does so under the child's own account with a session the phone forwarded. Running
+    /// it as SYSTEM would put a network client with a child-influenced input inside the most
+    /// privileged process on the machine, which is constraint C1 in `docs/PLUGIN-SYSTEM.md`.
+    ///
+    /// Bounded twice, and every implementation must honour both: [`PROBE_TIMEOUT`], after which
+    /// the process is killed, and [`MAX_PROBE_OUTPUT`], past which the answer is refused. A
+    /// non-zero exit is an error however much it printed — a probe that failed has said nothing
+    /// this side may use.
+    fn run_probe(&self, exe: &Path, input: Vec<u8>) -> Result<Vec<u8>, ControlError>;
+}
+
+/// Turn a finished probe's pipe output into an answer, or into the right refusal.
+///
+/// **Shared by both runners deliberately.** [`run_local_probe`] drives an ordinary child process
+/// and `session::run_probe_in_session` drives one launched into the child's Windows session over
+/// Win32 pipes; the launches have nothing in common, but the three rules that decide whether the
+/// bytes are usable are identical — a run that did not finish is refused, the output must arrive
+/// within what is left of the timeout, and it must be within the bound. Only one of those two
+/// callers can ever execute on the machine this project is developed on, so keeping the rules in
+/// one place is what lets the Windows path inherit logic these tests actually exercise instead of
+/// carrying an untested copy.
+///
+/// It is not hypothetical that the copies drift: they already had. The two spelled the same
+/// timeout sentence with `as_secs_f32` and `as_secs`, so the same failure read differently
+/// depending on which machine produced it.
+///
+/// `timed_out` is the caller's own answer to "did the process outlive the timeout", because the
+/// two learn it differently — one by polling `try_wait`, the other from `WaitForSingleObject`.
+/// The exit *status* stays with the caller for the same reason.
+///
+/// **No single mutation of that flag is observable here, and it is still load-bearing.** Measured,
+/// not assumed: turning this check into `if false` fails no test, and so does replacing
+/// [`run_local_probe`]'s `None` arm with `Ok(output)` — because on this platform a probe that
+/// outran the timeout has no exit status either, so whichever of the two survives answers with the
+/// same refusal. Remove **both** and `a_probe_that_answers_and_then_wedges_is_refused_with_its_answer`
+/// fails, which is what says the pair is defence in depth rather than one of them being dead.
+///
+/// The flag is the half that matters off this platform. A terminated Windows process *does* carry
+/// an exit status — code `1`, from `TerminateProcess` — so without this check a probe that printed
+/// a valid answer and then wedged would be diagnosed as *exited with code 1*, a probe that failed,
+/// rather than as one that never finished. Written down because the alternative is somebody later
+/// deleting a parameter that no single test defends.
+pub(crate) fn collect_probe_output(
+    rx: &std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    timed_out: bool,
+    started: Instant,
+    timeout: Duration,
+    max_output: u64,
+) -> Result<Vec<u8>, ControlError> {
+    let not_finished = || {
+        ControlError::Op(format!(
+            "probe did not finish within {}s",
+            timeout.as_secs_f32()
+        ))
+    };
+    if timed_out {
+        return Err(not_finished());
+    }
+    // The process has exited; its output must arrive within what is left of the timeout. A probe
+    // whose own children keep the pipe open counts as not finished — waiting on the reader thread
+    // instead waits for those children, which is thirty seconds past a timeout of a third of one.
+    let output = rx
+        .recv_timeout(timeout.saturating_sub(started.elapsed()))
+        .map_err(|_| not_finished())?
+        .map_err(|e| ControlError::Op(format!("reading probe output: {e}")))?;
+    // The bound before the exit status: a flooding probe usually dies of the closed pipe, and
+    // "wrote more than N bytes" is the diagnosis, not the signal that killed it.
+    if output.len() as u64 > max_output {
+        return Err(ControlError::Op(format!(
+            "probe wrote more than {max_output} bytes"
+        )));
+    }
+    Ok(output)
+}
+
+/// Run `exe` as *this* process's user with `input` on stdin, bounded by `timeout` and
+/// `max_output`.
+///
+/// The dev-machine runner, and the interactive Windows `run`. The SYSTEM service does not use
+/// it: it launches the probe into the child's session through `session::run_probe_in_session`,
+/// which carries the same two bounds over Win32 pipes. Everything else does, which is what lets a
+/// compiled probe be exercised on a Mac end to end.
+pub fn run_local_probe(
+    exe: &Path,
+    input: &[u8],
+    timeout: Duration,
+    max_output: u64,
+) -> Result<Vec<u8>, ControlError> {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(exe)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| ControlError::Op(format!("could not start probe {}: {e}", exe.display())))?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        return Err(ControlError::Op("probe pipes were not created".into()));
+    };
+    // Written from its own thread and closed there, so a probe that never reads its input cannot
+    // deadlock this side against a full pipe, and one that does read sees EOF after it.
+    let input = input.to_vec();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    // One byte past the bound, so "exactly at" and "over" are distinguishable. Dropping the handle
+    // afterwards closes the pipe, which is what stops a flooding probe rather than letting it fill
+    // a buffer nobody reads.
+    //
+    // A channel rather than a join, because the reader can outlive the probe: killing a shell
+    // script leaves its `sleep` holding the pipe's write end, and a join would wait for that
+    // grandchild — thirty seconds past a timeout of a third of one, measured. The reader ends
+    // when the last holder lets go, and nothing here waits on it beyond `timeout`.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let read = stdout.take(max_output + 1).read_to_end(&mut buf);
+        let _ = tx.send(read.map(|_| buf));
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => {
+                let _ = child.kill();
+                return Err(ControlError::Op(format!("waiting for probe: {e}")));
+            }
+        }
+    };
+    let _ = writer.join();
+    let output = collect_probe_output(&rx, status.is_none(), started, timeout, max_output)?;
+    match status {
+        Some(status) if status.success() => Ok(output),
+        Some(status) => Err(ControlError::Op(format!("probe exited with {status}"))),
+        // Unreachable: `collect_probe_output` refuses a run that never finished, which is the
+        // only way `status` is `None`. Stated as an error rather than an `expect`, because a
+        // panic here would be inside the service that enforces the rules.
+        None => Err(ControlError::Op("probe did not finish".into())),
+    }
 }
 
 /// Show the interactive user a notification from an async context, off the runtime.
@@ -474,5 +642,121 @@ mod tests {
                 "{input:?} must not be read as a preview"
             );
         }
+    }
+
+    // ----- run_local_probe: the dev-machine runner, and the bounds every runner shares -----
+
+    /// A file that is not there is an error naming it, not a hang or an empty answer.
+    #[test]
+    fn a_missing_probe_is_an_error_that_names_it() {
+        let dir = crate::testutil::ScratchDir::new("probe-missing");
+        let path = dir.join("not-here");
+        let err = run_local_probe(&path, b"", PROBE_TIMEOUT, MAX_PROBE_OUTPUT).unwrap_err();
+        assert!(err.to_string().contains("not-here"), "got {err}");
+    }
+
+    #[cfg(unix)]
+    fn script(dir: &crate::testutil::ScratchDir, name: &str, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// The secret goes in on stdin and the answer comes out on stdout — the whole contract.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_reads_its_input_on_stdin_and_is_read_back_from_stdout() {
+        let dir = crate::testutil::ScratchDir::new("probe-cat");
+        let path = script(&dir, "echo-back", "cat");
+        let out = run_local_probe(&path, b"the secret", PROBE_TIMEOUT, MAX_PROBE_OUTPUT).unwrap();
+        assert_eq!(out, b"the secret");
+    }
+
+    /// The reader is bounded, because the writer runs as the child.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_writes_past_the_bound_is_refused_not_buffered() {
+        let dir = crate::testutil::ScratchDir::new("probe-flood");
+        let path = script(&dir, "flood", "head -c 20000 /dev/zero");
+        let err = run_local_probe(&path, b"", PROBE_TIMEOUT, 4096).unwrap_err();
+        assert!(err.to_string().contains("4096"), "got {err}");
+    }
+
+    /// Exactly the bound is an answer, not a flood — the other side of the check above, which is
+    /// what tells `>` from `>=`; mutation testing found this one-sided before it shipped.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_writes_exactly_the_bound_is_read_in_full() {
+        let dir = crate::testutil::ScratchDir::new("probe-exact");
+        let path = script(&dir, "exact", "head -c 4096 /dev/zero");
+        let out = run_local_probe(&path, b"", PROBE_TIMEOUT, 4096).unwrap();
+        assert_eq!(out.len(), 4096);
+    }
+
+    /// A probe that never finishes is killed at the timeout rather than waited on forever.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_outruns_the_timeout_is_killed() {
+        let dir = crate::testutil::ScratchDir::new("probe-hang");
+        let path = script(&dir, "hang", "sleep 30");
+        let started = std::time::Instant::now();
+        let err = run_local_probe(
+            &path,
+            b"",
+            std::time::Duration::from_millis(300),
+            MAX_PROBE_OUTPUT,
+        )
+        .unwrap_err();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the call outlived its timeout by far"
+        );
+        assert!(err.to_string().contains("did not finish"), "got {err}");
+    }
+
+    /// A probe that answered and then wedged has still not finished, and its answer is not used.
+    ///
+    /// The case that separates "bound the wait" from "bound the wait and mean it": the bytes are
+    /// sitting complete and valid in the pipe, so a runner that simply took whatever had arrived
+    /// would grant screen time from a process it had just had to kill. Refusing is the same
+    /// judgement as refusing a non-zero exit — the run did not complete, so nothing it said counts.
+    ///
+    /// **The script closes stdout before it sleeps, and that detail is the whole test.** Without it
+    /// the sleeping process keeps the write end open, the reader never sees EOF, and the answer
+    /// never reaches the channel at all — so the run is refused for having delivered nothing, and
+    /// this passes while pinning something else entirely. It did exactly that on the first attempt.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_answers_and_then_wedges_is_refused_with_its_answer() {
+        let dir = crate::testutil::ScratchDir::new("probe-answer-hang");
+        let path = script(
+            &dir,
+            "answer-hang",
+            "echo '{\"questions\":9,\"minutes\":9}'\nexec 1>&-\nsleep 30",
+        );
+        let err = run_local_probe(
+            &path,
+            b"",
+            std::time::Duration::from_millis(300),
+            MAX_PROBE_OUTPUT,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("did not finish"), "got {err}");
+    }
+
+    /// A probe that exits non-zero has said nothing this side may use.
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_fails_is_an_error_even_if_it_printed_something() {
+        let dir = crate::testutil::ScratchDir::new("probe-exit");
+        let path = script(
+            &dir,
+            "fail",
+            "echo '{\"questions\":9,\"minutes\":9}'; exit 3",
+        );
+        let err = run_local_probe(&path, b"", PROBE_TIMEOUT, MAX_PROBE_OUTPUT).unwrap_err();
+        assert!(err.to_string().contains("exit"), "got {err}");
     }
 }

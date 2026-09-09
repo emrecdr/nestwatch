@@ -919,17 +919,23 @@ pub fn revoke_integration_sessions(
     store.revoke_all(&ids)
 }
 
-/// May a scoped integration reach this request?
+/// May a scoped integration named `source` reach this request?
 ///
-/// **The allowlist is three routes and the third is the one that gets forgotten.** An integration
+/// **The allowlist is three routes and the second is the one that gets forgotten.** An integration
 /// pushes to `/api/extra-time`, and then *reads the grant back* from `/api/usage/today` — it
 /// refuses to tell a parent a number the PC does not show, which is the agreed mitigation for a
 /// replayed idempotency key crossing midnight (`O85`). An allowlist written from the obvious
 /// sentence — "the phone pushes grants" — contains only the first, silently disables the
 /// read-back, and **every test in both repositories still passes**. It was named as a trap by the
 /// session that maintains that client before this was written, which is the only reason it is
-/// not one here. The third route is `GET /p/{token}` itself, which never reaches this function
-/// because pairing is unauthenticated by design.
+/// not one here. (`GET /p/{token}` itself never reaches this function, because pairing is
+/// unauthenticated by design.)
+///
+/// **The third is scoped to the caller's own name.** `POST /api/providers/{source}/secret` lets
+/// the phone forward the session it holds, for the probe this machine runs on the provider's
+/// behalf (`config::Probe`). The path segment must *equal* the scope's source — not merely name an
+/// installed provider — so a pairing minted for one integration cannot overwrite another's
+/// credential. Write-only: nothing an integration can reach reads a secret back.
 ///
 /// `/api/usage/today` stays open to `Scope::Dashboard` for everyone else: it is also the Android
 /// client's, and narrowing a shared route for one caller would break a full dashboard to bound an
@@ -938,11 +944,17 @@ pub fn revoke_integration_sessions(
 /// Matched on the path as this layer sees it, which is *inside* `.nest("/api", …)`. That is
 /// asserted by a test rather than assumed, because the difference between the nested and the
 /// original path is exactly one silent prefix.
-fn integration_may_reach(method: &axum::http::Method, path: &str) -> bool {
-    matches!(
-        (method.as_str(), path),
-        ("POST", "/extra-time" | "/api/extra-time") | ("GET", "/usage/today" | "/api/usage/today")
-    )
+fn integration_may_reach(method: &axum::http::Method, path: &str, source: &str) -> bool {
+    let path = path.strip_prefix("/api").unwrap_or(path);
+    match (method.as_str(), path) {
+        ("POST", "/extra-time") | ("GET", "/usage/today") => true,
+        ("POST", path) => {
+            path.strip_prefix("/providers/")
+                .and_then(|rest| rest.strip_suffix("/secret"))
+                == Some(source)
+        }
+        _ => false,
+    }
 }
 
 /// The fields of today's summary an integration-scoped caller may read.
@@ -1000,9 +1012,11 @@ pub async fn require_auth(
         return Err(AppError::Unauthorized);
     };
     if let crate::pairing::Scope::Integration { source } = &scope {
-        if !integration_may_reach(request.method(), request.uri().path()) {
+        if !integration_may_reach(request.method(), request.uri().path(), source) {
             return Err(AppError::Forbidden(
-                "this pairing may push earned time and read today's total, nothing else".into(),
+                "this pairing may push earned time, read today's total and deposit its own \
+                 secret, nothing else"
+                    .into(),
             ));
         }
         // **The registry is the boundary, for the read as well as the write.** `extra_time`
@@ -1278,5 +1292,37 @@ mod tests {
 
         // …but the parent's IP is unaffected (this is the DoS the global counter allowed).
         assert!(limiter.check(parent).is_ok(), "parent NOT locked out");
+    }
+
+    /// The allowlist is exact, and the third route is scoped to the caller's own name.
+    ///
+    /// A pairing minted for `studygo` may deposit `studygo`'s secret and nobody else's — the
+    /// path segment has to equal the scope's source, not merely name an installed provider.
+    #[test]
+    fn an_integration_reaches_its_own_secret_route_and_nobody_elses() {
+        use axum::http::Method;
+        let may = |method: Method, path: &str| integration_may_reach(&method, path, "studygo");
+        assert!(may(Method::POST, "/extra-time"));
+        assert!(may(Method::GET, "/usage/today"));
+        assert!(may(Method::POST, "/providers/studygo/secret"));
+        assert!(
+            may(Method::POST, "/api/providers/studygo/secret"),
+            "the un-nested spelling too, as the other two routes are matched"
+        );
+        assert!(
+            !may(Method::POST, "/providers/chores/secret"),
+            "another provider's secret is not this pairing's to set"
+        );
+        assert!(
+            !may(Method::POST, "/providers/studygo"),
+            "configuring itself is the parent's"
+        );
+        assert!(!may(Method::POST, "/providers/studygo/delete"));
+        assert!(!may(Method::POST, "/providers/studygo/pair"));
+        assert!(
+            !may(Method::GET, "/providers/studygo/secret"),
+            "the secret is write-only"
+        );
+        assert!(!may(Method::POST, "/providers/studygo/secret/"));
     }
 }

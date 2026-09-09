@@ -3,7 +3,12 @@
 //! It keeps an in-memory process list (so "kill" visibly removes an entry), synthesises a
 //! placeholder JPEG for screenshots, and makes "shutdown" a logged no-op — so you can
 //! exercise every endpoint and the full UI without a Windows box or real side effects.
+//!
+//! One method is not side-effect-free, and it is named: [`SystemControl::run_probe`] runs the
+//! file it is given unless a test scripted an answer. That is the dev path for a provider probe,
+//! and it only ever runs a file a parent configured.
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
@@ -15,6 +20,10 @@ const SHUTDOWN_LOG_CAP: usize = 64;
 /// Same bound, same reason, for [`FakeControl::notifications`]. Higher than shutdowns because a
 /// day's worth of countdown warnings is legitimately more numerous than a day's shutdowns.
 const NOTIFY_LOG_CAP: usize = 128;
+
+/// Same bound, same reason, for [`FakeControl::probe_calls`]. A probe runs a few times an hour,
+/// so this is weeks of a dev server left up.
+const PROBE_LOG_CAP: usize = 128;
 
 pub struct FakeControl {
     processes: Mutex<Vec<ProcessInfo>>,
@@ -45,6 +54,18 @@ pub struct FakeControl {
     /// `tests/translated_strings.rs` guards the shape of these messages statically; this is what
     /// lets a test assert that one actually arrived, and with what in it.
     notifications: Mutex<Vec<(String, String)>>,
+    /// What [`SystemControl::session_state`] answers. Active by default, which is what every test
+    /// written before this field existed assumes and what a dev server wants — the screen-time
+    /// enforcer accrues time exactly as it did. Scriptable because two behaviours are decided by
+    /// this answer and neither could be reached otherwise: the enforcer treats an unreadable state
+    /// as `Active`, so a failure never hands out unlimited time, and `probe::run_once` treats it as
+    /// "do not run", so a failure never spends a request on a third party.
+    session: Mutex<Result<SessionState, String>>,
+    /// A scripted answer for [`SystemControl::run_probe`], or `None` to run the file for real.
+    probe_script: Mutex<Option<Result<Vec<u8>, String>>>,
+    /// Every `(exe, input)` this fake was asked to probe with, in order — so a test can assert
+    /// the caller's half of the contract: which file, with which secret.
+    probe_calls: Mutex<Vec<(PathBuf, Vec<u8>)>>,
 }
 
 impl FakeControl {
@@ -79,7 +100,31 @@ impl FakeControl {
             ]),
             shutdowns: Mutex::new(Vec::new()),
             notifications: Mutex::new(Vec::new()),
+            session: Mutex::new(Ok(SessionState::Active)),
+            probe_script: Mutex::new(None),
+            probe_calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Answer every later [`SystemControl::session_state`] with `answer`.
+    pub fn script_session_state(&self, answer: Result<SessionState, String>) {
+        *self.session.lock().expect("fake session state poisoned") = answer;
+    }
+
+    /// Answer every later [`SystemControl::run_probe`] with `answer` instead of running the file.
+    pub fn script_probe(&self, answer: Result<Vec<u8>, String>) {
+        *self
+            .probe_script
+            .lock()
+            .expect("fake probe script poisoned") = Some(answer);
+    }
+
+    /// Every probe this fake was asked to run, as `(exe, input)`, oldest first.
+    pub fn probe_calls(&self) -> Vec<(PathBuf, Vec<u8>)> {
+        self.probe_calls
+            .lock()
+            .expect("fake probe log poisoned")
+            .clone()
     }
 
     /// Every shutdown this fake was asked for, as `(delay_secs, message)`, oldest first.
@@ -204,9 +249,13 @@ impl SystemControl for FakeControl {
     }
 
     fn session_state(&self) -> Result<SessionState, ControlError> {
-        // Dev/tests: pretend a user is actively at the machine, so the screen-time enforcer
-        // accrues time exactly as it did before this method existed.
-        Ok(SessionState::Active)
+        // Dev/tests: a user is actively at the machine unless a test said otherwise, so the
+        // screen-time enforcer accrues time exactly as it did before this was scriptable.
+        self.session
+            .lock()
+            .expect("fake session state poisoned")
+            .clone()
+            .map_err(ControlError::Op)
     }
 
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
@@ -221,6 +270,29 @@ impl SystemControl for FakeControl {
             log.push((title, body));
         }
         Ok(())
+    }
+
+    /// Scripted when a test asked for it; otherwise the file is genuinely run, as this user. That
+    /// is the one side effect this fake has, and it is the dev path: `nestwatch run` on a Mac with
+    /// a compiled probe in the data dir exercises the whole loop without a Windows box.
+    fn run_probe(&self, exe: &Path, input: Vec<u8>) -> Result<Vec<u8>, ControlError> {
+        {
+            let mut calls = self.probe_calls.lock().expect("fake probe log poisoned");
+            if calls.len() < PROBE_LOG_CAP {
+                calls.push((exe.to_path_buf(), input.clone()));
+            }
+        }
+        let scripted = self
+            .probe_script
+            .lock()
+            .expect("fake probe script poisoned")
+            .clone();
+        match scripted {
+            Some(answer) => answer.map_err(ControlError::Op),
+            None => {
+                super::run_local_probe(exe, &input, super::PROBE_TIMEOUT, super::MAX_PROBE_OUTPUT)
+            }
+        }
     }
 }
 
@@ -328,6 +400,71 @@ mod tests {
             log[SHUTDOWN_LOG_CAP - 1].0,
             SHUTDOWN_LOG_CAP as u32 - 1,
             "the retained window is not the first {SHUTDOWN_LOG_CAP} calls"
+        );
+    }
+
+    /// A scripted answer is what a test gets, and the fake remembers what it was asked so the
+    /// caller's half of the contract — which file, with which secret — is assertable.
+    #[test]
+    fn a_scripted_probe_answers_and_records_what_it_was_asked() {
+        let fake = FakeControl::new();
+        fake.script_probe(Ok(br#"{"questions":12,"minutes":24}"#.to_vec()));
+        let out = fake
+            .run_probe(
+                std::path::Path::new("studygo-probe.exe"),
+                b"the secret".to_vec(),
+            )
+            .unwrap();
+        assert_eq!(out, br#"{"questions":12,"minutes":24}"#);
+        assert_eq!(
+            fake.probe_calls(),
+            vec![(
+                std::path::PathBuf::from("studygo-probe.exe"),
+                b"the secret".to_vec()
+            )]
+        );
+
+        fake.script_probe(Err("no network".into()));
+        let err = fake
+            .run_probe(std::path::Path::new("studygo-probe.exe"), Vec::new())
+            .unwrap_err();
+        assert!(err.to_string().contains("no network"), "got {err}");
+        assert_eq!(fake.probe_calls().len(), 2, "a failure is a call too");
+    }
+
+    /// Unscripted, the fake runs the file for real — the dev path on a Mac — so a compiled probe
+    /// can be exercised end to end without a Windows box.
+    #[cfg(unix)]
+    #[test]
+    fn an_unscripted_probe_runs_the_file_and_hands_it_the_secret() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = crate::testutil::ScratchDir::new("fake-probe");
+        let path = dir.join("echo-back");
+        std::fs::write(&path, "#!/bin/sh\ncat\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = FakeControl::new()
+            .run_probe(&path, b"hello".to_vec())
+            .unwrap();
+        assert_eq!(out, b"hello");
+    }
+
+    /// The probe log keeps the oldest `PROBE_LOG_CAP` calls and not one more — the same bound,
+    /// for the same reason, as the shutdown log above. Mutation testing found the comparison
+    /// one-sided: `<` and `<=` both keep the first call, and only counting tells them apart.
+    #[test]
+    fn the_probe_log_is_capped_at_the_oldest_calls() {
+        let fake = FakeControl::new();
+        fake.script_probe(Ok(b"{}".to_vec()));
+        for i in 0..PROBE_LOG_CAP + 5 {
+            let _ = fake.run_probe(std::path::Path::new("probe"), i.to_string().into_bytes());
+        }
+        let log = fake.probe_calls();
+        assert_eq!(log.len(), PROBE_LOG_CAP, "the cap must hold exactly");
+        assert_eq!(log[0].1, b"0", "the oldest call is the one kept");
+        assert_eq!(
+            log[PROBE_LOG_CAP - 1].1,
+            (PROBE_LOG_CAP - 1).to_string().into_bytes(),
+            "the retained window is the first {PROBE_LOG_CAP} calls"
         );
     }
 }

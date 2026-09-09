@@ -13,8 +13,9 @@
 //! Requires `SE_TCB_NAME` (SYSTEM has it). All `unsafe` FFI; compile/link-checked via the
 //! Windows target and must be runtime-verified on an actual Windows machine.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::os::windows::io::FromRawHandle;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
@@ -30,15 +31,15 @@ use windows::Win32::System::RemoteDesktop::{
     WTSINFOEXW, WTSQuerySessionInformationW, WTSQueryUserToken, WTSSendMessageW, WTSSessionInfoEx,
 };
 use windows::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, PROCESS_INFORMATION,
-    STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetExitCodeProcess,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONWARNING, MB_OK, MB_SYSTEMMODAL, MESSAGEBOX_RESULT,
 };
 use windows::core::{PCWSTR, PWSTR};
 
-use crate::control::{ControlError, SessionState, ShotTier};
+use crate::control::{ControlError, MAX_PROBE_OUTPUT, PROBE_TIMEOUT, SessionState, ShotTier};
 
 const HELPER_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -358,12 +359,31 @@ fn spawn_piped(
     exe: &str,
     args: &str,
 ) -> Result<(std::fs::File, PROCESS_INFORMATION), ControlError> {
+    let (stdout, _, proc_info) = spawn_piped_io(exe, args, false)?;
+    Ok((stdout, proc_info))
+}
+
+/// [`spawn_piped`] with an optional **stdin** pipe as well, for the provider probe: the child
+/// inherits the read end of a second pipe and the caller gets the write end, so a secret can be
+/// handed to a process running as the child without ever touching its command line — which any
+/// process of the child's can read — or a file.
+///
+/// The three handles the caller receives: the stdout read end, the stdin write end when asked
+/// for, and the process information. The `File`s close their pipe ends on drop; the process
+/// handles must be `CloseHandle`d.
+fn spawn_piped_io(
+    exe: &str,
+    args: &str,
+    with_stdin: bool,
+) -> Result<(std::fs::File, Option<std::fs::File>, PROCESS_INFORMATION), ControlError> {
     // SAFETY: Win32 token/pipe/process FFI. Every handle acquired here is either released before
-    // returning or handed to the caller, and the read end becomes a File that closes on drop.
+    // returning or handed to the caller, and the pipe ends the caller keeps become `File`s that
+    // close on drop.
     unsafe {
         let primary = active_session_token().map_err(ControlError::Capture)?;
 
-        // Pipe: child inherits the write end; parent keeps the (non-inheritable) read end.
+        // Pipes: the child inherits the write end of stdout (and the read end of stdin); the
+        // parent keeps the other ends, made non-inheritable so the child cannot hold them open.
         let sa = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: std::ptr::null_mut(),
@@ -377,22 +397,44 @@ fn spawn_piped(
         }
         let _ = SetHandleInformation(read, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
 
+        let mut in_read = HANDLE::default();
+        let mut in_write = HANDLE::default();
+        if with_stdin && let Err(e) = CreatePipe(&mut in_read, &mut in_write, Some(&sa), 0) {
+            let _ = CloseHandle(read);
+            let _ = CloseHandle(write);
+            let _ = CloseHandle(primary);
+            return Err(cap("CreatePipe (stdin)", e));
+        }
+        if with_stdin {
+            let _ = SetHandleInformation(in_write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+        }
+
         // Environment block for the target user (so %PATH% etc. resolve on their side).
         let mut env_block: *mut core::ffi::c_void = std::ptr::null_mut();
         let have_env = CreateEnvironmentBlock(&mut env_block, Some(primary), false).is_ok();
 
         let mut desktop = to_wide(r"winsta0\default");
-        // hStdError/hStdInput are left null by `..Default::default()`: the helper writes only its
-        // payload to stdout, so nothing can corrupt the stream.
+        // hStdError is left null by `..Default::default()`, and hStdInput too unless a pipe was
+        // asked for: the helper writes only its payload to stdout, so nothing can corrupt the
+        // stream.
         let startup = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
             lpDesktop: PWSTR(desktop.as_mut_ptr()),
             dwFlags: STARTF_USESTDHANDLES,
             hStdOutput: write,
+            hStdInput: if with_stdin {
+                in_read
+            } else {
+                HANDLE::default()
+            },
             ..Default::default()
         };
 
-        let mut cmdline = to_wide(&format!("\"{exe}\" {args}"));
+        let mut cmdline = to_wide(&if args.is_empty() {
+            format!("\"{exe}\"")
+        } else {
+            format!("\"{exe}\" {args}")
+        });
         let mut proc_info = PROCESS_INFORMATION::default();
         let spawn = CreateProcessAsUserW(
             Some(primary),
@@ -400,7 +442,7 @@ fn spawn_piped(
             Some(PWSTR(cmdline.as_mut_ptr())),
             None::<*const SECURITY_ATTRIBUTES>,
             None::<*const SECURITY_ATTRIBUTES>,
-            true, // inherit handles (the pipe write end)
+            true, // inherit handles (the pipe ends meant for the child)
             CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
             if have_env { Some(env_block) } else { None },
             None,
@@ -408,9 +450,12 @@ fn spawn_piped(
             &mut proc_info,
         );
 
-        // Parent no longer needs the write end (must close it to receive EOF), the env
-        // block, or the token.
+        // Parent no longer needs the child's ends (must close them to receive EOF and to deliver
+        // it), the env block, or the token.
         let _ = CloseHandle(write);
+        if with_stdin {
+            let _ = CloseHandle(in_read);
+        }
         if have_env {
             let _ = DestroyEnvironmentBlock(env_block);
         }
@@ -418,10 +463,81 @@ fn spawn_piped(
 
         if let Err(e) = spawn {
             let _ = CloseHandle(read);
+            if with_stdin {
+                let _ = CloseHandle(in_write);
+            }
             return Err(cap("CreateProcessAsUserW", e));
         }
 
-        Ok((std::fs::File::from_raw_handle(read.0), proc_info))
+        let stdin = with_stdin.then(|| std::fs::File::from_raw_handle(in_write.0));
+        Ok((std::fs::File::from_raw_handle(read.0), stdin, proc_info))
+    }
+}
+
+/// Run a provider probe in the active console session with `input` on its stdin, bounded by
+/// [`PROBE_TIMEOUT`] and [`MAX_PROBE_OUTPUT`] — the service-side half of
+/// `SystemControl::run_probe`.
+///
+/// The same launch as the screenshot helper, plus the stdin pipe [`spawn_piped_io`] describes.
+/// The secret is written from its own thread and the pipe closed after it, so the probe reads EOF
+/// once it has the secret and a probe that never reads cannot wedge this side. Unlike the capture
+/// helper there is no watchdog thread: this thread waits on the process itself, so a probe that
+/// closed stdout and kept running is bounded by the same timeout as one that never wrote.
+///
+/// **Never executed on Windows yet** — compile- and lint-checked for the target, like the rest of
+/// this file, and listed in `docs/WINDOWS-TESTING.md`.
+pub fn run_probe_in_session(exe: &Path, input: Vec<u8>) -> Result<Vec<u8>, ControlError> {
+    let exe = exe.to_string_lossy().into_owned();
+    let (mut stdout, stdin, proc_info) = spawn_piped_io(&exe, "", true)?;
+    let Some(mut stdin) = stdin else {
+        return Err(ControlError::Op("probe stdin pipe was not created".into()));
+    };
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&input);
+    });
+    // A channel rather than a join, for the reason `control::run_local_probe` gives: a killed
+    // probe's own children may still hold the pipe, and nothing here waits on them past the
+    // timeout.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let read = (&mut stdout)
+            .take(MAX_PROBE_OUTPUT + 1)
+            .read_to_end(&mut buf);
+        drop(stdout);
+        let _ = tx.send(read.map(|_| buf));
+    });
+    let started = Instant::now();
+
+    // SAFETY: Win32 process FFI. `proc_info`'s handles come from `spawn_piped_io` and are closed
+    // exactly once, below, after the last call that uses them.
+    unsafe {
+        let timed_out = WaitForSingleObject(proc_info.hProcess, PROBE_TIMEOUT.as_millis() as u32)
+            == WAIT_TIMEOUT;
+        if timed_out {
+            let _ = TerminateProcess(proc_info.hProcess, 1);
+        }
+        let mut code: u32 = 0;
+        let exit = GetExitCodeProcess(proc_info.hProcess, &mut code);
+        let _ = CloseHandle(proc_info.hProcess);
+        let _ = CloseHandle(proc_info.hThread);
+
+        let _ = writer.join();
+        // The timeout, the remaining-time wait and the size bound are decided by
+        // `control::collect_probe_output`, which the host runner also uses and the tests on this
+        // machine actually exercise — see its doc for why this half must not carry its own copy.
+        let output = crate::control::collect_probe_output(
+            &rx,
+            timed_out,
+            started,
+            PROBE_TIMEOUT,
+            MAX_PROBE_OUTPUT,
+        )?;
+        match exit {
+            Ok(()) if code == 0 => Ok(output),
+            Ok(()) => Err(ControlError::Op(format!("probe exited with code {code}"))),
+            Err(e) => Err(ControlError::Op(format!("GetExitCodeProcess: {e}"))),
+        }
     }
 }
 

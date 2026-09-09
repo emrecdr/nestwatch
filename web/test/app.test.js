@@ -2471,6 +2471,69 @@ test("routineScheduleLabel accounts for windows the editor cannot show", () => {
   assert.match(label, /\+1 more/);
 });
 
+// --- The probe's status line -----------------------------------------------------------------
+//
+// One sentence under the integration row that says what the last check found and whether the
+// phone's session is still there. Built entirely from the language tables, because the guard at
+// the foot of this file pins the set of methods allowed to assemble English, and this one is not
+// joining it.
+
+test("probeSummary says nothing for a provider that runs no probe", () => {
+  const app = withState({ lang: "en" });
+  assert.equal(app.probeSummary({ probeExe: "", probeStatus: null, secretAt: null }), "");
+});
+
+test("probeSummary reports a probe that has never run and no session yet", () => {
+  const app = withState({ lang: "en" });
+  assert.equal(
+    app.probeSummary({ probeExe: "studygo-probe.exe", probeStatus: null, secretAt: null }),
+    "Not checked yet · No session from the phone yet",
+  );
+});
+
+test("probeSummary reads the last check back: when, what was found, what it earned", () => {
+  const app = withState({ lang: "en" });
+  const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000 - 1000).toISOString();
+  const line = app.probeSummary({
+    probeExe: "studygo-probe.exe",
+    probeStatus: { at: "2026-09-08T16:00:00+02:00", questions: 12, minutes: 5, granted: 16 },
+    secretAt: twoDaysAgo,
+  });
+  assert.match(line, /^Checked at \d\d:\d\d · 12 questions · 5 min practised · \+16 min · /);
+  assert.match(line, /Session from the phone: 2 days ago$/);
+});
+
+test("probeSummary names a refusal in the parent's words and a failure in the probe's", () => {
+  const app = withState({ lang: "en" });
+  const today = new Date().toISOString();
+  const refused = app.probeSummary({
+    probeExe: "p",
+    probeStatus: { at: today, questions: 3, minutes: 1, refused: "below_threshold" },
+    secretAt: today,
+  });
+  assert.match(refused, /3 questions · 1 min practised · Nothing added: below the bar · Session from the phone: today$/);
+  for (const [reason, words] of [
+    ["already_granted_today", "already earned today"],
+    ["daily_cap_reached", "today's maximum reached"],
+  ]) {
+    const line = app.probeSummary({ probeExe: "p", probeStatus: { at: today, refused: reason }, secretAt: null });
+    assert.match(line, new RegExp(`Nothing added: ${words.replace("'", "'")} · No session`));
+  }
+  const failed = app.probeSummary({
+    probeExe: "p",
+    probeStatus: { at: today, error: "probe exited with code 3" },
+    secretAt: null,
+  });
+  assert.match(failed, /^Checked at \d\d:\d\d · Check failed: probe exited with code 3 · No session from the phone yet$/);
+});
+
+test("probeSummary is translated, not assembled in English", () => {
+  const app = withState({ lang: "nl" });
+  const line = app.probeSummary({ probeExe: "p", probeStatus: null, secretAt: null });
+  assert.equal(line, app.t("probeNotRunYet") + " · " + app.t("noSessionYet"));
+  assert.notEqual(line, "Not checked yet · No session from the phone yet");
+});
+
 // --- The Integrations/Devices join (F6) -------------------------------------------------------
 
 test("pairingSummary says nothing until the device list has actually been fetched", () => {

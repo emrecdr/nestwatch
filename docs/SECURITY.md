@@ -67,9 +67,10 @@ Two properties of that list are load-bearing:
 **Every row above needs a session whose scope is `Dashboard`.** A pairing token records what it is
 worth when it is *minted*, and redeeming it carries that across: `nestwatch pair` mints a dashboard
 token, which is what a person scanning it needs and what the Android app needs;
-`nestwatch pair --integration <name>` mints one that may reach `POST /api/extra-time` and
-`GET /api/usage/today` and nothing else, and whose grants are attributed to `<name>` whatever the
-request body says.
+`nestwatch pair --integration <name>` mints one that may reach `POST /api/extra-time`,
+`GET /api/usage/today` and `POST /api/providers/<name>/secret` — its own name only, to forward the
+session a probe runs with — and nothing else, and whose grants are attributed to `<name>` whatever
+the request body says.
 
 **And only while `<name>` is installed and enabled** — the registry entry is the authority, not
 merely the policy. Switching an integration off refuses both of its routes, and removing it revokes
@@ -702,6 +703,15 @@ than a process name and less than a browsing history:
 second counts, and nothing else. A new field fails it, so the paragraph above cannot drift from
 the code without somebody noticing.
 
+**A forwarded StudyGo session, if a parent set up a probe.** `POST /api/providers/{name}/secret`
+stores whatever the phone (or the parent) deposits — for StudyGo, the child's own session token,
+good for roughly ten days — as a file under `secrets/` in the ACL-locked data dir. It is never
+written into `config.json`, so neither `/api/policy` nor `/api/export` carries it; nothing
+authenticated can read it back, and the registry lists only *when* it was deposited; it is forgotten
+by a `null` deposit and by uninstalling the provider. It is handed to the probe on stdin, never on a
+command line, and the probe runs as the child — whose own account it is, and who already holds that
+session in his browser, so the process exposes nothing to him he does not have.
+
 **Two Windows APIs the dependency list makes look worse than they are.** `Cargo.toml` enables
 `Win32_UI_Accessibility` and `Win32_UI_Input_KeyboardAndMouse`, both of which sound like the
 keylogging this project refuses. They are:
@@ -775,6 +785,17 @@ check, no telemetry, no licence call, no crash reporting. `src/` contains no HTT
 outgoing socket anywhere is `doctor`'s probe of `127.0.0.1` to confirm the service bound its port.
 A test pins this by asserting the Content-Security-Policy names exactly one external host and that
 `default-src` stays `'none'`.
+
+**One opt-in exception, and it is not the service.** A parent who names a *probe* for an integration
+(*Check from this PC* on the Integrations card) asks this machine to run that program on a schedule,
+**as the child**, from the program directory he cannot write to, with the session the phone forwarded.
+That program contacts the provider — StudyGo, for the one it was built for — under the child's own
+account, at most once per configured interval (five minutes at the least), and only while he is signed
+in and has not already earned the day's ceiling. The service itself still contacts nothing, `src/`
+still has no HTTP client, and a household that names no probe is exactly where it was before this
+paragraph existed. [PLUGIN-SYSTEM.md](PLUGIN-SYSTEM.md) records why the request is made by a
+child-context process rather than by the service, what bounds a probe that lies, and that the Windows
+launch has never executed.
 
 That one host is `api.github.com`, and the distinction matters: it is reachable **from the
 dashboard page**, which runs in the parent's browser on the parent's own device. The button that

@@ -42,7 +42,7 @@ use common::{PASSWORD, app_with_audit_file, body_json, crate_sources, get, login
 /// to do with the module they live in: the first is only recorded when the submission was
 /// **accepted**, and acceptance is capped at `timereq::MAX_PENDING` until a parent resolves one; the
 /// second is only recorded on a **valid** code, of which at most `timecode::MAX_ACTIVE_CODES` exist.
-const CLASSIFIED: [(&str, bool); 34] = [
+const CLASSIFIED: [(&str, bool); 36] = [
     // auth.rs — the only module where an unauthenticated caller reaches a writer.
     ("\"auth_failure\"", true), // no credential at all; 5/min/IP from the login limiter
     ("\"pair_failed\"", true),  // no credential; coalesced onto the lockout, so 1/min/IP
@@ -77,6 +77,10 @@ const CLASSIFIED: [(&str, bool); 34] = [
     ("\"extra_time_granted\"", false),
     ("\"provider_configured\"", false), // POST /api/providers, behind require_auth
     ("\"provider_removed\"", false),    // POST /api/providers/{name}/delete, behind require_auth
+    // POST /api/providers/{name}/secret, behind require_auth. Reachable by an integration pairing
+    // as well as a parent, but only for its own name, and each call replaces one file.
+    ("\"provider_secret_stored\"", false),
+    ("\"provider_secret_forgotten\"", false),
     // POST /api/providers/{name}/pair. Behind `require_auth` *and* a password re-entry, so it is
     // paced twice over: a live session is not enough to reach either one.
     ("\"pairing_minted\"", false),

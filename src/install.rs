@@ -622,7 +622,7 @@ fn prompt_for_password() -> Result<String> {
 }
 
 #[cfg(windows)]
-fn install_dir() -> std::path::PathBuf {
+pub(crate) fn install_dir() -> std::path::PathBuf {
     use std::path::PathBuf;
     std::env::var_os("ProgramFiles")
         .map(PathBuf::from)

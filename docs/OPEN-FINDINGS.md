@@ -2003,3 +2003,29 @@ to `::backdrop`, and `web.rs`'s CSP-expression guard constrains what the markup 
 is hard, but all of it is behaviour no test in this repository can observe — the suite has no browser
 — so it wants verifying by hand on a real page rather than reasoning about. Writing an unverified
 focus trap would trade a documented gap for an undocumented one.
+
+### O101 · The gate has no voice: nothing tells the child what the probe found or what would earn more
+
+`probe::run_once` grants and refuses in silence. The plan this was built to (`PLUGIN-SYSTEM.md`,
+*A probe, and the machine's first outbound request*) describes a child who sees one calm notice when
+nothing has been practised — *fifteen questions or half an hour adds thirty; so far: none* — and a
+short "nice" when a rung is cleared. Neither exists: the probe's outcome reaches the parent's
+dashboard through `probe_status` and reaches the child nowhere.
+
+`SystemControl::notify_user` is the channel, `rules.rs` already sends translated, address-carrying
+notices through it, and `tests/translated_strings.rs` guards their shape — so the mechanics are there.
+What is missing is the decision of *when* to speak (not on every refused run; once a day for "nothing
+yet", once per rung cleared) and the three-language copy, which this project treats as a decision
+rather than a detail (`O96`). Until it lands, a child who does not know the rule sees his time extend
+or not with no explanation, which is the controlling-parent failure mode the plan's research warns
+against.
+
+### O102 · A dead probe scheduler looks exactly like a probe that is not due
+
+`probe::run_scheduler` deliberately stamps no `heartbeat` — its doc says why: it enforces nothing,
+and its silent death is the base budget by design. The consequence for the parent is that a
+`probe_status.at` going stale has two readings, *the scheduler is dead* and *nothing has been due*,
+and the dashboard cannot separate them. `rules` and `curfew` solved the same problem with
+`heartbeat::Enforcer` and the *enforcement alive* banner. Adding a third variant is small; deciding
+what the banner says when only this loop is dead, and whether `doctor` should report it, is the part
+left open.

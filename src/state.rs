@@ -91,6 +91,8 @@ pub struct AppState {
     /// Held here (rather than built inside `build_router`) so tests can swap in an ephemeral
     /// store and never touch the real data dir.
     pub sessions: FileSessionStore,
+    /// The last run of each provider's probe, for the dashboard. See [`crate::probe`].
+    pub probe_status: crate::probe::StatusMap,
 }
 
 impl AppState {
@@ -132,6 +134,7 @@ impl AppState {
             status_limiter: Arc::new(SubmitLimiter::new(30, std::time::Duration::from_secs(60))),
             enforcement_wake: Arc::new(tokio::sync::watch::channel(0).0),
             sessions,
+            probe_status: Arc::new(std::sync::Mutex::new(Default::default())),
         }
     }
 }

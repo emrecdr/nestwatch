@@ -80,7 +80,7 @@ pub const MAX_ROUTINE_NAME: usize = 40;
 /// authenticated request and lives in the persisted config, so without a ceiling a caller with
 /// the parent's session can grow `config.json` without limit — and every save rewrites the whole
 /// file. Twelve is far above any real household: an integration is one homework or chores signal,
-/// and `api::MAX_EARNED_SOURCES` already refuses to let more than sixteen distinct sources grant
+/// and [`MAX_EARNED_SOURCES`] already refuses to let more than sixteen distinct sources grant
 /// on one day, so a registry larger than that could not all be used anyway.
 ///
 /// Paired with the delete route by necessity, not by taste. A cap with no way to remove an entry
@@ -118,6 +118,27 @@ pub const MAX_TIER_QUESTIONS: u32 = 1000;
 /// judgement — a threshold above 1440 asks for more minutes than the day contains.
 pub const MAX_TIER_MINUTES: u32 = 24 * 60;
 
+/// Fewest minutes between two runs of one provider's probe.
+///
+/// A floor rather than a free choice, because the request lands on a third party's API under the
+/// child's own account. StudyGo's risk register (in the Voortgang repository) rates a
+/// terms-of-service objection as "account action" and relies on minimal request volume as the
+/// mitigation. The gate's design polls every fifteen minutes and stops for the day once the bar is
+/// met — about a dozen requests a day; five minutes is the least a parent can ask for here.
+pub const MIN_PROBE_MINS: u32 = 5;
+/// Most minutes between two runs. Bounded like every other minutes field so the dashboard's box
+/// has a limit `web.rs` can hold it to. Four hours is already a probe that fires once an
+/// afternoon; past that the field becomes a way of switching a probe off that reads as leaving it
+/// on.
+pub const MAX_PROBE_MINS: u32 = 240;
+/// Longest probe file name accepted. Well past any real name, and the value is written into the
+/// audit log and shown on the dashboard, so it must not be able to be a paragraph.
+pub const MAX_PROBE_NAME: usize = 64;
+/// Most distinct non-`parent` sources that may grant on one day. Bounds [`Config::earned`], which
+/// lives in the persisted config: a compromised parent session must not be able to grow that file
+/// without limit.
+pub const MAX_EARNED_SOURCES: usize = 16;
+
 /// A saved, named preset of usage [`Rules`](crate::rules::Rules) — e.g. "Homework", "Weekend" —
 /// that the parent can apply to the live rules with one click.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -152,12 +173,19 @@ pub struct Routine {
 /// An installed integration that may push earned bonus time.
 ///
 /// Deliberately tiny: an integration is enable/disable plus the reward its
-/// signal earns. It carries no endpoint, no credential, and no code — the
-/// gathering happens off this machine (on the parent's phone) and arrives as
-/// an authenticated push, which is what keeps the monitored PC from ever
-/// dialing out. See `docs/PLUGIN-SYSTEM.md` for why this shape and not a
-/// loaded module.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// signal earns. By default it carries no endpoint, no credential, and no
+/// code — the gathering happens off this machine (on the parent's phone) and
+/// arrives as an authenticated push, which is what keeps the monitored PC
+/// from ever dialing out. See `docs/PLUGIN-SYSTEM.md` for why this shape and
+/// not a loaded module.
+///
+/// The one exception is opt-in and named: a [`Probe`]. A parent who sets one
+/// asks this machine to run a program *as the child* on a timer and judge
+/// what it prints, which is the half of a gate a phone cannot do. It changes
+/// nothing about how the answer is judged — a probe's two numbers go through
+/// [`Config::earn`] exactly as a push's do — and it is absent from every
+/// config that has not asked for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provider {
     /// Whether this provider may currently grant. A disabled provider's push
     /// is refused, so turning an integration off is one switch, not a
@@ -204,6 +232,12 @@ pub struct Provider {
     /// against it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tiers: Vec<Tier>,
+    /// A program to run as the child, on a timer, to ask what he has done
+    /// today. See [`Probe`]. Absent — the default, and every config written
+    /// before it existed — means this provider is push-only, exactly as it
+    /// always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<Probe>,
 }
 
 /// One step of a provider's reward ladder: what the child has to have done, and what it earns.
@@ -241,6 +275,61 @@ impl Tier {
     }
 }
 
+/// A program this machine runs, as the child, to ask a provider what the child has done today.
+///
+/// The half of a gate the phone cannot do. Voortgang signs in to StudyGo and forwards the session
+/// (`POST /api/providers/{name}/secret`), but a phone in a pocket cannot ask every fifteen
+/// minutes; the PC can, and this names what it runs. The program reads the deposited secret on
+/// stdin, prints one JSON object — `{"questions": 12, "minutes": 24}` — and exits. This machine
+/// judges those numbers against the provider's [`Provider::tiers`] exactly as it judges a push,
+/// so a probe is never trusted to decide anything. See `docs/PLUGIN-SYSTEM.md`, *A probe, and the
+/// machine's first outbound request*.
+///
+/// **A file name, never a path.** It is resolved inside the program directory, which the child
+/// can execute from and cannot write to (`install::harden_program_dir`). A path would let a
+/// parent point at a file on the desktop, which the child could replace with one that prints
+/// whatever he likes. The ceiling would still bound the damage, but the property that the probe
+/// *cannot be swapped* is worth more than the flexibility, and a parent who wants a different
+/// probe copies it into that directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Probe {
+    /// The file to run, inside the program directory.
+    pub exe: String,
+    /// Minutes between runs while the child is signed in, within
+    /// [`MIN_PROBE_MINS`]..=[`MAX_PROBE_MINS`].
+    pub every_mins: u32,
+}
+
+impl Probe {
+    /// Refuse anything that is not a bare, bounded file name with a bounded interval.
+    ///
+    /// The charset is deliberately narrow: letters, digits, `.`, `_` and `-`, not starting with a
+    /// dot. No separator of either platform, no drive letter, no whitespace — the name is joined
+    /// to a directory and must not be able to leave it, and it is written verbatim into the
+    /// audit log, where nothing may fake a line break or a quote.
+    pub fn validate(&self) -> Result<(), String> {
+        let name = &self.exe;
+        let bare = !name.is_empty()
+            && name.len() <= MAX_PROBE_NAME
+            && !name.starts_with('.')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        if !bare {
+            return Err(format!(
+                "probe must be a bare file name of 1-{MAX_PROBE_NAME} letters, digits, '.', '_' \
+                 or '-', not starting with '.'"
+            ));
+        }
+        if !(MIN_PROBE_MINS..=MAX_PROBE_MINS).contains(&self.every_mins) {
+            return Err(format!(
+                "probe interval must be {MIN_PROBE_MINS}-{MAX_PROBE_MINS} minutes"
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl Provider {
     /// What one push is worth, given whatever it reported about the work behind it.
     ///
@@ -266,6 +355,34 @@ impl Provider {
                 .max(),
         }
     }
+
+    /// Whether another grant today could pay anything — the question the probe scheduler asks
+    /// before spending a request, so a source paid in full stops being polled for the day.
+    ///
+    /// Reads the same entry [`Config::earn`] writes, under the same rules: with no ceiling the
+    /// first grant latches the day; with one, an untracked entry counts as the ceiling reached
+    /// (see [`EarnedDay::minutes`]) and a tracked one is compared against it. An entry from
+    /// another day says nothing about today.
+    pub fn exhausted_for(&self, today: NaiveDate, earned: Option<&EarnedDay>) -> bool {
+        let Some(entry) = earned.filter(|e| e.date == today) else {
+            return false;
+        };
+        match (self.daily_cap_mins, entry.minutes) {
+            (None, _) | (Some(_), None) => true,
+            (Some(cap), Some(used)) => used >= cap,
+        }
+    }
+}
+
+/// How a provider grant came out. See [`Config::earn`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Earn {
+    /// Minutes were added to today's budget — the reward, or what was left of the ceiling.
+    Granted(u32),
+    /// An ordinary outcome that moved nothing: `already_granted_today`, `daily_cap_reached` or
+    /// `below_threshold`. On the wire this is `200 {ok: false, reason}`, and the reason values
+    /// are a cross-repo contract — Voortgang branches on the flag and shows the reason.
+    Refused(&'static str),
 }
 
 /// What one grant source has already been given on one local day.
@@ -686,6 +803,106 @@ impl Config {
         }
     }
 
+    /// Grant earned time from `source` for what it reported about today, or say why not.
+    ///
+    /// **The one place a provider grant is decided.** `api::extra_time` calls it for a push from
+    /// the phone and `probe::run_once` for a probe this machine ran itself. The two arrive by
+    /// different roads — one authenticated over the LAN, one launched as the child and read back
+    /// over a pipe — and neither is believed about anything but the two numbers it reports: the
+    /// provider must exist and be on, the reward is the registry's, the day latch or the ceiling
+    /// is applied, and only then does the budget move.
+    ///
+    /// `Err` rejects the request itself — no such provider, turned off, too many sources today.
+    /// `Ok(Refused)` is an ordinary answer that changed nothing. `Ok(Granted)` has already moved
+    /// [`Config::extra`] and written [`Config::earned`]. A caller holding the config write guard
+    /// through a persist sees the three as one atomic step, which is what stops two grants from
+    /// the same source racing past the latch — the reason the callers run this inside
+    /// `try_update_config` rather than before it.
+    pub fn earn(
+        &mut self,
+        source: &str,
+        today: NaiveDate,
+        reported: Option<(u32, u32)>,
+    ) -> Result<Earn, String> {
+        // A provider grant is governed by the registry: it must name an enabled provider, and
+        // the reward is that provider's — read here, never taken from the push.
+        let (mut minutes, ceiling) = {
+            let provider = self.provider_authority(source)?;
+            match provider.reward_for(reported) {
+                Some(reward) => (reward, provider.daily_cap_mins),
+                // Work was reported and it meets no tier. Not an error: a client that pushes
+                // whatever it sees and lets this machine judge is exactly what tiers are for, so
+                // "not yet" has to be an ordinary answer rather than a rejection. Unreachable for
+                // a provider with no tiers configured.
+                None => return Ok(Earn::Refused("below_threshold")),
+            }
+        };
+        // Read out as an owned value, not held as a borrow: the map is mutated a few lines
+        // below, and `Option<Option<u32>>` says the two things that matter separately — whether
+        // this source has an entry for today at all, and whether that entry's amount was ever
+        // measured.
+        let spent = self
+            .earned
+            .get(source)
+            .filter(|entry| entry.date == today)
+            .map(|entry| entry.minutes);
+        match (ceiling, spent) {
+            // The original rule, and the one every config that has not opted in takes: one
+            // grant per source per day, whatever it was worth.
+            (None, Some(_)) => return Ok(Earn::Refused("already_granted_today")),
+            // A ceiling is configured, but this source's earlier grant today was never measured —
+            // an older build wrote it, or the ceiling was added after it landed. Refusing is the
+            // conservative reading; `EarnedDay::minutes` gives the argument for why the
+            // alternative hands out a second full reward.
+            (Some(_), Some(None)) => return Ok(Earn::Refused("daily_cap_reached")),
+            (Some(cap), Some(Some(used))) => {
+                let room = cap.saturating_sub(used);
+                if room == 0 {
+                    return Ok(Earn::Refused("daily_cap_reached"));
+                }
+                // The last grant of a day is worth the remainder, not the full reward.
+                //
+                // **Deliberately not the rejection an over-quota API call would get**, and the
+                // difference is that a provider never asks for an amount: there is no request to
+                // half-fulfil. The client asserts a threshold was met and this machine answers
+                // what that is worth today, which near the ceiling is the remainder. Rejecting
+                // instead would take the work and pay nothing for it — the failure this whole
+                // feature exists to avoid.
+                //
+                // The ceiling still binds exactly: `used + minutes <= cap` by construction here
+                // and in the arm below, so `tracked` can never pass `cap` however many times a
+                // client pushes.
+                minutes = minutes.min(room);
+            }
+            // A ceiling below the single-grant reward still binds on the first push.
+            (Some(cap), None) => minutes = minutes.min(cap),
+            (None, None) => {}
+        }
+        // Only a **new** source can hit the ceiling on distinct sources. The original rule made a
+        // second push from a counted source unreachable, so the check never had to exclude one;
+        // a ceiling makes it ordinary, and without this clause a household at the limit would
+        // start refusing exactly the sources it had already admitted.
+        if spent.is_none()
+            && self.earned.values().filter(|e| e.date == today).count() >= MAX_EARNED_SOURCES
+        {
+            return Err("too many earned-time sources today".into());
+        }
+        self.earned.retain(|_, entry| entry.date == today);
+        // Measured only where a ceiling governs it. Writing `Some` unconditionally would change
+        // the shape of a config that never opted in, which is the single thing `EarnedDay`'s
+        // hand-written serde impls exist to prevent.
+        let tracked = ceiling.map(|_| spent.flatten().unwrap_or(0) + minutes);
+        self.earned.insert(
+            source.to_string(),
+            EarnedDay {
+                date: today,
+                minutes: tracked,
+            },
+        );
+        self.extra.add(today, minutes);
+        Ok(Earn::Granted(minutes))
+    }
+
     pub fn rules_at(&self, at: DateTime<FixedOffset>) -> &crate::rules::Rules {
         self.scheduled_routine_at(at)
             .map_or(&self.rules, |r| &r.rules)
@@ -857,6 +1074,7 @@ mod tests {
                     reward_mins: 30,
                 },
             ],
+            probe: None,
         }
     }
 
@@ -940,6 +1158,7 @@ mod tests {
             minutes: 25,
             daily_cap_mins: None,
             tiers: Vec::new(),
+            probe: None,
         };
         assert_eq!(
             plain.reward_for(Some((0, 0))),
@@ -999,6 +1218,7 @@ mod tests {
             minutes: 30,
             daily_cap_mins: None,
             tiers: Vec::new(),
+            probe: None,
         };
         assert_eq!(
             serde_json::to_string(&provider).unwrap(),
@@ -1025,6 +1245,7 @@ mod tests {
             minutes: 30,
             daily_cap_mins: Some(45),
             tiers: Vec::new(),
+            probe: None,
         };
         let json = serde_json::to_string(&provider).unwrap();
         assert!(json.contains(r#""daily_cap_mins":45"#), "got {json}");
@@ -1468,5 +1689,271 @@ mod tests {
             "a missing schedule field means manual-only, not a parse error"
         );
         assert_eq!(cfg.active_routine_at(at("2026-09-02T17:00:00+02:00")), None);
+    }
+
+    // ----- the probe: a bare file name, a bounded interval, and nothing written until set -----
+
+    fn probe(exe: &str, every_mins: u32) -> Probe {
+        Probe {
+            exe: exe.into(),
+            every_mins,
+        }
+    }
+
+    /// The probe is named, never pathed: it is resolved inside a directory the child cannot
+    /// write, and a path would let a parent point at one he can.
+    #[test]
+    fn a_probe_is_a_bare_file_name_not_a_path() {
+        assert!(probe("studygo-probe.exe", 15).validate().is_ok());
+        assert!(probe("probe", 15).validate().is_ok());
+        for bad in [
+            "",
+            ".",
+            "..",
+            ".hidden",
+            "..\\probe.exe",
+            "../probe.exe",
+            "bin/probe.exe",
+            "bin\\probe.exe",
+            "C:\\probe.exe",
+            "probe .exe",
+            "probe\n.exe",
+        ] {
+            assert!(
+                probe(bad, 15).validate().is_err(),
+                "{bad:?} must be refused as a probe name"
+            );
+        }
+        let long = "p".repeat(MAX_PROBE_NAME + 1);
+        assert!(probe(&long, 15).validate().is_err());
+        assert!(probe(&"p".repeat(MAX_PROBE_NAME), 15).validate().is_ok());
+    }
+
+    /// The interval is bounded on both sides: a floor because the request lands on a third
+    /// party's API, a ceiling because a probe that runs once a week is a rule that never fires.
+    #[test]
+    fn a_probe_interval_is_bounded_on_both_sides() {
+        assert!(probe("p", 0).validate().is_err());
+        assert!(probe("p", MIN_PROBE_MINS - 1).validate().is_err());
+        assert!(probe("p", MIN_PROBE_MINS).validate().is_ok());
+        assert!(probe("p", MAX_PROBE_MINS).validate().is_ok());
+        assert!(probe("p", MAX_PROBE_MINS + 1).validate().is_err());
+    }
+
+    /// The same guarantee `daily_cap_mins` and `tiers` carry: a provider that never opts in
+    /// serialises exactly as it did before the field existed.
+    #[test]
+    fn nothing_written_changes_shape_until_a_probe_is_set() {
+        let mut provider = Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: None,
+            tiers: Vec::new(),
+            probe: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&provider).unwrap(),
+            r#"{"enabled":true,"minutes":30}"#
+        );
+        provider.probe = Some(probe("studygo-probe.exe", 15));
+        let json = serde_json::to_string(&provider).unwrap();
+        assert!(
+            json.contains(r#""probe":{"exe":"studygo-probe.exe","every_mins":15}"#),
+            "got {json}"
+        );
+        let back: Provider = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, provider);
+    }
+
+    /// Whether running the probe again today could grant anything — the check that stops the
+    /// scheduler spending a request on a source that has already been paid in full.
+    #[test]
+    fn a_provider_is_exhausted_once_today_has_paid_it_in_full() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        let yesterday = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+        let entry = |date, minutes| EarnedDay { date, minutes };
+
+        let latched = Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: None,
+            tiers: Vec::new(),
+            probe: None,
+        };
+        assert!(!latched.exhausted_for(today, None));
+        assert!(latched.exhausted_for(today, Some(&entry(today, None))));
+        assert!(latched.exhausted_for(today, Some(&entry(today, Some(5)))));
+        assert!(!latched.exhausted_for(today, Some(&entry(yesterday, None))));
+
+        let capped = Provider {
+            daily_cap_mins: Some(30),
+            ..latched
+        };
+        assert!(!capped.exhausted_for(today, None));
+        assert!(!capped.exhausted_for(today, Some(&entry(today, Some(16)))));
+        assert!(capped.exhausted_for(today, Some(&entry(today, Some(30)))));
+        assert!(capped.exhausted_for(today, Some(&entry(today, Some(31)))));
+        assert!(
+            capped.exhausted_for(today, Some(&entry(today, None))),
+            "an untracked grant under a ceiling reads as the ceiling reached, as EarnedDay says"
+        );
+        assert!(!capped.exhausted_for(today, Some(&entry(yesterday, Some(30)))));
+    }
+
+    // ----- the grant itself, out of the handler and into the registry -----
+
+    fn with_provider(name: &str, provider: Provider) -> Config {
+        let mut cfg = Config::default();
+        cfg.providers.insert(name.into(), provider);
+        cfg
+    }
+
+    /// The registry decides, and every outcome is one of three shapes: a grant that moved the
+    /// budget, an ordinary refusal that moved nothing, or a rejection of the request itself.
+    #[test]
+    fn earn_grants_refuses_and_rejects_from_one_place() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+
+        let mut cfg = Config::default();
+        assert!(cfg.earn("studygo", today, None).is_err(), "not installed");
+        let mut cfg = with_provider(
+            "studygo",
+            Provider {
+                enabled: false,
+                ..laddered()
+            },
+        );
+        assert!(cfg.earn("studygo", today, None).is_err(), "turned off");
+
+        // The original rule: one grant, then the latch.
+        let mut cfg = with_provider(
+            "studygo",
+            Provider {
+                daily_cap_mins: None,
+                tiers: Vec::new(),
+                ..laddered()
+            },
+        );
+        assert_eq!(cfg.earn("studygo", today, None), Ok(Earn::Granted(30)));
+        assert_eq!(cfg.extra.for_day(today), 30);
+        assert_eq!(
+            cfg.earned.get("studygo"),
+            Some(&EarnedDay {
+                date: today,
+                minutes: None
+            })
+        );
+        assert_eq!(
+            cfg.earn("studygo", today, None),
+            Ok(Earn::Refused("already_granted_today"))
+        );
+        assert_eq!(cfg.extra.for_day(today), 30, "a refusal moves nothing");
+
+        // The ladder under a ceiling: the lower rung, then the difference, then the ceiling.
+        let mut cfg = with_provider("studygo", laddered());
+        assert_eq!(
+            cfg.earn("studygo", today, Some((3, 5))),
+            Ok(Earn::Refused("below_threshold"))
+        );
+        assert!(cfg.earned.is_empty(), "below the bar writes no entry");
+        assert_eq!(
+            cfg.earn("studygo", today, Some((12, 5))),
+            Ok(Earn::Granted(16))
+        );
+        assert_eq!(
+            cfg.earn("studygo", today, Some((15, 5))),
+            Ok(Earn::Granted(14))
+        );
+        assert_eq!(
+            cfg.earn("studygo", today, Some((40, 60))),
+            Ok(Earn::Refused("daily_cap_reached"))
+        );
+        assert_eq!(cfg.extra.for_day(today), 30);
+        assert_eq!(cfg.earned.get("studygo").and_then(|e| e.minutes), Some(30));
+    }
+
+    /// A rejected grant leaves the config exactly as it found it.
+    ///
+    /// **Required by the caller, not merely tidy.** Both callers run this inside
+    /// `api::try_update_config`, whose contract is explicit: a mutation that returns `Err` must
+    /// leave the config unchanged, because on that path the write guard is dropped *without
+    /// saving*. A partial mutation would therefore live in memory and never reach disk — the
+    /// parent sees a budget that the next restart silently revokes, which is the divergence that
+    /// lock exists to prevent. `earn` satisfies it by rejecting before it touches anything, and
+    /// this is what says so.
+    #[test]
+    fn a_rejected_grant_changes_nothing() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+
+        // Not installed, and switched off: both refused before any field is read.
+        for provider in [
+            None,
+            Some(Provider {
+                enabled: false,
+                ..laddered()
+            }),
+        ] {
+            let mut cfg = Config::default();
+            if let Some(provider) = provider {
+                cfg.providers.insert("studygo".into(), provider);
+            }
+            let before = serde_json::to_string(&cfg).unwrap();
+            assert!(cfg.earn("studygo", today, None).is_err());
+            assert_eq!(
+                serde_json::to_string(&cfg).unwrap(),
+                before,
+                "a rejected grant must not have moved anything"
+            );
+        }
+
+        // The sources cap, which is the one rejection that happens *after* a reward has been
+        // resolved and is therefore the one with something to leave behind.
+        let mut cfg = Config::default();
+        for i in 0..MAX_EARNED_SOURCES {
+            let name = format!("s{i}");
+            cfg.providers.insert(
+                name.clone(),
+                Provider {
+                    daily_cap_mins: None,
+                    tiers: Vec::new(),
+                    ..laddered()
+                },
+            );
+            assert!(matches!(cfg.earn(&name, today, None), Ok(Earn::Granted(_))));
+        }
+        cfg.providers.insert("one-more".into(), laddered());
+        let before = serde_json::to_string(&cfg).unwrap();
+        assert!(cfg.earn("one-more", today, None).is_err());
+        assert_eq!(
+            serde_json::to_string(&cfg).unwrap(),
+            before,
+            "the source cap must reject before it writes, not after"
+        );
+    }
+
+    /// The sources cap counts distinct sources, and only a *new* one can trip it.
+    #[test]
+    fn a_new_source_past_the_cap_is_rejected_and_a_counted_one_is_not() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        let mut cfg = Config::default();
+        for i in 0..MAX_EARNED_SOURCES {
+            let name = format!("s{i}");
+            cfg.providers.insert(
+                name.clone(),
+                Provider {
+                    daily_cap_mins: Some(60),
+                    tiers: Vec::new(),
+                    ..laddered()
+                },
+            );
+            assert_eq!(cfg.earn(&name, today, None), Ok(Earn::Granted(30)));
+        }
+        cfg.providers.insert("one-more".into(), laddered());
+        assert!(cfg.earn("one-more", today, None).is_err());
+        assert_eq!(
+            cfg.earn("s0", today, None),
+            Ok(Earn::Granted(30)),
+            "a source already counted today is not a new one"
+        );
     }
 }

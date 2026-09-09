@@ -80,7 +80,7 @@ where
 ///
 /// `mutate` must leave the config unchanged when it returns `Err`: on that path the guard is
 /// dropped without saving, so a partial change would live in memory and not on disk.
-async fn try_update_config<F>(state: &AppState, mutate: F) -> Result<(), AppError>
+pub(crate) async fn try_update_config<F>(state: &AppState, mutate: F) -> Result<(), AppError>
 where
     F: FnOnce(&mut Config) -> Result<(), AppError>,
 {
@@ -313,7 +313,7 @@ fn require_minutes(minutes: u32, max: u32) -> Result<(), AppError> {
 ///
 /// * `requests` — the pending time-request queue changed.
 /// * `usage` — today's minutes or budget changed.
-fn notify(state: &AppState, tag: &'static str) {
+pub(crate) fn notify(state: &AppState, tag: &'static str) {
     debug_assert!(
         matches!(tag, "requests" | "usage"),
         "unknown event tag {tag:?} — add it to app.js's listeners first"
@@ -643,11 +643,6 @@ pub struct CurfewExtendBody {
 /// Longest accepted `source` token.
 const MAX_SOURCE_LEN: usize = 32;
 
-/// Most distinct non-`parent` sources that may grant on one day. Bounds
-/// [`Config::earned`], which lives in the persisted config: a compromised
-/// parent session must not be able to grow that file without limit.
-const MAX_EARNED_SOURCES: usize = 16;
-
 /// Is `source` an acceptable grant-source token?
 ///
 /// A bounded lowercase token rather than an enum, so the server stays ignorant
@@ -926,120 +921,33 @@ pub async fn extra_time(
     // it, and so the parent path cannot accidentally consult it: a parent grants a stated number
     // and has no threshold to clear.
     let reported = body.progress.map(|p| (p.questions, p.minutes));
-    // The reward: a parent's own grant is worth what they asked for; a provider's is worth what
-    // the parent configured for that provider *on this machine*, never what the push claimed — so
-    // a spoofed or compromised client cannot choose its own minutes. Resolved inside the config
-    // critical section for the robot case, so the provider it is read from is the same one the
-    // latch is written against.
+    // The reward: a parent's own grant is worth what they asked for; a provider's is decided by
+    // the registry — `Config::earn` — from what the push reported, never from what it claimed to
+    // be worth. Resolved inside the config critical section so the provider it is read from is
+    // the same one the latch is written against, and so two concurrent grants from the same
+    // source serialize on `config_save_lock` and the second sees the first's latch.
     let mut minutes = asked;
-    // Checked and latched inside the one place config is mutated, so two concurrent grants from
-    // the same source serialize on `config_save_lock` and the second sees the first's latch.
-    //
-    // `None` means the grant happened. The three refusals are all ordinary outcomes rather than
-    // errors, and only the first can be reached by a provider that has opted into nothing.
+    // `None` means the grant happened. The refusals are ordinary outcomes rather than errors, and
+    // only the first can be reached by a provider that has opted into nothing.
     let mut refused: Option<&'static str> = None;
     {
         let source = source.clone();
         try_update_config(&state, |c| {
             if robot {
-                // A provider grant is governed by the registry: it must name an enabled provider,
-                // and the reward is that provider's configured minutes.
                 // The same decision `require_auth` made before this request was routed, asked
                 // again here because this one is inside the write guard: it is atomic with the
-                // day latch below, and it is the only check at all for a `Scope::Dashboard`
-                // caller naming a `source` in its body, which never reaches that middleware arm.
-                let ceiling = match c.provider_authority(&source) {
-                    Ok(p) => match p.reward_for(reported) {
-                        Some(reward) => {
-                            minutes = reward;
-                            p.daily_cap_mins
-                        }
-                        // Work was reported and it meets no tier. Not an error: a client that
-                        // pushes whatever it sees and lets this machine judge is exactly what
-                        // tiers are for, so "not yet" has to be an ordinary answer rather than a
-                        // 400. Unreachable for a provider with no tiers configured.
-                        None => {
-                            refused = Some("below_threshold");
-                            return Ok(());
-                        }
-                    },
-                    Err(message) => return Err(AppError::BadRequest(message)),
-                };
-                // Read out as an owned value, not held as a borrow: the map is mutated a few
-                // lines below, and `Option<Option<u32>>` says the two things that matter
-                // separately — whether this source has an entry for today at all, and whether
-                // that entry's amount was ever measured.
-                let spent = c
-                    .earned
-                    .get(&source)
-                    .filter(|entry| entry.date == today)
-                    .map(|entry| entry.minutes);
-                match (ceiling, spent) {
-                    // The original rule, and the one every config that has not opted in takes:
-                    // one grant per source per day, whatever it was worth.
-                    (None, Some(_)) => {
-                        refused = Some("already_granted_today");
-                        return Ok(());
-                    }
-                    // A ceiling is configured, but this source's earlier grant today was never
-                    // measured — an older build wrote it, or the ceiling was added after it
-                    // landed. Refusing is the conservative reading; `EarnedDay::minutes` gives
-                    // the argument for why the alternative hands out a second full reward.
-                    (Some(_), Some(None)) => {
-                        refused = Some("daily_cap_reached");
-                        return Ok(());
-                    }
-                    (Some(cap), Some(Some(used))) => {
-                        let room = cap.saturating_sub(used);
-                        if room == 0 {
-                            refused = Some("daily_cap_reached");
-                            return Ok(());
-                        }
-                        // The last grant of a day is worth the remainder, not the full reward.
-                        //
-                        // **Deliberately not the rejection an over-quota API call would get**,
-                        // and the difference is that a provider never asks for an amount:
-                        // `ExtraTimeBody.minutes` is vestigial on this path, so there is no
-                        // request to half-fulfil. The client asserts a threshold was met and
-                        // this machine answers what that is worth today, which near the ceiling
-                        // is the remainder. Rejecting instead would take the work and pay
-                        // nothing for it — the failure this whole feature exists to avoid.
-                        //
-                        // The ceiling still binds exactly: `used + minutes <= cap` by
-                        // construction here and in the arm below, so `tracked` can never pass
-                        // `cap` however many times a client pushes.
-                        minutes = minutes.min(room);
-                    }
-                    // A ceiling below the single-grant reward still binds on the first push.
-                    (Some(cap), None) => minutes = minutes.min(cap),
-                    (None, None) => {}
-                }
-                // Only a **new** source can hit the ceiling on distinct sources. The original
-                // rule made a second push from a counted source unreachable, so the check never
-                // had to exclude one; a ceiling makes it ordinary, and without this clause a
-                // household at the limit would start refusing exactly the sources it had already
-                // admitted.
-                if spent.is_none()
-                    && c.earned.values().filter(|e| e.date == today).count() >= MAX_EARNED_SOURCES
+                // day latch, and it is the only check at all for a `Scope::Dashboard` caller
+                // naming a `source` in its body, which never reaches that middleware arm.
+                match c
+                    .earn(&source, today, reported)
+                    .map_err(AppError::BadRequest)?
                 {
-                    return Err(AppError::BadRequest(
-                        "too many earned-time sources today".into(),
-                    ));
+                    crate::config::Earn::Granted(granted) => minutes = granted,
+                    crate::config::Earn::Refused(reason) => refused = Some(reason),
                 }
-                c.earned.retain(|_, entry| entry.date == today);
-                // Measured only where a ceiling governs it. Writing `Some` unconditionally would
-                // change the shape of a config that never opted in, which is the single thing
-                // `EarnedDay`'s hand-written serde impls exist to prevent.
-                let tracked = ceiling.map(|_| spent.flatten().unwrap_or(0) + minutes);
-                c.earned.insert(
-                    source,
-                    crate::config::EarnedDay {
-                        date: today,
-                        minutes: tracked,
-                    },
-                );
+            } else {
+                c.extra.add(today, minutes);
             }
-            c.extra.add(today, minutes);
             Ok(())
         })
         .await?;
@@ -1148,7 +1056,7 @@ pub async fn revoke_session(
 /// The same posture as [`crate::state::recover_read`]: a panic in another handler must not
 /// permanently disable grants, and the cache's worst corrupt state costs a replay, never a
 /// double grant — the persisted day latch holds regardless.
-fn recover_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub(crate) fn recover_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1213,16 +1121,148 @@ pub struct ProviderBody {
     /// mechanism.
     #[serde(default)]
     tiers: Option<Vec<crate::config::Tier>>,
+    /// The program to run as the child, or `null` to stop running one. Absent leaves it alone,
+    /// like the ceiling, and needs the same `absent_or_null` to tell the two apart.
+    #[serde(default, deserialize_with = "absent_or_null")]
+    probe: Option<Option<crate::config::Probe>>,
 }
 
-/// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes } }`.
+/// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes, … } }`.
 ///
-/// The registry behind the dashboard's Integrations panel. Read-only and carries no secret — a
-/// provider holds no credential and no endpoint, only a switch and a reward — so it needs nothing
-/// the usage endpoint does not.
-pub async fn list_providers(State(state): State<AppState>) -> Json<Value> {
+/// The registry behind the dashboard's Integrations panel. Read-only and carries no secret: a
+/// provider that has deposited one is listed with `secret_at` — *when*, never *what* — and a
+/// provider whose probe has run is listed with its last `probe_status`. Both appear only where
+/// they apply, so a household that opted into neither reads the same bytes it always did, which
+/// is the guarantee every field added to this registry has kept.
+pub async fn list_providers(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let providers = crate::state::recover_read(&state.config).providers.clone();
-    Json(json!(providers))
+    let names: Vec<String> = providers.keys().cloned().collect();
+    // File metadata, off the runtime like every other disk read here.
+    let deposited = spawn(move || {
+        let dir = crate::config::data_paths().dir;
+        names
+            .into_iter()
+            .filter_map(|name| {
+                crate::probe::secret_deposited_at(&dir, &name)
+                    .ok()
+                    .flatten()
+                    .map(|at| (name, chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339()))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>()
+    })
+    .await?;
+    let status = recover_lock(&state.probe_status);
+    let mut out = serde_json::Map::new();
+    for (name, provider) in providers {
+        let mut entry = json!(provider);
+        if let Some(at) = deposited.get(&name) {
+            entry["secret_at"] = json!(at);
+        }
+        if let Some(last) = status.get(&name) {
+            entry["probe_status"] = last.to_json();
+        }
+        out.insert(name, entry);
+    }
+    Ok(Json(Value::Object(out)))
+}
+
+#[derive(Deserialize)]
+pub struct ProviderSecretBody {
+    /// The secret to keep, or `null` to forget the one deposited. Absent is refused rather than
+    /// read as either: this route is reached by a client that may be older or newer than this
+    /// build, and a missing field must not be able to mean "delete".
+    #[serde(default, deserialize_with = "absent_or_null")]
+    secret: Option<Option<String>>,
+}
+
+/// `POST /api/providers/{name}/secret` → deposit (or with `null`, forget) the credential a
+/// provider's probe runs with.
+///
+/// The phone's half of the gate. Voortgang signs in to StudyGo through a real login page, which a
+/// background program cannot do, and holds a session worth roughly ten days; this is how it hands
+/// that session to the machine that can ask every fifteen minutes. The parent may deposit too,
+/// from the dashboard, which is how a token is tried by hand.
+///
+/// **What is deliberately not here.** No read route: nothing authenticated can get the secret
+/// back out, and the registry lists only *when* one was deposited. No place in `config.json`: that
+/// file leaves the machine through `/api/policy` and `/api/export`, so the bytes go to their own
+/// file under the ACL-locked data dir (`probe::store_secret`). And no audit of the value — the
+/// line records the name and the action.
+///
+/// An integration may deposit only its own: `require_auth`'s allowlist admits this path for the
+/// scope's `source` alone, and the check is repeated here at the point the file is written,
+/// because the middleware's match is the only thing between a scoped credential and another
+/// provider's file and a second guard where the write happens costs one comparison.
+pub async fn set_provider_secret(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    scope: axum::Extension<crate::pairing::Scope>,
+    Json(body): Json<ProviderSecretBody>,
+) -> Result<Json<Value>, AppError> {
+    if !valid_provider_name(&name) {
+        return Err(AppError::BadRequest(format!(
+            "provider name must be 1-{MAX_SOURCE_LEN} characters of a-z, 0-9, _ or - \
+             (and not 'parent')"
+        )));
+    }
+    if let crate::pairing::Scope::Integration { source } = &*scope
+        && source != &name
+    {
+        return Err(AppError::Forbidden(
+            "this pairing may deposit only its own secret".into(),
+        ));
+    }
+    // Installed, not enabled: a secret may be deposited for a switched-off provider, the same
+    // order of operations `pair_provider` allows. A scoped caller was already refused above this
+    // for an uninstalled provider; this is the parent's check.
+    if !crate::state::recover_read(&state.config)
+        .providers
+        .contains_key(&name)
+    {
+        return Err(AppError::BadRequest(format!(
+            "no '{name}' integration is installed"
+        )));
+    }
+    let Some(secret) = body.secret else {
+        return Err(AppError::BadRequest(
+            "secret is required; send null to forget the one deposited".into(),
+        ));
+    };
+    let dir = crate::config::data_paths().dir;
+    // Each arm records its own line with a literal tag, which is what `tests/audit_partition.rs`
+    // scans for: a tag chosen by a variable is one the guard cannot classify.
+    match secret {
+        Some(secret) if secret.is_empty() => {
+            return Err(AppError::BadRequest(
+                "secret must not be empty; send null to forget the one deposited".into(),
+            ));
+        }
+        Some(secret) if secret.len() > crate::probe::MAX_SECRET_BYTES => {
+            return Err(AppError::BadRequest(format!(
+                "secret must be at most {} bytes",
+                crate::probe::MAX_SECRET_BYTES
+            )));
+        }
+        Some(secret) => {
+            let provider = name.clone();
+            spawn(move || crate::probe::store_secret(&dir, &provider, secret.as_bytes()))
+                .await?
+                .map_err(|e| anyhow::anyhow!("storing the secret: {e}"))?;
+            state
+                .audit
+                .record("provider_secret_stored", json!({ "name": name }));
+        }
+        None => {
+            let provider = name.clone();
+            spawn(move || crate::probe::delete_secret(&dir, &provider))
+                .await?
+                .map_err(|e| anyhow::anyhow!("forgetting the secret: {e}"))?;
+            state
+                .audit
+                .record("provider_secret_forgotten", json!({ "name": name }));
+        }
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// `POST /api/providers/{name}` → install or reconfigure an integration.
@@ -1294,8 +1334,14 @@ pub async fn set_provider(
             }
         }
     }
+    // The probe's own rules — a bare file name, a bounded interval — live on the type, because
+    // the scheduler resolves the name inside a directory and must never be handed a path.
+    if let Some(Some(probe)) = &body.probe {
+        probe.validate().map_err(AppError::BadRequest)?;
+    }
     let (enabled, minutes, ceiling) = (body.enabled, body.minutes, body.daily_cap_mins);
     let tiers = body.tiers;
+    let probe_field = body.probe;
     // Cap check + upsert under one write guard, the shape `save_routine` uses and for the same
     // reason. **Reconfiguring a provider that already exists is always allowed** — only a new
     // name can hit the cap. Without that, a parent sitting at the ceiling could not turn an
@@ -1331,15 +1377,26 @@ pub async fn set_provider(
                 minutes,
                 daily_cap_mins,
                 tiers,
+                probe: match &probe_field {
+                    Some(explicit) => explicit.clone(),
+                    None => c
+                        .providers
+                        .get(&name)
+                        .and_then(|existing| existing.probe.clone()),
+                },
             },
         );
         Ok(())
     })
     .await?;
-    state.audit.record(
-        "provider_configured",
-        json!({ "name": name, "enabled": body.enabled, "minutes": body.minutes }),
-    );
+    // The probe is named on the line when this request set one: a program that will run as
+    // the child is the one part of a provider's configuration an audit reader has to be able to
+    // see was chosen, and by whom. Absent otherwise, so every other line keeps its shape.
+    let mut line = json!({ "name": name, "enabled": body.enabled, "minutes": body.minutes });
+    if let Some(Some(probe)) = &probe_field {
+        line["probe"] = json!(probe.exe);
+    }
+    state.audit.record("provider_configured", line);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1386,9 +1443,25 @@ pub async fn delete_provider(
     // the provider gone and its session live, which is the state that already existed and is
     // refused by `require_auth` anyway once the entry is missing.
     let revoked = crate::auth::revoke_integration_sessions(&state.sessions, &name);
+    // And the credential the probe ran with, for the same reason the pairing goes: an uninstalled
+    // provider must hold nothing that could act on the child's behalf. Best effort — a file that
+    // cannot be removed is logged and the uninstall still stands, since the provider it belonged
+    // to is already gone from the registry and nothing runs a probe for a provider that is not
+    // in it.
+    let forgotten = {
+        let provider = name.clone();
+        let dir = crate::config::data_paths().dir;
+        match spawn(move || crate::probe::delete_secret(&dir, &provider)).await? {
+            Ok(forgotten) => forgotten,
+            Err(e) => {
+                tracing::warn!(provider = %name, error = %e, "could not remove the provider's secret");
+                false
+            }
+        }
+    };
     state.audit.record(
         "provider_removed",
-        json!({ "name": name, "sessions_revoked": revoked }),
+        json!({ "name": name, "sessions_revoked": revoked, "secret_forgotten": forgotten }),
     );
     Ok(Json(json!({ "ok": true })))
 }

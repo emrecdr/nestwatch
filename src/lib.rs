@@ -52,6 +52,7 @@ pub mod install;
 pub mod jsonl;
 pub mod pairing;
 pub mod preflight;
+pub mod probe;
 pub mod refusals;
 pub mod remotesetup;
 pub mod rules;
