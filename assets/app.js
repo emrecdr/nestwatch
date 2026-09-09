@@ -5,6 +5,12 @@
 // one place and "all fine" in the other for the same age.
 const ENFORCER_STALE_SECS = 150;
 
+// The longest message a parent may put on the child's screen. Named here rather than written into
+// `messageLeft` because the same number is also a `maxlength` in the markup and `MAX_MESSAGE_CHARS`
+// on the server, and three copies of a bound is two too many to keep in step by hand — `web.rs`
+// ties all three together, which is the only reason this one is allowed to be a literal at all.
+const MAX_MESSAGE_CHARS = 500;
+
 // Below this many minutes left, the remaining-time indicators turn amber. Matches the first
 // warning the child gets on their own desktop, so the parent's dashboard and the child's screen
 // change colour at the same moment rather than at two numbers nobody chose together.
@@ -1794,7 +1800,7 @@ function app() {
     // The bound matches `api::MAX_MESSAGE_CHARS`, and `maxlength` on the textarea enforces it —
     // this only reports it.
     messageLeft() {
-      return this.tf("tCharactersLeft", 500 - this.messageText.length);
+      return this.tf("tCharactersLeft", MAX_MESSAGE_CHARS - this.messageText.length);
     },
 
     // Put what the parent typed on the child's screen, and say whether it got there.

@@ -24,7 +24,12 @@ pub const MAX_REQUEST_MINUTES: u32 = 240;
 /// Cap on outstanding requests, so a spammy child can't flood the parent's queue.
 const MAX_PENDING: usize = 5;
 /// Reason text is truncated to this many characters.
-const MAX_REASON_CHARS: usize = 200;
+///
+/// `pub` so `web.rs` can hold the child's box to it. Truncation rather than rejection is what
+/// makes that guard worth having: a `maxlength` larger than this would cut his sentence off
+/// mid-word with nothing said, which is the one failure mode a person cannot diagnose from the
+/// screen.
+pub const MAX_REASON_CHARS: usize = 200;
 
 /// A pending request as surfaced to the parent UI (never leaks internal event history).
 #[derive(Debug, Serialize)]

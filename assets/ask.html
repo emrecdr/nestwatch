@@ -79,7 +79,11 @@
           <p data-i18n="codeBlurb" class="text-center text-sm opacity-70">Enter a time code to add minutes now.</p>
           <label class="flex flex-col mt-1">
             <span data-i18n="codeLabel" class="text-sm mb-1">Time code</span>
-            <input id="code" type="text" maxlength="12" autocomplete="off"
+            <!-- `maxlength` is `timecode::CODE_LEN`, not a round number. A code is always exactly
+                 six characters and `redeem` refuses any other length outright, so the twelve this
+                 used to allow was room to type six characters that could never work. `web.rs`
+                 holds the two together now. -->
+            <input id="code" type="text" maxlength="6" autocomplete="off"
                    inputmode="latin" autocapitalize="characters" spellcheck="false"
                    placeholder="A1B2C3" class="input uppercase tracking-widest" />
           </label>

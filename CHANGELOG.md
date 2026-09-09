@@ -9,6 +9,18 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The time-code box let your child type six characters that could never work.** A code is always
+  exactly six, and the server refuses any other length outright, but the box on his page accepted
+  twelve. Typing more than six could only ever end in *no such code*, with nothing on screen
+  explaining why. The box now stops at six.
+  <br>Found by a new guard rather than by noticing: the dashboard now ties every length-limited box
+  to the constant its endpoint enforces, the way the minutes boxes have been tied to theirs for a
+  while. It found this on its first run, along with two fields nothing had been checking at all —
+  the routine name and the reason your child types when asking for time. Both agreed with the
+  server; neither was being held to it.
+
 ### Added
 
 - **You can say something to him yourself.** Every message that has ever appeared on his screen was

@@ -786,6 +786,97 @@ mod tests {
         );
     }
 
+    /// Every length limit a person types against matches the one the server enforces.
+    ///
+    /// The sibling of the minutes guard above, for the other kind of bound this dashboard puts in
+    /// front of somebody. A `maxlength` that is larger than the server's limit turns a
+    /// valid-looking entry into a rejection the person cannot explain; one that is smaller
+    /// silently truncates their sentence mid-word, which is worse because nothing tells them.
+    ///
+    /// **It covers the countdown in `app.js` as well, and that is the half worth having.** The
+    /// message box states how much room is left, so the same number lives in three places — the
+    /// Rust constant, the attribute, and the script. Two of those are text files a browser reads
+    /// and neither can import the first. This is what stops them drifting.
+    ///
+    /// Anti-vacuity in both directions: an unrecognised `maxlength` fails rather than being
+    /// skipped, and the count of what was seen is compared with the table, so a scan that stops
+    /// matching cannot pass by finding nothing.
+    #[test]
+    fn every_length_limit_a_person_types_against_matches_the_one_the_server_enforces() {
+        use crate::api::MAX_MESSAGE_CHARS;
+        use crate::config::MAX_ROUTINE_NAME;
+
+        // Marker → the constant that box is restating. Keyed on `x-model` for the same reason the
+        // minutes table is: reordering the form cannot silently repoint a row at another field.
+        let fields = [
+            (
+                "x-model=\"messageText\"",
+                MAX_MESSAGE_CHARS,
+                "a message to the child",
+            ),
+            (
+                "x-model=\"newRoutineName\"",
+                MAX_ROUTINE_NAME,
+                "a routine's name",
+            ),
+            // The child's own boxes, on the page they reach without signing in. Keyed on their
+            // ids rather than an `x-model`, because `ask.html` is plain markup with no Alpine.
+            (
+                "id=\"reason\"",
+                crate::timereq::MAX_REASON_CHARS,
+                "the reason a child gives for asking",
+            ),
+            // The one field whose server limit is an *exact* length rather than a ceiling:
+            // `timecode::redeem` refuses anything that is not `CODE_LEN`. So the box matching it
+            // is not pedantry — every character past it is one that cannot possibly help.
+            (
+                "id=\"code\"",
+                crate::timecode::CODE_LEN,
+                "a time code the child types in",
+            ),
+        ];
+
+        let mut seen = 0;
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            for tag in html.split('<').skip(1) {
+                let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+                if !tag.contains("maxlength=\"") {
+                    continue;
+                }
+                seen += 1;
+                let Some(&(_, limit, what)) =
+                    fields.iter().find(|(marker, _, _)| tag.contains(marker))
+                else {
+                    panic!(
+                        "{name} carries a `maxlength` this test does not recognise, so nothing is \
+                         checking it against a server limit. Add it to the table with the constant \
+                         its endpoint enforces — and if it has no server limit, that is the thing \
+                         to fix, not this test:\n{tag}"
+                    );
+                };
+                assert!(
+                    tag.contains(&format!("maxlength=\"{limit}\"")),
+                    "{name}'s box for {what} does not cap at {limit}, which is what its endpoint \
+                     enforces:\n{tag}"
+                );
+            }
+        }
+        assert_eq!(
+            seen,
+            fields.len(),
+            "expected {} length-limited boxes across the served pages, found {seen}",
+            fields.len()
+        );
+
+        // And the script that reports the remaining room uses the same number, because a
+        // countdown that disagrees with the box it describes is worse than no countdown.
+        assert!(
+            APP_JS.contains(&format!("const MAX_MESSAGE_CHARS = {MAX_MESSAGE_CHARS};")),
+            "app.js's MAX_MESSAGE_CHARS must equal the server's {MAX_MESSAGE_CHARS}"
+        );
+    }
+
     /// The lockout a parent is told to wait out matches the one actually enforced.
     ///
     /// `app.js` says "wait a minute". That sentence cannot interpolate a constant — it is prose in
