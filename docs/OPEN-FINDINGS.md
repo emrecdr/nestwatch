@@ -2088,3 +2088,35 @@ deliberately scoped to a diff so it would stay cheap, and every option spends so
 
 Not decided here, and not this file's call: `ci.yml` belongs to whoever is holding it. Filed so the
 choice is made deliberately rather than by the job continuing to die quietly.
+
+### O104 · Everything this service says to the child evaporates after thirty seconds
+
+Every message the child receives goes through `control::notify`, which on Windows is
+`WTSSendMessageW` with `NOTIFY_TIMEOUT_SECS = 30`. The box appears over whatever they are doing and
+dismisses itself. That is right for a countdown — *five minutes left* is worthless once it is
+false — and wrong for the two newest callers.
+
+**The practice reminder is rationed to one a day** (`probe.rs`), so if he is away from the desk
+when it fires, that is the day's notice spent on an empty chair. **A message a parent typed** is
+worse: they were told it was *shown on his screen*, which is true and useless if he was in the
+kitchen. Both are notes rather than alarms, and a note that cannot be read later is a poor note.
+
+**The remedy is known and is a project rather than a parameter.** A toast notification lands in the
+Action Center and stays there until dismissed, which is exactly the property both callers want.
+Microsoft's documentation is explicit that a Session 0 service cannot raise one: toasts require a
+process running in the user's session, registered as a notification source with an AppUserModelID
+and a Start Menu shortcut. This codebase already *has* a user-session process — the helper that
+captures the screen and watches the foreground — so the missing pieces are the registration, a
+fourth helper subcommand, and a decision about what happens on a machine where the registration
+failed.
+
+**Raising the timeout is not the fix and should not be mistaken for one.** A modal box that sits
+there for ten minutes is worse than one that clears: it blocks the desktop it is covering, and the
+child's only move is to dismiss it unread. The choice is *persist somewhere else*, not *persist
+harder here*.
+
+**What makes this worth a finding rather than a wish:** the two newest callers were designed around
+a channel whose one property they do not want, and the alternative is documented, supported, and
+already half-present in this repository. Left open because the registration touches `install`, and
+an install-time step that can fail silently is exactly the class this project spends the most
+effort avoiding.
