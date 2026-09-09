@@ -27,7 +27,7 @@ fn status_of(state: &AppState, name: &str) -> ProbeStatus {
         .lock()
         .unwrap()
         .get(name)
-        .cloned()
+        .and_then(|state| state.last.clone())
         .unwrap_or_else(|| panic!("no probe status for {name}"))
 }
 
@@ -238,6 +238,112 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
         before + 1,
         "and it runs again the moment he is back"
     );
+
+    // --- What the child is told, and how often ------------------------------------------------
+    //
+    // Its own state, so the count is about this section rather than about everything above it.
+    // The rule: the reminder is said at most once a local day, a grant is announced every time,
+    // and a broken link is never his problem to read about.
+    {
+        let fake = Arc::new(FakeControl::new());
+        let mut cfg = test_config();
+        cfg.providers.insert(
+            "studygo".into(),
+            Provider {
+                enabled: true,
+                minutes: 30,
+                daily_cap_mins: Some(30),
+                tiers: vec![
+                    Tier {
+                        questions: 10,
+                        minutes_practised: 20,
+                        reward_mins: 16,
+                    },
+                    Tier {
+                        questions: 15,
+                        minutes_practised: 30,
+                        reward_mins: 30,
+                    },
+                ],
+                probe: Some(Probe {
+                    exe: "studygo-probe".into(),
+                    every_mins: 15,
+                }),
+            },
+        );
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+
+        // Short of the first rung: one notice, naming the nearest rung and what he has done.
+        fake.script_probe(Ok(br#"{"questions":3,"minutes":5}"#.to_vec()));
+        probe::run_once(&state, t0).await;
+        let said = fake.notification_bodies();
+        assert_eq!(said.len(), 1, "one notice, not one per check: {said:?}");
+        assert!(said[0].contains("studygo"), "{}", said[0]);
+        assert!(
+            said[0].contains("10"),
+            "names the nearest rung: {}",
+            said[0]
+        );
+        assert!(said[0].contains("16"), "and what it is worth: {}", said[0]);
+        assert!(said[0].contains('3'), "and what he has done: {}", said[0]);
+
+        // Still short, later the same day: nothing more. This is the whole point of the rule —
+        // a notice every fifteen minutes is nagging, which the design refuses.
+        fake.script_probe(Ok(br#"{"questions":4,"minutes":6}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(15)).await;
+        assert_eq!(
+            fake.notification_bodies().len(),
+            1,
+            "the reminder is once a day, however many times it checks"
+        );
+
+        // A grant is announced every time, because a rule that only ever says "not yet" is the
+        // controlling frame this feature was designed against.
+        fake.script_probe(Ok(br#"{"questions":12,"minutes":5}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(30)).await;
+        let said = fake.notification_bodies();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said[1].contains("16"),
+            "says how much was added: {}",
+            said[1]
+        );
+
+        // A broken link says nothing to him: it is the parent's to fix, and it is on their card.
+        fake.script_probe(Err("no network".into()));
+        probe::run_once(&state, t0 + Duration::minutes(45)).await;
+        assert_eq!(
+            fake.notification_bodies().len(),
+            2,
+            "a failed check is not the child's problem to read"
+        );
+
+        // Tomorrow the reminder is available again.
+        fake.script_probe(Ok(br#"{"questions":1,"minutes":1}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::days(1)).await;
+        assert_eq!(
+            fake.notification_bodies().len(),
+            3,
+            "a new day earns a new reminder"
+        );
+
+        // A reminder the OS would not show is not a reminder he got, so it is offered again at
+        // the next check rather than counted as said. The same distinction the countdown warnings
+        // draw before recording one.
+        let day_after = t0 + Duration::days(2);
+        fake.fail_notifications("no interactive session");
+        fake.script_probe(Ok(br#"{"questions":2,"minutes":2}"#.to_vec()));
+        probe::run_once(&state, day_after).await;
+        let attempted = fake.notification_bodies().len();
+        fake.script_probe(Ok(br#"{"questions":2,"minutes":2}"#.to_vec()));
+        probe::run_once(&state, day_after + Duration::minutes(15)).await;
+        assert_eq!(
+            fake.notification_bodies().len(),
+            attempted + 1,
+            "an undelivered reminder must be tried again, not marked as said"
+        );
+    }
 
     // --- Nothing configured means nothing happens --------------------------------------------
     let fake = Arc::new(FakeControl::new());

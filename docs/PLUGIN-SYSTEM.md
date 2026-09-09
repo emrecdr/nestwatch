@@ -600,8 +600,40 @@ job, in practice. Whether StudyGo exposes work *in progress* (`topic.exercise_id
 `exercise_progress_percentage`) is still unanswered; it needs a live session, and it decides only how
 good the signal is, not whether the mechanism works.
 
-**What this still does not do.** Nothing is said to the child: the notices the plan describes —
-*fifteen questions or half an hour adds thirty; so far: none* — are `O101`. The scheduler has no
-heartbeat (`O102`); a parent reads liveness off each provider's own `probe_status.at`. And none of the
-Windows half has executed: `session::run_probe_in_session` is compile- and lint-checked for the
-target and listed in `WINDOWS-TESTING.md` §H8.
+**What this still does not do.** The scheduler has no heartbeat (`O102`); a parent reads liveness
+off each provider's own `probe_status.at`. And none of the Windows half has executed:
+`session::run_probe_in_session` is compile- and lint-checked for the target and listed in
+`WINDOWS-TESTING.md` §H8.
+
+## The gate says something — 2026-09-09
+
+`O101`, closed the same day it was filed. The probe granted and refused in silence, so the child's
+time extended or did not with no explanation attached — which is the *controlling* frame the
+research behind this design warns produces more screen time rather than less. Two sentences now
+reach him, through `control::notify_child`, the same wrapper the screen-time enforcer uses.
+
+**A grant is announced every time; a shortfall is mentioned once a day.** That asymmetry is the
+whole design. Announcing every grant is what stops the feature being a thing that only ever says
+*not yet*; rationing the reminder to one a day is what stops a fifteen-minute timer becoming a
+fifteen-minute nag. Neither is a preference — a nagging tool and a purely negative one fail in the
+same direction, which is the child ignoring it.
+
+**It names the nearest rung, not the highest.** `Provider::next_rung` picks the cheapest tier not
+yet met, chosen by reward rather than by position so the sentence does not depend on the order a
+parent typed the ladder in — the same property `reward_for` holds on the paying side. Telling a
+child standing at the bottom of a ladder about its top is the discouraging choice, and a message
+that changes with entry order is an arbitrary one.
+
+**A reminder the OS refused is not a reminder he got.** `notify_child` reports whether the message
+was taken, and the day is recorded only when it was, so an undeliverable notice is retried at the
+next check rather than counted as said. That distinction already exists one file over: `rules.rs`
+checks the same return before recording a countdown warning, for the same reason — a warning that
+silently never arrived looks identical in the log to one that did.
+
+**Only `below_threshold` earns the reminder.** The other two refusals — the day latch and the
+ceiling — mean the day is already paid, so there is no rung to aim at and nothing worth saying. A
+failed *check* says nothing to him either: a broken link is the parent's to fix and it is already
+on their card.
+
+Both strings are built per language, like every other thing the child reads, and
+`tests/translated_strings.rs` is what makes that structural rather than a habit.

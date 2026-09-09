@@ -407,6 +407,28 @@ pub async fn notify(control: &Arc<dyn SystemControl>, title: &str, body: &str) -
     }
 }
 
+/// Best-effort child-facing notification under the fixed "Screen time" title, so callers only pass
+/// the body. Returns whether the OS took the message — see [`notify`]; the countdown checks it
+/// before recording, the at-zero warnings don't (their history rows already record the enforcement
+/// action itself, which is the thing that matters).
+///
+/// **Here rather than in `rules.rs`, where it began, because it now has two callers.** The rules
+/// enforcer speaks to the child about screen time and the probe scheduler speaks about practice;
+/// they share nothing else, and a second copy of this would be a second title to keep in step —
+/// which is exactly the drift `tests/translated_strings.rs` exists to catch. One title, one place.
+pub(crate) async fn notify_child(
+    control: &Arc<dyn SystemControl>,
+    body: &str,
+    lang: crate::config::Language,
+) -> bool {
+    let title = match lang {
+        crate::config::Language::En => "Screen time",
+        crate::config::Language::Nl => "Schermtijd",
+        crate::config::Language::Tr => "Ekran süresi",
+    };
+    notify(control, title, body).await
+}
+
 /// Fit `img` to `tier` and encode it as JPEG. Shared by the real and fake controllers so the
 /// sizing, quality and error-mapping live in one place (child modules see this private helper).
 ///

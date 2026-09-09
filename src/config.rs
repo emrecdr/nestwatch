@@ -356,6 +356,26 @@ impl Provider {
         }
     }
 
+    /// The rung to aim at next: the cheapest tier this work has not yet met.
+    ///
+    /// What the child is told to reach, so it is the *nearest* thing rather than the most
+    /// impressive — naming the top of a ladder to someone standing at the bottom is the
+    /// discouraging choice, and the research this feature was designed against is explicit that a
+    /// controlling frame produces more screen time rather than less. Chosen by reward rather than
+    /// by position, so the sentence does not depend on the order a parent happened to type the
+    /// tiers in, which is the same property [`Provider::reward_for`] holds on the paying side.
+    ///
+    /// `None` when every tier is met — there is nothing left to earn, so there is nothing to say —
+    /// and when there are no tiers at all, which is a provider whose single reward has no bar in
+    /// front of it.
+    pub fn next_rung(&self, progress: (u32, u32)) -> Option<&Tier> {
+        let (questions, practised) = progress;
+        self.tiers
+            .iter()
+            .filter(|tier| !tier.met(questions, practised))
+            .min_by_key(|tier| tier.reward_mins)
+    }
+
     /// Whether another grant today could pay anything — the question the probe scheduler asks
     /// before spending a request, so a source paid in full stops being polled for the day.
     ///
@@ -1870,6 +1890,33 @@ mod tests {
         );
         assert_eq!(cfg.extra.for_day(today), 30);
         assert_eq!(cfg.earned.get("studygo").and_then(|e| e.minutes), Some(30));
+    }
+
+    /// The rung to aim at is the cheapest one still unmet, not the highest or the first.
+    ///
+    /// This is what the child is told to reach, so it has to be the nearest achievable thing
+    /// rather than the most impressive: naming the top of the ladder to someone at the bottom of
+    /// it is the discouraging choice, and naming whichever the parent happened to type first makes
+    /// the message depend on entry order the way `reward_for` refuses to.
+    #[test]
+    fn the_rung_to_aim_at_is_the_cheapest_one_not_yet_met() {
+        let ladder = laddered();
+        // Nothing done: the 16-minute rung is nearer than the 30-minute one.
+        assert_eq!(ladder.next_rung((0, 0)).map(|t| t.reward_mins), Some(16));
+        // The lower rung is met, so the next thing to aim at is the upper one.
+        assert_eq!(ladder.next_rung((12, 0)).map(|t| t.reward_mins), Some(30));
+        // Everything met: nothing left to aim at, and nothing to say.
+        assert_eq!(ladder.next_rung((99, 99)), None);
+        // Entry order must not decide it.
+        let mut reversed = laddered();
+        reversed.tiers.reverse();
+        assert_eq!(reversed.next_rung((0, 0)).map(|t| t.reward_mins), Some(16));
+        // A provider with no ladder has no rung to name.
+        let plain = Provider {
+            tiers: Vec::new(),
+            ..laddered()
+        };
+        assert_eq!(plain.next_rung((0, 0)), None);
     }
 
     /// A rejected grant leaves the config exactly as it found it.

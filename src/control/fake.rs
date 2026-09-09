@@ -61,6 +61,11 @@ pub struct FakeControl {
     /// as `Active`, so a failure never hands out unlimited time, and `probe::run_once` treats it as
     /// "do not run", so a failure never spends a request on a third party.
     session: Mutex<Result<SessionState, String>>,
+    /// What [`SystemControl::notify_user`] answers. `Ok` by default, which is what every test
+    /// written before this field existed assumes. Scriptable because two callers ask whether the
+    /// OS actually took the message before recording that the child was told, and a fake that can
+    /// only succeed leaves that branch unreachable.
+    notify_result: Mutex<Result<(), String>>,
     /// A scripted answer for [`SystemControl::run_probe`], or `None` to run the file for real.
     probe_script: Mutex<Option<Result<Vec<u8>, String>>>,
     /// Every `(exe, input)` this fake was asked to probe with, in order — so a test can assert
@@ -101,9 +106,19 @@ impl FakeControl {
             shutdowns: Mutex::new(Vec::new()),
             notifications: Mutex::new(Vec::new()),
             session: Mutex::new(Ok(SessionState::Active)),
+            notify_result: Mutex::new(Ok(())),
             probe_script: Mutex::new(None),
             probe_calls: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Make every later [`SystemControl::notify_user`] fail with `error`, as an OS that has no
+    /// interactive session to show a box on does.
+    pub fn fail_notifications(&self, error: &str) {
+        *self
+            .notify_result
+            .lock()
+            .expect("fake notify result poisoned") = Err(error.to_string());
     }
 
     /// Answer every later [`SystemControl::session_state`] with `answer`.
@@ -260,6 +275,14 @@ impl SystemControl for FakeControl {
 
     fn notify_user(&self, title: String, body: String) -> Result<(), ControlError> {
         tracing::info!(%title, %body, "[fake] notify_user (no-op on this platform)");
+        // Recorded before the scripted result is consulted: a message the OS refused was still
+        // *attempted*, and a test asserting that nothing was said must be able to tell the two
+        // apart.
+        let scripted = self
+            .notify_result
+            .lock()
+            .expect("fake notify result poisoned")
+            .clone();
         // Capped keeping the OLDEST, for the same reason `shutdown` above gives: assertions index
         // from the front, so dropping from the front would silently renumber what a test reads.
         let mut log = self
@@ -269,7 +292,7 @@ impl SystemControl for FakeControl {
         if log.len() < NOTIFY_LOG_CAP {
             log.push((title, body));
         }
-        Ok(())
+        scripted.map_err(ControlError::Op)
     }
 
     /// Scripted when a test asked for it; otherwise the file is genuinely run, as this user. That

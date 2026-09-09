@@ -99,8 +99,102 @@ impl ProbeStatus {
     }
 }
 
-/// Per-provider [`ProbeStatus`], keyed by provider name. Held in `AppState`.
-pub type StatusMap = Arc<Mutex<BTreeMap<String, ProbeStatus>>>;
+/// What the child is told when a check finds them short of the next rung.
+///
+/// **Said at most once a day, and shaped to be usable rather than merely true.** It names the
+/// provider (a parent-chosen word, so it matches whatever they called it), the nearest rung rather
+/// than the highest — see [`crate::config::Provider::next_rung`] — what that rung is worth, and
+/// what has been done so far, so the number is never a mystery. The research this feature was
+/// designed against is blunt about the alternative: a controlling frame correlates with *more*
+/// screen time, not less, so this states a rule and a score and stops.
+///
+/// Built per language like every other string the child reads, and guarded the same way — see
+/// `tests/translated_strings.rs`, which exists because two notices once reached a Dutch install in
+/// English at the most stressful moment of the day.
+fn practice_reminder_message(
+    source: &str,
+    tier: &crate::config::Tier,
+    done: Progress,
+    lang: crate::config::Language,
+) -> String {
+    use crate::config::Language;
+    // A zero threshold states *no condition* (see `Tier::met`), so a tier asking only one of the
+    // two must be described with one of the two. "10 questions or 0 minutes" would announce a bar
+    // that does not exist and that the child has already cleared.
+    let bar = match (tier.questions, tier.minutes_practised) {
+        (0, m) => match lang {
+            Language::En => format!("{m} minutes"),
+            Language::Nl => format!("{m} minuten"),
+            Language::Tr => format!("{m} dakika"),
+        },
+        (q, 0) => match lang {
+            Language::En => format!("{q} questions"),
+            Language::Nl => format!("{q} vragen"),
+            Language::Tr => format!("{q} soru"),
+        },
+        (q, m) => match lang {
+            Language::En => format!("{q} questions or {m} minutes"),
+            Language::Nl => format!("{q} vragen of {m} minuten"),
+            Language::Tr => format!("{q} soru veya {m} dakika"),
+        },
+    };
+    let so_far = match (done.questions, done.minutes, lang) {
+        (0, 0, Language::En) => "nothing yet".to_string(),
+        (0, 0, Language::Nl) => "nog niets".to_string(),
+        (0, 0, Language::Tr) => "henüz hiçbir şey".to_string(),
+        (q, m, Language::En) => format!("{q} questions and {m} minutes"),
+        (q, m, Language::Nl) => format!("{q} vragen en {m} minuten"),
+        (q, m, Language::Tr) => format!("{q} soru ve {m} dakika"),
+    };
+    let reward = tier.reward_mins;
+    match lang {
+        Language::En => {
+            format!(
+                "{source}: {bar} earns {reward} more minutes of screen time. Today so far: {so_far}."
+            )
+        }
+        Language::Nl => format!(
+            "{source}: {bar} levert {reward} minuten extra schermtijd. Vandaag tot nu toe: {so_far}."
+        ),
+        Language::Tr => format!(
+            "{source}: {bar} ile {reward} dakika ek ekran süresi kazanırsın. Bugün şu ana kadar: {so_far}."
+        ),
+    }
+}
+
+/// What the child is told when practice has just bought them time.
+///
+/// Short, and said every time a grant lands rather than once a day: this one is the *reason* the
+/// rest of it is tolerable, and a rule that only ever speaks to say "not yet" is the controlling
+/// frame the reminder above is written to avoid. It is naturally bounded by the ceiling — a
+/// provider cannot grant more times than its own daily maximum allows.
+fn practice_earned_message(minutes: u32, lang: crate::config::Language) -> String {
+    use crate::config::Language;
+    match lang {
+        Language::En => format!("Nice — {minutes} more minutes of screen time for your practice."),
+        Language::Nl => format!("Mooi — {minutes} minuten extra schermtijd voor je oefenwerk."),
+        Language::Tr => format!("Güzel — çalışman için {minutes} dakika ek ekran süresi."),
+    }
+}
+
+/// What this machine remembers about one provider's probe between runs.
+///
+/// Both halves are in memory only and deliberately so: a restart forgets them, which re-runs every
+/// due probe and re-offers the day's reminder once. Both are the right thing after a service has
+/// been down for hours, and the facts that must survive — what was actually earned — live in the
+/// config where [`crate::config::Config::earn`] put them.
+#[derive(Debug, Clone, Default)]
+pub struct ProbeState {
+    /// The last run, or `None` before the first one.
+    pub last: Option<ProbeStatus>,
+    /// The local day this provider last got its reminder *delivered* to the child. Absent until
+    /// one lands, so an undeliverable notice is retried at the next check rather than counted as
+    /// said — the same distinction `rules.rs` draws before recording a countdown warning.
+    pub reminded_on: Option<NaiveDate>,
+}
+
+/// Per-provider [`ProbeState`], keyed by provider name. Held in `AppState`.
+pub type StatusMap = Arc<Mutex<BTreeMap<String, ProbeState>>>;
 
 /// Where probes live: the one directory the child can execute from and cannot write to.
 ///
@@ -244,7 +338,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 if !provider.enabled || provider.exhausted_for(today, cfg.earned.get(name)) {
                     return None;
                 }
-                let last = status.get(name).map(|s| s.at);
+                let last = status.get(name).and_then(|s| s.last.as_ref()).map(|s| s.at);
                 due(now, last, probe.every_mins).then(|| (name.clone(), probe.clone()))
             })
             .collect()
@@ -280,12 +374,51 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 tracing::warn!(provider = %name, error = %error, "probe failed")
             }
         }
+        let reminded_before = crate::api::recover_lock(&state.probe_status)
+            .get(&name)
+            .and_then(|state| state.reminded_on);
+        // What, if anything, the child hears. Decided from a config snapshot released before the
+        // await below, and `true` marks the reminder — the one that is rationed.
+        let (lang, speak) = {
+            let cfg = crate::state::recover_read(&state.config);
+            let lang = cfg.language;
+            let speak = match (&outcome, reported) {
+                // Every grant is announced. A rule that only ever says "not yet" is the
+                // controlling frame this feature is written to avoid, and the ceiling already
+                // bounds how many times this can happen.
+                (ProbeOutcome::Granted(minutes), _) => {
+                    Some((practice_earned_message(*minutes, lang), false))
+                }
+                // Short of the bar, and not yet told today. The other two refusals mean the day
+                // is already paid, so there is nothing to aim at and nothing to say.
+                (ProbeOutcome::Refused("below_threshold"), Some(done))
+                    if reminded_before != Some(today) =>
+                {
+                    cfg.providers
+                        .get(&name)
+                        .and_then(|provider| provider.next_rung((done.questions, done.minutes)))
+                        .map(|tier| (practice_reminder_message(&name, tier, done, lang), true))
+                }
+                _ => None,
+            };
+            (lang, speak)
+        };
+        let mut reminded_on = reminded_before;
+        if let Some((body, is_reminder)) = speak {
+            let delivered = crate::control::notify_child(&state.control, &body, lang).await;
+            if is_reminder && delivered {
+                reminded_on = Some(today);
+            }
+        }
         crate::api::recover_lock(&state.probe_status).insert(
             name,
-            ProbeStatus {
-                at: now,
-                reported,
-                outcome,
+            ProbeState {
+                last: Some(ProbeStatus {
+                    at: now,
+                    reported,
+                    outcome,
+                }),
+                reminded_on,
             },
         );
     }
@@ -413,6 +546,112 @@ mod tests {
         );
         assert_eq!(read_secret(dir.path(), "studygo").unwrap(), None);
         assert_eq!(secret_deposited_at(dir.path(), "studygo").unwrap(), None);
+    }
+
+    // ----- what the child is told -----
+
+    /// Every language gets its own wording, and each states the bar and the progress.
+    ///
+    /// Walks `Language::ALL` so a fourth language cannot be added past this test, which is the
+    /// shape every other child-facing message in this crate is guarded by.
+    #[test]
+    fn every_language_gets_its_own_practice_reminder() {
+        let tier = crate::config::Tier {
+            questions: 10,
+            minutes_practised: 20,
+            reward_mins: 16,
+        };
+        let done = Progress {
+            questions: 3,
+            minutes: 5,
+        };
+        let said: Vec<String> = crate::config::Language::ALL
+            .iter()
+            .map(|&lang| practice_reminder_message("studygo", &tier, done, lang))
+            .collect();
+        for (lang, text) in crate::config::Language::ALL.iter().zip(&said) {
+            assert!(
+                text.contains("studygo"),
+                "{lang:?} must name the provider: {text}"
+            );
+            assert!(
+                text.contains("10"),
+                "{lang:?} must state the questions: {text}"
+            );
+            assert!(
+                text.contains("20"),
+                "{lang:?} must state the minutes: {text}"
+            );
+            assert!(
+                text.contains("16"),
+                "{lang:?} must state the reward: {text}"
+            );
+            assert!(
+                text.contains('3'),
+                "{lang:?} must state what he has done: {text}"
+            );
+        }
+        let unique: std::collections::BTreeSet<&String> = said.iter().collect();
+        assert_eq!(
+            unique.len(),
+            said.len(),
+            "each language needs its own wording, not a shared English one: {said:?}"
+        );
+    }
+
+    /// A tier that asks only one of the two states only that one.
+    ///
+    /// A tier's zero means *no condition* rather than a threshold of nought, so a message reading
+    /// "10 questions or 0 minutes" would be stating a bar that does not exist and that the child
+    /// has already cleared.
+    #[test]
+    fn a_one_sided_tier_is_described_with_one_side() {
+        let questions_only = crate::config::Tier {
+            questions: 10,
+            minutes_practised: 0,
+            reward_mins: 16,
+        };
+        let minutes_only = crate::config::Tier {
+            questions: 0,
+            minutes_practised: 20,
+            reward_mins: 16,
+        };
+        let done = Progress {
+            questions: 0,
+            minutes: 0,
+        };
+        for lang in crate::config::Language::ALL {
+            let q = practice_reminder_message("studygo", &questions_only, done, lang);
+            let m = practice_reminder_message("studygo", &minutes_only, done, lang);
+            assert!(
+                !q.contains(" 0 "),
+                "{lang:?} states a bar that is not set: {q}"
+            );
+            assert!(
+                !m.contains(" 0 "),
+                "{lang:?} states a bar that is not set: {m}"
+            );
+            assert!(q.contains("10"), "{q}");
+            assert!(m.contains("20"), "{m}");
+        }
+    }
+
+    /// Every language gets its own congratulation, and each says how much was added.
+    #[test]
+    fn every_language_gets_its_own_earned_notice() {
+        let said: Vec<String> = crate::config::Language::ALL
+            .iter()
+            .map(|&lang| practice_earned_message(16, lang))
+            .collect();
+        for (lang, text) in crate::config::Language::ALL.iter().zip(&said) {
+            assert!(text.contains("16"), "{lang:?} must say how much: {text}");
+        }
+        let unique: std::collections::BTreeSet<&String> = said.iter().collect();
+        assert_eq!(
+            unique.len(),
+            said.len(),
+            "each language needs its own: {said:?}"
+        );
     }
 
     /// The provider name is a path segment, so it is validated here as well as at the door.

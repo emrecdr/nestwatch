@@ -1615,7 +1615,7 @@ pub async fn run_rules_enforcer(
                 }
                 RuleAction::AppStopped { app, reason } => {
                     let msg = with_hint(app_stopped_message(&app, &reason, lang), hint.as_deref());
-                    let notified = notify_child(&control, &msg, lang).await;
+                    let notified = crate::control::notify_child(&control, &msg, lang).await;
                     // Recorded whether or not the notice was delivered, and that is the one place
                     // this deliberately differs from `TimeWarning` above.
                     //
@@ -1639,7 +1639,7 @@ pub async fn run_rules_enforcer(
                 }
                 RuleAction::Warn => has_warn = true,
                 RuleAction::LockWarning => {
-                    notify_child(
+                    crate::control::notify_child(
                         &control,
                         &with_hint(lock_warning_message(rules.warn_secs, lang), hint.as_deref()),
                         lang,
@@ -1650,7 +1650,7 @@ pub async fn run_rules_enforcer(
                     // Record the heads-up only if the OS actually took the message. A countdown
                     // the child never saw must not look, in the history, like one they did.
                     let msg = with_hint(budget_countdown_message(mins, lang), hint.as_deref());
-                    if notify_child(&control, &msg, lang).await {
+                    if crate::control::notify_child(&control, &msg, lang).await {
                         usage_log.record(
                             "budget_countdown",
                             serde_json::json!({
@@ -1670,7 +1670,7 @@ pub async fn run_rules_enforcer(
         // `log_transition` calls below, which flip `warning`.
         if has_warn && !warning {
             let msg = with_hint(limit_reached_message(lang).to_string(), hint.as_deref());
-            notify_child(&control, &msg, lang).await;
+            crate::control::notify_child(&control, &msg, lang).await;
         }
 
         // Log budget events once per episode (on the transition into enforcement).
@@ -1797,19 +1797,6 @@ async fn maybe_abort_budget_shutdown(
         usage_log.record("budget_shutdown_aborted", detail);
     }
     now_wanted
-}
-
-/// Best-effort child-facing notification under the fixed "Screen time" title, so callers only
-/// pass the body. Returns whether the OS took the message — see [`crate::control::notify`]; the
-/// countdown checks it before recording, the at-zero warnings don't (their history rows already
-/// record the enforcement action itself, which is the thing that matters).
-async fn notify_child(control: &Arc<dyn SystemControl>, body: &str, lang: Language) -> bool {
-    let title = match lang {
-        Language::En => "Screen time",
-        Language::Nl => "Schermtijd",
-        Language::Tr => "Ekran süresi",
-    };
-    crate::control::notify(control, title, body).await
 }
 
 /// "Need more? <url>", or `None` when asking cannot help.

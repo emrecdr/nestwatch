@@ -2016,22 +2016,6 @@ must never reach a log that is not the audit log. Whoever does this has to choos
 deliberately rather than adopt a default formatter, which is a decision about a family's privacy and
 not a plumbing task.
 
-### O101 · The gate has no voice: nothing tells the child what the probe found or what would earn more
-
-`probe::run_once` grants and refuses in silence. The plan this was built to (`PLUGIN-SYSTEM.md`,
-*A probe, and the machine's first outbound request*) describes a child who sees one calm notice when
-nothing has been practised — *fifteen questions or half an hour adds thirty; so far: none* — and a
-short "nice" when a rung is cleared. Neither exists: the probe's outcome reaches the parent's
-dashboard through `probe_status` and reaches the child nowhere.
-
-`SystemControl::notify_user` is the channel, `rules.rs` already sends translated, address-carrying
-notices through it, and `tests/translated_strings.rs` guards their shape — so the mechanics are there.
-What is missing is the decision of *when* to speak (not on every refused run; once a day for "nothing
-yet", once per rung cleared) and the three-language copy, which this project treats as a decision
-rather than a detail (`O96`). Until it lands, a child who does not know the rule sees his time extend
-or not with no explanation, which is the controlling-parent failure mode the plan's research warns
-against.
-
 ### O102 · A dead probe scheduler looks exactly like a probe that is not due
 
 `probe::run_scheduler` deliberately stamps no `heartbeat` — its doc says why: it enforces nothing,

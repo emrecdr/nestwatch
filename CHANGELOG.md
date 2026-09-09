@@ -7,6 +7,25 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Added
+
+- **The gate now says something to your son.** Until this, a probe granted or refused in silence:
+  his time extended, or it did not, with no explanation attached. Two sentences now reach him on
+  his own screen, through the same notification path the screen-time warnings already use. When a
+  check finds him short, once a day: *"studygo: 10 questions or 20 minutes earns 16 more minutes of
+  screen time. Today so far: 3 questions and 5 minutes."* When practice buys him time, every time:
+  *"Nice — 16 more minutes of screen time for your practice."*
+  <br>The asymmetry is deliberate. Announcing every grant is what keeps this from being a thing
+  that only ever says *not yet*; rationing the shortfall notice to one a day is what keeps a
+  fifteen-minute timer from becoming a fifteen-minute nag. Both failures point the same way, which
+  is a child who stops reading it. It names the **nearest** rung rather than the highest, chosen by
+  what it is worth rather than by the order you typed the ladder in, and a notice the machine could
+  not display is offered again at the next check instead of being counted as said. A failed check
+  says nothing to him at all — a broken link is yours to fix, and it is already on your card. Both
+  sentences exist in English, Dutch and Turkish, which a guard enforces rather than trusts.
+
 ## [0.8.0] — 2026-09-09
 
 ### Security
