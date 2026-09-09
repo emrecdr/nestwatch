@@ -67,16 +67,7 @@ jobs:
       - name: Install NASM (Windows, for ring)
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build frontend CSS
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+      - uses: ./.github/actions/frontend-css
       - name: Clippy (warnings as errors)
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
@@ -148,18 +139,9 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       # `build.rs` fails the build if assets/app.css is missing, so the CSS has to exist even for
       # a lint-only run.
-      - name: Build frontend CSS
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+      - uses: ./.github/actions/frontend-css
       # Not `--locked`: this asks about the compiler, not the dependency graph, and the pinned
       # jobs above are what hold the lockfile honest.
       - name: Clippy on today's stable
@@ -287,17 +269,7 @@ jobs:
       # which is generated and gitignored. Without this the baseline fails on a fresh checkout and
       # every mutant is reported unviable — a red job that says nothing about the tests.
       - if: steps.diff.outputs.has_rust == 'true'
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build frontend CSS
-        if: steps.diff.outputs.has_rust == 'true'
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+        uses: ./.github/actions/frontend-css
       - name: Test the mutants the diff introduces
         if: steps.diff.outputs.has_rust == 'true'
         run: cargo mutants --no-shuffle -vV --in-place --in-diff git.diff
@@ -324,16 +296,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Install NASM (for ring)
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build frontend CSS
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
+      - uses: ./.github/actions/frontend-css
       - name: Build release binary
         run: cargo build --release --locked
       - uses: actions/upload-artifact@v7

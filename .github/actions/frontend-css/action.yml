@@ -1,0 +1,21 @@
+name: Build frontend CSS
+description: >-
+  Install the web toolchain and generate `assets/app.css`. That file is gitignored, `build.rs`
+  fails the build without it, and `src/web.rs`'s class scans read it — so every job that compiles
+  or tests this crate needs it, which is why this block was copied into six of them.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+    # `shell` is mandatory on a composite `run` step; there is no default to inherit.
+    - name: Build frontend CSS
+      working-directory: web
+      shell: bash
+      run: |
+        npm ci
+        npm run build

@@ -1,8 +1,13 @@
-//! Guards on the release pipeline's supply chain, asserted against the workflow files themselves.
+//! Guards on the release pipeline's supply chain, asserted against the workflow files themselves
+//! and against the local composite actions they use.
 //!
 //! Both properties below already hold. They are pinned here because neither is checked by
 //! anything else: a workflow is not compiled, not linted by `clippy`, and only "tested" by
 //! running a release — which is the one moment you cannot afford to discover the problem.
+//!
+//! Both tests read text rather than parsed YAML, which is why composite actions need explicit
+//! handling: a `uses:` moved into `.github/actions/x/action.yml` runs with identical privileges
+//! and disappears from the file these scans read.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,6 +45,51 @@ fn workflows() -> Vec<(String, String)> {
     out
 }
 
+/// Every local composite action, as (name, contents).
+///
+/// Scanned beside the workflows because a `uses:` inside a composite action runs with exactly the
+/// same privileges as one written in the workflow, and neither test below can see it otherwise.
+/// A missing directory is not a failure — this repository need not have any.
+fn composite_actions() -> Vec<(String, String)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/actions");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, String)> = Vec::new();
+    for entry in entries {
+        let path: PathBuf = entry.expect("unreadable directory entry").path();
+        for file in ["action.yml", "action.yaml"] {
+            let candidate = path.join(file);
+            if !candidate.is_file() {
+                continue;
+            }
+            let dir_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .expect("action directory name is not UTF-8");
+            let body = fs::read_to_string(&candidate)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", candidate.display()));
+            out.push((format!("{dir_name}/{file}"), body));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The repository-local action a `uses:` line references, if it is one: `.github/actions/x`.
+///
+/// `action_ref` cannot answer this: a local reference carries no `@ref`, which is the whole point
+/// — it is this tree's own code at this commit, so there is no version to pin.
+fn local_action(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let rest = trimmed
+        .strip_prefix("- uses:")
+        .or_else(|| trimmed.strip_prefix("uses:"))?;
+    let spec = rest.trim().split('#').next()?.trim();
+    spec.strip_prefix("./")
+        .filter(|p| p.starts_with(".github/"))
+}
+
 /// The `uses:` reference on a line, if it has one: `("owner/repo", "ref")`.
 fn action_ref(line: &str) -> Option<(&str, &str)> {
     let rest = line.trim().strip_prefix("- uses:").or_else(|| {
@@ -66,7 +116,7 @@ fn is_sha(r: &str) -> bool {
 fn every_third_party_action_is_pinned_to_a_commit() {
     let mut checked = 0usize;
     let mut floating = Vec::new();
-    for (name, body) in workflows() {
+    for (name, body) in workflows().into_iter().chain(composite_actions()) {
         for line in body.lines() {
             let Some((action, reference)) = action_ref(line) else {
                 continue;
@@ -156,6 +206,34 @@ fn the_signing_job_runs_no_build_step() {
     );
 
     let (job, steps) = signing[0];
+
+    // A composite action runs build steps whose names never appear in this file, which is exactly
+    // what the scan below reads. So expand every local action the signing job uses: moving
+    // `npm ci` behind `uses: ./.github/actions/frontend-css` must not quietly satisfy this test.
+    // A reference that resolves to no `action.yml` fails rather than expanding to nothing — a
+    // renamed directory is a hole in this guard, not a pass.
+    let mut steps = steps.clone();
+    for line in steps.clone().lines() {
+        let Some(rel) = local_action(line) else {
+            continue;
+        };
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+        let file = ["action.yml", "action.yaml"]
+            .iter()
+            .map(|f| dir.join(f))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| {
+                panic!(
+                    "job `{job}` uses `./{rel}`, which holds no action.yml — this guard cannot \
+                     read what that step runs, so it cannot say the job does not build"
+                )
+            });
+        steps.push_str(
+            &fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display())),
+        );
+    }
+
     // Anything that turns source into the artifact. `cargo build` is the one that matters; the
     // toolchain and Node setups are listed because a build step cannot appear without them, so
     // they fail earlier and point at the cause more directly.
