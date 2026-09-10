@@ -778,7 +778,8 @@ download page and the behaviour below has never executed on the platform it was 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 38 items across §H1–§H8, where it held 32 at `v0.7.0`. The one
+accumulated rather than turned over: 42 items across §H1–§H9, where it held 38 at `v0.8.0` and 32 at
+`v0.7.0`. The one
 thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
 (§H8) instead of being added to the list later or not at all, which is the failure `O87` records
 against 0.6.0 and 0.7.0.

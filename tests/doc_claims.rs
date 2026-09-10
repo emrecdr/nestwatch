@@ -8,9 +8,12 @@
 //!
 //! Markdown is in the same category `tests/workflow_pins.rs` describes for workflow files: not
 //! compiled, not linted by `clippy`, and only "tested" by a reader believing it. The difference is
-//! that a wrong workflow fails a release loudly, while wrong prose is read and acted on. All three
-//! properties below already hold as of 2026-09-02; each is here because it did **not** hold days
-//! earlier and nothing noticed:
+//! that a wrong workflow fails a release loudly, while wrong prose is read and acted on. The three
+//! examples below are the ones this file was opened for on 2026-09-02, each because it did **not**
+//! hold days earlier and nothing noticed. It has grown since, and every guard in it arrived the
+//! same way — written after the claim it pins had already drifted, never before. No count is given
+//! here on purpose: a header that states how many tests are below is one more claim to keep true,
+//! and this file exists because that is the kind nobody notices going stale:
 //!
 //!   * `README.md` said `argon2 0.5` for the several days after the crate moved to `0.6` — a
 //!     security-adjacent claim, in the most-read file, wrong in the direction of understating what
@@ -191,6 +194,89 @@ fn the_findings_release_state_names_this_version() {
          Bumping the version is part of cutting a release; so is saying which release the open \
          findings are open against."
     );
+}
+
+/// The size the Windows checklist is quoted as having, wherever it is quoted, is the size it has.
+///
+/// Three files cite it, and all three are arguments about how much of this project is unverified
+/// on the platform it runs on: `README.md`'s release-state paragraph, the `## Release state` header
+/// in `docs/OPEN-FINDINGS.md`, and the checklist's own section-H preamble. A count that has drifted
+/// downward understates that gap, in the most-read file in the project — the same shape as the
+/// `argon2` claim this file's header describes, and the same direction.
+///
+/// **It fired on the day it was written.** `§H9` was added after `v0.8.0` shipped and moved every
+/// citation at once, 38 items to 42 and 209 boxes to 213. Four places said 38 for a day and nothing
+/// noticed, which is the whole argument for this test rather than a fifth careful reader.
+///
+/// Exact rather than one-sided, unlike `o71_line_counts_have_not_drifted_past_its_citation` above.
+/// These are counted, not estimated: `- [ ]` occurrences in a markdown file. Re-counting costs a
+/// grep, so there is no honest reason for the three to disagree, and no band inside which drift is
+/// tolerable.
+///
+/// When this fires: re-count and edit the citations. It is a prompt to re-measure, not a budget.
+#[test]
+fn the_windows_checklist_is_the_size_its_citations_claim() {
+    let checklist = repo("docs/WINDOWS-TESTING.md");
+
+    let start = checklist
+        .find("\n## H. ")
+        .expect("docs/WINDOWS-TESTING.md has no `## H.` section");
+    let end = checklist[start + 1..]
+        .find("\n## ")
+        .map(|i| start + 1 + i)
+        .unwrap_or(checklist.len());
+    let section_h = &checklist[start..end];
+
+    let items = section_h.matches("- [ ]").count();
+    let boxes = checklist.matches("- [ ]").count();
+    let last = section_h
+        .rmatch_indices("\n### H")
+        .next()
+        .map(|(i, _)| {
+            section_h[i + 6..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty())
+        .expect("section H has no `### H<n>` subsections");
+
+    // Anti-vacuity in both directions: a scan that stopped matching must not report agreement.
+    assert!(
+        items >= 20 && boxes > items,
+        "counted {items} items in section H and {boxes} in the whole file; the scan is broken, \
+         not the checklist"
+    );
+
+    // The citations say nothing has ever been recorded as run. If that stops being true, the
+    // sentence around these numbers is wrong in a way no count would catch.
+    assert_eq!(
+        checklist.matches("- [x]").count(),
+        0,
+        "an item is ticked, so `docs/OPEN-FINDINGS.md`'s claim that no commit has ever recorded a \
+         ticked item is now false. Rewrite that sentence rather than deleting this assertion."
+    );
+
+    let range = format!("{items} items across §H1–§H{last}");
+    for file in [
+        "README.md",
+        "docs/OPEN-FINDINGS.md",
+        "docs/WINDOWS-TESTING.md",
+    ] {
+        assert!(
+            repo(file).contains(&range),
+            "{file} does not say `{range}`. Section H holds {items} items across §H1–§H{last} \
+             right now; every file that cites the checklist's size has to say the same number."
+        );
+    }
+
+    let findings = repo("docs/OPEN-FINDINGS.md");
+    for claim in [format!("{boxes} boxes"), format!("carries {items} items")] {
+        assert!(
+            findings.contains(&claim),
+            "docs/OPEN-FINDINGS.md does not say `{claim}`, which is what the checklist measures now."
+        );
+    }
 }
 
 /// `O71` cites the size of the dashboard component. Those numbers must not understate it badly.

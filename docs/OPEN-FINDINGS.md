@@ -65,8 +65,12 @@ solid, and each says which it is: some are read directly off the tree and are fa
 exists; others rest on a primary source plus a mechanism, and name the one on-device observation that
 would confirm or kill them.
 
-Last audited against the tree on **2026-08-31**. Entries that did not survive that audit were removed
-or rewritten rather than annotated, per the rules above.
+Last **full** audit against the tree: **2026-08-31**. Entries that did not survive it were removed or
+rewritten rather than annotated, per the rules above. Individual entries have been re-measured since
+and carry their own later dates — `O87` and the release state above were both re-measured on
+2026-09-10, and `O100` was deleted on 2026-09-09 once the markup it described had been converted. So
+read the date on an entry before the date on this line: this one bounds only how long ago every
+entry was last looked at *together*.
 
 ## Release state
 
@@ -80,11 +84,13 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 the downloaded artifacts.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **38 items across §H1–§H8** — the bedtime
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **42 items across §H1–§H9** — the bedtime
 extension, the enforcer wake, the translated shutdown notices, the ask link, the child's page in
-Dutch, and now the provider probe — and none of them has executed on Windows. Measured 2026-09-09,
-and worth stating exactly: **no commit in this repository's history has ever recorded a ticked item
-in that file**, in any section, so the 209 boxes it carries are all still open. The three gates that
+Dutch, the provider probe, and the message a parent types — and none of them has executed on
+Windows. Re-measured 2026-09-10; it read 38 across §H1–§H8 when `v0.8.0` shipped, and §H9 has been
+added since for work that is not in that release. Worth stating exactly: **no commit in this
+repository's history has ever recorded a ticked item in that file**, in any section, so all
+213 boxes it carries are still open. The three gates that
 were green when it shipped are the same three that were green when `install` failed on real hardware
 and again when `remove_file` turned out not to be exclusive. That is not an argument for distrusting
 them; it is the reason the section below exists and the reason the checklist is the only method here
@@ -1653,8 +1659,8 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 38 items that have never executed (measured 2026-09-09; it was 32 when this was written), so
-the gap has a size and a reader can weigh it. A
+carries 42 items that have never executed (measured 2026-09-10; 38 at `v0.8.0`, and 32 when this was
+written), so the gap has a size and a reader can weigh it. A
 feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and
 left unchecked, 0.6.0's were never written down. The two together are the tier-3 surface, and only
