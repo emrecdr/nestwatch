@@ -753,9 +753,11 @@ mod tests {
         let mut seen = 0;
         for (name, page) in PAGES {
             let html = strip_html_comments(page);
-            for tag in html.split("<input").skip(1) {
-                let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
-                if !tag.contains("type=\"number\"") {
+            // `opening_tags` rather than `split("<input")`, for the reason that helper's own doc
+            // gives: an attribute value containing `>` ends the tag early, and `index.html` has
+            // thirteen of those. This was the last hand-rolled splitter in the file.
+            for tag in opening_tags(&html) {
+                if !tag.starts_with("<input") || !tag.contains("type=\"number\"") {
                     continue;
                 }
                 seen += 1;

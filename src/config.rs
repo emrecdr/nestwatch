@@ -345,12 +345,12 @@ impl Provider {
     ///
     /// The best matching tier wins rather than the first, so the answer does not depend on the
     /// order a parent happened to enter them in.
-    pub fn reward_for(&self, progress: Option<(u32, u32)>) -> Option<u32> {
+    pub fn reward_for(&self, progress: Option<Progress>) -> Option<u32> {
         match (progress, self.tiers.as_slice()) {
             (_, []) | (None, _) => Some(self.minutes),
-            (Some((questions, practised)), tiers) => tiers
+            (Some(done), tiers) => tiers
                 .iter()
-                .filter(|tier| tier.met(questions, practised))
+                .filter(|tier| tier.met(done.questions, done.minutes))
                 .map(|tier| tier.reward_mins)
                 .max(),
         }
@@ -368,11 +368,10 @@ impl Provider {
     /// `None` when every tier is met — there is nothing left to earn, so there is nothing to say —
     /// and when there are no tiers at all, which is a provider whose single reward has no bar in
     /// front of it.
-    pub fn next_rung(&self, progress: (u32, u32)) -> Option<&Tier> {
-        let (questions, practised) = progress;
+    pub fn next_rung(&self, done: Progress) -> Option<&Tier> {
         self.tiers
             .iter()
-            .filter(|tier| !tier.met(questions, practised))
+            .filter(|tier| !tier.met(done.questions, done.minutes))
             .min_by_key(|tier| tier.reward_mins)
     }
 
@@ -392,6 +391,54 @@ impl Provider {
             (Some(cap), Some(used)) => used >= cap,
         }
     }
+}
+
+/// What a child has actually done today, as reported by whatever is watching.
+///
+/// **One named type, because the two fields are the same shape and swapping them compiles.**
+/// `reward_for`, `next_rung` and `earn` all took a bare `(u32, u32)`, and `api` and `probe` each
+/// declared their own identical struct to feed them — so three call sites could transpose questions
+/// and minutes silently, and a field added in one copy would be missing from the other. The push
+/// from the phone and the probe's two numbers are the same fact arriving by different roads, so they
+/// are the same type.
+///
+/// `Deserialize` lives here because both roads parse it: the HTTP body in `api::ExtraTimeBody` and
+/// the probe's stdout in `probe::parse_output`.
+///
+/// **Both fields are required, and that is the probe's contract rather than a preference.** The
+/// earlier HTTP-only copy of this struct defaulted each field so a client could send one of the
+/// two; merging the two types carried that leniency onto the probe, where it meant a program
+/// printing `{}` — or `[]`, which serde reads as a struct of defaults from a sequence — was read as
+/// *nothing practised today* instead of being refused as not an answer. Silently crediting a broken
+/// probe with a real zero is the failure this module is most careful about elsewhere. Nothing sent
+/// a partial `progress`, so strictness costs nothing and
+/// `the_answer_is_two_integers_and_nothing_else_is_believed` is what says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Progress {
+    /// Questions answered today.
+    pub questions: u32,
+    /// Minutes *practised* today — deliberately not a reward. The two are one transposition apart,
+    /// which is the whole argument for this being a struct rather than a pair.
+    pub minutes: u32,
+}
+
+/// The three reasons a provider grant can be refused, as they appear on the wire.
+///
+/// **Named because four copies of each literal had accumulated** — two in [`Config::earn`] and two
+/// in `probe.rs`, which has to recognise one of them to decide whether the child hears about it. A
+/// renamed literal in one place and not the others would have left the child silently untold.
+///
+/// These strings are a cross-repository contract: they reach Voortgang as `{ok: false, reason}` and
+/// it branches on them, so the *values* must not change. `O106` records the remaining problem, which
+/// naming them does not solve: the match in `probe.rs` is still not exhaustive, so a fourth reason
+/// would fall through a catch-all rather than fail to compile.
+pub mod refused {
+    /// Work was reported and met no tier.
+    pub const BELOW_THRESHOLD: &str = "below_threshold";
+    /// This source already granted today and has no ceiling to top up against.
+    pub const ALREADY_GRANTED_TODAY: &str = "already_granted_today";
+    /// The ceiling is configured and today's allowance is spent.
+    pub const DAILY_CAP_REACHED: &str = "daily_cap_reached";
 }
 
 /// How a provider grant came out. See [`Config::earn`].
@@ -842,7 +889,7 @@ impl Config {
         &mut self,
         source: &str,
         today: NaiveDate,
-        reported: Option<(u32, u32)>,
+        reported: Option<Progress>,
     ) -> Result<Earn, String> {
         // A provider grant is governed by the registry: it must name an enabled provider, and
         // the reward is that provider's — read here, never taken from the push.
@@ -854,7 +901,7 @@ impl Config {
                 // whatever it sees and lets this machine judge is exactly what tiers are for, so
                 // "not yet" has to be an ordinary answer rather than a rejection. Unreachable for
                 // a provider with no tiers configured.
-                None => return Ok(Earn::Refused("below_threshold")),
+                None => return Ok(Earn::Refused(refused::BELOW_THRESHOLD)),
             }
         };
         // Read out as an owned value, not held as a borrow: the map is mutated a few lines
@@ -869,16 +916,16 @@ impl Config {
         match (ceiling, spent) {
             // The original rule, and the one every config that has not opted in takes: one
             // grant per source per day, whatever it was worth.
-            (None, Some(_)) => return Ok(Earn::Refused("already_granted_today")),
+            (None, Some(_)) => return Ok(Earn::Refused(refused::ALREADY_GRANTED_TODAY)),
             // A ceiling is configured, but this source's earlier grant today was never measured —
             // an older build wrote it, or the ceiling was added after it landed. Refusing is the
             // conservative reading; `EarnedDay::minutes` gives the argument for why the
             // alternative hands out a second full reward.
-            (Some(_), Some(None)) => return Ok(Earn::Refused("daily_cap_reached")),
+            (Some(_), Some(None)) => return Ok(Earn::Refused(refused::DAILY_CAP_REACHED)),
             (Some(cap), Some(Some(used))) => {
                 let room = cap.saturating_sub(used);
                 if room == 0 {
-                    return Ok(Earn::Refused("daily_cap_reached"));
+                    return Ok(Earn::Refused(refused::DAILY_CAP_REACHED));
                 }
                 // The last grant of a day is worth the remainder, not the full reward.
                 //
@@ -1076,6 +1123,12 @@ pub(crate) fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> 
 mod tests {
     use super::*;
 
+    /// Helper: what a child did, for the call sites that judge it. Named fields, so a test cannot
+    /// transpose questions and minutes the way a bare pair let every caller do.
+    fn done(questions: u32, minutes: u32) -> Progress {
+        Progress { questions, minutes }
+    }
+
     /// Helper: a provider with the two-step ladder a household actually asks for.
     fn laddered() -> Provider {
         Provider {
@@ -1143,18 +1196,18 @@ mod tests {
     fn the_best_matching_tier_wins_not_the_first() {
         let mut provider = laddered();
         assert_eq!(
-            provider.reward_for(Some((20, 40))),
+            provider.reward_for(Some(done(20, 40))),
             Some(30),
             "clearing both tiers is worth the higher one"
         );
         provider.tiers.reverse();
         assert_eq!(
-            provider.reward_for(Some((20, 40))),
+            provider.reward_for(Some(done(20, 40))),
             Some(30),
             "and still the higher one when they are listed the other way round"
         );
         assert_eq!(
-            provider.reward_for(Some((12, 0))),
+            provider.reward_for(Some(done(12, 0))),
             Some(16),
             "clearing only the lower tier is worth the lower reward"
         );
@@ -1163,7 +1216,7 @@ mod tests {
     /// Nothing earned is `None`, and a caller must not read it as a grant of zero.
     #[test]
     fn work_below_every_tier_earns_nothing() {
-        assert_eq!(laddered().reward_for(Some((9, 19))), None);
+        assert_eq!(laddered().reward_for(Some(done(9, 19))), None);
     }
 
     /// Both roads back to the original behaviour.
@@ -1181,7 +1234,7 @@ mod tests {
             probe: None,
         };
         assert_eq!(
-            plain.reward_for(Some((0, 0))),
+            plain.reward_for(Some(done(0, 0))),
             Some(25),
             "no tiers means the single reward, however detailed the push"
         );
@@ -1872,20 +1925,20 @@ mod tests {
         // The ladder under a ceiling: the lower rung, then the difference, then the ceiling.
         let mut cfg = with_provider("studygo", laddered());
         assert_eq!(
-            cfg.earn("studygo", today, Some((3, 5))),
+            cfg.earn("studygo", today, Some(done(3, 5))),
             Ok(Earn::Refused("below_threshold"))
         );
         assert!(cfg.earned.is_empty(), "below the bar writes no entry");
         assert_eq!(
-            cfg.earn("studygo", today, Some((12, 5))),
+            cfg.earn("studygo", today, Some(done(12, 5))),
             Ok(Earn::Granted(16))
         );
         assert_eq!(
-            cfg.earn("studygo", today, Some((15, 5))),
+            cfg.earn("studygo", today, Some(done(15, 5))),
             Ok(Earn::Granted(14))
         );
         assert_eq!(
-            cfg.earn("studygo", today, Some((40, 60))),
+            cfg.earn("studygo", today, Some(done(40, 60))),
             Ok(Earn::Refused("daily_cap_reached"))
         );
         assert_eq!(cfg.extra.for_day(today), 30);
@@ -1902,21 +1955,30 @@ mod tests {
     fn the_rung_to_aim_at_is_the_cheapest_one_not_yet_met() {
         let ladder = laddered();
         // Nothing done: the 16-minute rung is nearer than the 30-minute one.
-        assert_eq!(ladder.next_rung((0, 0)).map(|t| t.reward_mins), Some(16));
+        assert_eq!(
+            ladder.next_rung(done(0, 0)).map(|t| t.reward_mins),
+            Some(16)
+        );
         // The lower rung is met, so the next thing to aim at is the upper one.
-        assert_eq!(ladder.next_rung((12, 0)).map(|t| t.reward_mins), Some(30));
+        assert_eq!(
+            ladder.next_rung(done(12, 0)).map(|t| t.reward_mins),
+            Some(30)
+        );
         // Everything met: nothing left to aim at, and nothing to say.
-        assert_eq!(ladder.next_rung((99, 99)), None);
+        assert_eq!(ladder.next_rung(done(99, 99)), None);
         // Entry order must not decide it.
         let mut reversed = laddered();
         reversed.tiers.reverse();
-        assert_eq!(reversed.next_rung((0, 0)).map(|t| t.reward_mins), Some(16));
+        assert_eq!(
+            reversed.next_rung(done(0, 0)).map(|t| t.reward_mins),
+            Some(16)
+        );
         // A provider with no ladder has no rung to name.
         let plain = Provider {
             tiers: Vec::new(),
             ..laddered()
         };
-        assert_eq!(plain.next_rung((0, 0)), None);
+        assert_eq!(plain.next_rung(done(0, 0)), None);
     }
 
     /// A rejected grant leaves the config exactly as it found it.

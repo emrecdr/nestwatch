@@ -32,7 +32,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, FixedOffset, NaiveDate};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::config::{Earn, Probe};
@@ -49,11 +48,10 @@ pub const MAX_SECRET_BYTES: usize = 8 * 1024;
 const SCHEDULER_TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// What a probe reported: the two numbers the registry judges, and the only two it reads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub struct Progress {
-    pub questions: u32,
-    pub minutes: u32,
-}
+///
+/// The registry's own type — see [`crate::config::Progress`]. A probe's stdout and a push from the
+/// phone are the same fact arriving by different roads, so they parse into the same struct.
+pub use crate::config::Progress;
 
 /// How one run came out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,12 +423,12 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 }
                 // Short of the bar, and not yet told today. The other two refusals mean the day
                 // is already paid, so there is nothing to aim at and nothing to say.
-                (ProbeOutcome::Refused("below_threshold"), Some(done))
+                (ProbeOutcome::Refused(crate::config::refused::BELOW_THRESHOLD), Some(done))
                     if reminded_before != Some(today) =>
                 {
                     cfg.providers
                         .get(&name)
-                        .and_then(|provider| provider.next_rung((done.questions, done.minutes)))
+                        .and_then(|provider| provider.next_rung(done))
                         .map(|tier| practice_reminder_message(&name, tier, done, lang))
                 }
                 _ => None,
@@ -442,7 +440,12 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
         let mut reminded_on = reminded_before;
         if let Some(body) = speak {
             let delivered = crate::control::notify_child(&state.control, &body, lang).await;
-            if delivered && matches!(outcome, ProbeOutcome::Refused("below_threshold")) {
+            if delivered
+                && matches!(
+                    outcome,
+                    ProbeOutcome::Refused(crate::config::refused::BELOW_THRESHOLD)
+                )
+            {
                 reminded_on = Some(today);
             }
         }
@@ -499,7 +502,7 @@ async fn run_one(
     // serializes behind this on `config_save_lock`.
     let mut verdict = None;
     let source = name.to_string();
-    let reported = Some((progress.questions, progress.minutes));
+    let reported = Some(progress);
     let persisted = crate::api::try_update_config(state, |c| {
         verdict = Some(
             c.earn(&source, today, reported)

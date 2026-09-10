@@ -2155,10 +2155,11 @@ either. `Rules::validate` bounds `MAX_RULE_ENTRIES`, which is the *count*. So th
 message — *"if it has no server limit, that is the thing to fix, not this test"* — describes a case
 its scan structurally cannot reach.
 
-**Two changes, and the second is the one that matters.** The scan should iterate every `<textarea>`
-and every `<input>` whose type is `text` or `number`, from one table keyed by page, attribute and
-constant — which also merges the two guards into one. And each of those five fields needs a server
-bound to be held to. They are parent-supplied and land in `config.json`, so the risk is a file that
+**Narrowed 2026-09-10.** Both scans now share `opening_tags`, so the hand-rolled splitters this
+entry also described are gone and what remains is purely the *scope* question: which boxes the scan
+can see. The scan should iterate every `<textarea>` and every `<input>` whose type is `text` or
+`number`, from one table keyed by page, attribute and constant — which also merges the two guards
+into one. And each of those five fields needs a server bound to be held to. They are parent-supplied and land in `config.json`, so the risk is a file that
 grows rather than an attack, but "the parent can make the config arbitrarily large" is not a
 property anyone chose.
 
@@ -2175,6 +2176,11 @@ reminder and `_ => None` silently absorbs everything else. Add a fourth refusal 
 cooldown, say, or "disabled between the snapshot and the judgement" — and the child is simply never
 told, with nothing at any layer forcing the author to decide whether they should be. The compiler
 cannot help, and no test notices an *addition*.
+
+**Narrowed 2026-09-10.** The four scattered copies of each literal are gone — `config::refused`
+names all three and both `Config::earn` and `probe.rs` use those constants — so a rename can no
+longer leave the child silently untold. What naming does **not** fix is the exhaustiveness, which is
+the whole of what is left here: the match in `probe.rs` still ends in a catch-all.
 
 **The change:** `enum RefusedReason` with a `wire()` returning today's exact literals, carried by
 both `Earn::Refused` and `ProbeOutcome::Refused`, plus one test pinning all three values — which

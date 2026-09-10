@@ -684,20 +684,7 @@ pub struct ExtraTimeBody {
     /// already willing to push when it had not earned anything; what bounds either is
     /// `daily_cap_mins`, not the honesty of the report.
     #[serde(default)]
-    progress: Option<Progress>,
-}
-
-/// What a push reports about the work behind it. See [`ExtraTimeBody::progress`].
-#[derive(Deserialize, Clone, Copy)]
-pub struct Progress {
-    /// Questions answered today.
-    #[serde(default)]
-    questions: u32,
-    /// Minutes *practised* today — deliberately not the same thing as the `minutes` beside it in
-    /// the body, which is a reward a parent is granting. Nested so the two can never be read for
-    /// one another.
-    #[serde(default)]
-    minutes: u32,
+    progress: Option<crate::config::Progress>,
 }
 
 /// Body of `POST /api/curfew/extend`.
@@ -992,7 +979,7 @@ pub async fn extra_time(
     // Flattened out of the body here so the closure captures a `Copy` pair rather than borrowing
     // it, and so the parent path cannot accidentally consult it: a parent grants a stated number
     // and has no threshold to clear.
-    let reported = body.progress.map(|p| (p.questions, p.minutes));
+    let reported = body.progress;
     // The reward: a parent's own grant is worth what they asked for; a provider's is decided by
     // the registry — `Config::earn` — from what the push reported, never from what it claimed to
     // be worth. Resolved inside the config critical section so the provider it is read from is
