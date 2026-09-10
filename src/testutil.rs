@@ -129,11 +129,17 @@ pub(crate) fn assert_all_lists_every_variant(src: &str, decl: &str, all_len: usi
 
 /// Assert that every language produced its own wording rather than a shared one.
 ///
-/// Four tests were spelling this by hand in two idioms — a `BTreeSet` here and a
-/// `clone/sort/dedup` in `rules.rs` — which is three copies more than a two-line property needs.
 /// The failure it exists for is quiet: a `match lang` whose arms were filled in by copying the
 /// English one leaves a Dutch install reading English, and every other assertion in such a test
 /// still passes.
+///
+/// **The migration to this helper is outstanding, not finished, and this comment says so on
+/// purpose.** Three call sites use it — two in `probe.rs`, one in `control/mod.rs`, the last of
+/// which was the `BTreeSet` copy that prompted the extraction. Six hand-rolled copies remain, in
+/// two idioms: a `clone/sort/dedup` at `rules.rs:3552`, and an index loop with an inner
+/// `assert_ne!` at `rules.rs:3658`, `:3674`, `:3693` and `curfew.rs:1215`, `:1249`. An earlier
+/// version of this comment read as though those had been converted. They had not, and a comment
+/// that describes work as done is worse than no comment: it stops the next reader looking.
 pub(crate) fn assert_each_language_differs<T: Ord + std::fmt::Debug>(said: &[T]) {
     let unique: std::collections::BTreeSet<&T> = said.iter().collect();
     assert_eq!(

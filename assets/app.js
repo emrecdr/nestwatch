@@ -1796,9 +1796,6 @@ function app() {
       return "Paired to " + paired.map((s) => this.deviceLabel(s.user_agent)).join(", ");
     },
 
-    // How much room is left in the box, so a parent is not surprised by the cap mid-sentence.
-    // The bound matches `api::MAX_MESSAGE_CHARS`, and `maxlength` on the textarea enforces it —
-    // this only reports it.
     // Whether the last message reached his screen, as a sentence. Built at render time from the
     // language table rather than stored, so switching language re-translates it.
     messageStatus() {
@@ -1811,6 +1808,9 @@ function app() {
       return this.t("tMessageNotShown");
     },
 
+    // How much room is left in the box, so a parent is not surprised by the cap mid-sentence.
+    // The bound matches `api::MAX_MESSAGE_CHARS`, and `maxlength` on the textarea enforces it —
+    // this only reports it.
     messageLeft() {
       return this.tf("tCharactersLeft", MAX_MESSAGE_CHARS - this.messageText.length);
     },
