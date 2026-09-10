@@ -11,6 +11,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **Both new notices read "1 questions and 1 minutes" when the count was one.** Your son answering a
+  single question was told so in the plural, in English and in Dutch. The words now agree with the
+  number — and deliberately do not in Turkish, where a numeral leaves the noun singular, so "1
+  dakika" and "16 dakika" take the same word. That asymmetry was already written down for the
+  screen-time countdown; these two builders shipped without it.
 - **The time-code box let your child type six characters that could never work.** A code is always
   exactly six, and the server refuses any other length outright, but the box on his page accepted
   twelve. Typing more than six could only ever end in *no such code*, with nothing on screen

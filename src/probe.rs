@@ -118,43 +118,76 @@ fn practice_reminder_message(
     // two must be described with one of the two. "10 questions or 0 minutes" would announce a bar
     // that does not exist and that the child has already cleared.
     let bar = match (tier.questions, tier.minutes_practised) {
-        (0, m) => match lang {
-            Language::En => format!("{m} minutes"),
-            Language::Nl => format!("{m} minuten"),
-            Language::Tr => format!("{m} dakika"),
-        },
-        (q, 0) => match lang {
-            Language::En => format!("{q} questions"),
-            Language::Nl => format!("{q} vragen"),
-            Language::Tr => format!("{q} soru"),
-        },
-        (q, m) => match lang {
-            Language::En => format!("{q} questions or {m} minutes"),
-            Language::Nl => format!("{q} vragen of {m} minuten"),
-            Language::Tr => format!("{q} soru veya {m} dakika"),
-        },
+        (0, m) => format!("{m} {}", minutes_word(m, lang)),
+        (q, 0) => format!("{q} {}", questions_word(q, lang)),
+        (q, m) => {
+            let (qw, mw) = (questions_word(q, lang), minutes_word(m, lang));
+            match lang {
+                Language::En => format!("{q} {qw} or {m} {mw}"),
+                Language::Nl => format!("{q} {qw} of {m} {mw}"),
+                Language::Tr => format!("{q} {qw} veya {m} {mw}"),
+            }
+        }
     };
-    let so_far = match (done.questions, done.minutes, lang) {
-        (0, 0, Language::En) => "nothing yet".to_string(),
-        (0, 0, Language::Nl) => "nog niets".to_string(),
-        (0, 0, Language::Tr) => "henüz hiçbir şey".to_string(),
-        (q, m, Language::En) => format!("{q} questions and {m} minutes"),
-        (q, m, Language::Nl) => format!("{q} vragen en {m} minuten"),
-        (q, m, Language::Tr) => format!("{q} soru ve {m} dakika"),
+    let so_far = match (done.questions, done.minutes) {
+        (0, 0) => match lang {
+            Language::En => "nothing yet".to_string(),
+            Language::Nl => "nog niets".to_string(),
+            Language::Tr => "henüz hiçbir şey".to_string(),
+        },
+        (q, m) => {
+            let (qw, mw) = (questions_word(q, lang), minutes_word(m, lang));
+            match lang {
+                Language::En => format!("{q} {qw} and {m} {mw}"),
+                Language::Nl => format!("{q} {qw} en {m} {mw}"),
+                Language::Tr => format!("{q} {qw} ve {m} {mw}"),
+            }
+        }
     };
     let reward = tier.reward_mins;
+    let rw = minutes_word(reward, lang);
     match lang {
         Language::En => {
             format!(
-                "{source}: {bar} earns {reward} more minutes of screen time. Today so far: {so_far}."
+                "{source}: {bar} earns {reward} more {rw} of screen time. Today so far: {so_far}."
             )
         }
         Language::Nl => format!(
-            "{source}: {bar} levert {reward} minuten extra schermtijd. Vandaag tot nu toe: {so_far}."
+            "{source}: {bar} levert {reward} {rw} extra schermtijd. Vandaag tot nu toe: {so_far}."
         ),
         Language::Tr => format!(
-            "{source}: {bar} ile {reward} dakika ek ekran süresi kazanırsın. Bugün şu ana kadar: {so_far}."
+            "{source}: {bar} ile {reward} {rw} ek ekran süresi kazanırsın. Bugün şu ana kadar: {so_far}."
         ),
+    }
+}
+
+/// The word for a count of questions, singular where the language needs one.
+///
+/// Extracted because **grammar forces it**, not to save repetition: both builders here shipped with
+/// unconditional plurals, so one answered question read as "1 questions". `rules.rs` carries the
+/// same rule for minutes and the note explaining the asymmetry — English and Dutch split, and
+/// **Turkish does not**, because a numeral there leaves the noun singular. Pluralising the Turkish
+/// would be the defect rather than the fix.
+fn questions_word(n: u32, lang: crate::config::Language) -> &'static str {
+    use crate::config::Language;
+    match (lang, n) {
+        (Language::En, 1) => "question",
+        (Language::En, _) => "questions",
+        (Language::Nl, 1) => "vraag",
+        (Language::Nl, _) => "vragen",
+        (Language::Tr, _) => "soru",
+    }
+}
+
+/// The word for a count of minutes. See [`questions_word`] for why Turkish has one arm.
+fn minutes_word(n: u32, lang: crate::config::Language) -> &'static str {
+    use crate::config::Language;
+    match (lang, n) {
+        (Language::En, 1) => "minute",
+        (Language::En, _) => "minutes",
+        (Language::Nl, 1) => "minuut",
+        (Language::Nl, _) => "minuten",
+        (Language::Tr, _) => "dakika",
     }
 }
 
@@ -166,10 +199,11 @@ fn practice_reminder_message(
 /// provider cannot grant more times than its own daily maximum allows.
 fn practice_earned_message(minutes: u32, lang: crate::config::Language) -> String {
     use crate::config::Language;
+    let w = minutes_word(minutes, lang);
     match lang {
-        Language::En => format!("Nice — {minutes} more minutes of screen time for your practice."),
-        Language::Nl => format!("Mooi — {minutes} minuten extra schermtijd voor je oefenwerk."),
-        Language::Tr => format!("Güzel — çalışman için {minutes} dakika ek ekran süresi."),
+        Language::En => format!("Nice — {minutes} more {w} of screen time for your practice."),
+        Language::Nl => format!("Mooi — {minutes} {w} extra schermtijd voor je oefenwerk."),
+        Language::Tr => format!("Güzel — çalışman için {minutes} {w} ek ekran süresi."),
     }
 }
 
@@ -603,6 +637,76 @@ mod tests {
             );
         }
         crate::testutil::assert_each_language_differs(&said);
+    }
+
+    /// A count of one reads as one, in the languages that need it and not in the one that does not.
+    ///
+    /// `rules::budget_countdown_message` already carries this rule and the note explaining it:
+    /// English and Dutch split (minute/minutes, minuut/minuten), and **Turkish does not** — a
+    /// numeral leaves the noun singular, so "1 dakika" and "20 dakika" take the same word. Both
+    /// builders here shipped with unconditional plurals, so a child who had answered one question
+    /// was told "1 questions and 1 minutes".
+    #[test]
+    fn a_count_of_one_is_not_written_as_a_plural() {
+        use crate::config::{Language, Tier};
+        let one = Tier {
+            questions: 1,
+            minutes_practised: 1,
+            reward_mins: 1,
+        };
+        let done = Progress {
+            questions: 1,
+            minutes: 1,
+        };
+        let en = practice_reminder_message("studygo", &one, done, Language::En);
+        assert!(!en.contains("1 questions"), "{en}");
+        assert!(!en.contains("1 minutes"), "{en}");
+        assert!(en.contains("1 question"), "{en}");
+        assert!(en.contains("1 minute"), "{en}");
+
+        let nl = practice_reminder_message("studygo", &one, done, Language::Nl);
+        assert!(!nl.contains("1 vragen"), "{nl}");
+        assert!(!nl.contains("1 minuten"), "{nl}");
+        assert!(nl.contains("1 vraag"), "{nl}");
+        assert!(nl.contains("1 minuut"), "{nl}");
+
+        // Turkish takes the same noun at every count; pluralising it would be the defect here.
+        let tr = practice_reminder_message("studygo", &one, done, Language::Tr);
+        assert!(tr.contains("1 soru"), "{tr}");
+        assert!(tr.contains("1 dakika"), "{tr}");
+
+        let earned_en = practice_earned_message(1, Language::En);
+        assert!(earned_en.contains("1 more minute of"), "{earned_en}");
+        assert!(!earned_en.contains("minutes"), "{earned_en}");
+        let earned_nl = practice_earned_message(1, Language::Nl);
+        assert!(earned_nl.contains("1 minuut"), "{earned_nl}");
+        assert!(!earned_nl.contains("minuten"), "{earned_nl}");
+        let earned_tr = practice_earned_message(1, Language::Tr);
+        assert!(earned_tr.contains("1 dakika"), "{earned_tr}");
+        // And the plural still arrives where it belongs — these are the exact sentences, read
+        // back from the builders rather than guessed at.
+        assert_eq!(
+            practice_earned_message(16, Language::En),
+            "Nice — 16 more minutes of screen time for your practice."
+        );
+        assert_eq!(
+            practice_earned_message(16, Language::Nl),
+            "Mooi — 16 minuten extra schermtijd voor je oefenwerk."
+        );
+        assert_eq!(
+            practice_reminder_message(
+                "studygo",
+                &Tier {
+                    questions: 1,
+                    minutes_practised: 1,
+                    reward_mins: 1
+                },
+                done,
+                Language::En
+            ),
+            "studygo: 1 question or 1 minute earns 1 more minute of screen time. \
+             Today so far: 1 question and 1 minute."
+        );
     }
 
     /// A tier that asks only one of the two states only that one.
