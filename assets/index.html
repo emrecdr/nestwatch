@@ -795,7 +795,7 @@
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(b, i) in rules.blocklist" :key="i">
                     <div class="flex items-center gap-2">
-                      <input type="text" x-model="rules.blocklist[i]" placeholder="game.exe"
+                      <input type="text" maxlength="64" x-model="rules.blocklist[i]" placeholder="game.exe"
                              aria-label="Blocked app filename" class="input input-sm w-64" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
                     </div>
@@ -810,7 +810,7 @@
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(row, i) in appLimitRows" :key="i">
                     <div class="flex items-center gap-2">
-                      <input type="text" x-model="row.name" placeholder="chrome.exe"
+                      <input type="text" maxlength="64" x-model="row.name" placeholder="chrome.exe"
                              aria-label="App filename to limit" class="input input-sm w-64" />
                       <input type="number" min="0" max="10080" x-model.number="row.mins" placeholder="min"
                              aria-label="Daily limit in minutes" class="input input-sm w-24" />
@@ -828,7 +828,7 @@
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(g, i) in groupRows" :key="i">
                     <div class="flex flex-wrap items-center gap-2">
-                      <input type="text" x-model="g.name" placeholder="Games"
+                      <input type="text" maxlength="64" x-model="g.name" placeholder="Games"
                              aria-label="Group name" class="input input-sm w-32" />
                       <input type="text" x-model="g.appsText" placeholder="minecraft.exe, roblox.exe"
                              aria-label="Apps in this group, comma separated"
@@ -1056,7 +1056,7 @@
                       <div class="mb-2 flex flex-col gap-2 pl-2">
                         <p class="text-xs opacity-60" x-text="t('probeExplained')"></p>
                         <div class="flex flex-wrap items-center gap-2">
-                          <input type="text" class="input input-sm w-56" placeholder="studygo-probe.exe"
+                          <input type="text" maxlength="64" class="input input-sm w-56" placeholder="studygo-probe.exe"
                                  x-model="row.probeExe" :aria-label="t('probeProgram')"
                                  @change="saveProvider(row)" />
                           <span class="text-sm" x-text="t('everyPrefix')"></span>

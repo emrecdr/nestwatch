@@ -2142,24 +2142,3 @@ already half-present in this repository. Left open because the registration touc
 an install-time step that can fail silently is exactly the class this project spends the most
 effort avoiding.
 
-### O105 · Five text boxes on the served pages have no server bound, and the guard cannot see them
-
-`web.rs`'s new length guard scans tags that *carry* `maxlength`, so a box without one is invisible
-to it. Its sibling, the minutes guard, deliberately keys on `type="number"` instead, and its doc
-says why: "an input cannot leave this test's attention by losing an attribute, only by ceasing to be
-a number input." The newer test reintroduced the failure mode the older one was rewritten to close.
-
-**The concrete gap.** `index.html`'s blocklist entry, per-app name, group name, group apps list, and
-the probe executable name carry no `maxlength` — and none of them has a per-string server bound
-either. `Rules::validate` bounds `MAX_RULE_ENTRIES`, which is the *count*. So the guard's own panic
-message — *"if it has no server limit, that is the thing to fix, not this test"* — describes a case
-its scan structurally cannot reach.
-
-**Narrowed 2026-09-10.** Both scans now share `opening_tags`, so the hand-rolled splitters this
-entry also described are gone and what remains is purely the *scope* question: which boxes the scan
-can see. The scan should iterate every `<textarea>` and every `<input>` whose type is `text` or
-`number`, from one table keyed by page, attribute and constant — which also merges the two guards
-into one. And each of those five fields needs a server bound to be held to. They are parent-supplied and land in `config.json`, so the risk is a file that
-grows rather than an attack, but "the parent can make the config arbitrarily large" is not a
-property anyone chose.
-

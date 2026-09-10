@@ -11,6 +11,16 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **Four boxes on the dashboard had no length limit at all, and neither did the server.** A blocked
+  app, an app with its own limit, an app group's name and the probe program could each be as long as
+  you could paste, and it was stored in the settings file verbatim. Nothing was going to break, but
+  "the settings file can be made arbitrarily large" was not a property anyone chose. All four now
+  stop at 64 characters, and the server refuses longer ones with a sentence rather than storing them.
+  <br>Found by extending yesterday's guard rather than by noticing. The two scans that checked the
+  dashboard's numbers and its text limits are now one, keyed on the *box* rather than on the
+  attribute — so a new box with no limit fails the build instead of landing quietly, which is what
+  happened here. Two boxes are listed as deliberately unbounded with their reasons, because a
+  decision and an oversight should not look the same.
 - **Both new notices read "1 questions and 1 minutes" when the count was one.** Your son answering a
   single question was told so in the plural, in English and in Dutch. The words now agree with the
   number — and deliberately do not in Turkish, where a numeral leaves the noun singular, so "1

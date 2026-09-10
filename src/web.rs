@@ -619,276 +619,258 @@ mod tests {
         }
     }
 
-    /// Every minutes limit a person is shown matches the one its own endpoint enforces.
+    /// Every box a person types a bounded value into matches the bound its endpoint enforces.
     ///
-    /// There are **two** limits here and they are not the same fact. `timecode::MAX_CODE_MINUTES`
-    /// bounds the code a parent issues; `timereq::MAX_REQUEST_MINUTES` bounds the extra time a
-    /// child asks for and the bonus a parent grants. Both are 240 today, which is exactly why this
-    /// needs a table rather than one number: the first version of this test asserted every surface
-    /// against `MAX_CODE_MINUTES` and passed — including for the child's input, which that constant
-    /// does not govern. Raising one alone would have demanded the other move with it.
+    /// **One guard over all of them, and the table is the list of what is guarded at all.** This
+    /// replaces two parallel scans — one keyed on `type="number"`, one on the presence of
+    /// `maxlength` — that shared an algorithm, a panic message and an anti-vacuity check and
+    /// differed in the one place that mattered: the second could only see a box that had already
+    /// opted in by carrying the attribute, so a new `<input type="text">` with no limit landed
+    /// silently. That is the failure mode the first was rewritten to close, reintroduced by its
+    /// sibling, and `O105` is where it was written down.
     ///
-    /// The surfaces that restate these are `max=` attributes, none of them near the enforcement.
-    /// Nothing connected any of them and nothing pinned any of them, so raising a constant left the
-    /// server accepting a value every box still refused — including on `/ask`, where the person
-    /// told the wrong limit is the child, who cannot ask why the number is wrong.
+    /// A box that is **deliberately** unbounded says so in the table, with its reason. That is the
+    /// difference between a decision and an oversight, and it is the only way a scan keyed on the
+    /// element rather than the attribute can stay quiet about the legitimate cases.
     ///
-    /// It guarded two toast messages as well until `api::require_minutes` and the active-code cap
-    /// learned to send their bound with the refusal. `app.js` now prints what the server said
-    /// rather than a number copied from it, so there is no second spelling left to pin. That is
-    /// the better shape of the same fix: the limit travels *with* the error instead of being held
-    /// against it from outside, and a pinning loop is only ever the second-best way to stop two
-    /// copies drifting.
-    ///
-    /// A source scan because the property lives in markup and in strings, which no Rust type
-    /// reaches — the sanctioned case in `OPEN-FINDINGS.md` O54. **Every `type="number"` input on
-    /// either page is selected**, and an unrecognised one is a panic rather than a skip, so a new
-    /// number box cannot pass unchecked.
-    ///
-    /// That selector was `min="1"`, which reached two inputs of the eight. It was chosen when the
-    /// other six were unbounded, and it made their unboundedness invisible to the one test placed
-    /// to notice: four of them accepted any number at all while `Rules::validate` rejected
-    /// anything over `MAX_BUDGET_MINS`, so a parent typing 99,999 got a 400 the box had just told
-    /// them was fine. Selecting on `min="1"` also meant *removing* a `max` would drop an input out
-    /// of the scan silently, which is the same failure as deleting a golden file to make a test
-    /// pass. Keying on `type="number"` closes both: an input cannot leave this test's attention by
-    /// losing an attribute, only by ceasing to be a number input.
+    /// It matters in both directions: a limit larger than the server's turns a valid-looking entry
+    /// into a rejection the person cannot explain, and one that is smaller truncates their sentence
+    /// mid-word with nothing said — which is worse, and is what `timereq` does to the child's reason.
     #[test]
-    fn every_minutes_limit_a_person_sees_matches_the_one_the_server_enforces() {
-        use crate::config::{MAX_PROBE_MINS, MAX_TIER_MINUTES, MAX_TIER_QUESTIONS};
+    fn every_bound_a_person_types_against_matches_the_one_the_server_enforces() {
+        use crate::api::MAX_MESSAGE_CHARS;
+        use crate::config::{
+            MAX_PROBE_MINS, MAX_PROBE_NAME, MAX_ROUTINE_NAME, MAX_TIER_MINUTES, MAX_TIER_QUESTIONS,
+        };
         use crate::curfew::MAX_WARN_SECS;
-        use crate::rules::MAX_BUDGET_MINS;
-        use crate::timecode::MAX_CODE_MINUTES;
+        use crate::rules::{MAX_BUDGET_MINS, MAX_RULE_NAME};
+        use crate::timecode::{CODE_LEN, MAX_CODE_MINUTES};
+        use crate::timereq::MAX_REASON_CHARS;
         use crate::timereq::MAX_REQUEST_MINUTES;
 
-        // Marker → the constant whose value that box is restating. Keyed on `x-model` rather than
-        // position, so reordering the form cannot silently repoint a row at a different field.
-        let inputs = [
+        /// What a box's bound is, so the table holds a decision rather than only a number.
+        enum Bound {
+            /// The named attribute must carry exactly this value.
+            Caps(&'static str, usize),
+            /// Deliberately unbounded, for the stated reason.
+            Open(&'static str),
+        }
+        use Bound::{Caps, Open};
+        let max = |n: u32| Caps("max", n as usize);
+        let len = |n: usize| Caps("maxlength", n);
+
+        // Keyed by page and marker. The marker is an `x-model` where the page has Alpine on it and
+        // an `id` where it does not — `ask.html` is plain markup.
+        let boxes = [
+            // --- numbers -----------------------------------------------------------------
             (
                 "index.html",
                 "x-model.number=\"newCodeMins\"",
-                MAX_CODE_MINUTES,
+                max(MAX_CODE_MINUTES),
                 "the code a parent issues",
             ),
             (
                 "index.html",
                 "x-model.number=\"curfew.warn_secs\"",
-                MAX_WARN_SECS,
+                max(MAX_WARN_SECS),
                 "the curfew's warning",
             ),
             (
                 "index.html",
                 "x-model.number=\"rules.warn_secs\"",
-                MAX_WARN_SECS,
+                max(MAX_WARN_SECS),
                 "the budget's warning",
             ),
             (
                 "index.html",
                 "x-model.number=\"rules.daily_budget_mins\"",
-                MAX_BUDGET_MINS,
+                max(MAX_BUDGET_MINS),
                 "the daily limit",
             ),
             (
                 "index.html",
                 "x-model.number=\"rules.budget_by_weekday[i]\"",
-                MAX_BUDGET_MINS,
+                max(MAX_BUDGET_MINS),
                 "a per-weekday limit",
             ),
             (
                 "index.html",
                 "x-model.number=\"row.mins\"",
-                MAX_BUDGET_MINS,
+                max(MAX_BUDGET_MINS),
                 "a per-app limit",
             ),
             (
                 "index.html",
                 "x-model.number=\"g.limit_mins\"",
-                MAX_BUDGET_MINS,
+                max(MAX_BUDGET_MINS),
                 "an app-group limit",
             ),
             (
                 "index.html",
                 "x-model.number=\"row.minutes\"",
-                MAX_REQUEST_MINUTES,
+                max(MAX_REQUEST_MINUTES),
                 "an integration's earned reward",
             ),
             (
                 "index.html",
                 "x-model=\"row.cap\"",
-                MAX_REQUEST_MINUTES,
+                max(MAX_REQUEST_MINUTES),
                 "an integration's daily ceiling",
             ),
             (
                 "index.html",
                 "x-model.number=\"tier.questions\"",
-                MAX_TIER_QUESTIONS,
+                max(MAX_TIER_QUESTIONS),
                 "a reward tier's question threshold",
             ),
             (
                 "index.html",
                 "x-model.number=\"tier.minutesPractised\"",
-                MAX_TIER_MINUTES,
+                max(MAX_TIER_MINUTES),
                 "a reward tier's practised-minutes threshold",
             ),
             (
                 "index.html",
                 "x-model.number=\"tier.rewardMins\"",
-                MAX_REQUEST_MINUTES,
+                max(MAX_REQUEST_MINUTES),
                 "a reward tier's reward",
             ),
             (
                 "index.html",
                 "x-model.number=\"row.probeEvery\"",
-                MAX_PROBE_MINS,
+                max(MAX_PROBE_MINS),
                 "how often an integration's probe runs",
             ),
             (
                 "ask.html",
                 "id=\"minutes\"",
-                MAX_REQUEST_MINUTES,
+                max(MAX_REQUEST_MINUTES),
                 "the extra time a child asks for",
             ),
-        ];
-
-        let mut seen = 0;
-        for (name, page) in PAGES {
-            let html = strip_html_comments(page);
-            // `opening_tags` rather than `split("<input")`, for the reason that helper's own doc
-            // gives: an attribute value containing `>` ends the tag early, and `index.html` has
-            // thirteen of those. This was the last hand-rolled splitter in the file.
-            for tag in opening_tags(&html) {
-                if !tag.starts_with("<input") || !tag.contains("type=\"number\"") {
-                    continue;
-                }
-                seen += 1;
-                let Some(&(_, _, limit, what)) = inputs
-                    .iter()
-                    .find(|(p, marker, _, _)| *p == name && tag.contains(marker))
-                else {
-                    panic!(
-                        "{name} carries a `type=\"number\"` input this test does not recognise, so \
-                         nothing is checking it against a server limit. Add it to the table with \
-                         the constant its endpoint enforces — and if it has no server limit, that \
-                         is the thing to fix, not this test:\n{tag}"
-                    );
-                };
-                assert!(
-                    tag.contains(&format!("max=\"{limit}\"")),
-                    "{name}'s input for {what} does not cap at {limit}, which is what its endpoint \
-                     enforces. A box that accepts more than the server does turns a valid-looking \
-                     entry into a 400 the person cannot explain:\n{tag}"
-                );
-            }
-        }
-        assert_eq!(
-            seen,
-            inputs.len(),
-            "expected {} minutes inputs across the served pages, found {seen}",
-            inputs.len()
-        );
-    }
-
-    /// Every length limit a person types against matches the one the server enforces.
-    ///
-    /// The sibling of the minutes guard above, for the other kind of bound this dashboard puts in
-    /// front of somebody. A `maxlength` that is larger than the server's limit turns a
-    /// valid-looking entry into a rejection the person cannot explain; one that is smaller
-    /// silently truncates their sentence mid-word, which is worse because nothing tells them.
-    ///
-    /// **It covers the countdown in `app.js` as well, and that is the half worth having.** The
-    /// message box states how much room is left, so the same number lives in three places — the
-    /// Rust constant, the attribute, and the script. Two of those are text files a browser reads
-    /// and neither can import the first. This is what stops them drifting.
-    ///
-    /// Anti-vacuity in both directions: an unrecognised `maxlength` fails rather than being
-    /// skipped, and the count of what was seen is compared with the table, so a scan that stops
-    /// matching cannot pass by finding nothing.
-    #[test]
-    fn every_length_limit_a_person_types_against_matches_the_one_the_server_enforces() {
-        use crate::api::MAX_MESSAGE_CHARS;
-        use crate::config::MAX_ROUTINE_NAME;
-
-        // Marker → the constant that box is restating. Keyed on `x-model` for the same reason the
-        // minutes table is: reordering the form cannot silently repoint a row at another field.
-        // Keyed by page as well as marker, like the minutes table above: without the page, a
-        // marker that appeared on both would match whichever was scanned first.
-        let fields = [
+            // --- text --------------------------------------------------------------------
             (
                 "index.html",
                 "x-model=\"messageText\"",
-                MAX_MESSAGE_CHARS,
+                len(MAX_MESSAGE_CHARS),
                 "a message to the child",
             ),
             (
                 "index.html",
                 "x-model=\"newRoutineName\"",
-                MAX_ROUTINE_NAME,
+                len(MAX_ROUTINE_NAME),
                 "a routine's name",
             ),
-            // The child's own boxes, on the page they reach without signing in. Keyed on their
-            // ids rather than an `x-model`, because `ask.html` is plain markup with no Alpine.
+            (
+                "index.html",
+                "x-model=\"rules.blocklist[i]\"",
+                len(MAX_RULE_NAME),
+                "a blocked app",
+            ),
+            (
+                "index.html",
+                "x-model=\"row.name\"",
+                len(MAX_RULE_NAME),
+                "a per-app limit's app",
+            ),
+            (
+                "index.html",
+                "x-model=\"g.name\"",
+                len(MAX_RULE_NAME),
+                "an app group's name",
+            ),
+            (
+                "index.html",
+                "x-model=\"row.probeExe\"",
+                len(MAX_PROBE_NAME),
+                "an integration's probe",
+            ),
             (
                 "ask.html",
                 "id=\"reason\"",
-                crate::timereq::MAX_REASON_CHARS,
+                len(MAX_REASON_CHARS),
                 "the reason a child gives for asking",
             ),
-            // The one field whose server limit is an *exact* length rather than a ceiling:
-            // `timecode::redeem` refuses anything that is not `CODE_LEN`. So the box matching it
-            // is not pedantry — every character past it is one that cannot possibly help.
             (
                 "ask.html",
                 "id=\"code\"",
-                crate::timecode::CODE_LEN,
+                len(CODE_LEN),
                 "a time code the child types in",
+            ),
+            // --- deliberately open -------------------------------------------------------
+            (
+                "index.html",
+                "x-model=\"g.appsText\"",
+                Open(
+                    "a comma-separated list, so no single constant bounds the text: the server \
+                     bounds what it parses into, at most MAX_RULE_ENTRIES apps each at most \
+                     MAX_RULE_NAME characters, and a cap on the joined form would truncate a \
+                     legitimate long group mid-name",
+                ),
+                "an app group's members",
+            ),
+            (
+                "index.html",
+                "autocomplete=\"username\"",
+                Open(
+                    "readonly, and present only so a password manager files the entry under a user",
+                ),
+                "the username a password manager sees",
             ),
         ];
 
         let mut seen = 0;
         for (name, page) in PAGES {
             let html = strip_html_comments(page);
-            // `opening_tags`, not `split('<')`. The naive form is what this module's own scanner
-            // was rewritten away from: `index.html` carries thirteen `>` characters inside
-            // attribute values (`x-show="providerRows.length > 0"`, the Tailwind `[&>*]:min-w-0`),
-            // so cutting at the first one reads half a tag. The two scans agree today, which is
-            // exactly why a second implementation is worth removing before they stop agreeing.
             for tag in opening_tags(&html) {
-                if !tag.contains("maxlength=\"") {
+                // Every box a person types a value into: a text input, a number input, or a
+                // textarea. Checkboxes, toggles, times and files carry no typed value, and a
+                // `maxlength` on a password box is an anti-pattern rather than a missing guard.
+                let typed = tag.starts_with("<textarea")
+                    || (tag.starts_with("<input")
+                        && (tag.contains("type=\"text\"") || tag.contains("type=\"number\"")));
+                if !typed {
                     continue;
                 }
                 seen += 1;
-                let Some(&(_, _, limit, what)) = fields
+                let Some((_, _, bound, what)) = boxes
                     .iter()
                     .find(|(page, marker, _, _)| *page == name && tag.contains(marker))
                 else {
                     panic!(
-                        "{name} carries a `maxlength` this test does not recognise, so nothing is \
-                         checking it against a server limit. Add it to the table with the constant \
-                         its endpoint enforces — and if it has no server limit, that is the thing \
-                         to fix, not this test:\n{tag}"
+                        "{name} carries a box a person types into that this test does not \
+                         recognise, so nothing is checking it against a server limit. Add it with \
+                         the constant its endpoint enforces — or, if it is deliberately unbounded, \
+                         with `Open` and the reason. If it simply has no server limit, that is the \
+                         thing to fix rather than this test:\n{tag}"
                     );
                 };
-                assert!(
-                    tag.contains(&format!("maxlength=\"{limit}\"")),
-                    "{name}'s box for {what} does not cap at {limit}, which is what its endpoint \
-                     enforces:\n{tag}"
-                );
+                match bound {
+                    Caps(attr, limit) => assert!(
+                        tag.contains(&format!("{attr}=\"{limit}\"")),
+                        "{name}'s box for {what} does not cap at {attr}=\"{limit}\", which is what \
+                         its endpoint enforces:\n{tag}"
+                    ),
+                    Open(why) => assert!(
+                        !tag.contains("maxlength="),
+                        "{name}'s box for {what} is listed as deliberately unbounded ({why}) and \
+                         now carries a maxlength. Decide which it is:\n{tag}"
+                    ),
+                }
             }
         }
         assert_eq!(
             seen,
-            fields.len(),
-            "expected {} length-limited boxes across the served pages, found {seen}",
-            fields.len()
+            boxes.len(),
+            "expected {} typed boxes across the served pages, found {seen}",
+            boxes.len()
         );
 
-        // And the script that reports the remaining room uses the same number.
+        // And the script that reports the message box's remaining room uses the same number.
         //
         // **Both halves, because a declaration guarded alone is a decoy** — the lesson
-        // `the_budget_the_dashboard_calls_low_is_the_childs_first_warning` already records one
-        // screen down. Pinning `const MAX_MESSAGE_CHARS = 500;` reads as protection precisely
-        // because somebody took the trouble to write it, and it stays green if the countdown is
-        // rewritten to a literal or deleted outright. So the *use* is pinned too.
+        // `the_budget_the_dashboard_calls_low_is_the_childs_first_warning` records one screen down.
+        // Pinning `const MAX_MESSAGE_CHARS = 500;` reads as protection precisely because somebody
+        // wrote it, and stays green if the countdown is rewritten to a literal or deleted.
         assert!(
             APP_JS.contains(&format!("const MAX_MESSAGE_CHARS = {MAX_MESSAGE_CHARS};")),
             "app.js's MAX_MESSAGE_CHARS must equal the server's {MAX_MESSAGE_CHARS}"

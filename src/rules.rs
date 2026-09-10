@@ -37,6 +37,20 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(30);
 /// Largest minute value accepted for any limit — a week, so generous per-weekday budgets fit
 /// while absurd values are refused with a message rather than silently clamped.
 pub const MAX_BUDGET_MINS: u32 = 7 * 24 * 60;
+/// Longest any single name inside a rule may be: a blocked app, a per-app limit's key, an app
+/// group's name, or a member of one.
+///
+/// **Counted in characters, and checked at the door.** `validate` bounded how *many* entries a list
+/// could hold and every minute value in it, and bounded the length of nothing — so any of those
+/// four strings could be as long as a parent could paste and it would be stored in `config.json`
+/// verbatim. Parent-supplied, so this is a file that grows rather than an attack, but "the parent
+/// can make the config arbitrarily large" was a property nobody chose, and the dashboard's boxes had
+/// no number to restate either (`O105`).
+///
+/// Sixty-four is generous against the thing being named: `ApplicationFrameHost.exe`, the longest
+/// executable name this codebase mentions anywhere, is twenty-four.
+pub const MAX_RULE_NAME: usize = 64;
+
 /// Largest number of entries in the blocklist / per-app limits / app groups. Bounds the config
 /// file and the per-tick matching work.
 pub const MAX_RULE_ENTRIES: usize = 200;
@@ -291,6 +305,20 @@ impl Rules {
             || self.app_groups.len() > MAX_RULE_ENTRIES
         {
             return Err(format!("at most {MAX_RULE_ENTRIES} entries per list"));
+        }
+        // Every *name* as well as every count. One closure over all four places they live, so a
+        // fifth place to put a name cannot be bounded in three of them and missed in the fourth.
+        let too_long = |name: &String| name.chars().count() > MAX_RULE_NAME;
+        if self.blocklist.iter().any(too_long)
+            || self.app_limits.keys().any(too_long)
+            || self
+                .app_groups
+                .iter()
+                .any(|group| too_long(&group.name) || group.apps.iter().any(too_long))
+        {
+            return Err(format!(
+                "an app or group name must be at most {MAX_RULE_NAME} characters"
+            ));
         }
         Ok(())
     }
@@ -2009,6 +2037,72 @@ mod tests {
     /// `Rules::default()` (fresh install) and a config that omits the fields (upgrade) must agree.
     /// They didn't: `Default` hardcoded `warn_secs: 0` while serde applied 60, so a brand-new
     /// install locked the child's screen with no warning while an upgraded one warned for 60s.
+    /// No string in a rule may be longer than [`MAX_RULE_NAME`], and the bound is checked at the
+    /// door rather than left to the config file.
+    ///
+    /// `validate` bounded the *count* of entries and every minute value, and nothing at all bounded
+    /// the strings — so a blocklist entry, an app-limit key, a group name or a group member could be
+    /// any length a parent could paste, and it would be stored. Parent-supplied, so the risk is a
+    /// config file that grows rather than an attack; "the parent can make the config arbitrarily
+    /// large" is still not a property anyone chose. Both sides of the bound, because a limit tested
+    /// only from above is half a test.
+    #[test]
+    fn no_string_in_a_rule_may_be_longer_than_the_bound() {
+        let long = "x".repeat(MAX_RULE_NAME + 1);
+        let exact = "x".repeat(MAX_RULE_NAME);
+
+        let with_blocklist = |name: &str| Rules {
+            blocklist: vec![name.to_string()],
+            ..Rules::default()
+        };
+        assert!(
+            with_blocklist(&long).validate().is_err(),
+            "a blocked app name"
+        );
+        assert!(
+            with_blocklist(&exact).validate().is_ok(),
+            "exactly the bound is allowed"
+        );
+
+        let with_limit = |name: &str| {
+            let mut rules = Rules::default();
+            rules.app_limits.insert(name.to_string(), 30);
+            rules
+        };
+        assert!(
+            with_limit(&long).validate().is_err(),
+            "a per-app limit's key"
+        );
+        assert!(with_limit(&exact).validate().is_ok());
+
+        let with_group = |name: &str, app: &str| Rules {
+            app_groups: vec![AppGroup {
+                name: name.to_string(),
+                apps: vec![app.to_string()],
+                limit_mins: 30,
+            }],
+            ..Rules::default()
+        };
+        assert!(
+            with_group(&long, "a.exe").validate().is_err(),
+            "a group's name"
+        );
+        assert!(
+            with_group("Games", &long).validate().is_err(),
+            "a group member"
+        );
+        assert!(with_group(&exact, &exact).validate().is_ok());
+
+        // Counted in characters, not bytes, like every other length bound here — a parent naming an
+        // app in Dutch or Turkish is measured the way they read it.
+        assert!(
+            with_blocklist(&"é".repeat(MAX_RULE_NAME))
+                .validate()
+                .is_ok(),
+            "multi-byte characters at the bound are still at the bound"
+        );
+    }
+
     #[test]
     fn fresh_install_defaults_match_serde_defaults() {
         let fresh = Rules::default();
