@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, FixedOffset};
 
-use nestwatch::config::{Config, EarnedDay, Probe, Provider, Tier};
+use nestwatch::config::{Config, EarnedDay, Probe, Provider, Refused, Tier};
 use nestwatch::control::FakeControl;
 use nestwatch::probe::{self, ProbeOutcome, ProbeStatus, Progress};
 use nestwatch::state::{AppState, recover_read, recover_write};
@@ -177,7 +177,7 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
     assert_eq!(fake.probe_calls().len(), 3);
     assert_eq!(
         status_of(&state, "studygo").outcome,
-        ProbeOutcome::Refused("below_threshold")
+        ProbeOutcome::Refused(Refused::BelowThreshold)
     );
     assert_eq!(extra_today(&state, tomorrow), 0);
 

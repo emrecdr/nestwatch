@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde_json::{Value, json};
 
-use crate::config::{Earn, Probe};
+use crate::config::{Earn, Probe, Refused};
 use crate::state::AppState;
 
 /// Most bytes a deposited secret may hold.
@@ -58,8 +58,9 @@ pub use crate::config::Progress;
 pub enum ProbeOutcome {
     /// Minutes added to today's budget by `Config::earn`.
     Granted(u32),
-    /// The registry's ordinary refusal — the same three reasons a push can get.
-    Refused(&'static str),
+    /// The registry's ordinary refusal — the same three a push can get. Typed, so the decision
+    /// about whether the child hears it cannot be made by a catch-all.
+    Refused(Refused),
     /// The probe could not be run, did not answer, or answered something that is not an answer.
     Failed(String),
 }
@@ -86,7 +87,7 @@ impl ProbeStatus {
         }
         match &self.outcome {
             ProbeOutcome::Granted(minutes) => out.insert("granted".into(), json!(minutes)),
-            ProbeOutcome::Refused(reason) => out.insert("refused".into(), json!(reason)),
+            ProbeOutcome::Refused(reason) => out.insert("refused".into(), json!(reason.wire())),
             ProbeOutcome::Failed(error) => out.insert("error".into(), json!(error)),
         };
         Value::Object(out)
@@ -397,7 +398,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 tracing::info!(provider = %name, minutes, "probe grant")
             }
             ProbeOutcome::Refused(reason) => {
-                tracing::debug!(provider = %name, reason, "probe refused")
+                tracing::debug!(provider = %name, reason = reason.wire(), "probe refused")
             }
             ProbeOutcome::Failed(error) => {
                 tracing::warn!(provider = %name, error = %error, "probe failed")
@@ -423,7 +424,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 }
                 // Short of the bar, and not yet told today. The other two refusals mean the day
                 // is already paid, so there is nothing to aim at and nothing to say.
-                (ProbeOutcome::Refused(crate::config::refused::BELOW_THRESHOLD), Some(done))
+                (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done))
                     if reminded_before != Some(today) =>
                 {
                     cfg.providers
@@ -431,7 +432,14 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                         .and_then(|provider| provider.next_rung(done))
                         .map(|tier| practice_reminder_message(&name, tier, done, lang))
                 }
-                _ => None,
+                // Enumerated rather than caught. The day latch and the ceiling both mean the day
+                // is already paid, so there is no rung to aim at and nothing worth saying; a failed
+                // check is the parent's to read, not his. A fourth refusal fails to compile here,
+                // which is the whole point of the reason being a type.
+                (ProbeOutcome::Refused(Refused::BelowThreshold), _)
+                | (ProbeOutcome::Refused(Refused::AlreadyGrantedToday), _)
+                | (ProbeOutcome::Refused(Refused::DailyCapReached), _)
+                | (ProbeOutcome::Failed(_), _) => None,
             };
             (lang, speak)
         };
@@ -440,12 +448,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
         let mut reminded_on = reminded_before;
         if let Some(body) = speak {
             let delivered = crate::control::notify_child(&state.control, &body, lang).await;
-            if delivered
-                && matches!(
-                    outcome,
-                    ProbeOutcome::Refused(crate::config::refused::BELOW_THRESHOLD)
-                )
-            {
+            if delivered && matches!(outcome, ProbeOutcome::Refused(Refused::BelowThreshold)) {
                 reminded_on = Some(today);
             }
         }
@@ -976,7 +979,7 @@ mod tests {
         let refused = ProbeStatus {
             at,
             reported,
-            outcome: ProbeOutcome::Refused("daily_cap_reached"),
+            outcome: ProbeOutcome::Refused(Refused::DailyCapReached),
         };
         assert_eq!(refused.to_json()["refused"], "daily_cap_reached");
         assert!(refused.to_json().get("granted").is_none());

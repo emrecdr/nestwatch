@@ -2163,30 +2163,3 @@ into one. And each of those five fields needs a server bound to be held to. They
 grows rather than an attack, but "the parent can make the config arbitrarily large" is not a
 property anyone chose.
 
-### O106 · A refusal reason is a bare string, so a new one is silently never spoken
-
-`Config::earn` answers `Earn::Refused(&'static str)` with one of three literals. Those values are a
-cross-repo contract — they reach the wire as `{ok: false, reason}` and Voortgang branches on them —
-and **the wire values must not change**. But a stable encoding is not an argument for a
-stringly-typed *internal* representation, and `probe.rs` is the first consumer to branch on the
-reason in Rust rather than pass it along.
-
-That branch is non-exhaustive by construction: `Refused("below_threshold")` earns the child a
-reminder and `_ => None` silently absorbs everything else. Add a fourth refusal — a per-provider
-cooldown, say, or "disabled between the snapshot and the judgement" — and the child is simply never
-told, with nothing at any layer forcing the author to decide whether they should be. The compiler
-cannot help, and no test notices an *addition*.
-
-**Narrowed 2026-09-10.** The four scattered copies of each literal are gone — `config::refused`
-names all three and both `Config::earn` and `probe.rs` use those constants — so a rename can no
-longer leave the child silently untold. What naming does **not** fix is the exhaustiveness, which is
-the whole of what is left here: the match in `probe.rs` still ends in a catch-all.
-
-**The change:** `enum RefusedReason` with a `wire()` returning today's exact literals, carried by
-both `Earn::Refused` and `ProbeOutcome::Refused`, plus one test pinning all three values — which
-makes the cross-repo contract explicit instead of implicit across three scattered `Refused("…")`
-call sites. A new variant then fails to compile at every site that has to answer "does he hear about
-this?"
-
-Not done here because it is an architecture change to a path that shipped in 0.8.0 an hour earlier,
-and it belongs in its own commit with its own verification rather than bundled into a cleanup pass.

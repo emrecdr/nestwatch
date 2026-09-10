@@ -422,23 +422,45 @@ pub struct Progress {
     pub minutes: u32,
 }
 
-/// The three reasons a provider grant can be refused, as they appear on the wire.
+/// Why a provider grant was refused.
 ///
-/// **Named because four copies of each literal had accumulated** — two in [`Config::earn`] and two
-/// in `probe.rs`, which has to recognise one of them to decide whether the child hears about it. A
-/// renamed literal in one place and not the others would have left the child silently untold.
+/// **A type rather than three string constants, so a fourth reason cannot be silently unspoken.**
+/// `probe.rs` has to recognise one of these to decide whether the child hears anything, and while
+/// the reason was a `&'static str` that match ended in a catch-all: a new refusal would have fallen
+/// through it, the child would never have been told, and nothing at any layer would have asked the
+/// author to decide whether they should be. Now adding a variant fails to compile at every site
+/// that has to answer that question.
 ///
-/// These strings are a cross-repository contract: they reach Voortgang as `{ok: false, reason}` and
-/// it branches on them, so the *values* must not change. `O106` records the remaining problem, which
-/// naming them does not solve: the match in `probe.rs` is still not exhaustive, so a fourth reason
-/// would fall through a catch-all rather than fail to compile.
-pub mod refused {
-    /// Work was reported and met no tier.
-    pub const BELOW_THRESHOLD: &str = "below_threshold";
+/// [`Refused::wire`] carries the values, which are **a cross-repository contract** — they reach
+/// Voortgang as `{ok: false, reason}` and it branches on them, so the strings must not change. They
+/// used to live as four scattered literals; one function and one test now hold them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// Work was reported and met no tier. The only one worth telling the child about: it is the one
+    /// with a rung still to aim at.
+    BelowThreshold,
     /// This source already granted today and has no ceiling to top up against.
-    pub const ALREADY_GRANTED_TODAY: &str = "already_granted_today";
-    /// The ceiling is configured and today's allowance is spent.
-    pub const DAILY_CAP_REACHED: &str = "daily_cap_reached";
+    AlreadyGrantedToday,
+    /// A ceiling is configured and today's allowance is spent.
+    DailyCapReached,
+}
+
+impl Refused {
+    /// Every variant, so a test can walk them and a new one cannot be added past it.
+    pub const ALL: [Refused; 3] = [
+        Refused::BelowThreshold,
+        Refused::AlreadyGrantedToday,
+        Refused::DailyCapReached,
+    ];
+
+    /// The value that reaches the wire. Pinned by a test, because another repository reads it.
+    pub fn wire(self) -> &'static str {
+        match self {
+            Refused::BelowThreshold => "below_threshold",
+            Refused::AlreadyGrantedToday => "already_granted_today",
+            Refused::DailyCapReached => "daily_cap_reached",
+        }
+    }
 }
 
 /// How a provider grant came out. See [`Config::earn`].
@@ -446,10 +468,10 @@ pub mod refused {
 pub enum Earn {
     /// Minutes were added to today's budget — the reward, or what was left of the ceiling.
     Granted(u32),
-    /// An ordinary outcome that moved nothing: `already_granted_today`, `daily_cap_reached` or
-    /// `below_threshold`. On the wire this is `200 {ok: false, reason}`, and the reason values
-    /// are a cross-repo contract — Voortgang branches on the flag and shows the reason.
-    Refused(&'static str),
+    /// An ordinary outcome that moved nothing. On the wire this is `200 {ok: false, reason}`, with
+    /// the reason from [`Refused::wire`] — a cross-repo contract, since Voortgang branches on the
+    /// flag and shows the reason.
+    Refused(Refused),
 }
 
 /// What one grant source has already been given on one local day.
@@ -901,7 +923,7 @@ impl Config {
                 // whatever it sees and lets this machine judge is exactly what tiers are for, so
                 // "not yet" has to be an ordinary answer rather than a rejection. Unreachable for
                 // a provider with no tiers configured.
-                None => return Ok(Earn::Refused(refused::BELOW_THRESHOLD)),
+                None => return Ok(Earn::Refused(Refused::BelowThreshold)),
             }
         };
         // Read out as an owned value, not held as a borrow: the map is mutated a few lines
@@ -916,16 +938,16 @@ impl Config {
         match (ceiling, spent) {
             // The original rule, and the one every config that has not opted in takes: one
             // grant per source per day, whatever it was worth.
-            (None, Some(_)) => return Ok(Earn::Refused(refused::ALREADY_GRANTED_TODAY)),
+            (None, Some(_)) => return Ok(Earn::Refused(Refused::AlreadyGrantedToday)),
             // A ceiling is configured, but this source's earlier grant today was never measured —
             // an older build wrote it, or the ceiling was added after it landed. Refusing is the
             // conservative reading; `EarnedDay::minutes` gives the argument for why the
             // alternative hands out a second full reward.
-            (Some(_), Some(None)) => return Ok(Earn::Refused(refused::DAILY_CAP_REACHED)),
+            (Some(_), Some(None)) => return Ok(Earn::Refused(Refused::DailyCapReached)),
             (Some(cap), Some(Some(used))) => {
                 let room = cap.saturating_sub(used);
                 if room == 0 {
-                    return Ok(Earn::Refused(refused::DAILY_CAP_REACHED));
+                    return Ok(Earn::Refused(Refused::DailyCapReached));
                 }
                 // The last grant of a day is worth the remainder, not the full reward.
                 //
@@ -1918,7 +1940,7 @@ mod tests {
         );
         assert_eq!(
             cfg.earn("studygo", today, None),
-            Ok(Earn::Refused("already_granted_today"))
+            Ok(Earn::Refused(Refused::AlreadyGrantedToday))
         );
         assert_eq!(cfg.extra.for_day(today), 30, "a refusal moves nothing");
 
@@ -1926,7 +1948,7 @@ mod tests {
         let mut cfg = with_provider("studygo", laddered());
         assert_eq!(
             cfg.earn("studygo", today, Some(done(3, 5))),
-            Ok(Earn::Refused("below_threshold"))
+            Ok(Earn::Refused(Refused::BelowThreshold))
         );
         assert!(cfg.earned.is_empty(), "below the bar writes no entry");
         assert_eq!(
@@ -1939,10 +1961,40 @@ mod tests {
         );
         assert_eq!(
             cfg.earn("studygo", today, Some(done(40, 60))),
-            Ok(Earn::Refused("daily_cap_reached"))
+            Ok(Earn::Refused(Refused::DailyCapReached))
         );
         assert_eq!(cfg.extra.for_day(today), 30);
         assert_eq!(cfg.earned.get("studygo").and_then(|e| e.minutes), Some(30));
+    }
+
+    /// Every refusal's wire value, spelled out.
+    ///
+    /// **The cross-repository contract, made explicit.** These three strings reach Voortgang as
+    /// `{ok: false, reason}` and it branches on them, so they are not ours to rename — and until
+    /// they were a type they existed as four scattered literals with nothing asserting any of them.
+    /// Walking `Refused::ALL` is what stops a fourth variant arriving without a value anyone chose.
+    #[test]
+    fn every_refusal_keeps_the_wire_value_another_repository_reads() {
+        assert_eq!(Refused::BelowThreshold.wire(), "below_threshold");
+        assert_eq!(Refused::AlreadyGrantedToday.wire(), "already_granted_today");
+        assert_eq!(Refused::DailyCapReached.wire(), "daily_cap_reached");
+        let all: Vec<&str> = Refused::ALL.iter().map(|r| r.wire()).collect();
+        assert_eq!(
+            all.len(),
+            3,
+            "a variant was added without a wire value: {all:?}"
+        );
+        let unique: std::collections::BTreeSet<&&str> = all.iter().collect();
+        assert_eq!(
+            unique.len(),
+            all.len(),
+            "two refusals share a wire value: {all:?}"
+        );
+        crate::testutil::assert_all_lists_every_variant(
+            include_str!("config.rs"),
+            "pub enum Refused {",
+            Refused::ALL.len(),
+        );
     }
 
     /// The rung to aim at is the cheapest one still unmet, not the highest or the first.

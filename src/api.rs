@@ -988,7 +988,7 @@ pub async fn extra_time(
     let mut minutes = asked;
     // `None` means the grant happened. The refusals are ordinary outcomes rather than errors, and
     // only the first can be reached by a provider that has opted into nothing.
-    let mut refused: Option<&'static str> = None;
+    let mut refused: Option<crate::config::Refused> = None;
     {
         let source = source.clone();
         try_update_config(&state, |c| {
@@ -1035,7 +1035,7 @@ pub async fn extra_time(
         // pins and what Voortgang parses; that client treats every refusal alike, so a value it
         // has not seen costs it nothing. A client that wants to behave well can now tell a
         // refusal worth retrying after more practice from one that will stand until midnight.
-        json!({ "ok": false, "reason": refused })
+        json!({ "ok": false, "reason": refused.map(|r| r.wire()) })
     };
     if let Some(key) = replay_key {
         recover_lock(&state.grant_replays).record(
