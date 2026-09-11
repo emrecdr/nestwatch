@@ -828,4 +828,35 @@ mod tests {
         }
         crate::testutil::assert_each_language_differs(&titles);
     }
+
+    /// The heading the *machine* speaks under is a real translated heading, in every language.
+    ///
+    /// **Found by cargo-mutants on CI rather than by review**, and the way it hid is the useful
+    /// part. `a_parents_message_is_titled_as_a_person_not_as_the_system` above does reference
+    /// `child_notice_title` — it asserts the two differ — so the function looked covered. But
+    /// that assertion is satisfied by *any* value the parent's title does not equal, including
+    /// `""`. Replacing this whole function with an empty string, or with `"xyzzy"`, survived the
+    /// suite.
+    ///
+    /// What that would ship is a notification box raised over a child's work with no heading, or
+    /// an English placeholder over a Dutch sentence — and `WINDOWS-TESTING.md` §H8 and §H9 both
+    /// hang on this title being the thing that tells a person from the machine. A test that
+    /// compares two values covers neither of them on its own.
+    #[test]
+    fn the_childs_notice_is_headed_by_a_translated_heading_of_its_own() {
+        use crate::config::Language;
+        let titles: Vec<&str> = Language::ALL
+            .iter()
+            .map(|&l| child_notice_title(l))
+            .collect();
+        for (lang, title) in Language::ALL.iter().zip(&titles) {
+            assert!(
+                !title.trim().is_empty(),
+                "{lang:?} has no heading for what this service says to the child"
+            );
+        }
+        // The property the `!=` above cannot reach: three languages, three headings. A single
+        // hard-coded string would satisfy every other assertion in this file.
+        crate::testutil::assert_each_language_differs(&titles);
+    }
 }

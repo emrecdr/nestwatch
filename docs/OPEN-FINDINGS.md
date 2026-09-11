@@ -1014,9 +1014,10 @@ added so the tests cannot go stale when a third language lands.
 
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
-`assets/app.js` is **3,407 lines** registering a single `Alpine.data("app", app)` with ~154
-methods, consumed by one `x-data="app"` root across 1,796 lines of markup. By comparison `src/`
-is 43 modules with a stated responsibility each. *(Measured 2026-09-07.)*
+`assets/app.js` is **3,786 lines** registering a single `Alpine.data("app", app)` with 163
+methods, consumed by one `x-data="app"` root across 1,941 lines of markup. By comparison `src/`
+is 43 modules with a stated responsibility each. *(Re-measured 2026-09-11; it read 3,407 / ~154 /
+1,796 on 2026-09-07, and 163 is a count rather than an estimate this time.)*
 
 **Most of the latest jump is a string table, not logic, and that distinction matters here.** The
 dashboard's own translation landed 189 keys × three languages as a `const UI` literal at the top of
@@ -1028,9 +1029,19 @@ harder to hold in your head, which is the thing the entry is actually about. If 
 **The premise most reviews attach to this is false, and it was false when they wrote it.** The
 argument arrives as "a component this size cannot be tested without a browser, so split it to
 make it testable". `web/test/harness.js` has evaluated `app.js` in a `vm` context since
-`4434447`, and `web/test/app.test.js` is **2,573 lines** exercising its pure methods. Reachability
+`4434447`, and `web/test/app.test.js` is **2,975 lines** exercising its pure methods. Reachability
 was never the problem and splitting would not improve it. Anyone re-raising this should check the
 harness before repeating the testability argument.
+
+**The guard fired for the first time on 2026-09-11, and what it caught is worth recording because
+it is not what the entry predicted.** It tripped on the *test* file, not the component: 2,573 to
+2,975, crossing the 15% bound on five small tests for `gateTotals`. The component grew too, by 379
+lines, which is 11% and under the bound. So the thing CI noticed was the half of this scope that
+is getting *better* — the tests — and it noticed it before the half the entry is actually about.
+That is the one-sided bound working as designed rather than a defect in it: a percentage of a
+smaller number is a smaller absolute allowance, and nothing here should be read as an argument for
+writing fewer tests. But it means a future firing has to be read before it is acted on, because
+*which* of the three numbers moved decides whether anything is wrong at all.
 
 **The trigger below has fired twice and nobody was watching, which is the part worth acting on.**
 Every figure in this entry was re-measured on 2026-09-02 and every one had drifted, in six days,
@@ -2108,6 +2119,25 @@ deliberately scoped to a diff so it would stay cheap, and every option spends so
 
 Not decided here, and not this file's call: `ci.yml` belongs to whoever is holding it. Filed so the
 choice is made deliberately rather than by the job continuing to die quietly.
+
+**Second confirmed instance, 2026-09-11, on the fourteen-commit push that carried `v0.9.0`.** Same
+annotation, word for word: *"The job has exceeded the maximum execution time of 30m0s"*, reported as
+`cancelled` beside five green jobs. So this is now measured twice rather than once, and both times
+on a backlog push, which is the shape the entry predicts.
+
+**And it is more valuable than "it dies quietly" implies, which changes the weighting of the four
+options above.** Before the budget killed it, the run had already emitted two surviving mutants as
+check-run warnings — both in `control::child_notice_title`, replacing the child's notification
+heading with `""` and with `"xyzzy"`. Both were real: the only test naming that function asserts it
+*differs* from the parent's heading, which `""` satisfies. Fixed the same day by a test that asserts
+the heading is non-empty and differs across the three languages, and confirmed by re-running both
+mutants against it.
+
+The lesson for the options is that a **sharded** job (the third option) is strictly better than a
+**shorter-diff** one (the fourth): a timed-out run still reports everything it found before it died,
+so partial coverage that accumulates is worth more than complete coverage of a smaller diff. What it
+must not do is stay grey — a job whose findings only reach a reader who goes looking at annotations
+has already lost most of them.
 
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 
