@@ -679,3 +679,49 @@ one in `rules.rs` — and neither pass could see the other's consequence. The ge
 changed since the top of this file: **a provider is a registry entry plus a credential bound to
 it**, and everything bolted to the entry inherits an assumption about the entry that nothing
 restates at the bolt.
+
+## A gate needs no gate — 2026-09-11
+
+The household rule this registry was built towards is *thirty-five minutes, and he earns the rest
+of his day by practising*. Every design sketch for it, including the ones in this document,
+assumed the missing piece was **subtractive**: something that caps the day while the bar is unmet
+and steps out of the way once it is met. A `Provider::gate`, a second enforcer, a round.
+
+**It was already there, and it is arithmetic rather than mechanism.** `Rules::effective_budget_mins`
+is `base + extra` — the single place the enforcer reads. Set the base to the short day and make the
+top rung worth the *difference*, and the two states are exactly the two the rule describes:
+
+```
+daily_budget_mins = 35, tiers = [10q|20m -> 16, 15q|30m -> 85], daily_cap_mins = 85
+
+  nothing practised   35      the gate
+  lower rung met      51      35 + 16
+  bar met            120      35 + 85, and the ceiling pays the DIFFERENCE, not another 85
+  pushed again       120      daily_cap_reached
+```
+
+That is pinned in `earned_grant.rs` rather than recorded here as an observation, and the last two
+lines are why it needs pinning: the totals are only correct because the ceiling clamps a second
+grant to the remainder, which is a decision made for an unrelated reason (`A ceiling instead of a
+latch`) three days earlier. A tidy-up that made an over-ceiling push a refusal — the industry
+default, and the thing that section argues against — would silently turn the 120 into a 51 and
+break a rule nobody had written down as depending on it.
+
+**What was actually missing was a sentence, not a subsystem.** A reward is a difference and a
+budget is a total; a parent setting this up thinks *35 and 120* and has to type *85*. Nothing held
+the two together, so changing the budget later left the ladder quietly describing a different rule.
+`assets/app.js::gateTotals` computes the day totals from the same two places the enforcer reads and
+prints them under the ladder. It validates nothing and warns about nothing — there is no wrong pair
+of numbers here, only a pair whose consequence was invisible.
+
+**The general form, and it is the inverse of every other entry in this file.** The five findings
+above are all *a question left unasked beside a question answered*. This one is a question asked
+and answered twice: the mechanism existed, and the design work went looking for it anyway, because
+the rule was stated in totals and the code was written in differences. Nothing was wrong; the two
+vocabularies simply never met, and a design session is exactly where that goes unnoticed — you can
+hold both halves in mind and still not notice they are the same half.
+
+The cost of not checking would have been a `Gate` type, a second path into
+`effective_budget_mins`, its own `skip_serializing_if`, its own checklist items, and a second
+answer to *what does this machine do when the day runs out* — in the file where every serious bug
+this project has had has lived.

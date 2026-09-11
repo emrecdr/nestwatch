@@ -2471,6 +2471,50 @@ test("routineScheduleLabel accounts for windows the editor cannot show", () => {
   assert.match(label, /\+1 more/);
 });
 
+// --- What a ladder is worth as a whole day ---------------------------------------------------
+//
+// `earned_grant.rs` pins that a practice gate needs no subtractive mechanism: a budget of 35 with
+// a top rung worth 85 IS "capped at 35 until the bar is met, then his normal 120". What that
+// leaves is the parent having to type 85 while thinking 120, which is what this line answers.
+
+test("gateTotals says nothing for a provider with no ladder", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
+  assert.equal(app.gateTotals({ tiers: [], cap: "" }), "");
+});
+
+test("gateTotals says nothing on a day with no budget, because there is no gate to describe", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 0, budget_by_weekday: null } });
+  assert.equal(app.gateTotals({ tiers: [{ rewardMins: 85 }], cap: "" }), "");
+});
+
+test("gateTotals reports the two totals the parent is actually thinking in", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
+  assert.equal(
+    app.gateTotals({ tiers: [{ rewardMins: 16 }, { rewardMins: 85 }], cap: 85 }),
+    "Without practice he has 35 min today · with the highest tier met, 120 min",
+  );
+});
+
+test("gateTotals follows the ceiling, not the rung, when the ceiling is lower", () => {
+  // The ceiling is what actually binds, so a ladder whose top rung is worth more than a day may
+  // hold cannot be reported as though it were payable.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
+  assert.match(app.gateTotals({ tiers: [{ rewardMins: 200 }], cap: 20 }), /55 min$/);
+});
+
+test("gateTotals reads the per-weekday budget Monday-first, like the server", () => {
+  // `Date.getDay()` is Sunday-first and `Rules::budget_by_weekday` is Monday-first. Getting that
+  // wrong misreports one day in seven rather than failing, which is why it is asserted against
+  // today's actual weekday rather than a fixed index.
+  const week = [10, 20, 30, 40, 50, 60, 70];
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 999, budget_by_weekday: week } });
+  const todaysBase = week[(new Date().getDay() + 6) % 7];
+  assert.match(
+    app.gateTotals({ tiers: [{ rewardMins: 5 }], cap: "" }),
+    new RegExp(`has ${todaysBase} min today`),
+  );
+});
+
 // --- The probe's status line -----------------------------------------------------------------
 //
 // One sentence under the integration row that says what the last check found and whether the

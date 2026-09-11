@@ -1040,6 +1040,117 @@ async fn earned_grants_latch_replay_and_validate() {
             );
         }
     }
+    // --- Practice governs the day, stated the way a household states it. ------------------
+    //
+    // The question this section answers is not "does a grant land" — everything above covers
+    // that — but whether the registry and the screen-time budget COMPOSE into the rule a parent
+    // actually describes: *thirty-five minutes, and he earns the rest of his day by practising.*
+    //
+    // They do, and that is worth pinning rather than rediscovering, because the answer is
+    // surprising in a useful direction: a gate needs **no subtractive mechanism**. A budget of 35
+    // with the top rung worth the difference is arithmetically identical to "capped at 35 until
+    // the bar is met, then his normal day", and it reaches that through
+    // `Rules::effective_budget_mins`, which is the single home for the number the enforcer acts
+    // on. Nothing new decides when the machine locks.
+    //
+    // What that leaves genuinely open is a *comprehension* problem rather than a mechanism one:
+    // the parent has to type 85 when they are thinking 120, and nothing here holds the two
+    // together if either moves. That is what the dashboard has to solve; it is not what the
+    // enforcer has to.
+    {
+        let (app, cookie, config) = fresh_app().await;
+        nestwatch::state::recover_write(&config)
+            .rules
+            .daily_budget_mins = 35;
+
+        // The household rule: 35 minutes without practice, 120 with it, and a partial credit for
+        // two-thirds of the way. The top rung is the DIFFERENCE, which is exactly the arithmetic
+        // this section exists to pin — and the ceiling is set to it, so the day totals the best
+        // rung reached rather than the sum of the rungs.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({
+                    "enabled": true,
+                    "minutes": 85,
+                    "daily_cap_mins": 85,
+                    "tiers": [
+                        { "questions": 10, "minutes_practised": 20, "reward_mins": 16 },
+                        { "questions": 15, "minutes_practised": 30, "reward_mins": 85 }
+                    ]
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        // Read through the same call the enforcer makes, not by adding the numbers here: an
+        // expected value computed the way the code computes it agrees with the code however
+        // wrong it is, and `expected-value-must-not-come-from-the-code` is why this file spells
+        // its totals as literals.
+        let budget = || {
+            let cfg = nestwatch::state::recover_read(&config);
+            cfg.rules
+                .effective_budget_mins(today, cfg.extra.for_day(today))
+        };
+        assert_eq!(budget(), 35, "before any practice, the day is the gate");
+
+        // Short of every rung: the answer is "not yet", and the day does not move.
+        let (status, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 3, "minutes": 5 } }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["reason"], json!("below_threshold"));
+        assert_eq!(budget(), 35, "a refusal grants nothing, so nothing changes");
+
+        // Two-thirds of the way: the lower rung, and the extra two eight-minute checks a
+        // household asks for land as sixteen minutes.
+        let (_, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 12, "minutes": 5 } }),
+            None,
+        )
+        .await;
+        assert_eq!(body["minutes"], json!(16));
+        assert_eq!(budget(), 51, "35 + the lower rung");
+
+        // The bar, reached later on minutes alone. The ceiling pays the difference rather than a
+        // second full reward, so the day ends at the normal budget and not past it.
+        let (_, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 15, "minutes": 30 } }),
+            None,
+        )
+        .await;
+        assert_eq!(body["minutes"], json!(69), "the difference, not another 85");
+        assert_eq!(
+            budget(),
+            120,
+            "the bar is met, so the day is his normal one — exactly, not 35 + 85 + 16"
+        );
+
+        // And it cannot be farmed past it: the ceiling binds however many times the client pushes.
+        let (_, body) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "reading", "progress": { "questions": 99, "minutes": 99 } }),
+            None,
+        )
+        .await;
+        assert_eq!(body["ok"], json!(false));
+        assert_eq!(body["reason"], json!("daily_cap_reached"));
+        assert_eq!(budget(), 120, "a refused push leaves the day where it was");
+    }
+
     // --- A refusal writes nothing and wakes nobody (`O84`) -------------------------------------
     //
     // `try_update_config` saved and woke on every `Ok`, so a push that granted nothing still

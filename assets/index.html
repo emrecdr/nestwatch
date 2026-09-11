@@ -1042,6 +1042,9 @@
                         <button class="btn btn-ghost btn-xs w-fit" x-show="row.tiers.length < 4"
                                 @click="addTier(row)" x-text="t('addTier')"></button>
                         <p class="text-xs opacity-60" x-text="t('eitherConditionMeetsATier')"></p>
+                        <!-- The same two numbers as a whole day, because a reward is a difference
+                             and a budget is a total. See `gateTotals`. -->
+                        <p class="text-xs opacity-60" x-text="gateTotals(row)" x-show="gateTotals(row)"></p>
 
                         <!-- The cadence of the notice he gets while he is short. Off is once a
                              day, which is the anti-nag default `docs/PLUGIN-SYSTEM.md` argues

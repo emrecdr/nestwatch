@@ -220,6 +220,8 @@ const UI = {
     addTier: "Add tier",
     eitherConditionMeetsATier: "Either condition is enough. The highest tier reached decides the reward.",
     remindEveryCheck: "Tell him at every check while he is short of the lowest tier (otherwise once a day)",
+    gateWithoutPractice: "Without practice he has {} min today",
+    gateWithFullReward: "with the highest tier met, {} min",
     appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here. You choose whether each is on and how many minutes it grants — and, under Check from this PC, whether this PC asks on its own instead.",
     checkFromThisPc: "Check from this PC",
     probeExplained: "Name a program in the Nestwatch folder and this PC runs it as your child on a schedule, with the session your phone forwarded, and judges what it reports by the rules above. Leave it blank to keep the checking on the phone.",
@@ -461,6 +463,8 @@ const UI = {
     addTier: "Niveau toevoegen",
     eitherConditionMeetsATier: "Eén van beide voorwaarden is genoeg. Het hoogst behaalde niveau bepaalt de beloning.",
     remindEveryCheck: "Zeg het bij elke controle zolang hij onder het laagste niveau blijft (anders één keer per dag)",
+    gateWithoutPractice: "Zonder oefenen heeft hij vandaag {} min",
+    gateWithFullReward: "met het hoogste niveau gehaald {} min",
     appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft — en onder Controleren vanaf deze pc of deze pc het in plaats daarvan zelf vraagt.",
     checkFromThisPc: "Controleren vanaf deze pc",
     probeExplained: "Noem een programma in de Nestwatch-map en deze pc voert het volgens schema uit als je kind, met de sessie die je telefoon doorgaf, en beoordeelt wat het meldt volgens de regels hierboven. Laat het leeg om de controle op de telefoon te houden.",
@@ -706,6 +710,8 @@ const UI = {
     addTier: "Kademe ekle",
     eitherConditionMeetsATier: "İki koşuldan biri yeterlidir. Ulaşılan en yüksek kademe ödülü belirler.",
     remindEveryCheck: "En düşük kademenin altındayken her kontrolde ona söyle (aksi hâlde günde bir kez)",
+    gateWithoutPractice: "Alıştırma yapmazsa bugün {} dk",
+    gateWithFullReward: "en yüksek kademeye ulaşırsa {} dk",
     appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz — ve Bu bilgisayardan kontrol et altında, bunun yerine bu bilgisayarın kendisinin sormasına.",
     checkFromThisPc: "Bu bilgisayardan kontrol et",
     probeExplained: "Nestwatch klasöründe bir program adı verin; bu bilgisayar onu çocuğunuz adına, telefonunuzun ilettiği oturumla düzenli aralıklarla çalıştırır ve bildirdiklerini yukarıdaki kurallara göre değerlendirir. Kontrolü telefonda tutmak için boş bırakın.",
@@ -1877,6 +1883,36 @@ function app() {
         // household has switched it on, so `undefined` and `false` are the same answer here.
         remindEveryCheck: this.providers[name].remind_every_check === true,
       }));
+    },
+
+    // What this ladder is worth as a WHOLE DAY, which is the one thing this card cannot show by
+    // listing rewards.
+    //
+    // A reward is a difference and a budget is a total, and a parent setting a practice gate is
+    // thinking in totals: *thirty-five minutes, and a hundred and twenty once he has done his
+    // work.* To get that they must type 85, and nothing holds 35 + 85 = 120 together if either
+    // number later moves. `earned_grant.rs` pins that the arithmetic is genuinely all a gate
+    // needs — no subtractive mechanism, no second enforcer — which leaves exactly this: showing
+    // the totals the two numbers produce, computed from the same two places the enforcer reads.
+    //
+    // Not a validation and deliberately not a warning. There is no wrong pair of numbers here;
+    // there is only a pair whose consequence was invisible.
+    gateTotals(row) {
+      const tiers = row.tiers || [];
+      if (!tiers.length) return "";
+      // Monday-first, matching `Rules::budget_by_weekday`; `Date.getDay()` is Sunday-first, and
+      // the two disagreeing would misreport one day in seven rather than fail outright.
+      const perDay = this.rules.budget_by_weekday;
+      const base = Array.isArray(perDay) && perDay.length === 7
+        ? Number(perDay[(new Date().getDay() + 6) % 7]) || 0
+        : Number(this.rules.daily_budget_mins) || 0;
+      // No budget is no gate. `Rules::effective_budget_mins` returns 0 for an unlimited day and
+      // ignores granted extra there, so a sentence about totals would describe a rule that is
+      // not in force — the same trap the today card avoids by not drawing a phantom budget.
+      if (base <= 0) return "";
+      const cap = row.cap === "" || row.cap === null ? Infinity : Number(row.cap);
+      const best = Math.min(cap, Math.max(...tiers.map((t) => Number(t.rewardMins) || 0)));
+      return [this.tf("gateWithoutPractice", base), this.tf("gateWithFullReward", base + best)].join(" · ");
     },
 
     // What the last check found and whether the phone's session is still there, in one line under

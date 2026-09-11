@@ -11,6 +11,17 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Added
 
+- **The reward rules now say what they are worth as a whole day.** If your son's day is 35 minutes
+  and the top tier is worth 85, his day after practising is 120 — and until now you had to do that
+  sum yourself, keep it in your head, and redo it every time you changed either number. The card
+  now reads *Without practice he has 35 min today · with the highest tier met, 120 min*, computed
+  from the budget and the ladder rather than typed anywhere.
+  <br>This is the whole of what a practice gate needed, which was the surprise. Set his day to the
+  short one and make the top tier worth the difference, and *capped until he has practised, then
+  his normal day* is exactly what happens — no second limit, no new thing deciding when the machine
+  locks, and nothing at all for a household that does not use it. That is now pinned as a test
+  rather than left as an observation, because it is the kind of property that is true until
+  somebody tidies one of the two halves.
 - **You can choose how often he is told he is behind.** Until now the practice check told him once
   a day and then stayed quiet, deliberately: a fifteen-minute timer that says *not yet* every
   fifteen minutes is a nag, and a child stops reading a nag. A tick box under an integration's
