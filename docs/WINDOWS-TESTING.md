@@ -987,9 +987,12 @@ is launched directly, not through `cmd.exe`.
       the box on his screen must read *Nice — N more minutes of screen time for your practice.*
       titled as the system, **not** *Message from your parent* — that title belongs to §H9 and
       confusing the two is the thing `child_notice_title` exists to prevent.
-- [ ] **The shortfall notice is once a day, not once a check.** Set the interval to 5 minutes and
-      leave a probe reporting less than the lowest rung for half an hour. Exactly **one** notice
-      must appear, naming the nearest rung and what he has done so far.
+- [ ] **The shortfall notice follows the switch.** Set the interval to 5 minutes and leave a probe
+      reporting less than the lowest rung for half an hour. With *Tell him at every check* **off**
+      — the default — exactly **one** notice must appear, naming the nearest rung and what he has
+      done so far. Tick the box and the next check must speak again, with the newer numbers. One
+      item rather than two because it is one code path and one screen; the rationing itself is
+      decided off Windows and pinned in `probe_runner.rs`.
 - [ ] **A notice the OS refused is not counted as said.** Sign him out, let a check refuse while
       the console is empty, then sign him back in. The reminder must still arrive at the next
       check. This is the assertion that cannot be tested off Windows: only the real

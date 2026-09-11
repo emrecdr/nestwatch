@@ -45,6 +45,7 @@ fn laddered_studygo() -> Provider {
             exe: "studygo-probe".into(),
             every_mins: 15,
         }),
+        remind_every_check: false,
     }
 }
 
@@ -56,6 +57,7 @@ fn plain_chores() -> Provider {
         daily_cap_mins: None,
         tiers: Vec::new(),
         probe: None,
+        remind_every_check: false,
     }
 }
 
@@ -338,6 +340,63 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
             5,
             "an undelivered reminder must be tried again, not marked as said"
         );
+    }
+
+    // --- A household that wants to be told at every check can be ------------------------------
+    //
+    // Once a day stays the default, and the section above is why: rationing is what keeps a
+    // fifteen-minute timer from becoming a fifteen-minute nag. But that argument was made for a
+    // reward — *there is more to earn if you want it* — and it does not survive being pointed at
+    // a gate, where the notice is the only warning that the machine is about to lock. Which of
+    // the two a household has is not something this file can know, so it is the parent's switch,
+    // per provider, and absent means exactly today's behaviour.
+    {
+        let fake = Arc::new(FakeControl::new());
+        let mut cfg = test_config();
+        let mut every_check = laddered_studygo();
+        every_check.remind_every_check = true;
+        cfg.providers.insert("studygo".into(), every_check);
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+
+        fake.script_probe(Ok(br#"{"questions":3,"minutes":5}"#.to_vec()));
+        probe::run_once(&state, t0).await;
+        assert_eq!(
+            fake.notification_bodies().len(),
+            1,
+            "the first check speaks either way"
+        );
+
+        // The line that differs from the section above, and the only one that does.
+        fake.script_probe(Ok(br#"{"questions":4,"minutes":6}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(15)).await;
+        let said = fake.notification_bodies();
+        assert_eq!(
+            said.len(),
+            2,
+            "with the switch on, every check that finds him short says so: {said:?}"
+        );
+        assert!(
+            said[1].contains('4'),
+            "and says what he has done NOW, not what the first notice said: {}",
+            said[1]
+        );
+
+        // What the switch does not touch. A broken link is still the parent's to read...
+        fake.script_probe(Err("no network".into()));
+        probe::run_once(&state, t0 + Duration::minutes(30)).await;
+        assert_eq!(
+            fake.notification_bodies().len(),
+            2,
+            "a failed check is not the child's problem however the switch is set"
+        );
+
+        // ...and a grant is still announced, which it was before the switch existed.
+        fake.script_probe(Ok(br#"{"questions":12,"minutes":5}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(45)).await;
+        let said = fake.notification_bodies();
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(said[2].contains("16"), "says what was added: {}", said[2]);
     }
 
     // --- Nothing configured means nothing happens --------------------------------------------

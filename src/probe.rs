@@ -422,20 +422,29 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 (ProbeOutcome::Granted(minutes), _) => {
                     Some(practice_earned_message(*minutes, lang))
                 }
-                // Short of the bar, and not yet told today. The other two refusals mean the day
-                // is already paid, so there is nothing to aim at and nothing to say.
-                (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done))
-                    if reminded_before != Some(today) =>
-                {
-                    cfg.providers
-                        .get(&name)
-                        .and_then(|provider| provider.next_rung(done))
-                        .map(|tier| practice_reminder_message(&name, tier, done, lang))
-                }
+                // Short of the bar, and either not yet told today or set to say it every time.
+                // The other two refusals mean the day is already paid, so there is nothing to aim
+                // at and nothing to say.
+                //
+                // The rationing moved inside the lookup rather than staying a match guard,
+                // because which rule applies is now the *provider's* to say and the guard ran
+                // before anything had been looked up. `filter` before `and_then` keeps the two
+                // questions in the order they are asked: may he be told, and is there a rung to
+                // tell him about.
+                (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done)) => cfg
+                    .providers
+                    .get(&name)
+                    .filter(|provider| {
+                        provider.remind_every_check || reminded_before != Some(today)
+                    })
+                    .and_then(|provider| provider.next_rung(done))
+                    .map(|tier| practice_reminder_message(&name, tier, done, lang)),
                 // Enumerated rather than caught. The day latch and the ceiling both mean the day
                 // is already paid, so there is no rung to aim at and nothing worth saying; a failed
                 // check is the parent's to read, not his. A fourth refusal fails to compile here,
-                // which is the whole point of the reason being a type.
+                // which is the whole point of the reason being a type. `BelowThreshold` reaches
+                // this arm only with nothing reported, which a probe cannot produce and a push
+                // can.
                 (ProbeOutcome::Refused(Refused::BelowThreshold), _)
                 | (ProbeOutcome::Refused(Refused::AlreadyGrantedToday), _)
                 | (ProbeOutcome::Refused(Refused::DailyCapReached), _)

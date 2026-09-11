@@ -238,6 +238,40 @@ pub struct Provider {
     /// always was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<Probe>,
+    /// Say the shortfall notice at **every** check that finds him short,
+    /// rather than once a local day.
+    ///
+    /// `false` — the default, and how every config written before this field
+    /// loads — is the rationed rule `docs/PLUGIN-SYSTEM.md` argues for: a
+    /// grant is announced every time, a shortfall is mentioned once a day,
+    /// because a fifteen-minute timer that says *not yet* every fifteen
+    /// minutes is a nag, and a nagging tool and a purely negative one fail in
+    /// the same direction.
+    ///
+    /// **That argument is about a reward, and it does not survive being
+    /// pointed at a gate.** Rationing is right when the notice means *there is
+    /// more to earn if you want it*, and wrong when it is the only warning
+    /// that the machine is going to lock: a child told once at 16:00 and
+    /// locked out at 16:35 was, for practical purposes, not told. Which of
+    /// the two a household has is a property of its configuration, not of
+    /// this code, so it is the parent's switch.
+    ///
+    /// It moves **only** the shortfall. A grant is still announced every
+    /// time, a failed check still says nothing to him, and the day latch and
+    /// the ceiling still say nothing — those two mean the day is already
+    /// paid, so there is no rung to aim at whatever this is set to.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remind_every_check: bool,
+}
+
+/// `skip_serializing_if` for a `bool` that defaults to `false`.
+///
+/// Named rather than `std::ops::Not::not`, which type-checks here and reads
+/// like a mistake. The point of every `skip_serializing_if` in this file is
+/// that a household which never opted in keeps a byte-identical
+/// `config.json`, and that intent should be legible at the attribute.
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// One step of a provider's reward ladder: what the child has to have done, and what it earns.
@@ -1170,6 +1204,7 @@ mod tests {
                 },
             ],
             probe: None,
+            remind_every_check: false,
         }
     }
 
@@ -1254,6 +1289,7 @@ mod tests {
             daily_cap_mins: None,
             tiers: Vec::new(),
             probe: None,
+            remind_every_check: false,
         };
         assert_eq!(
             plain.reward_for(Some(done(0, 0))),
@@ -1314,6 +1350,7 @@ mod tests {
             daily_cap_mins: None,
             tiers: Vec::new(),
             probe: None,
+            remind_every_check: false,
         };
         assert_eq!(
             serde_json::to_string(&provider).unwrap(),
@@ -1341,6 +1378,7 @@ mod tests {
             daily_cap_mins: Some(45),
             tiers: Vec::new(),
             probe: None,
+            remind_every_check: false,
         };
         let json = serde_json::to_string(&provider).unwrap();
         assert!(json.contains(r#""daily_cap_mins":45"#), "got {json}");
@@ -1845,6 +1883,7 @@ mod tests {
             daily_cap_mins: None,
             tiers: Vec::new(),
             probe: None,
+            remind_every_check: false,
         };
         assert_eq!(
             serde_json::to_string(&provider).unwrap(),
@@ -1874,6 +1913,7 @@ mod tests {
             daily_cap_mins: None,
             tiers: Vec::new(),
             probe: None,
+            remind_every_check: false,
         };
         assert!(!latched.exhausted_for(today, None));
         assert!(latched.exhausted_for(today, Some(&entry(today, None))));

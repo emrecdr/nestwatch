@@ -637,3 +637,45 @@ on their card.
 
 Both strings are built per language, like every other thing the child reads, and
 `tests/translated_strings.rs` is what makes that structural rather than a habit.
+
+## The ration is a default, not a rule — 2026-09-11
+
+`O101`'s fix gave the gate a voice and rationed the shortfall half of it to once a day. That
+decision was right and the argument for it is above: announcing every grant is what stops the
+feature being a thing that only ever says *not yet*, and rationing the reminder is what stops a
+fifteen-minute timer becoming a fifteen-minute nag.
+
+**It was argued for a reward, and this document has now made the same mistake it keeps recording:
+answering one axis completely and reading as though it had answered the neighbour.** A reward's
+notice means *there is more to earn if you want it*, and a household that hears it once has heard
+it. A gate's notice means *this machine is going to lock*, and the identical sentence, rationed the
+identical way, is the only warning a child gets before that happens. Told once at 16:00 and locked
+out at 16:35, he was for practical purposes not told. Nothing in the notice changed; what changed
+is what the budget does when he ignores it.
+
+So `Provider::remind_every_check` is a switch rather than a new rule, and the default does not
+move. Three properties make it cheap:
+
+* It moves **only** the shortfall. A grant is still announced every time — that half was never
+  rationed — and a failed check still says nothing to him, because a broken link is the parent's
+  and is already on their card.
+* The day latch and the ceiling are untouched. Both mean the day is already paid, so there is no
+  rung to aim at whatever the switch says; the refusal being a **type** rather than a string is
+  what makes that a compile-time fact rather than three `if`s to keep in step.
+* `skip_serializing_if` again, so a household that never ticks the box keeps a byte-identical
+  `config.json` and a byte-identical `GET /api/providers`.
+
+**One mechanical detail is worth recording because the obvious form is wrong.** The ration was a
+match *guard* — `if reminded_before != Some(today)` — which ran before the provider had been looked
+up. Which rule applies is now the provider's to say, so the test moved inside the lookup as a
+`filter` between `get` and `and_then`. That is not a refactor: a guard cannot read the thing the
+match is about to fetch, and leaving it as one would have meant looking the provider up twice and
+having two places that could disagree about which entry they were reading.
+
+**And the shape of the underlying gap, which is the fifth time this document has written it down.**
+A notice has a cadence, and a cadence is only correct relative to *what happens if the notice is
+ignored*. The reminder and the enforcement were designed in separate passes — one in `probe.rs`,
+one in `rules.rs` — and neither pass could see the other's consequence. The general form has not
+changed since the top of this file: **a provider is a registry entry plus a credential bound to
+it**, and everything bolted to the entry inherits an assumption about the entry that nothing
+restates at the bolt.

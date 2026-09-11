@@ -219,6 +219,7 @@ const UI = {
     removeTier: "Remove tier",
     addTier: "Add tier",
     eitherConditionMeetsATier: "Either condition is enough. The highest tier reached decides the reward.",
+    remindEveryCheck: "Tell him at every check while he is short of the lowest tier (otherwise once a day)",
     appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here. You choose whether each is on and how many minutes it grants — and, under Check from this PC, whether this PC asks on its own instead.",
     checkFromThisPc: "Check from this PC",
     probeExplained: "Name a program in the Nestwatch folder and this PC runs it as your child on a schedule, with the session your phone forwarded, and judges what it reports by the rules above. Leave it blank to keep the checking on the phone.",
@@ -459,6 +460,7 @@ const UI = {
     removeTier: "Niveau verwijderen",
     addTier: "Niveau toevoegen",
     eitherConditionMeetsATier: "Eén van beide voorwaarden is genoeg. Het hoogst behaalde niveau bepaalt de beloning.",
+    remindEveryCheck: "Zeg het bij elke controle zolang hij onder het laagste niveau blijft (anders één keer per dag)",
     appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft — en onder Controleren vanaf deze pc of deze pc het in plaats daarvan zelf vraagt.",
     checkFromThisPc: "Controleren vanaf deze pc",
     probeExplained: "Noem een programma in de Nestwatch-map en deze pc voert het volgens schema uit als je kind, met de sessie die je telefoon doorgaf, en beoordeelt wat het meldt volgens de regels hierboven. Laat het leeg om de controle op de telefoon te houden.",
@@ -703,6 +705,7 @@ const UI = {
     removeTier: "Kademeyi kaldır",
     addTier: "Kademe ekle",
     eitherConditionMeetsATier: "İki koşuldan biri yeterlidir. Ulaşılan en yüksek kademe ödülü belirler.",
+    remindEveryCheck: "En düşük kademenin altındayken her kontrolde ona söyle (aksi hâlde günde bir kez)",
     appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz — ve Bu bilgisayardan kontrol et altında, bunun yerine bu bilgisayarın kendisinin sormasına.",
     checkFromThisPc: "Bu bilgisayardan kontrol et",
     probeExplained: "Nestwatch klasöründe bir program adı verin; bu bilgisayar onu çocuğunuz adına, telefonunuzun ilettiği oturumla düzenli aralıklarla çalıştırır ve bildirdiklerini yukarıdaki kurallara göre değerlendirir. Kontrolü telefonda tutmak için boş bırakın.",
@@ -1870,6 +1873,9 @@ function app() {
         probeEvery: this.providers[name].probe ? this.providers[name].probe.every_mins : 15,
         probeStatus: this.providers[name].probe_status || null,
         secretAt: this.providers[name].secret_at || null,
+        // Absent means off, the way the server writes it: the field is skipped entirely unless a
+        // household has switched it on, so `undefined` and `false` are the same answer here.
+        remindEveryCheck: this.providers[name].remind_every_check === true,
       }));
     },
 
@@ -1949,6 +1955,9 @@ function app() {
         body.daily_cap_mins = row.cap === "" || row.cap === null ? null : Number(row.cap);
         // A blank name is an explicit null, the way a blank ceiling is: it takes the probe off.
         body.probe = probeExe ? { exe: probeExe, every_mins: Number(row.probeEvery) } : null;
+        // A switch has two positions, so this is sent as a plain boolean rather than the
+        // null-clears dance the ceiling and the probe need.
+        body.remind_every_check = row.remindEveryCheck === true;
         body.tiers = (row.tiers || []).map((t) => ({
           questions: Number(t.questions) || 0,
           minutes_practised: Number(t.minutesPractised) || 0,

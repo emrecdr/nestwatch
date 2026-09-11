@@ -1209,6 +1209,14 @@ pub struct ProviderBody {
     /// like the ceiling, and needs the same `absent_or_null` to tell the two apart.
     #[serde(default, deserialize_with = "absent_or_null")]
     probe: Option<Option<crate::config::Probe>>,
+    /// Whether the shortfall notice is said at every check or once a day. Absent leaves it as it
+    /// is, for the reason `daily_cap_mins` gives above.
+    ///
+    /// A plain `Option<bool>` rather than `absent_or_null`: a switch has two positions and `null`
+    /// is not one of them, so there is nothing for the third state to mean. Sending `false` is
+    /// how it comes off.
+    #[serde(default)]
+    remind_every_check: Option<bool>,
 }
 
 /// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes, … } }`.
@@ -1426,6 +1434,7 @@ pub async fn set_provider(
     let (enabled, minutes, ceiling) = (body.enabled, body.minutes, body.daily_cap_mins);
     let tiers = body.tiers;
     let probe_field = body.probe;
+    let remind = body.remind_every_check;
     // Cap check + upsert under one write guard, the shape `save_routine` uses and for the same
     // reason. **Reconfiguring a provider that already exists is always allowed** — only a new
     // name can hit the cap. Without that, a parent sitting at the ceiling could not turn an
@@ -1467,6 +1476,13 @@ pub async fn set_provider(
                         .providers
                         .get(&name)
                         .and_then(|existing| existing.probe.clone()),
+                },
+                remind_every_check: match remind {
+                    Some(explicit) => explicit,
+                    None => c
+                        .providers
+                        .get(&name)
+                        .is_some_and(|existing| existing.remind_every_check),
                 },
             },
         );

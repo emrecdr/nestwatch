@@ -7,6 +7,23 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Added
+
+- **You can choose how often he is told he is behind.** Until now the practice check told him once
+  a day and then stayed quiet, deliberately: a fifteen-minute timer that says *not yet* every
+  fifteen minutes is a nag, and a child stops reading a nag. A tick box under an integration's
+  reward rules now says *Tell him at every check while he is short* instead.
+  <br>The default has not moved, and the reason the two exist is worth a sentence. Once a day is
+  right when the notice means *there is more to earn if you want it*. It is wrong when the notice
+  is the only warning that the machine is about to lock — a child told once at four o'clock and
+  locked out at half past was, for practical purposes, not told. Which of those two your house has
+  is a thing only you know, so it is a switch rather than a rule.
+  <br>It moves only that one sentence. A grant is still announced every time, a check that failed
+  still says nothing to him, and once the day's reward is fully paid there is nothing left to aim
+  at, so nothing is said whatever the box is set to.
+
 ## [0.9.0] — 2026-09-11
 
 ### Fixed
