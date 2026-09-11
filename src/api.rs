@@ -85,11 +85,36 @@ where
     F: FnOnce(&mut Config) -> Result<(), AppError>,
 {
     let _persist = state.config_save_lock.lock().await;
-    let snapshot = {
+    let (before, snapshot) = {
         let mut guard = crate::state::recover_write(&state.config);
+        // Serialised before the mutation so the comparison below is of bytes rather than of
+        // anybody's promise. See that comparison for why it is not a flag.
+        let before = serde_json::to_string(&*guard).ok();
         mutate(&mut guard)?;
-        guard.clone()
+        (before, guard.clone())
     };
+    // **A mutation that changed nothing is not written and does not wake anyone.**
+    //
+    // `O84`: the refusal paths through here — the day latch, the daily ceiling, work below every
+    // tier — all return `Ok` having touched nothing, and this used to save and wake regardless. A
+    // handful of wasted writes a day while the only caller was a parent's phone; the probe
+    // scheduler polls on a timer, which is the trigger that entry set for itself.
+    //
+    // **Compared on the serialised bytes, not on a flag out of the closure**, which is what `O84`
+    // prescribed and is the weaker design: a flag is a claim a caller can get wrong, and getting it
+    // wrong loses a change in memory that never reaches disk. Bytes cannot be got wrong by a
+    // caller at all. `rules::save_tally_if_changed` already makes the same choice for the same
+    // reason, and states it: "a flag would miss that; a content compare cannot."
+    //
+    // Skipping the wake alongside the save is sound rather than convenient. The enforcers read this
+    // very `RwLock`, so a byte-identical config is one they have already seen — there is no pending
+    // shutdown a no-op write could invalidate. That is the narrow claim; `O76` is the broader one
+    // about writes that *do* change something irrelevant, and it is untouched here.
+    if let Some(before) = &before
+        && serde_json::to_string(&snapshot).ok().as_ref() == Some(before)
+    {
+        return Ok(());
+    }
     spawn(move || snapshot.save())
         .await?
         .map_err(AppError::Internal)?;

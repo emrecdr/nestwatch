@@ -1309,8 +1309,21 @@ wake unless *only* known-irrelevant fields changed — and must land with a test
 which ones still wake. Passing an explicit `Wake::{Enforcement,None}` at the four call sites is the
 other option and is worse: it hands back exactly the remembering that the choke point removed.
 
+**Narrowed 2026-09-11, and its trigger has half fired.** `api::try_update_config` now compares the
+serialised config before and after the mutation and skips **both** the save and the wake when they
+are identical, which closed `O84`. So the wakes this entry is about are now only the ones where
+something genuinely changed — a no-op `POST` no longer pulls either enforcer out of cadence at all.
+That is the easy half and it needed no slice comparison, because a byte-identical config is one the
+enforcers have already seen.
+
+What remains is exactly the hard half this entry describes: a write that changes something the
+enforcers do not care about — a language, a password hash, a routine's name — still wakes both. The
+reservations above stand unchanged, including that any attempt must be inverted to be safe and must
+land with a test per handler.
+
 **Trigger.** Worth doing when something makes a wake expensive — a heavier tick, a slower
-`running_processes`, or a config-writing endpoint that stops being human-paced.
+`running_processes`, or a config-writing endpoint that stops being human-paced. The probe scheduler
+became the third of those on 2026-09-09; the `O84` fix above is why that no longer forces this one.
 
 ### O78 · The notification decision rests on an assumption nobody has spent a minute testing
 
@@ -1513,39 +1526,6 @@ made this change. Whoever picks it up should file the counterpart there and turn
 **Trigger.** The next change to `nestwatch-mobile`'s home screen, or the first parent who asks why
 the app and the dashboard disagree about how much time is left.
 
-
-### O84 · A refused earned grant still rewrites the config and wakes the enforcer
-
-`api::extra_time` decides the day latch **inside** `try_update_config`, which is correct — that is
-what serialises two concurrent pushes from one source so the second sees the first's latch. But the
-already-granted branch sets `granted = false` and returns `Ok(())`, and `try_update_config` saves on
-every `Ok`. So a push that grants nothing still serialises the whole `Config`, writes `config.json`,
-and calls `heartbeat::wake`.
-
-Bounded and not a security issue: the caller is authenticated, and an authenticated caller has far
-larger levers than this (`POST /api/shutdown`). The cost is a pointless disk write and an enforcer
-tick per refused retry, which for a phone scheduler retrying through the day is a handful.
-
-**`Provider::daily_cap_mins` moved the frequency this estimate rests on, without meeting the trigger
-below.** A refusal used to be the second push of a day and nothing after it; under a ceiling the
-refusals are every push once the allowance is spent, which for a poller checking on a timer is the
-common case rather than the rare one. That changes "a handful" into "one write per poll for the rest
-of the day" — still bounded, still not a security issue, and still without a measurement on the
-target hardware, which is what the trigger actually asks for. Recorded here rather than re-filed:
-the defect is unchanged, only the arithmetic around it.
-
-**Not fixed deliberately.** The clean fix is a "no change, do not save" signal out of the mutate
-closure, and `try_update_config` is the single choke point every config write in the service passes
-through — the one place where an extra branch is most expensive to get wrong. That is not a trade
-worth making for a few writes a day, but it should be made if a second caller ever needs the same
-signal, because then it stops being a special case.
-
-**Fix.** Either a third closure outcome distinguishing "changed" from "correct, but nothing to
-persist", or hoist the latch read — which cannot be done without losing the serialisation the
-current shape exists to provide, so it is the first one or nothing.
-
-**Trigger.** A second handler wanting to mutate-or-not under the same lock, or evidence that config
-writes are actually costing something on the target hardware.
 
 ### O85 · An idempotency replay can cross midnight and report a grant for a day that got none
 

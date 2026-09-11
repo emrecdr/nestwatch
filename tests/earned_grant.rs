@@ -1040,4 +1040,52 @@ async fn earned_grants_latch_replay_and_validate() {
             );
         }
     }
+    // --- A refusal writes nothing and wakes nobody (`O84`) -------------------------------------
+    //
+    // `try_update_config` saved and woke on every `Ok`, so a push that granted nothing still
+    // serialised the whole config, rewrote `config.json` and pulled both enforcers out of their
+    // cadence. Harmless per refusal and no longer rare: under a ceiling every push after the
+    // allowance is spent is a refusal, and the probe scheduler polls on a timer rather than waiting
+    // for a person to press something.
+    //
+    // **Observed by tampering with the file rather than by timing it.** A marker appended to
+    // `config.json` by hand survives only if nothing rewrote the file from memory, which is exactly
+    // the property under test and is deterministic — an mtime comparison would not be.
+    {
+        let state = state_with(test_config());
+        let wake = state.enforcement_wake.clone();
+        let app = app_with(state);
+        let cookie = login(&app, PASSWORD).await.unwrap();
+        assert_eq!(
+            configure_provider(&app, &cookie, "studygo", true, 30).await,
+            StatusCode::OK
+        );
+        let (status, _) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(status, StatusCode::OK, "the first push grants");
+
+        let path = data_paths().config;
+        let mut tampered = std::fs::read_to_string(&path).unwrap();
+        tampered.push('\n');
+        let woken_before = *wake.borrow();
+
+        std::fs::write(&path, &tampered).unwrap();
+        let (status, body) = grant(&app, &cookie, json!({ "source": "studygo" }), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["ok"],
+            json!(false),
+            "the second push is refused: {body}"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            tampered,
+            "a refused grant rewrote config.json, which it has nothing to write"
+        );
+        assert_eq!(
+            *wake.borrow(),
+            woken_before,
+            "a refused grant woke the enforcers, which have nothing to re-read"
+        );
+    }
 }

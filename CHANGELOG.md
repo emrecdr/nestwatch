@@ -11,6 +11,17 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **A request that changed nothing still rewrote the settings file and interrupted the enforcers.**
+  Every refused bonus-time push — the once-a-day latch, the daily ceiling, practice below the bar —
+  wrote the whole settings file back to disk and pulled both enforcement loops out of their cadence,
+  having nothing to tell them. Harmless one at a time, and no longer rare: once a daily maximum is
+  set, every push after the allowance is spent is a refusal, and the new check-from-this-PC program
+  polls on a timer rather than waiting for you to press something. Now nothing is written and nobody
+  is woken unless something actually changed.
+  <br>Decided by comparing the file's contents before and after rather than by asking each caller to
+  say whether it changed anything: a flag is a claim that can be wrong, and being wrong would lose a
+  real change before it reached disk. The daily screen-time tally already made the same choice for
+  the same reason.
 - **Four boxes on the dashboard had no length limit at all, and neither did the server.** A blocked
   app, an app with its own limit, an app group's name and the probe program could each be as long as
   you could paste, and it was stored in the settings file verbatim. Nothing was going to break, but
