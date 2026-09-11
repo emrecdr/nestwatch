@@ -768,21 +768,27 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in 0.5.0 through 0.8.0 — none of it has run on Windows
+## H. New in 0.5.0 through 0.9.0 — none of it has run on Windows
 
-**Four releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
-2026-08-31, `v0.6.0`, `v0.7.0`, and `v0.8.0` on 2026-09-09. That is a deliberate decision rather
+**Five releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
+2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, and `v0.9.0` on 2026-09-11. That is a deliberate decision rather
 than an oversight, and it is recorded in each release commit as well as here: the binary is on the
 download page and the behaviour below has never executed on the platform it was written for.
 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 42 items across §H1–§H9, where it held 38 at `v0.8.0` and 32 at
+accumulated rather than turned over: 45 items across §H1–§H9, where it held 38 at `v0.8.0` and 32 at
 `v0.7.0`. The one
 thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
 (§H8) instead of being added to the list later or not at all, which is the failure `O87` records
 against 0.6.0 and 0.7.0.
+
+**`v0.9.0` half-repeated that failure, and the three items at the end of §H8 are the repair.** Its
+message box arrived with §H9 in the same commit; the gate's two sentences to the child arrived with
+nothing, and were uncounted here for two days. They are the probe *speaking*, so they sit in §H8
+rather than in a section of their own — and the last of the three is a property no test off Windows
+can reach, which is exactly the kind this file is for.
 
 Everything in this section was written, tested and reviewed on a Mac. The parts that talk to
 Windows are compile- and lint-verified for the target and have **never executed**. Each item below
@@ -977,6 +983,18 @@ is launched directly, not through `cmd.exe`.
       Files: access denied. That is the ACL from §B doing this feature's whole job.
 - [ ] **Nothing runs while he is signed out or locked.** Lock the session and wait past the
       interval: the *Checked at* time must not move.
+- [ ] **A grant is announced, every time.** With a ladder set and a probe that reports enough,
+      the box on his screen must read *Nice — N more minutes of screen time for your practice.*
+      titled as the system, **not** *Message from your parent* — that title belongs to §H9 and
+      confusing the two is the thing `child_notice_title` exists to prevent.
+- [ ] **The shortfall notice is once a day, not once a check.** Set the interval to 5 minutes and
+      leave a probe reporting less than the lowest rung for half an hour. Exactly **one** notice
+      must appear, naming the nearest rung and what he has done so far.
+- [ ] **A notice the OS refused is not counted as said.** Sign him out, let a check refuse while
+      the console is empty, then sign him back in. The reminder must still arrive at the next
+      check. This is the assertion that cannot be tested off Windows: only the real
+      `WTSSendMessageW` decides what a signed-out console returns, and `notify_child` records the
+      day only when it was taken.
 
 ### H9. A message you typed (never run on Windows)
 

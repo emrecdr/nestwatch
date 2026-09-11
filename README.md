@@ -386,28 +386,31 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.8.0` (2026-09-09) is the newest published release — it
-lets this PC ask an integration what your child has done, counts a wrong time code where it used to
-count nothing, makes the full-size screenshot a dialog the keyboard cannot walk out of, and reports
-whether the system drive is encrypted. It also relaxes one promise, on purpose and only if you ask
-it to — the second of the two exceptions named at the top of this file, under **Check from this
-PC** on the Integrations card.
+**Where the current release stands.** `v0.9.0` (2026-09-11) is the newest published release — the
+check that watches your son's practice now *says* something to him instead of granting and refusing
+in silence, you can send him a sentence in your own words, and every box on the dashboard is held to
+the limit its endpoint actually enforces. The release before it, `v0.8.0`, is the one that lets this
+PC ask an integration what your child has done: that is the second of the two exceptions named at
+the top of this file, under **Check from this PC** on the Integrations card, and nothing here
+changes it.
 
-**Unlike the two before it, this release adds Windows-only code — the first since `v0.5.1`.** That
-is the single most useful sentence here, because it is the opposite of what `v0.7.0` could say. The
-probe runs the check program *as your child*, which on Windows means launching it into the
-interactive session the way the screenshot helper does, and that is tier 3 by definition: the
-`#[cfg(windows)]` module `session.rs` gains 129 lines, and both Windows implementations of the probe
-call are new. Measured against `v0.7.0`, not asserted.
+**Unlike the release before it, this one adds no Windows-only code at all.** Measured with `git
+diff v0.8.0..HEAD` rather than asserted: of the 1,057 lines added under `src/`, **not one** sits
+inside a `#[cfg(windows)]` block, and `session.rs`, `control/windows.rs` and
+`control/service_control.rs` are untouched. What is new is code that *drives* a Windows path that
+already existed — both new sentences reach your child through `WTSSendMessageW`, the same call the
+countdown warnings have always used. So this release's risk is not new platform code. It is that
+neither of the two things it puts on your child's screen has ever been seen on a Windows screen.
 
-**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for four releases: section H of the
-checklist now carries 42 items across §H1–§H9 — the bedtime extension, the enforcer wake, the
-translated shutdown notices, the ask link, the child's page in Dutch, the probe, and the message a
-parent types — and none has been executed on a Windows machine. No box anywhere in that file has ever been ticked in a
-commit. That is stated here rather than only in the changelog, because tier 3 is the tier the
-sentence above says every serious bug has lived in, and a reader deciding whether to install this is
-entitled to know which tier the newest features sit in — this time more than usual, because for the
-first time in three releases the newest feature is *in* that tier rather than beside it.
+**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for five releases: section H of the
+checklist now carries 45 items across §H1–§H9 — the bedtime extension, the enforcer wake, the
+translated shutdown notices, the ask link, the child's page in Dutch, the probe and what it says,
+and the message a parent types — and none has been executed on a Windows machine. No box anywhere
+in that file has ever been ticked in a commit. That is stated here rather than only in the
+changelog, because tier 3 is the tier the sentence above says every serious bug has lived in, and a
+reader deciding whether to install this is entitled to know which tier the newest features sit in.
+Three of those 45 items were written while cutting this release, for a feature that had shipped
+without any — the honest half of a rule working is saying when it nearly did not.
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were
