@@ -133,13 +133,24 @@ pub(crate) fn assert_all_lists_every_variant(src: &str, decl: &str, all_len: usi
 /// English one leaves a Dutch install reading English, and every other assertion in such a test
 /// still passes.
 ///
+/// **Not sufficient on its own.** Three distinct strings can still include an empty one, so every
+/// caller pairs this with an absolute assertion per language — `!msg.trim().is_empty()`, or the
+/// number the sentence has to state. A migration that drops that pairing makes a test weaker, not
+/// tidier: `control::child_notice_title` was covered only by an `assert_ne!` against the parent's
+/// heading, which `""` satisfies, and cargo-mutants found it on the 0.9.0 push.
+///
 /// **The migration to this helper is outstanding, not finished, and this comment says so on
-/// purpose.** Three call sites use it — two in `probe.rs`, one in `control/mod.rs`, the last of
+/// purpose.** Four call sites use it — two in `probe.rs`, two in `control/mod.rs`, the first of
 /// which was the `BTreeSet` copy that prompted the extraction. Six hand-rolled copies remain, in
-/// two idioms: a `clone/sort/dedup` at `rules.rs:3552`, and an index loop with an inner
-/// `assert_ne!` at `rules.rs:3658`, `:3674`, `:3693` and `curfew.rs:1215`, `:1249`. An earlier
-/// version of this comment read as though those had been converted. They had not, and a comment
-/// that describes work as done is worse than no comment: it stops the next reader looking.
+/// two idioms: a `clone/sort/dedup` in
+/// `rules::tests::every_reason_an_app_was_closed_is_explained_in_every_language`, and an index
+/// loop with an inner `assert_ne!` — three in
+/// `rules::tests::every_language_has_its_own_lock_and_limit_wording`, one each in
+/// `curfew::tests::every_language_has_its_own_bedtime_title` and
+/// `curfew::tests::every_language_has_its_own_bedtime_shutdown_notice`. An earlier version of this
+/// comment read as though those had been converted. They had not, and a comment that describes
+/// work as done is worse than no comment: it stops the next reader looking. Named by symbol rather
+/// than line: every line number this comment used to carry had drifted by the time anyone checked.
 pub(crate) fn assert_each_language_differs<T: Ord + std::fmt::Debug>(said: &[T]) {
     let unique: std::collections::BTreeSet<&T> = said.iter().collect();
     assert_eq!(
