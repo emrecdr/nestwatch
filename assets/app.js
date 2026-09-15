@@ -229,6 +229,8 @@ const UI = {
     remindEveryCheck: "Tell him at every check while he is short of the lowest tier (otherwise once a day)",
     gateWithoutPractice: "Without practice he has {} min today",
     gateWithFullReward: "with the highest tier met, {} min",
+    gateSwitchedOffDayIs: "Switched off, so nothing is earned here — his day is {} min",
+    gateSwitchedOffWouldBe: "switched on, and the highest tier met, it would be {} min",
     appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here. You choose whether each is on and how many minutes it grants — and, under Check from this PC, whether this PC asks on its own instead.",
     checkFromThisPc: "Check from this PC",
     probeExplained: "Name a program in the Nestwatch folder and this PC runs it as your child on a schedule, with the session your phone forwarded, and judges what it reports by the rules above. Leave it blank to keep the checking on the phone.",
@@ -477,6 +479,8 @@ const UI = {
     remindEveryCheck: "Zeg het bij elke controle zolang hij onder het laagste niveau blijft (anders één keer per dag)",
     gateWithoutPractice: "Zonder oefenen heeft hij vandaag {} min",
     gateWithFullReward: "met het hoogste niveau gehaald {} min",
+    gateSwitchedOffDayIs: "Uitgeschakeld, dus hier wordt niets verdiend — zijn dag is {} min",
+    gateSwitchedOffWouldBe: "ingeschakeld en het hoogste niveau gehaald zou het {} min zijn",
     appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft — en onder Controleren vanaf deze pc of deze pc het in plaats daarvan zelf vraagt.",
     checkFromThisPc: "Controleren vanaf deze pc",
     probeExplained: "Noem een programma in de Nestwatch-map en deze pc voert het volgens schema uit als je kind, met de sessie die je telefoon doorgaf, en beoordeelt wat het meldt volgens de regels hierboven. Laat het leeg om de controle op de telefoon te houden.",
@@ -729,6 +733,8 @@ const UI = {
     remindEveryCheck: "En düşük kademenin altındayken her kontrolde ona söyle (aksi hâlde günde bir kez)",
     gateWithoutPractice: "Alıştırma yapmazsa bugün {} dk",
     gateWithFullReward: "en yüksek kademeye ulaşırsa {} dk",
+    gateSwitchedOffDayIs: "Kapalı, yani burada bir şey kazanılmıyor — günü {} dk",
+    gateSwitchedOffWouldBe: "açık olsa ve en yüksek kademeye ulaşsa {} dk olurdu",
     appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz — ve Bu bilgisayardan kontrol et altında, bunun yerine bu bilgisayarın kendisinin sormasına.",
     checkFromThisPc: "Bu bilgisayardan kontrol et",
     probeExplained: "Nestwatch klasöründe bir program adı verin; bu bilgisayar onu çocuğunuz adına, telefonunuzun ilettiği oturumla düzenli aralıklarla çalıştırır ve bildirdiklerini yukarıdaki kurallara göre değerlendirir. Kontrolü telefonda tutmak için boş bırakın.",
@@ -1941,6 +1947,22 @@ function app() {
       if (base <= 0) return "";
       const cap = row.cap === "" || row.cap === null ? Infinity : Number(row.cap);
       const best = Math.min(cap, Math.max(...tiers.map((t) => Number(t.rewardMins) || 0)));
+      // Switched off, the ladder is scenery: `Config::provider_authority` refuses this provider's
+      // pushes and `probe.rs` will not run its probe, so nothing can reach a rung. Saying "with
+      // the highest tier met, 120 min" on a row whose own toggle is off names a number the child
+      // has no way to get — and on a gated day it is the *base* that is then the whole day, which
+      // is the thing the parent needs to see and the one thing the card never said. Still names
+      // what turning it back on is worth, because that is the decision they are making.
+      //
+      // `!row.enabled` rather than `=== false`: a real row always carries the flag, so this only
+      // fires on one that lost it, and of the two possible mistakes announcing an unreachable
+      // reward is the misleading one.
+      if (!row.enabled) {
+        return [
+          this.tf("gateSwitchedOffDayIs", base),
+          this.tf("gateSwitchedOffWouldBe", base + best),
+        ].join(" · ");
+      }
       return [this.tf("gateWithoutPractice", base), this.tf("gateWithFullReward", base + best)].join(" · ");
     },
 

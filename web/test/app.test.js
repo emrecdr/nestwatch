@@ -2479,18 +2479,18 @@ test("routineScheduleLabel accounts for windows the editor cannot show", () => {
 
 test("gateTotals says nothing for a provider with no ladder", () => {
   const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
-  assert.equal(app.gateTotals({ tiers: [], cap: "" }), "");
+  assert.equal(app.gateTotals({ enabled: true, tiers: [], cap: "" }), "");
 });
 
 test("gateTotals says nothing on a day with no budget, because there is no gate to describe", () => {
   const app = withState({ lang: "en", rules: { daily_budget_mins: 0, budget_by_weekday: null } });
-  assert.equal(app.gateTotals({ tiers: [{ rewardMins: 85 }], cap: "" }), "");
+  assert.equal(app.gateTotals({ enabled: true, tiers: [{ rewardMins: 85 }], cap: "" }), "");
 });
 
 test("gateTotals reports the two totals the parent is actually thinking in", () => {
   const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
   assert.equal(
-    app.gateTotals({ tiers: [{ rewardMins: 16 }, { rewardMins: 85 }], cap: 85 }),
+    app.gateTotals({ enabled: true, tiers: [{ rewardMins: 16 }, { rewardMins: 85 }], cap: 85 }),
     "Without practice he has 35 min today · with the highest tier met, 120 min",
   );
 });
@@ -2499,7 +2499,7 @@ test("gateTotals follows the ceiling, not the rung, when the ceiling is lower", 
   // The ceiling is what actually binds, so a ladder whose top rung is worth more than a day may
   // hold cannot be reported as though it were payable.
   const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
-  assert.match(app.gateTotals({ tiers: [{ rewardMins: 200 }], cap: 20 }), /55 min$/);
+  assert.match(app.gateTotals({ enabled: true, tiers: [{ rewardMins: 200 }], cap: 20 }), /55 min$/);
 });
 
 test("gateTotals reads the per-weekday budget Monday-first, like the server", () => {
@@ -2510,9 +2510,35 @@ test("gateTotals reads the per-weekday budget Monday-first, like the server", ()
   const app = withState({ lang: "en", rules: { daily_budget_mins: 999, budget_by_weekday: week } });
   const todaysBase = week[(new Date().getDay() + 6) % 7];
   assert.match(
-    app.gateTotals({ tiers: [{ rewardMins: 5 }], cap: "" }),
+    app.gateTotals({ enabled: true, tiers: [{ rewardMins: 5 }], cap: "" }),
     new RegExp(`has ${todaysBase} min today`),
   );
+});
+
+test("gateTotals stops advertising a reward a switched-off integration cannot pay", () => {
+  // The defect this closes, observed rather than imagined: with the toggle OFF the card still read
+  // *with the highest tier met, 120 min*. Nothing can meet a tier while the provider is off —
+  // `Config::provider_authority` refuses its pushes and `probe.rs` will not run its probe — so the
+  // card was naming a number the child had no way to reach, on the very row saying it was off.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
+  const ladder = { tiers: [{ rewardMins: 16 }, { rewardMins: 85 }], cap: 85 };
+  const off = app.gateTotals({ enabled: false, ...ladder });
+  assert.match(off, /^Switched off/, `got: ${off}`);
+  assert.match(off, /his day is 35 min/, "it must say what the day actually IS, not only what it is not");
+  assert.match(off, /120 min/, "and still say what turning it on would be worth, or the parent cannot weigh it");
+  assert.doesNotMatch(
+    off,
+    /with the highest tier met/,
+    "the reward must not be stated as reachable while nothing can reach it",
+  );
+});
+
+test("gateTotals treats a row with no enabled flag as off, not as earning", () => {
+  // Fails toward the truth about what is reachable. A real row always carries `enabled` — the
+  // server never skips it — so this only fires on a row that lost the field, and of the two
+  // possible mistakes, announcing an unreachable 120 is the one that misleads.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
+  assert.match(app.gateTotals({ tiers: [{ rewardMins: 85 }], cap: 85 }), /^Switched off/);
 });
 
 // --- The probe's status line -----------------------------------------------------------------

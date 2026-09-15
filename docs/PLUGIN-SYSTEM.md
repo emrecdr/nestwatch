@@ -792,3 +792,56 @@ shape as *A gate needs no gate*, and the same answer: the fix for an invisible c
 it, not to forbid it. Here it is `MAX_SETTLE_MINS`, a hint under the box in the parent's language,
 and this paragraph — and unlike the totals line, this one has no second number on the card to show it
 against, which is the honest limit of the remedy.
+
+## An off switch cannot give back what it never took — 2026-09-16
+
+Asked directly: *is this module easily enabled and disabled from the parent portal?* The switch is
+there and is honoured everywhere — a toggle per provider on the Integrations card, a Remove button
+beside it, `Config::provider_authority` refusing a switched-off provider's pushes, `probe.rs`
+skipping its probe, and `api::delete_provider` revoking the pairings a removal orphans. A household
+that never installs one has the config it always had.
+
+**And for a plain reward provider that is the whole answer.** Switch off *chores* and the child
+stops earning a bonus on top of a daily limit that has not moved. Nothing else changes, which is
+what a parent clicking a toggle expects.
+
+**For a gate it is not, and the reason is the design one section up.** *A gate needs no gate* spells
+the rule as a short base budget plus a ladder worth the difference — 35, and a top rung of 85. The
+number the parent thinks of as his normal day, 120, is therefore **written down nowhere**: the
+config holds 35 and 85 and nothing that means *and his ordinary day is 120*. Switching the provider
+off removes the only route to 120 and leaves the 35 standing. Driven through the real endpoint in
+`earned_grant.rs` rather than argued: minutes already granted today survive the switch (a grant is
+spent time and retracting it would lock a child out of a day he was given), and **tomorrow is 35**.
+
+So the off switch means *the gate is now permanently shut*, which is close to the opposite of what
+it reads as. The parent has to move a second control, on a different card, and nothing said so.
+
+**What was wrong and is now fixed: the card was naming the unreachable number.** `gateTotals` read
+the ladder and the budget and never the toggle, so a row whose own switch was off still said *with
+the highest tier met, 120 min* — a number nothing could reach, printed beside the control that had
+just made it unreachable. It now says what the day actually *is* (`Switched off, so nothing is
+earned here — his day is 35 min`) and what turning it back on would be worth, because that is the
+decision the parent is making.
+
+**What is not fixed, deliberately, because it is a choice rather than a defect.** Three ways to make
+the switch restore a normal day, and the cost of each:
+
+- **Let the dashboard offer it.** On switching off a provider with tiers, ask *his day is 35 min
+  without this — set his daily limit back to 120?* and write `daily_budget_mins` on a confirmation.
+  `base + best` is well-defined and is the parent's own total. No enforcer change, no new concept,
+  and it stays arithmetic in the same place `gateTotals` already does arithmetic. Cheapest, and the
+  recommendation.
+- **Record the normal day on the provider.** Rejected on sight: a plugin that can set the
+  household's screen-time budget is no longer a plugin, and the whole argument of architecture 4 is
+  that a provider is data the registry judges, never a thing with authority over the rules.
+- **Invert the model** — budget 120, with a gate that caps until the bar is met. This is the
+  subtractive mechanism *A gate needs no gate* found was unnecessary, and buying it back costs a
+  `Gate` type, a second path into `effective_budget_mins`, `rules.rs` knowing what a provider is,
+  and a second answer to *what does this machine do when the day runs out*. It would also end the
+  property that the whole registry can be deleted without touching the enforcer.
+
+**The general form, and it is the third time this file has recorded it.** A rule stated in totals
+and stored in differences reads correctly forwards and misleads backwards. `gateTotals` was the
+forward direction — the parent types 85 while thinking 120. This is the reverse: they remove the 85
+and the 120 does not come back, because it was never there. Both are comprehension failures of the
+same arithmetic, and both are answered by showing the consequence rather than by adding a mechanism.

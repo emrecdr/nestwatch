@@ -59,6 +59,21 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   before; only earning extra time stops. A banner that raised the serious alarm for the smaller
   problem would teach you to ignore it.
 
+### Fixed
+
+- **A switched-off integration no longer advertises time your child cannot earn.** The reward-rules
+  line read *with the highest tier met, 120 min* whether the integration was on or off — and while
+  it is off nothing can meet a tier, so that was a number he had no way to reach, printed next to
+  the switch that had just made it unreachable. It now reads *Switched off, so nothing is earned
+  here — his day is 35 min · switched on, and the highest tier met, it would be 120 min.*
+  <br>Worth knowing what that sentence is telling you, because the switch does less than it looks
+  like. If you set his day up as a practice gate — a short daily limit plus a reward worth the
+  difference — then his normal day is not written down anywhere; only the short one and the reward
+  are. Switching the integration off removes the only way to reach the long day and leaves the
+  short one in force. Minutes he has already earned today are kept, but tomorrow is the short day
+  until you change his daily limit back yourself. Nothing said that before; the card now does.
+
+
 ## [0.9.0] — 2026-09-11
 
 ### Fixed

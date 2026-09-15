@@ -1149,6 +1149,51 @@ async fn earned_grants_latch_replay_and_validate() {
         assert_eq!(body["ok"], json!(false));
         assert_eq!(body["reason"], json!("daily_cap_reached"));
         assert_eq!(budget(), 120, "a refused push leaves the day where it was");
+
+        // AND WHAT THE PARENT'S OFF SWITCH DOES TO A DAY SHAPED LIKE THIS, which is the half of
+        // the composition nothing had asked about.
+        //
+        // The switch is honoured everywhere — `probe.rs` will not run its probe and
+        // `Config::provider_authority` refuses its pushes — but the *budget* is not the
+        // provider's to restore. A gate is spelled as a short base plus a ladder worth the
+        // difference, so the number a parent thinks of as his normal day (120) is written down
+        // nowhere: only 35 and 85 are. Switching the provider off therefore removes the only way
+        // to reach 120 and leaves 35 standing.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": false, "minutes": 85 }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            budget(),
+            120,
+            "minutes already earned are not taken back by switching the source off — a grant is \
+             spent time, and retracting it mid-afternoon would lock a child out of a day he had \
+             already been given"
+        );
+
+        // Tomorrow is the one that matters, and this assertion is a statement of a *problem*
+        // rather than of a desired behaviour. `extra` is per-day, so reading tomorrow's is what
+        // the enforcer will see tomorrow.
+        let tomorrow = today.succ_opt().expect("a next day");
+        let tomorrows_budget = {
+            let cfg = nestwatch::state::recover_read(&config);
+            cfg.rules
+                .effective_budget_mins(tomorrow, cfg.extra.for_day(tomorrow))
+        };
+        assert_eq!(
+            tomorrows_budget, 35,
+            "with the gate's provider switched off, the day stays at the gate — the child cannot \
+             earn past it and nothing has told the parent that their off switch left him on the \
+             short day. This is pinned because it is surprising, not because it is right: see \
+             docs/PLUGIN-SYSTEM.md, `An off switch cannot give back what it never took`."
+        );
     }
 
     // --- A refusal writes nothing and wakes nobody (`O84`) -------------------------------------
