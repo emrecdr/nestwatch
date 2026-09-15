@@ -138,6 +138,14 @@ fn warn(text: impl Into<String>, fix: impl Into<String>) -> Check {
 /// threshold of two fire on a healthy install. A parent-facing diagnostic that cries wolf gets
 /// ignored, which is the failure mode `DECLINED-OPTIONS.md` gives for refusing a coverage gate.
 const MASQUERADE_MIN_DEVICES: usize = 3;
+/// Past this many seconds without a stamp, the provider-probe scheduler is not running.
+///
+/// **Not [`crate::heartbeat`]'s enforcement threshold of 150, and the difference is the period
+/// rather than the tolerance**: the enforcers tick every 30 seconds and this loop every 60, so
+/// three missed ticks here is 180 where it is 90 there. Mirrored in `assets/app.js` as
+/// `PROBE_STALE_SECS`, which carries the same note — the two are read by a parent on the same
+/// screen and must not disagree about the same age, the way the enforcement pair once did.
+const EARNED_CHECK_STALE_SECS: i64 = 180;
 
 /// Does the access log look like a router that rewrites source addresses?
 ///
@@ -670,6 +678,40 @@ pub fn run() -> Result<()> {
                          own heartbeat. Check the dashboard's Today card, which reads the running\n\
                          service's value.",
                     )),
+                }
+
+                // The probe scheduler, asked separately and only of a household that named a
+                // probe. Separate because it is not enforcement — nothing above stops when this
+                // loop dies, and `heartbeat::worst_age_secs` deliberately does not hear it, so a
+                // parent reading "enforcement checked in 3s ago" is reading something true. Only
+                // when a probe is named because the loop is running either way; it simply has
+                // nothing to say to a household that has not asked it to do anything.
+                let probing: Vec<&str> = cfg
+                    .providers
+                    .iter()
+                    .filter(|(_, p)| p.enabled && p.probe.is_some())
+                    .map(|(name, _)| name.as_str())
+                    .collect();
+                if !probing.is_empty() {
+                    let named = probing.join(", ");
+                    match crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe) {
+                        Some(age) if age <= EARNED_CHECK_STALE_SECS => checks.push(ok(format!(
+                            "earned-time checks running ({named}), last look {age}s ago"
+                        ))),
+                        Some(age) => checks.push(warn(
+                            format!("earned-time checks stopped {} min ago", age / 60),
+                            "Limits are still being applied — this only stops time being EARNED,\n\
+                             so the day stays at its base budget and the child hears nothing\n\
+                             about practising. Restart the service:\n\
+                             sc stop HostHealthService && sc start HostHealthService",
+                        )),
+                        None => checks.push(warn(
+                            format!("no earned-time check seen yet ({named})"),
+                            "Expected when running `doctor` as a one-off — the live service keeps\n\
+                             its own. In the running service it means the loop has not reached its\n\
+                             first minute, or never will; the Integrations card says which.",
+                        )),
+                    }
                 }
 
                 if configured && cfg.rules.warn_secs == 0 {

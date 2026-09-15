@@ -768,7 +768,7 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in 0.5.0 through 0.9.0 — none of it has run on Windows
+## H. New in 0.5.0 through 0.9.0, and since — none of it has run on Windows
 
 **Five releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
 2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, and `v0.9.0` on 2026-09-11. That is a deliberate decision rather
@@ -778,11 +778,16 @@ download page and the behaviour below has never executed on the platform it was 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 45 items across §H1–§H9, where it held 38 at `v0.8.0` and 32 at
-`v0.7.0`. The one
+accumulated rather than turned over: 48 items across §H1–§H9, where it held 45 at `v0.9.0`, 38 at
+`v0.8.0` and 32 at `v0.7.0`. The one
 thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
 (§H8) instead of being added to the list later or not at all, which is the failure `O87` records
 against 0.6.0 and 0.7.0.
+
+**Three of the 48 are newer than `v0.9.0` and are not in any release yet** — the probe scheduler's
+heartbeat and the settling period before its first check, both on `main`. They are written here in
+the commit that added them rather than at the next release, which is the rule `O87` exists to
+enforce and the thing 0.6.0 and 0.7.0 did not do.
 
 **`v0.9.0` half-repeated that failure, and the three items at the end of §H8 are the repair.** Its
 message box arrived with §H9 in the same commit; the gate's two sentences to the child arrived with
@@ -998,6 +1003,24 @@ is launched directly, not through `cmd.exe`.
       check. This is the assertion that cannot be tested off Windows: only the real
       `WTSSendMessageW` decides what a signed-out console returns, and `notify_child` records the
       day only when it was taken.
+- [ ] **The settling period is measured in screen time, not in the clock.** Set *first check
+      after* to `3`, restart the service, and sign him in. Nothing must be asked for the first
+      three minutes he is actually at the machine. Then the part that only Windows can answer:
+      before those three minutes are up, sign him out and back in. The wait must **not** restart —
+      the first check must still land at three minutes of accrued screen time. This is the whole
+      reason the period reads `usage_state.json` rather than a session start, and a sign-out is the
+      one way to tell the two apart.
+- [ ] **A stopped scheduler says so, on the card that owns it.** With a probe configured, kill the
+      service (`sc stop HostHealthService`) with the dashboard open in another browser, wait three
+      minutes, and reload from a machine that can still reach it — or simply read the card after a
+      restart that fails. The line under *Check from this PC* must lead with *This PC has stopped
+      checking … Limits still apply; only earning has stopped.* The *enforcement alive* banner on
+      the Today card must **not** be the thing that changes; it means limits are off, and they are
+      not.
+- [ ] **`doctor` separates the two loops.** Run `nestwatch doctor` on a machine with a probe
+      configured and the service running. Enforcement must report `checked in Ns ago` **and** a
+      second line must read `earned-time checks running (studygo), last look Ns ago`. With no probe
+      configured, the second line must be absent entirely rather than saying nothing is wrong.
 
 ### H9. A message you typed (never run on Windows)
 

@@ -5,6 +5,13 @@
 // one place and "all fine" in the other for the same age.
 const ENFORCER_STALE_SECS = 150;
 
+// The provider-probe scheduler stamps its own heartbeat every 60s. Three missed ticks, where the
+// enforcers' 150 above is five — the tolerance is the same, the period is not. Mirrored from
+// `doctor.rs::EARNED_CHECK_STALE_SECS`, and the reason the two are written down rather than
+// inlined is the note above: a parent reads both on one screen, and the enforcement pair once
+// disagreed about the same age.
+const PROBE_STALE_SECS = 180;
+
 // The longest message a parent may put on the child's screen. Named here rather than written into
 // `messageLeft` because the same number is also a `maxlength` in the markup and `MAX_MESSAGE_CHARS`
 // on the server, and three copies of a bound is two too many to keep in step by hand — `web.rs`
@@ -228,7 +235,11 @@ const UI = {
     probeProgram: "Program in the Nestwatch folder",
     probeEvery: "Check interval in minutes",
     everyPrefix: "every",
+    probeFirstCheckAfter: "first check after",
+    probeFirstCheckAfterHint: "minutes of screen time used today — 0 asks straight away. Screen time, not the clock: signing out and back in does not restart it.",
     probeNotRunYet: "Not checked yet",
+    probeChecksStopped: "This PC has stopped checking — last look {} min ago. Limits still apply; only earning has stopped.",
+    probeChecksNotRunning: "This PC is not checking. Limits still apply; only earning has stopped.",
     probeCheckedAt: "Checked at {}",
     probeQuestions: "{} questions",
     probeMinutesPractised: "{} min practised",
@@ -242,6 +253,7 @@ const UI = {
     sessionToday: "Session from the phone: today",
     sessionDaysAgo: "Session from the phone: {} days ago",
     tProbeEveryBetween5And240: "Check interval must be between 5 and 240 minutes",
+    tProbeSettleBetween0And240: "The wait before the first check must be between 0 and 240 minutes",
     tProbeNameInvalid: "The program is a file name in the Nestwatch folder, not a path",
     min: "min",
     pair: "Pair",
@@ -471,7 +483,11 @@ const UI = {
     probeProgram: "Programma in de Nestwatch-map",
     probeEvery: "Controle-interval in minuten",
     everyPrefix: "elke",
+    probeFirstCheckAfter: "eerste controle na",
+    probeFirstCheckAfterHint: "minuten schermtijd van vandaag — 0 vraagt meteen. Schermtijd, niet de klok: uitloggen en weer inloggen begint niet opnieuw.",
     probeNotRunYet: "Nog niet gecontroleerd",
+    probeChecksStopped: "Deze pc controleert niet meer — laatste keer {} min geleden. De limieten gelden nog; alleen verdienen is gestopt.",
+    probeChecksNotRunning: "Deze pc controleert niet. De limieten gelden nog; alleen verdienen is gestopt.",
     probeCheckedAt: "Gecontroleerd om {}",
     probeQuestions: "{} vragen",
     probeMinutesPractised: "{} min geoefend",
@@ -485,6 +501,7 @@ const UI = {
     sessionToday: "Sessie van de telefoon: vandaag",
     sessionDaysAgo: "Sessie van de telefoon: {} dagen geleden",
     tProbeEveryBetween5And240: "Het controle-interval moet tussen 5 en 240 minuten liggen",
+    tProbeSettleBetween0And240: "De wachttijd voor de eerste controle moet tussen 0 en 240 minuten liggen",
     tProbeNameInvalid: "Het programma is een bestandsnaam in de Nestwatch-map, geen pad",
     min: "min",
     pair: "Koppelen",
@@ -718,7 +735,11 @@ const UI = {
     probeProgram: "Nestwatch klasöründeki program",
     probeEvery: "Kontrol aralığı (dakika)",
     everyPrefix: "her",
+    probeFirstCheckAfter: "ilk kontrol şundan sonra:",
+    probeFirstCheckAfterHint: "bugün kullanılan ekran süresi (dakika) — 0 hemen sorar. Saat değil ekran süresi: çıkıp yeniden girmek baştan başlatmaz.",
     probeNotRunYet: "Henüz kontrol edilmedi",
+    probeChecksStopped: "Bu bilgisayar artık kontrol etmiyor — son bakış {} dk önce. Sınırlar hâlâ geçerli; yalnızca süre kazanma durdu.",
+    probeChecksNotRunning: "Bu bilgisayar kontrol etmiyor. Sınırlar hâlâ geçerli; yalnızca süre kazanma durdu.",
     probeCheckedAt: "Kontrol saati: {}",
     probeQuestions: "{} soru",
     probeMinutesPractised: "{} dk çalışıldı",
@@ -732,6 +753,7 @@ const UI = {
     sessionToday: "Telefondan oturum: bugün",
     sessionDaysAgo: "Telefondan oturum: {} gün önce",
     tProbeEveryBetween5And240: "Kontrol aralığı 5 ile 240 dakika arasında olmalı",
+    tProbeSettleBetween0And240: "İlk kontrolden önceki bekleme 0 ile 240 dakika arasında olmalı",
     tProbeNameInvalid: "Program, Nestwatch klasöründeki bir dosya adıdır, yol değil",
     min: "dk",
     pair: "Eşleştir",
@@ -1877,7 +1899,14 @@ function app() {
         // age are read-only and only ever present once something has happened.
         probeExe: this.providers[name].probe ? this.providers[name].probe.exe : "",
         probeEvery: this.providers[name].probe ? this.providers[name].probe.every_mins : 15,
+        // Skipped on the wire when it is zero, like every other opt-in field here, so `undefined`
+        // and `0` are the same answer: ask straight away.
+        probeSettle: (this.providers[name].probe && this.providers[name].probe.first_check_after_mins) || 0,
         probeStatus: this.providers[name].probe_status || null,
+        // Present only where a probe is named, and `null` there until the loop has reported. Kept
+        // out of `probeStatus`: the failure this exists to show is a scheduler that died before
+        // the first run, and then there is no `probeStatus` to hang it on.
+        probeSchedulerAge: this.providers[name].probe_scheduler_age_secs ?? null,
         secretAt: this.providers[name].secret_at || null,
         // Absent means off, the way the server writes it: the field is skipped entirely unless a
         // household has switched it on, so `undefined` and `false` are the same answer here.
@@ -1922,6 +1951,15 @@ function app() {
     probeSummary(row) {
       if (!row.probeExe) return "";
       const parts = [];
+      // Leads the line, because it is the fact that decides what the rest of it means: a check
+      // "at 16:00" reads as recent until you know nothing has looked since. `== null` rather than
+      // a falsy test, so an age of 0 — stamped this second — is not read as never.
+      const age = row.probeSchedulerAge;
+      if (age == null) {
+        parts.push(this.t("probeChecksNotRunning"));
+      } else if (age > PROBE_STALE_SECS) {
+        parts.push(this.tf("probeChecksStopped", Math.round(age / 60)));
+      }
       const status = row.probeStatus;
       if (!status) {
         parts.push(this.t("probeNotRunYet"));
@@ -1981,6 +2019,14 @@ function app() {
           this.loadProviders();
           return;
         }
+        // Zero is a real answer here — no settling period — so the floor is 0 rather than 1, and
+        // that is the one thing separating this check from the one above it.
+        const settle = Number(row.probeSettle);
+        if (!Number.isInteger(settle) || settle < 0 || settle > 240) {
+          this.toast(this.t("tProbeSettleBetween0And240"), "error");
+          this.loadProviders();
+          return;
+        }
       }
       this.savingProvider = true;
       try {
@@ -1990,7 +2036,13 @@ function app() {
         const body = { enabled: row.enabled, minutes: mins };
         body.daily_cap_mins = row.cap === "" || row.cap === null ? null : Number(row.cap);
         // A blank name is an explicit null, the way a blank ceiling is: it takes the probe off.
-        body.probe = probeExe ? { exe: probeExe, every_mins: Number(row.probeEvery) } : null;
+        body.probe = probeExe
+          ? {
+              exe: probeExe,
+              every_mins: Number(row.probeEvery),
+              first_check_after_mins: Number(row.probeSettle) || 0,
+            }
+          : null;
         // A switch has two positions, so this is sent as a plain boolean rather than the
         // null-clears dance the ceiling and the probe need.
         body.remind_every_check = row.remindEveryCheck === true;

@@ -253,4 +253,26 @@ async fn a_secret_is_deposited_kept_privately_and_forgotten_with_its_provider() 
             .is_none(),
         "a provider whose probe never ran says nothing about one"
     );
+
+    // --- And the scheduler's own liveness, which `probe_status` cannot speak for -------------
+    //
+    // A stale `probe_status.at` reads equally as *the loop is dead* and *nothing has been
+    // due*, and before the first run there is no line to be stale. This test is the case that
+    // proves the second half — `run_once` was driven by hand above, so the scheduler **loop**
+    // has never ticked in this process, and the field is here saying exactly that.
+    let listing = listed(&app, &parent).await;
+    assert!(
+        listing["studygo"]
+            .get("probe_scheduler_age_secs")
+            .is_some_and(Value::is_null),
+        "a provider that names a probe must carry the loop's age, null while it has never \
+         reported: {}",
+        listing["studygo"]
+    );
+    assert!(
+        listing["chores"].get("probe_scheduler_age_secs").is_none(),
+        "and a provider that names no probe must not carry it at all — a household with no \
+         probe reads the bytes it always did: {}",
+        listing["chores"]
+    );
 }

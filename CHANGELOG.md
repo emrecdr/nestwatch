@@ -34,6 +34,30 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   <br>It moves only that one sentence. A grant is still announced every time, a check that failed
   still says nothing to him, and once the day's reward is fully paid there is nothing left to aim
   at, so nothing is said whatever the box is set to.
+- **You can give him a few minutes before the first check of the day.** Under *Check from this PC*
+  there is now a *first check after* box. Set it to 3 and nothing asks what he has practised until
+  he has actually been at the machine for three minutes — so the day's first notice is not the
+  thing that greets him at the sign-in screen. Zero, the default, asks straight away, which is what
+  every install did before.
+  <br>The number is minutes of **screen time**, not minutes on the clock, and that is deliberate.
+  A wait measured from when he signed in is a wait he can restart: signing out and back in every
+  two minutes would mean the check never happened at all. Screen time only goes up, and it is the
+  same number his daily limit is spent against, so the two cannot drift apart. One consequence
+  worth knowing: a wait longer than his daily limit means the check never happens, because the
+  machine locks first. Nothing stops you setting that — the limit and the integration are edited
+  in different places and either can move under the other — so it is written down here rather than
+  refused.
+- **The dashboard now tells you when this PC has stopped checking.** A provider's line used to
+  report only when the last check happened, which reads the same whether the checking loop is
+  dead or simply not due yet — and before the very first check it said *Not checked yet*, forever,
+  with nothing to distinguish a service that started a second ago from one whose checking died at
+  startup. The line now leads with *This PC has stopped checking … Limits still apply; only
+  earning has stopped* when that is true, and `nestwatch doctor` reports the same thing as its own
+  line.
+  <br>Deliberately **not** folded into the *enforcement alive* banner. That banner means one
+  thing — limits are not being applied — and a dead checking loop applies every limit exactly as
+  before; only earning extra time stops. A banner that raised the serious alarm for the smaller
+  problem would teach you to ignore it.
 
 ## [0.9.0] — 2026-09-11
 

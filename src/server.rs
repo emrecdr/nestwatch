@@ -255,8 +255,9 @@ pub async fn serve_with_handle(
     // that has none: one config read a minute.
     {
         let state = state.clone();
+        let wake = state.enforcement_wake.subscribe();
         tokio::spawn(async move {
-            crate::probe::run_scheduler(state).await;
+            crate::probe::run_scheduler(state, wake).await;
             tracing::error!("probe scheduler exited unexpectedly — provider probes will not run");
         });
     }

@@ -1078,6 +1078,20 @@
                                  @change="saveProvider(row)" />
                           <span class="text-sm opacity-60" x-text="t('min')"></span>
                         </div>
+                        <!-- How long he gets before the first check of the day. Zero is the
+                             default and means "ask straight away", which is what every install
+                             before this field did. The number is minutes of SCREEN TIME, not of
+                             clock — `probe.rs` says why, and the hint says it to the parent,
+                             because a period he could reset from the Start menu would be no
+                             period at all. -->
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm" x-text="t('probeFirstCheckAfter')"></span>
+                          <input type="number" min="0" max="240" class="input input-sm w-20"
+                                 x-model.number="row.probeSettle" :aria-label="t('probeFirstCheckAfter')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-sm opacity-60" x-text="t('min')"></span>
+                        </div>
+                        <p class="text-xs opacity-60" x-text="t('probeFirstCheckAfterHint')"></p>
                         <p class="text-xs opacity-60" x-text="probeSummary(row)" x-show="probeSummary(row)"></p>
                       </div>
                     </details>

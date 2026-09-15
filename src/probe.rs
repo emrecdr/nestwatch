@@ -22,10 +22,11 @@
 //! reads, because the designed failure mode of this whole feature is *the base budget*, and a
 //! parent has to be able to see that the link is down rather than infer it from a quiet child.
 //!
-//! **What it costs a household that never opted in.** The scheduler wakes once a minute, reads
-//! the config, finds no provider naming a probe, and sleeps. No controller call, no disk, no
-//! process. That is the whole of it, and `tests/probe_runner.rs` pins the *nothing configured*
-//! case as a section rather than leaving it to inspection.
+//! **What it costs a household that never opted in.** The scheduler wakes once a minute — and on
+//! any config write, which is how a provider switched on is checked within a round trip rather
+//! than within a minute — reads the config, finds no provider naming a probe, and sleeps. No
+//! controller call, no disk, no process. That is the whole of it, and `tests/probe_runner.rs`
+//! pins the *nothing configured* case as a section rather than leaving it to inspection.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -357,8 +358,9 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
     let today = now.date_naive();
     // Decided from a snapshot of the config and the status map, both released before anything
     // blocks. A provider is due when it names a probe, is switched on, could still earn today,
-    // and its interval has passed.
-    let due_now: Vec<(String, Probe)> = {
+    // and its interval has passed. A settling period, if one is set, is applied after this — it
+    // needs a file read, and nothing should be read while two locks are held.
+    let mut due_now: Vec<(String, Probe)> = {
         let cfg = crate::state::recover_read(&state.config);
         let status = crate::api::recover_lock(&state.probe_status);
         cfg.providers
@@ -375,6 +377,51 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
     };
     if due_now.is_empty() {
         return;
+    }
+    // The settling period: how long the child gets before anything asks what he has practised.
+    //
+    // **Measured in screen time used today, not in wall clock**, and that is the whole of the
+    // design. A period counted from when the session became active is a period the child owns —
+    // signing out and back in inside it would mean the probe never ran at all, and the gate would
+    // be defeated from the Start menu. The day's tally only goes up, and it is the same number
+    // the budget is spent against, so "three minutes in" means one thing to the gate and to the
+    // enforcer rather than two.
+    //
+    // **A plain floor, and nothing tracks which check is the first one.** The first draft of this
+    // carried a *first check of the day* flag beside each due provider and applied the period only
+    // to that one, which is how the rule reads in English. A surviving mutant showed the flag
+    // could be replaced by `true` — always on — with no test and no behaviour changing, because a
+    // within-day tally only rises: once it has passed the mark it stays past it, so a floor delays
+    // the day's first check and can never delay a later one. The two spellings are the same rule,
+    // and this is the one whose *name* for the period ("of each day") is a consequence of the
+    // clock it is measured in rather than a second rule enforced beside it.
+    //
+    // The read is behind a condition, so it costs nothing to a household that has not asked for
+    // one: a provider must be due *and* name a period. What it costs the household that did, said
+    // exactly: during the period the probe is due on every tick, so it is one file read a minute
+    // (plus one per config write, which also wakes this loop) for as long as the period lasts;
+    // afterwards the interval has to pass first, so it is one read per check. Both are on the
+    // blocking pool, and neither reaches the controller or the network.
+    if due_now
+        .iter()
+        .any(|(_, probe)| probe.first_check_after_mins > 0)
+    {
+        let used = tokio::task::spawn_blocking(move || {
+            crate::rules::Usage::load_for_today(today).total_secs / 60
+        })
+        .await;
+        let Ok(used_mins) = used else {
+            // Fail toward *do not run*, the same direction an unreadable session state fails in
+            // two paragraphs down, and for the same reason: the cost of not checking is minutes
+            // the child can still earn at the next tick, and the cost of checking on a number we
+            // could not read is a request to a third party we had no grounds to make.
+            tracing::error!("probe: reading the day's tally panicked, not running");
+            return;
+        };
+        due_now.retain(|(_, probe)| used_mins >= u64::from(probe.first_check_after_mins));
+        if due_now.is_empty() {
+            return;
+        }
     }
     // Only while the child is signed in and at the machine. Nothing is marked when he is not, so
     // the first minute after he signs in runs whatever was waiting.
@@ -545,24 +592,36 @@ async fn run_one(
     (Some(progress), outcome)
 }
 
-/// Run [`run_once`] once a minute for the life of the service.
+/// Run [`run_once`] once a minute for the life of the service, stamping a heartbeat each time.
 ///
-/// A plain interval, not a `heartbeat` enforcer: this loop enforces nothing, and its silent death
-/// is *the base budget* — the outcome the design chose for every failure. What a parent needs to
-/// see is not "the scheduler is alive" but "this provider's last run was at …", which is what
-/// [`ProbeStatus::at`] on the dashboard says.
+/// **This loop used to stamp nothing, on an argument that has since expired** — it enforces
+/// nothing, and its silent death is *the base budget*, the outcome the design chose for every
+/// failure here. What a parent needed to see was not "the scheduler is alive" but "this
+/// provider's last run was at …", which [`ProbeStatus::at`] already said.
 ///
-/// **That argument is weaker than it was when it was written, and `O102` now says so.** It was
-/// made when a dead scheduler cost only minutes the child had not earned. It now also costs the
-/// daily reminder and the announcement of a grant — a child-facing feature whose absence is
-/// invisible to *both* people, because the parent sees a stale `at` that equally means "nothing
-/// was due" and the child simply never hears the rule.
-pub async fn run_scheduler(state: AppState) {
+/// That held while a dead scheduler cost only minutes the child had not earned. It now also costs
+/// the reminder and the announcement of a grant, and — once a household points a short budget at
+/// a ladder — every minute of the child's day past the gate. Meanwhile the evidence a parent had
+/// was **one timestamp carrying two readings**: *the loop is dead* and *nothing has been due* are
+/// indistinguishable on that line, and before the first run of a fresh service there is no line
+/// at all, which is exactly when a dead loop is most likely. So it reports itself like the other
+/// two, through the [`crate::heartbeat::tick`] that welds the stamp to the await.
+///
+/// **What it deliberately does not join is the enforcement banner.** `heartbeat::worst_age_secs`
+/// still reads only the two loops that enforce, and the argument for keeping it that way is
+/// written there. This age belongs beside the provider it describes.
+///
+/// Taking a [`crate::heartbeat::Wake`] is the other half of using that helper, and it earns its
+/// place on its own: a parent who switches a provider on, names a probe or deposits a session now
+/// gets the first check on the next round trip rather than up to a minute later. It cannot make
+/// probes run *more often* than asked — [`due`] still decides that, and a wake that finds nothing
+/// due does nothing at all.
+pub async fn run_scheduler(state: AppState, mut wake: crate::heartbeat::Wake) {
     let mut ticker = tokio::time::interval(SCHEDULER_TICK);
     // See the note in `rules`: without this a resume from sleep replays every missed tick.
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        ticker.tick().await;
+        crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Probe, &mut wake).await;
         run_once(&state, crate::clock::now()).await;
     }
 }

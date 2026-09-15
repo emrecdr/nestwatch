@@ -15,7 +15,7 @@ use nestwatch::probe::{self, ProbeOutcome, ProbeStatus, Progress};
 use nestwatch::state::{AppState, recover_read, recover_write};
 
 mod common;
-use common::{ScratchDir, state_with, test_config};
+use common::{ScratchDir, idle_waker, state_with, test_config, wait_for};
 
 /// The laddered `studygo` provider these sections use: two rungs, a ceiling at the top one, and a
 /// probe every fifteen minutes.
@@ -44,6 +44,7 @@ fn laddered_studygo() -> Provider {
         probe: Some(Probe {
             exe: "studygo-probe".into(),
             every_mins: 15,
+            first_check_after_mins: 0,
         }),
         remind_every_check: false,
     }
@@ -65,6 +66,26 @@ fn at(s: &str) -> DateTime<FixedOffset> {
     DateTime::parse_from_rfc3339(s).unwrap()
 }
 
+/// Write the day's screen-time tally the settling period is measured against.
+///
+/// Serialized from a real [`nestwatch::rules::Usage`] rather than hand-written JSON, for the
+/// reason `enforcer_shutdown.rs` gives where it does the same: `load_or_default` swallows a parse
+/// error and hands back a zeroed tally, so a field gaining a `serde` attribute would turn this
+/// fixture into "no time used" — which is the *refused* side of every assertion below, and would
+/// pass while proving nothing.
+fn seed_used(day: chrono::NaiveDate, mins: u64) {
+    let usage = nestwatch::rules::Usage {
+        day: Some(day),
+        total_secs: mins * 60,
+        ..Default::default()
+    };
+    std::fs::write(
+        nestwatch::config::data_paths().dir.join("usage_state.json"),
+        serde_json::to_string(&usage).expect("usage serializes"),
+    )
+    .expect("seeding the tally");
+}
+
 fn status_of(state: &AppState, name: &str) -> ProbeStatus {
     state
         .probe_status
@@ -84,6 +105,40 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
     let tmp = ScratchDir::new("proberunner");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
+
+    // --- The scheduler reports itself alive, and does not speak for the enforcers -------------
+    //
+    // Was `O102`: a dead scheduler was indistinguishable from "nothing was due", and both readings
+    // land on the same stale line. It stamps its own cell now — but deliberately NOT one the
+    // *enforcement alive* banner reads, because a dead probe loop is not stopped enforcement and
+    // a banner that says it is would teach a parent to ignore the one sentence that means limits
+    // are off. This binary is the place that can prove the second half: neither enforcer ever
+    // runs here, so `worst_age_secs` staying `None` while the probe cell fills is the property
+    // itself rather than a reading of the match arm.
+    assert!(
+        nestwatch::heartbeat::age_secs(nestwatch::heartbeat::Enforcer::Probe).is_none(),
+        "a fresh binary must start with no probe heartbeat, or what follows proves nothing"
+    );
+    {
+        let scheduler = tokio::spawn(probe::run_scheduler(
+            state_with(test_config()),
+            idle_waker(),
+        ));
+        assert!(
+            wait_for(|| {
+                nestwatch::heartbeat::age_secs(nestwatch::heartbeat::Enforcer::Probe).is_some()
+            })
+            .await,
+            "the scheduler never stamped a heartbeat — a parent would have no way to tell a dead \
+             loop from a quiet one"
+        );
+        assert!(
+            nestwatch::heartbeat::worst_age_secs().is_none(),
+            "the probe loop must not report itself as enforcement: nothing enforcing has ticked \
+             in this binary, and the banner that says so must still say so"
+        );
+        scheduler.abort();
+    }
 
     let fake = Arc::new(FakeControl::new());
     let mut cfg = test_config();
@@ -397,6 +452,106 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
         let said = fake.notification_bodies();
         assert_eq!(said.len(), 3, "{said:?}");
         assert!(said[2].contains("16"), "says what was added: {}", said[2]);
+    }
+
+    // --- The first check of the day waits, and waits on screen time ---------------------------
+    //
+    // The household rule this gate was built towards opens with a settling period: he turns the
+    // machine on and has a few minutes before anything asks what he has practised. Without one the
+    // first check lands in the minute he signs in, and with the notice rationed to once a day (the
+    // default, two sections up) that is the day's only warning spent on a child who has not had
+    // time to open anything.
+    //
+    // **Measured in screen time used today, not in wall clock, and that is the load-bearing
+    // choice.** A period measured from when the session became active is one the child controls:
+    // signing out and back in every two minutes would mean the probe never ran at all, and the
+    // gate would be defeated by the Start menu. Screen time only goes up, and it is the same
+    // number the budget is spent against, so "three minutes in" means the same thing to both.
+    {
+        let fake = Arc::new(FakeControl::new());
+        let mut cfg = test_config();
+        let mut settles = laddered_studygo();
+        settles.probe = Some(Probe {
+            exe: "studygo-probe".into(),
+            every_mins: 8,
+            first_check_after_mins: 3,
+        });
+        cfg.providers.insert("studygo".into(), settles);
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+        let day = t0.date_naive();
+
+        // Nothing used yet: he has just signed in, and nothing is asked of him.
+        seed_used(day, 0);
+        fake.script_probe(Ok(br#"{"questions":12,"minutes":5}"#.to_vec()));
+        probe::run_once(&state, t0).await;
+        assert!(
+            fake.probe_calls().is_empty(),
+            "the first check ran inside the settling period"
+        );
+        assert_eq!(extra_today(&state, t0), 0);
+
+        // Half an hour of wall clock later, with two minutes of it actually used — still inside.
+        // This is the assertion that separates the two clocks; every other line here would pass
+        // with either.
+        seed_used(day, 2);
+        probe::run_once(&state, t0 + Duration::minutes(30)).await;
+        assert!(
+            fake.probe_calls().is_empty(),
+            "thirty minutes of wall clock and two of screen time is two minutes of screen time"
+        );
+
+        // Exactly at the boundary it runs. Both sides of the bound are asserted deliberately: a
+        // `>` mutated to `>=` (or back) moves only this line, and the refused side above passes
+        // under either.
+        seed_used(day, 3);
+        probe::run_once(&state, t0 + Duration::minutes(31)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            1,
+            "at three minutes of screen time the first check must run"
+        );
+        assert_eq!(
+            extra_today(&state, t0),
+            16,
+            "and its answer is judged as any other"
+        );
+
+        // Afterwards the interval governs alone. Not because anything remembers that the first
+        // check has happened — it is a plain floor, checked every time — but because the tally it
+        // reads only rises, so a floor already passed cannot delay anything again today.
+        fake.script_probe(Ok(br#"{"questions":13,"minutes":6}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(35)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            1,
+            "four minutes after a check, with an interval of eight, is not due"
+        );
+        probe::run_once(&state, t0 + Duration::minutes(39)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            2,
+            "eight minutes after a check is due, settling period or not"
+        );
+
+        // And a new day brings a new settling period — for the same reason, read the other way:
+        // the tally resets with the day, so the floor is back below him. This is the half that
+        // makes "a settling period each day" true without anything tracking days.
+        let tomorrow = t0 + Duration::days(1);
+        seed_used(tomorrow.date_naive(), 0);
+        probe::run_once(&state, tomorrow).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            2,
+            "a new day starts a new settling period"
+        );
+        seed_used(tomorrow.date_naive(), 3);
+        probe::run_once(&state, tomorrow + Duration::minutes(5)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            3,
+            "and ends it the same way the first one did"
+        );
     }
 
     // --- Nothing configured means nothing happens --------------------------------------------

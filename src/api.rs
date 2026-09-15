@@ -1222,10 +1222,12 @@ pub struct ProviderBody {
 /// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes, … } }`.
 ///
 /// The registry behind the dashboard's Integrations panel. Read-only and carries no secret: a
-/// provider that has deposited one is listed with `secret_at` — *when*, never *what* — and a
-/// provider whose probe has run is listed with its last `probe_status`. Both appear only where
-/// they apply, so a household that opted into neither reads the same bytes it always did, which
-/// is the guarantee every field added to this registry has kept.
+/// provider that has deposited one is listed with `secret_at` — *when*, never *what* — a provider
+/// whose probe has run is listed with its last `probe_status`, and a provider that names a probe
+/// at all is listed with `probe_scheduler_age_secs`, how long ago the loop that would run it last
+/// reported in. All three appear only where they apply, so a household that opted into none of
+/// them reads the same bytes it always did, which is the guarantee every field added to this
+/// registry has kept.
 pub async fn list_providers(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let providers = crate::state::recover_read(&state.config).providers.clone();
     let names: Vec<String> = providers.keys().cloned().collect();
@@ -1244,6 +1246,11 @@ pub async fn list_providers(State(state): State<AppState>) -> Result<Json<Value>
     })
     .await?;
     let status = recover_lock(&state.probe_status);
+    // One process-global number, read once. It is the same for every provider — the scheduler is
+    // one loop — but it is carried per entry because this response is a map of providers and a
+    // sibling key would be a second kind of thing inside it, colliding with any provider a parent
+    // happened to name the same.
+    let scheduler_age = crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe);
     let mut out = serde_json::Map::new();
     for (name, provider) in providers {
         let mut entry = json!(provider);
@@ -1252,6 +1259,14 @@ pub async fn list_providers(State(state): State<AppState>) -> Result<Json<Value>
         }
         if let Some(probe) = status.get(&name) {
             entry["probe_status"] = probe.last.to_json();
+        }
+        // Deliberately beside `probe_status` rather than inside it: the case this exists
+        // for is a scheduler that died *before the first run*, and there is no `probe_status` at
+        // all then — the one moment the parent most needs to be told is the one moment the other
+        // field cannot speak. `null` while the loop has not ticked yet, which a fresh service and
+        // a dead one share for one minute and no longer.
+        if provider.probe.is_some() {
+            entry["probe_scheduler_age_secs"] = json!(scheduler_age);
         }
         out.insert(name, entry);
     }

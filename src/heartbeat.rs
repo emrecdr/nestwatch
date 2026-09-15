@@ -22,19 +22,26 @@
 use std::sync::atomic::{AtomicI64, Ordering};
 
 /// Which background loop reported in.
+///
+/// Not all of these enforce, which [`worst_age_secs`] is where it matters — see the note there
+/// on why [`Enforcer::Probe`] is stamped like the other two and reported nothing like them.
 #[derive(Clone, Copy)]
 pub enum Enforcer {
     Rules,
     Curfew,
+    /// The provider-probe scheduler (`crate::probe::run_scheduler`).
+    Probe,
 }
 
 static RULES_TICK: AtomicI64 = AtomicI64::new(0);
 static CURFEW_TICK: AtomicI64 = AtomicI64::new(0);
+static PROBE_TICK: AtomicI64 = AtomicI64::new(0);
 
 fn cell(which: Enforcer) -> &'static AtomicI64 {
     match which {
         Enforcer::Rules => &RULES_TICK,
         Enforcer::Curfew => &CURFEW_TICK,
+        Enforcer::Probe => &PROBE_TICK,
     }
 }
 
@@ -116,6 +123,18 @@ pub fn age_secs(which: Enforcer) -> Option<i64> {
 
 /// Seconds since the *least recently* seen enforcer ticked — the number to surface, since either
 /// one being dead means limits aren't being applied.
+///
+/// **[`Enforcer::Probe`] is deliberately not in here**, and it is the only cell that is left out.
+/// The number this returns is the one behind the dashboard's *enforcement alive* banner and
+/// `doctor`'s enforcement check, and both sentences mean exactly one thing: **limits are not being
+/// applied**. A dead probe scheduler does not stop a single limit — the budget, the blocklist,
+/// per-app limits and curfew all keep running; what stops is the earning of *extra* time, which
+/// fails toward the base budget by design (`crate::probe`). Folding it in would raise the alarm
+/// that means "your child is unsupervised" for a condition that means "your child cannot earn a
+/// bonus", and a banner that cries wolf is worth less than no banner. So it is stamped here, read
+/// through [`age_secs`], and surfaced on the integrations card where the thing it describes lives.
+/// Was `O102`; the argument for surfacing it *at all*, and for this exclusion, is in
+/// `docs/PLUGIN-SYSTEM.md`, *The loop that says nothing when it dies*.
 pub fn worst_age_secs() -> Option<i64> {
     match (age_secs(Enforcer::Rules), age_secs(Enforcer::Curfew)) {
         (Some(a), Some(b)) => Some(a.max(b)),
@@ -151,12 +170,48 @@ mod tests {
         beat(Enforcer::Curfew);
         assert!(age_secs(Enforcer::Curfew).is_some_and(|a| a < 5));
 
-        // Worst-of: pretend the rules enforcer died an hour ago.
+        // The three cells are distinct, which `cell` is the only place that can get wrong. Aged
+        // through the statics and then stamped through `beat`, so the reading afterwards can only
+        // come back young for the arm that was stamped: an arm pointing at a neighbour's cell
+        // moves a number this checks. Writing the probe's own value in directly instead would
+        // hide exactly that mutant — it did, until a probe aliased to `RULES_TICK` passed here
+        // and failed in `tests/probe_runner.rs`.
         RULES_TICK.store(now_secs() - 3600, Ordering::Relaxed);
+        CURFEW_TICK.store(now_secs() - 1800, Ordering::Relaxed);
+        beat(Enforcer::Probe);
+        assert!(age_secs(Enforcer::Probe).is_some_and(|a| a < 5));
+        assert!(
+            age_secs(Enforcer::Rules).is_some_and(|a| a >= 3600),
+            "stamping the probe loop moved the rules cell — they are the same cell"
+        );
+        assert!(
+            age_secs(Enforcer::Curfew).is_some_and(|a| a >= 1800),
+            "stamping the probe loop moved the curfew cell — they are the same cell"
+        );
+
+        // Worst-of: the rules enforcer, dead an hour, dominates a curfew loop that is merely half
+        // an hour behind.
         let worst = worst_age_secs().expect("both have ticked");
         assert!(
             worst >= 3600,
             "a dead enforcer must dominate a healthy one, got {worst}"
+        );
+
+        // And the probe cell reaches that number from neither direction. Both halves are asserted
+        // because only the pair pins it: a `max` that folded the probe in would pass the first
+        // with the cell fresh, and pass the second with it stale.
+        assert_eq!(
+            worst_age_secs(),
+            Some(worst),
+            "a probe loop that ticked a second ago must not make 'enforcement alive' read healthy"
+        );
+        PROBE_TICK.store(now_secs() - 86_400, Ordering::Relaxed);
+        RULES_TICK.store(now_secs(), Ordering::Relaxed);
+        CURFEW_TICK.store(now_secs(), Ordering::Relaxed);
+        assert!(
+            worst_age_secs().is_some_and(|a| a < 5),
+            "with both enforcers healthy the banner must read healthy, whatever the probe loop \
+             is doing"
         );
     }
 

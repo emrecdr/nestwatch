@@ -84,14 +84,14 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 the downloaded artifacts.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **45 items across §H1–§H9** — the bedtime
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **48 items across §H1–§H9** — the bedtime
 extension, the enforcer wake, the translated shutdown notices, the ask link, the child's page in
 Dutch, the provider probe and the two sentences it says, and the message a parent types — and none
 of them has executed on Windows. Re-measured 2026-09-11; it read 38 across §H1–§H8 when `v0.8.0`
 shipped, §H9 arrived with the message box it covers, and the last three items of §H8 were written
 while cutting this release for a feature that had shipped without any. Worth stating exactly: **no
 commit in this repository's history has ever recorded a ticked item in that file**, in any section,
-so all 216 boxes it carries are still open. The three gates that
+so all 219 boxes it carries are still open. The three gates that
 were green when it shipped are the same three that were green when `install` failed on real hardware
 and again when `remove_file` turned out not to be exclusive. That is not an argument for distrusting
 them; it is the reason the section below exists and the reason the checklist is the only method here
@@ -1669,8 +1669,8 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 45 items that have never executed (measured 2026-09-11; 38 at `v0.8.0`, and 32 when this was
-written), so the gap has a size and a reader can weigh it. A
+carries 48 items that have never executed (measured 2026-09-15; 45 at `v0.9.0`, 38 at `v0.8.0`, and
+32 when this was written), so the gap has a size and a reader can weigh it. A
 feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and
 left unchecked, 0.6.0's were never written down. The two together are the tier-3 surface, and only
@@ -2031,25 +2031,6 @@ A path like `/api/providers/studygo` names an integration; query strings and the
 must never reach a log that is not the audit log. Whoever does this has to choose the fields
 deliberately rather than adopt a default formatter, which is a decision about a family's privacy and
 not a plumbing task.
-
-### O102 · A dead probe scheduler looks exactly like a probe that is not due
-
-`probe::run_scheduler` deliberately stamps no `heartbeat` — its doc says why: it enforces nothing,
-and its silent death is the base budget by design.
-
-**That justification got weaker on 2026-09-09 and this entry should say so.** It was written when a
-dead scheduler cost only minutes the child had not earned. Since the gate gained a voice it also
-costs the daily reminder and the announcement of a grant — a child-facing feature whose absence is
-invisible to *both* people at once: the parent sees a stale `probe_status.at`, which equally means
-"nothing was due", and the child simply never hears the rule. So the cheap half of the fix (a
-`heartbeat::Enforcer::Probe` variant stamped in the loop, with the age surfaced on the integrations
-card rather than folded into the enforcement banner, since a dead probe loop is not stopped
-enforcement) is now worth more than it was when this was filed. The consequence for the parent is that a
-`probe_status.at` going stale has two readings, *the scheduler is dead* and *nothing has been due*,
-and the dashboard cannot separate them. `rules` and `curfew` solved the same problem with
-`heartbeat::Enforcer` and the *enforcement alive* banner. Adding a third variant is small; deciding
-what the banner says when only this loop is dead, and whether `doctor` should report it, is the part
-left open.
 
 ### O103 · The mutants job cannot finish a push that carries a backlog, and it fails as *cancelled* rather than red
 

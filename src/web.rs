@@ -640,7 +640,8 @@ mod tests {
     fn every_bound_a_person_types_against_matches_the_one_the_server_enforces() {
         use crate::api::MAX_MESSAGE_CHARS;
         use crate::config::{
-            MAX_PROBE_MINS, MAX_PROBE_NAME, MAX_ROUTINE_NAME, MAX_TIER_MINUTES, MAX_TIER_QUESTIONS,
+            MAX_PROBE_MINS, MAX_PROBE_NAME, MAX_ROUTINE_NAME, MAX_SETTLE_MINS, MAX_TIER_MINUTES,
+            MAX_TIER_QUESTIONS,
         };
         use crate::curfew::MAX_WARN_SECS;
         use crate::rules::{MAX_BUDGET_MINS, MAX_RULE_NAME};
@@ -740,6 +741,12 @@ mod tests {
                 "x-model.number=\"row.probeEvery\"",
                 max(MAX_PROBE_MINS),
                 "how often an integration's probe runs",
+            ),
+            (
+                "index.html",
+                "x-model.number=\"row.probeSettle\"",
+                max(MAX_SETTLE_MINS),
+                "how long an integration waits before its first check of the day",
             ),
             (
                 "ask.html",

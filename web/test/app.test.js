@@ -2530,7 +2530,12 @@ test("probeSummary says nothing for a provider that runs no probe", () => {
 test("probeSummary reports a probe that has never run and no session yet", () => {
   const app = withState({ lang: "en" });
   assert.equal(
-    app.probeSummary({ probeExe: "studygo-probe.exe", probeStatus: null, secretAt: null }),
+    app.probeSummary({
+      probeExe: "studygo-probe.exe",
+      probeSchedulerAge: 0,
+      probeStatus: null,
+      secretAt: null,
+    }),
     "Not checked yet · No session from the phone yet",
   );
 });
@@ -2540,6 +2545,7 @@ test("probeSummary reads the last check back: when, what was found, what it earn
   const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000 - 1000).toISOString();
   const line = app.probeSummary({
     probeExe: "studygo-probe.exe",
+    probeSchedulerAge: 0,
     probeStatus: { at: "2026-09-08T16:00:00+02:00", questions: 12, minutes: 5, granted: 16 },
     secretAt: twoDaysAgo,
   });
@@ -2560,22 +2566,137 @@ test("probeSummary names a refusal in the parent's words and a failure in the pr
     ["already_granted_today", "already earned today"],
     ["daily_cap_reached", "today's maximum reached"],
   ]) {
-    const line = app.probeSummary({ probeExe: "p", probeStatus: { at: today, refused: reason }, secretAt: null });
+    const line = app.probeSummary({ probeExe: "p", probeSchedulerAge: 0, probeStatus: { at: today, refused: reason }, secretAt: null });
     assert.match(line, new RegExp(`Nothing added: ${words.replace("'", "'")} · No session`));
   }
   const failed = app.probeSummary({
     probeExe: "p",
+    probeSchedulerAge: 0,
     probeStatus: { at: today, error: "probe exited with code 3" },
     secretAt: null,
   });
   assert.match(failed, /^Checked at \d\d:\d\d · Check failed: probe exited with code 3 · No session from the phone yet$/);
 });
 
+// The scheduler half of this line: a stale `Checked at 16:00` reads as recent until you know nothing
+// has looked since, so the scheduler's own state has to come FIRST or it changes nothing.
+
+test("probeSummary leads with a scheduler that has stopped", () => {
+  const app = withState({ lang: "en" });
+  const line = app.probeSummary({
+    probeExe: "studygo-probe.exe",
+    probeSchedulerAge: 600,
+    probeStatus: { at: "2026-09-08T16:00:00+02:00", questions: 12, minutes: 5, granted: 16 },
+    secretAt: null,
+  });
+  assert.match(line, /^This PC has stopped checking — last look 10 min ago\./);
+  assert.match(line, /Limits still apply/, "and says what has NOT stopped, or it reads as an outage");
+  assert.match(line, /Checked at \d\d:\d\d/, "without swallowing what the last check found");
+});
+
+test("probeSummary reads a scheduler that never reported as not running, not as fine", () => {
+  const app = withState({ lang: "en" });
+  // The case the age exists for and `probe_status` cannot cover: the loop died before its first
+  // run, so there is no check to be stale. `null` and an absent key are one answer here.
+  for (const age of [null, undefined]) {
+    const line = app.probeSummary({ probeExe: "p", probeSchedulerAge: age, probeStatus: null, secretAt: null });
+    assert.match(line, /^This PC is not checking\./, `age ${age} must not read as healthy`);
+  }
+});
+
+test("probeSummary draws the scheduler's line at the shared threshold", () => {
+  const app = withState({ lang: "en" });
+  const at = (age) =>
+    app.probeSummary({ probeExe: "p", probeSchedulerAge: age, probeStatus: null, secretAt: null });
+  // Both sides, and zero on its own: `age == null` rather than a falsy test is the only thing
+  // keeping a scheduler that stamped this very second out of the "never reported" branch.
+  assert.match(at(0), /^Not checked yet/, "stamped a second ago is the healthiest it gets");
+  assert.match(at(180), /^Not checked yet/, "exactly at the threshold is not yet stopped");
+  assert.match(at(181), /^This PC has stopped checking/, "past it");
+});
+
 test("probeSummary is translated, not assembled in English", () => {
   const app = withState({ lang: "nl" });
-  const line = app.probeSummary({ probeExe: "p", probeStatus: null, secretAt: null });
+  const line = app.probeSummary({ probeExe: "p", probeSchedulerAge: 0, probeStatus: null, secretAt: null });
   assert.equal(line, app.t("probeNotRunYet") + " · " + app.t("noSessionYet"));
   assert.notEqual(line, "Not checked yet · No session from the phone yet");
+});
+
+// --- The settling period, across the two edges that rename it --------------------------------
+//
+// `first_check_after_mins` on the wire, `probeSettle` in the row, and nothing but these two
+// methods in between. The field is `skip_serializing_if` on the server, so **absent is the common
+// case** and reading it as `undefined` would put `NaN` into the save body of every provider that
+// never set one.
+
+test("providerRows reads the settling period, and its absence as none", async () => {
+  const listing = {
+    settles: { enabled: true, minutes: 30, probe: { exe: "p", every_mins: 8, first_check_after_mins: 3 } },
+    straightaway: { enabled: true, minutes: 20, probe: { exe: "q", every_mins: 8 } },
+    noProbe: { enabled: true, minutes: 10 },
+  };
+  const app = loadApp({ fetch: async () => ({ ok: true, json: async () => listing }) });
+  app.toast = () => {};
+  await app.loadProviders();
+  const byName = Object.fromEntries(app.providerRows.map((r) => [r.name, r]));
+  assert.equal(byName.settles.probeSettle, 3);
+  assert.equal(byName.straightaway.probeSettle, 0, "the server omits the field at zero, and zero is a real answer");
+  assert.equal(byName.noProbe.probeSettle, 0, "and a provider with no probe at all still reads as a number");
+});
+
+test("saveProvider sends the settling period, zero included", async () => {
+  const bodies = [];
+  const app = loadApp({
+    fetch: async (_url, opts) => {
+      bodies.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({}) };
+    },
+  });
+  app.toast = () => {};
+  app.loadProviders = async () => {};
+  const row = (probeSettle) => ({
+    name: "studygo",
+    enabled: true,
+    minutes: 30,
+    cap: "",
+    tiers: [],
+    probeExe: "studygo-probe.exe",
+    probeEvery: 8,
+    probeSettle,
+    remindEveryCheck: true,
+  });
+  await app.saveProvider(row(3));
+  await app.saveProvider(row(0));
+  assert.deepEqual(
+    bodies.map((b) => b.probe.first_check_after_mins),
+    [3, 0],
+    "zero must be sent, not dropped: the parent clearing the box is how a settling period is removed",
+  );
+});
+
+test("saveProvider refuses a settling period outside the box's own range", async () => {
+  const toasts = [];
+  const app = loadApp({
+    fetch: async () => {
+      throw new Error("must not reach the server");
+    },
+  });
+  app.toast = (msg) => toasts.push(msg);
+  app.loadProviders = async () => {};
+  for (const bad of [-1, 241, 1.5]) {
+    await app.saveProvider({
+      name: "studygo",
+      enabled: true,
+      minutes: 30,
+      cap: "",
+      tiers: [],
+      probeExe: "studygo-probe.exe",
+      probeEvery: 8,
+      probeSettle: bad,
+      remindEveryCheck: false,
+    });
+  }
+  assert.equal(toasts.length, 3, `each bad value must be refused here: ${JSON.stringify(toasts)}`);
 });
 
 // --- The Integrations/Devices join (F6) -------------------------------------------------------

@@ -403,14 +403,16 @@ countdown warnings have always used. So this release's risk is not new platform 
 neither of the two things it puts on your child's screen has ever been seen on a Windows screen.
 
 **Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for five releases: section H of the
-checklist now carries 45 items across §H1–§H9 — the bedtime extension, the enforcer wake, the
+checklist now carries 48 items across §H1–§H9 — the bedtime extension, the enforcer wake, the
 translated shutdown notices, the ask link, the child's page in Dutch, the probe and what it says,
 and the message a parent types — and none has been executed on a Windows machine. No box anywhere
 in that file has ever been ticked in a commit. That is stated here rather than only in the
 changelog, because tier 3 is the tier the sentence above says every serious bug has lived in, and a
 reader deciding whether to install this is entitled to know which tier the newest features sit in.
-Three of those 45 items were written while cutting this release, for a feature that had shipped
-without any — the honest half of a rule working is saying when it nearly did not.
+Three of those items were written while cutting this release, for a feature that had shipped
+without any — the honest half of a rule working is saying when it nearly did not. Three more have
+been written since it shipped, and they are not in it: the probe scheduler's liveness and the
+settling period before its first check are on `main` and unreleased.
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were

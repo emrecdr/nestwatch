@@ -600,10 +600,10 @@ job, in practice. Whether StudyGo exposes work *in progress* (`topic.exercise_id
 `exercise_progress_percentage`) is still unanswered; it needs a live session, and it decides only how
 good the signal is, not whether the mechanism works.
 
-**What this still does not do.** The scheduler has no heartbeat (`O102`); a parent reads liveness
-off each provider's own `probe_status.at`. And none of the Windows half has executed:
+**What this still does not do.** None of the Windows half has executed:
 `session::run_probe_in_session` is compile- and lint-checked for the target and listed in
-`WINDOWS-TESTING.md` §H8.
+`WINDOWS-TESTING.md` §H8. (The scheduler had no heartbeat either, which is closed below — *The
+loop that says nothing when it dies*.)
 
 ## The gate says something — 2026-09-09
 
@@ -725,3 +725,70 @@ The cost of not checking would have been a `Gate` type, a second path into
 `effective_budget_mins`, its own `skip_serializing_if`, its own checklist items, and a second
 answer to *what does this machine do when the day runs out* — in the file where every serious bug
 this project has had has lived.
+
+## The loop that says nothing when it dies — 2026-09-15
+
+`O102`, closed. The probe scheduler deliberately stamped no heartbeat, and the argument for that was
+good when it was made: it enforces nothing, its silent death is *the base budget*, and what a parent
+needs to see is not "the scheduler is alive" but "this provider's last run was at …", which
+`probe_status.at` already said.
+
+**What expired was not the argument but its premise.** Two things arrived after it. The gate gained
+a voice, so a dead loop now also costs the reminder and the announcement of a grant — a child-facing
+feature whose absence is invisible to *both* people, because the parent sees a stale `at` and the
+child simply hears nothing. And *A gate needs no gate* turned a short base budget plus a ladder into
+the whole of the child's day: past the bar, a dead loop costs him 85 minutes rather than a bonus he
+had not earned.
+
+**The evidence a parent had was one line carrying two readings.** `probe_status.at` going stale
+means *the loop is dead* and *nothing has been due* equally, and the dashboard could not separate
+them. Worse at the one moment it matters most: before the first run there is no `probe_status` at
+all, so a scheduler that died at startup showed *Not checked yet* — forever, and indistinguishable
+from a service that started thirty seconds ago.
+
+So the loop reports itself like the other two, through `heartbeat::tick`, and `GET /api/providers`
+carries `probe_scheduler_age_secs` **beside** `probe_status` rather than inside it, precisely
+because the case it exists for is the one where there is no `probe_status` to hang it on.
+
+**It is deliberately not in `worst_age_secs`, and that was the part left open.** That number is
+behind the dashboard's *enforcement alive* banner and `doctor`'s enforcement line, and both sentences
+mean exactly one thing: **limits are not being applied**. A dead probe scheduler stops no limit — the
+budget, the blocklist, per-app limits and curfew all keep running. Folding it in would raise the
+alarm that means *your child is unsupervised* for a condition that means *your child cannot earn a
+bonus*, and a banner that cries wolf is worth less than no banner. `doctor` gets its own line for the
+same reason, and only when a probe is configured: the loop runs either way, and it has nothing to say
+to a household that has not asked it to do anything.
+
+The exclusion is pinned behaviourally rather than by reading the match arm — `tests/probe_runner.rs`
+runs the scheduler in a binary where neither enforcer ever ticks, so `worst_age_secs()` staying
+`None` while the probe cell fills *is* the property.
+
+## A settling period, measured in the only clock he cannot reset — 2026-09-15
+
+The household rule this registry was built towards opens with a few minutes of grace: he turns the
+machine on and has three minutes before anything asks what he has practised. Without one the first
+check lands in the minute he signs in — and with the shortfall notice rationed to once a day, that is
+the day's only warning spent on a child who has not had time to open anything.
+
+`Probe::first_check_after_mins` is that period, and **it is counted in screen time used today, not in
+wall clock.** A period measured from when the session became active is a period the child owns:
+signing out and back in inside it would mean the probe never ran at all, and a gate defeated from the
+Start menu is not a gate. The day's tally only rises, and it is the same number the budget is spent
+against, so *three minutes in* means one thing to the gate and to the enforcer rather than two.
+
+**A plain floor, and nothing tracks which check is the first.** The first implementation carried a
+*first check of the day* flag beside each due provider and applied the period only to that one, which
+is how the rule reads in English. A surviving mutant replaced that flag with `true` — always on — and
+no test moved. It could not: within a day the tally only rises, so a floor already passed cannot
+delay anything again, and "the first check of each day" is what a floor *does* when the thing it
+measures resets at midnight. The flag was a second rule enforced beside a mechanism that already
+produced its effect. Both spellings are the same rule; this one has no state to get wrong.
+
+**The pair nothing checks, stated rather than refused.** A settling period at or past the day's
+budget means the first check never happens — the machine locks before it is due. Nothing rejects
+that: the budget and the provider are edited independently and either can move under the other, so
+refusing it at the endpoint would reject a config that was valid when it was written. It is the same
+shape as *A gate needs no gate*, and the same answer: the fix for an invisible consequence is to show
+it, not to forbid it. Here it is `MAX_SETTLE_MINS`, a hint under the box in the parent's language,
+and this paragraph — and unlike the totals line, this one has no second number on the card to show it
+against, which is the honest limit of the remedy.

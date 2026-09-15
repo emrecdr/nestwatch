@@ -134,6 +134,16 @@ pub const MAX_PROBE_MINS: u32 = 240;
 /// Longest probe file name accepted. Well past any real name, and the value is written into the
 /// audit log and shown on the dashboard, so it must not be able to be a paragraph.
 pub const MAX_PROBE_NAME: usize = 64;
+/// Longest settling period a parent may put before a provider's first check of the day.
+///
+/// The same ceiling as [`MAX_PROBE_MINS`] and for a weaker reason: there is no risk here to bound,
+/// only a number that has to stop somewhere and a dashboard box that needs a `max`. Worth knowing
+/// where the real limit is instead — a settling period at or past the day's budget means the first
+/// check never happens, because the machine locks before it is due. Nothing refuses that pair:
+/// the budget and the provider are edited independently and either can move under the other, so
+/// refusing it here would reject a config that was valid when it was written. See
+/// `docs/PLUGIN-SYSTEM.md`, *A settling period, measured in the only clock he cannot reset*.
+pub const MAX_SETTLE_MINS: u32 = 240;
 /// Most distinct non-`parent` sources that may grant on one day. Bounds [`Config::earned`], which
 /// lives in the persisted config: a compromised parent session must not be able to grow that file
 /// without limit.
@@ -274,6 +284,12 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
+/// `skip_serializing_if` for a `u32` whose zero means *not set*. Same intent as [`is_false`]: a
+/// household that never named one keeps the bytes it had.
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 /// One step of a provider's reward ladder: what the child has to have done, and what it earns.
 ///
 /// A threshold of `0` states no condition rather than a trivially satisfied one — see
@@ -332,6 +348,21 @@ pub struct Probe {
     /// Minutes between runs while the child is signed in, within
     /// [`MIN_PROBE_MINS`]..=[`MAX_PROBE_MINS`].
     pub every_mins: u32,
+    /// Minutes of **screen time used today** before the day's first check runs. `0` is no
+    /// settling period, which is what every config written before this field existed says.
+    ///
+    /// Screen time rather than wall clock, and that is the whole of the design: a period measured
+    /// from when the session became active is one the child can reset at the Start menu, so
+    /// signing out and back in inside it would mean the probe never ran at all. The tally this
+    /// reads only goes up, and it is the same number the budget is spent against — so "three
+    /// minutes in" means the same thing to the gate and to the enforcer, and the two cannot drift.
+    ///
+    /// It delays the first check **of each day**, and that is a consequence rather than a second
+    /// rule: the tally resets at midnight, so the floor applies again; and within a day the tally
+    /// only rises, so once it is past the mark no later check is ever delayed by it. `probe.rs`
+    /// says what a mutant had to prove before this was written down.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub first_check_after_mins: u32,
 }
 
 impl Probe {
@@ -358,6 +389,11 @@ impl Probe {
         if !(MIN_PROBE_MINS..=MAX_PROBE_MINS).contains(&self.every_mins) {
             return Err(format!(
                 "probe interval must be {MIN_PROBE_MINS}-{MAX_PROBE_MINS} minutes"
+            ));
+        }
+        if self.first_check_after_mins > MAX_SETTLE_MINS {
+            return Err(format!(
+                "the settling period before the first check must be 0-{MAX_SETTLE_MINS} minutes"
             ));
         }
         Ok(())
@@ -1830,6 +1866,7 @@ mod tests {
         Probe {
             exe: exe.into(),
             every_mins,
+            first_check_after_mins: 0,
         }
     }
 
@@ -1873,6 +1910,24 @@ mod tests {
         assert!(probe("p", MAX_PROBE_MINS + 1).validate().is_err());
     }
 
+    /// The settling period is optional and bounded above only. Zero is a real answer — *no
+    /// settling period*, which is every config written before the field existed — so the floor is
+    /// the absence of a floor, and that is asserted rather than left to the type.
+    #[test]
+    fn a_settling_period_is_optional_and_bounded_above() {
+        let mut p = probe("p", MIN_PROBE_MINS);
+        assert!(
+            p.validate().is_ok(),
+            "zero is no settling period, not a refusal"
+        );
+        p.first_check_after_mins = 1;
+        assert!(p.validate().is_ok());
+        p.first_check_after_mins = MAX_SETTLE_MINS;
+        assert!(p.validate().is_ok());
+        p.first_check_after_mins = MAX_SETTLE_MINS + 1;
+        assert!(p.validate().is_err());
+    }
+
     /// The same guarantee `daily_cap_mins` and `tiers` carry: a provider that never opts in
     /// serialises exactly as it did before the field existed.
     #[test]
@@ -1893,7 +1948,8 @@ mod tests {
         let json = serde_json::to_string(&provider).unwrap();
         assert!(
             json.contains(r#""probe":{"exe":"studygo-probe.exe","every_mins":15}"#),
-            "got {json}"
+            "a probe without a settling period writes exactly the two fields it always did, \
+             got {json}"
         );
         let back: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(back, provider);
