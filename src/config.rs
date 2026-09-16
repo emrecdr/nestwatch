@@ -144,6 +144,13 @@ pub const MAX_PROBE_NAME: usize = 64;
 /// refusing it here would reject a config that was valid when it was written. See
 /// `docs/PLUGIN-SYSTEM.md`, *A settling period, measured in the only clock he cannot reset*.
 pub const MAX_SETTLE_MINS: u32 = 240;
+/// Longest allowance a practice gate may put on a day.
+///
+/// A day, minus nothing. The allowance is a *ceiling*, so an absurdly large one is harmless — it
+/// simply never binds — which is the opposite of the settling period above, where a large value
+/// silently switches the feature off. Bounded anyway because every minutes field here is, and
+/// because the dashboard's box needs a `max` that `web.rs` can hold it to.
+pub const MAX_GATE_ALLOWANCE_MINS: u32 = 1440;
 /// Most distinct non-`parent` sources that may grant on one day. Bounds [`Config::earned`], which
 /// lives in the persisted config: a compromised parent session must not be able to grow that file
 /// without limit.
@@ -272,6 +279,14 @@ pub struct Provider {
     /// paid, so there is no rung to aim at whatever this is set to.
     #[serde(default, skip_serializing_if = "is_false")]
     pub remind_every_check: bool,
+    /// A ceiling this provider puts on the day until its bar is met. See [`Gate`].
+    ///
+    /// Absent — the default, and every config written before it existed — means this provider
+    /// only ever *adds* time, which is what an integration did for its whole life before today.
+    /// Present, it also takes the day down to [`Gate::allowance_mins`] until the child has done
+    /// the work, and removing or switching off the provider removes the ceiling with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<Gate>,
 }
 
 /// `skip_serializing_if` for a `bool` that defaults to `false`.
@@ -322,6 +337,84 @@ impl Tier {
     pub fn met(&self, questions: u32, minutes_practised: u32) -> bool {
         (self.questions > 0 && questions >= self.questions)
             || (self.minutes_practised > 0 && minutes_practised >= self.minutes_practised)
+    }
+}
+
+/// A ceiling one provider puts on the day until its bar is met — a practice gate.
+///
+/// **The household rule this exists for:** *he has thirty-five minutes; once he has done his
+/// practice he has his normal day.* The obvious spelling of that — and the one this codebase
+/// shipped first — is to write 35 into `daily_budget_mins` and make the top reward worth the
+/// difference. It produces the right numbers and it is wrong, for a reason that only shows up at
+/// the off switch: it spends the **parent's own daily limit** as the gate's allowance, so the
+/// number meaning *his normal day* is then written down nowhere, and switching the integration off
+/// leaves the short day standing with no way back. A plugin may not redefine the household's
+/// settings. See `docs/PLUGIN-SYSTEM.md`, *A gate is a ceiling, not a budget*.
+///
+/// So the allowance belongs here, to the provider, and it **caps** rather than replaces: the
+/// parent's daily limit, per-weekday limits, routines and bedtime all stay exactly what they were,
+/// and this puts a lid on the day while the bar is unmet. Remove the provider and the lid goes
+/// with it — which is the property the whole registry is built to keep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gate {
+    /// Minutes the day is capped at while the bar below is unmet.
+    ///
+    /// Raised by whatever this provider has already granted today, so a ladder's lower rungs
+    /// extend the gate rather than adding to the day — see [`Config::gate_cap_mins`]. That is what
+    /// makes *do two-thirds and get another quarter of an hour* a longer leash rather than a
+    /// bonus, and it is why meeting the bar afterwards lands on exactly the normal day rather than
+    /// the normal day plus change.
+    pub allowance_mins: u32,
+    /// Questions that lift the gate, or `0` for "the bar does not ask about questions".
+    #[serde(default)]
+    pub questions: u32,
+    /// Minutes *practised* that lift the gate, or `0` for "does not ask".
+    #[serde(default)]
+    pub minutes_practised: u32,
+}
+
+impl Gate {
+    /// Whether reported work lifts this gate.
+    ///
+    /// Deliberately the same rule as [`Tier::met`] — either condition suffices, and a zero
+    /// threshold is not a condition — because a household states the bar and the rungs in one
+    /// breath and would not expect them to be read differently. A gate with neither threshold set
+    /// can never be lifted by work, which is the expensive-but-honest reading of a blank field;
+    /// [`Gate::validate`] refuses that pair outright rather than letting it ship.
+    pub fn met(&self, done: Progress) -> bool {
+        Tier {
+            questions: self.questions,
+            minutes_practised: self.minutes_practised,
+            reward_mins: 0,
+        }
+        .met(done.questions, done.minutes)
+    }
+
+    /// Refuse a gate that cannot be lifted, or one whose allowance is out of range.
+    ///
+    /// **A gate with no bar is the dangerous one** and is why this is a hard refusal rather than a
+    /// dashboard hint: it caps the child's day at the allowance with no work that can ever raise
+    /// it, for every day until a parent notices. Every other bad number here is a number; this one
+    /// is a child locked to thirty-five minutes a day by a blank field.
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=MAX_GATE_ALLOWANCE_MINS).contains(&self.allowance_mins) {
+            return Err(format!(
+                "the gate's allowance must be 1-{MAX_GATE_ALLOWANCE_MINS} minutes"
+            ));
+        }
+        if self.questions == 0 && self.minutes_practised == 0 {
+            return Err(
+                "a gate needs a bar that can lift it: set questions, minutes practised, or both"
+                    .into(),
+            );
+        }
+        if self.questions > MAX_TIER_QUESTIONS || self.minutes_practised > MAX_TIER_MINUTES {
+            return Err(format!(
+                "the gate's bar must be at most {MAX_TIER_QUESTIONS} questions or \
+                 {MAX_TIER_MINUTES} minutes practised"
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -574,6 +667,16 @@ pub struct EarnedDay {
     /// would look like no grant at all — which is precisely the farming the
     /// latch exists to prevent.
     pub minutes: Option<u32>,
+    /// Whether this source's [`Gate`] bar was met on [`EarnedDay::date`].
+    ///
+    /// The one piece of *verdict* in a struct that otherwise records amounts, and it is here
+    /// rather than recomputed because the evidence does not survive: the progress a check reported
+    /// lives in memory (`probe::ProbeStatus`) and dies with the process, while the day's ceiling
+    /// has to keep meaning the same thing across a restart at four in the afternoon.
+    ///
+    /// `false` for every entry written before this field, which is the right reading of silence:
+    /// a config that predates gates has no gate to have lifted.
+    pub bar_met: bool,
 }
 
 impl Serialize for EarnedDay {
@@ -585,13 +688,24 @@ impl Serialize for EarnedDay {
     /// change shape, and its file stays readable by an older build. The
     /// object form appears the first time a ceiling actually governs a grant.
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self.minutes {
-            None => self.date.serialize(serializer),
-            Some(minutes) => {
+        match (self.minutes, self.bar_met) {
+            // Still the bare date for a household with neither a ceiling nor a gate, which is
+            // what this impl exists for.
+            (None, false) => self.date.serialize(serializer),
+            (minutes, bar_met) => {
                 use serde::ser::SerializeStruct;
-                let mut entry = serializer.serialize_struct("EarnedDay", 2)?;
+                // Counted rather than fixed at 2: `serialize_struct`'s length has to match the
+                // fields actually written, and a gate without a ceiling writes only one of them.
+                let fields = 1 + usize::from(minutes.is_some()) + usize::from(bar_met);
+                let mut entry = serializer.serialize_struct("EarnedDay", fields)?;
                 entry.serialize_field("date", &self.date)?;
-                entry.serialize_field("minutes", &minutes)?;
+                if let Some(minutes) = minutes {
+                    entry.serialize_field("minutes", &minutes)?;
+                }
+                // Skipped when false, so adding gates to this build changed no existing file.
+                if bar_met {
+                    entry.serialize_field("bar_met", &true)?;
+                }
                 entry.end()
             }
         }
@@ -616,14 +730,25 @@ impl<'de> Deserialize<'de> for EarnedDay {
                 date: NaiveDate,
                 #[serde(default)]
                 minutes: Option<u32>,
+                #[serde(default)]
+                bar_met: bool,
             },
         }
         Ok(match Repr::deserialize(deserializer)? {
             Repr::Legacy(date) => Self {
                 date,
                 minutes: None,
+                bar_met: false,
             },
-            Repr::Tracked { date, minutes } => Self { date, minutes },
+            Repr::Tracked {
+                date,
+                minutes,
+                bar_met,
+            } => Self {
+                date,
+                minutes,
+                bar_met,
+            },
         })
     }
 }
@@ -1005,6 +1130,22 @@ impl Config {
             .get(source)
             .filter(|entry| entry.date == today)
             .map(|entry| entry.minutes);
+        // **The gate opens on work done, not on minutes paid, and that has to happen before every
+        // refusal below.** A child who does two-thirds of his practice takes the lower rung, which
+        // spends the day's single grant; finishing afterwards then arrives here and is refused as
+        // `already_granted_today`. If the bar were only recorded on the granting path, the one
+        // push that proves he finished would be the one push that could not open his gate, and he
+        // would sit at the extended allowance having done everything asked of him. The minutes
+        // rules below are unchanged — this records a fact about the child, not a payment.
+        if self
+            .providers
+            .get(source)
+            .and_then(|provider| provider.gate.as_ref())
+            .zip(reported)
+            .is_some_and(|(gate, done)| gate.met(done))
+        {
+            self.note_bar_met(source, today);
+        }
         match (ceiling, spent) {
             // The original rule, and the one every config that has not opted in takes: one
             // grant per source per day, whatever it was worth.
@@ -1047,19 +1188,125 @@ impl Config {
             return Err("too many earned-time sources today".into());
         }
         self.earned.retain(|_, entry| entry.date == today);
-        // Measured only where a ceiling governs it. Writing `Some` unconditionally would change
-        // the shape of a config that never opted in, which is the single thing `EarnedDay`'s
-        // hand-written serde impls exist to prevent.
-        let tracked = ceiling.map(|_| spent.flatten().unwrap_or(0) + minutes);
+        // Measured where a ceiling governs it — and now also where a gate does, because a gate's
+        // ceiling is `allowance + what this source has granted today` and that sum needs the
+        // second term. Still not written unconditionally: a household with neither keeps the bare
+        // date, which is the single thing `EarnedDay`'s hand-written serde impls exist to
+        // prevent changing.
+        let gated = self.providers.get(source).and_then(|p| p.gate.as_ref());
+        let tracked =
+            (ceiling.is_some() || gated.is_some()).then(|| spent.flatten().unwrap_or(0) + minutes);
+        // Once met, met for the day: a later check reporting less — a provider that resets a
+        // counter, a probe that reads a stale page — must not shut a gate the child has already
+        // opened and send him from his normal day back to the allowance mid-afternoon.
+        let bar_met = self
+            .earned
+            .get(source)
+            .is_some_and(|entry| entry.date == today && entry.bar_met)
+            || match (gated, reported) {
+                (Some(gate), Some(done)) => gate.met(done),
+                _ => false,
+            };
         self.earned.insert(
             source.to_string(),
             EarnedDay {
                 date: today,
                 minutes: tracked,
+                bar_met,
             },
         );
-        self.extra.add(today, minutes);
+        // **A gated provider's minutes raise its gate, not the day.** `Config::extra` is the
+        // parent's own pool — grants, redeemed codes, a bedtime extension — and adding to it here
+        // would mean that meeting the bar later handed the child his normal day *plus* whatever
+        // the lower rungs paid on the way. What a rung buys is a longer leash while he is still
+        // short, which is exactly a higher ceiling. See `Config::gate_cap_mins`.
+        if gated.is_none() {
+            self.extra.add(today, minutes);
+        }
         Ok(Earn::Granted(minutes))
+    }
+
+    /// Record that a gated source's bar was met today, whatever today's minutes have done.
+    ///
+    /// Creates the day's entry if there is none, and **with `Some(0)` rather than `None`**, which
+    /// is the whole subtlety: `None` is read everywhere else as *granted an untracked amount*, so
+    /// an entry conjured here with `None` would tell the ceiling that an unmeasured grant had
+    /// already happened and refuse every real one for the rest of the day. Zero is the true
+    /// statement — nothing has been granted yet — and it is only ever written for a provider that
+    /// is tracked anyway, so it changes no file that was not already keeping a number.
+    fn note_bar_met(&mut self, source: &str, today: NaiveDate) {
+        // The same pruning the granting path does, for the same reason: an entry from an earlier
+        // day must not be mistaken for today's, and this can run on a day where nothing grants.
+        self.earned.retain(|_, entry| entry.date == today);
+        // Read before the mutable borrow: the cap is about how many sources the map may hold, and
+        // asking that question inside a `match` arm on `get_mut` is what the borrow checker is
+        // for.
+        let room = self.earned.len() < MAX_EARNED_SOURCES;
+        match self.earned.get_mut(source) {
+            Some(entry) => entry.bar_met = true,
+            // Bounded by the same cap as a grant. A source that cannot be admitted cannot open a
+            // gate either — otherwise the cap on this map would be one line of defence with a
+            // second door beside it.
+            None if room => {
+                self.earned.insert(
+                    source.to_string(),
+                    EarnedDay {
+                        date: today,
+                        minutes: Some(0),
+                        bar_met: true,
+                    },
+                );
+            }
+            None => {}
+        }
+    }
+
+    /// The ceiling every installed practice gate puts on `today`, or `None` when none applies.
+    ///
+    /// **A ceiling, never a budget.** The parent's own rules — the daily limit, per-weekday
+    /// limits, routines, bedtime — are computed without ever consulting this, and this puts a lid
+    /// on the result. That is what makes the feature removable: take the provider out and the lid
+    /// goes with it, leaving numbers nothing ever rewrote. `Rules` is not told what a provider
+    /// is; it takes this as a number, exactly as it already takes granted extra.
+    ///
+    /// A gate stops applying for four reasons, and only the first is about the child:
+    ///
+    /// - **the bar was met today**, recorded on [`EarnedDay::bar_met`];
+    /// - **the provider is switched off**, which is the answer to *what does the off switch do* —
+    ///   it must hand the day back, or the switch would be a punishment;
+    /// - **the provider is gone**, the same, one step further;
+    /// - **this machine cannot currently check**, which `not_checking` names. A probe that failed
+    ///   or a scheduler that has stopped is not evidence that the child has not practised, and
+    ///   treating it as though it were would let a StudyGo outage cost him his day. Note what
+    ///   that buys and what it costs: it is the correct reading of ignorance, and it also means a
+    ///   child who can stop the check — pulling the network is enough — can lift the gate. That
+    ///   trade is the household's to make and is written up in `docs/PLUGIN-SYSTEM.md`.
+    ///
+    /// With several gates installed the **tightest** wins, because a child under two rules is
+    /// under both, and being under both is being under the smaller.
+    pub fn gate_cap_mins(
+        &self,
+        today: NaiveDate,
+        not_checking: &std::collections::BTreeSet<String>,
+    ) -> Option<u32> {
+        self.providers
+            .iter()
+            .filter(|(name, _)| !not_checking.contains(name.as_str()))
+            .filter_map(|(name, provider)| {
+                let gate = provider.gate.as_ref().filter(|_| provider.enabled)?;
+                let today_entry = self.earned.get(name).filter(|entry| entry.date == today);
+                if today_entry.is_some_and(|entry| entry.bar_met) {
+                    return None;
+                }
+                // Saturating for the reason every accumulator in `rules` is: a hand-edited
+                // allowance plus a granted minute must not wrap to a near-zero ceiling, which
+                // would lock the child out rather than let him through.
+                Some(
+                    gate.allowance_mins
+                        .saturating_add(today_entry.and_then(|entry| entry.minutes).unwrap_or(0)),
+                )
+            })
+            .min()
     }
 
     pub fn rules_at(&self, at: DateTime<FixedOffset>) -> &crate::rules::Rules {
@@ -1241,6 +1488,7 @@ mod tests {
             ],
             probe: None,
             remind_every_check: false,
+            gate: None,
         }
     }
 
@@ -1326,6 +1574,7 @@ mod tests {
             tiers: Vec::new(),
             probe: None,
             remind_every_check: false,
+            gate: None,
         };
         assert_eq!(
             plain.reward_for(Some(done(0, 0))),
@@ -1356,6 +1605,7 @@ mod tests {
             EarnedDay {
                 date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
                 minutes: None,
+                bar_met: false,
             },
             "a config written before the ceiling existed must load as an untracked grant"
         );
@@ -1387,6 +1637,7 @@ mod tests {
             tiers: Vec::new(),
             probe: None,
             remind_every_check: false,
+            gate: None,
         };
         assert_eq!(
             serde_json::to_string(&provider).unwrap(),
@@ -1397,6 +1648,7 @@ mod tests {
         let untracked = EarnedDay {
             date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
             minutes: None,
+            bar_met: false,
         };
         assert_eq!(
             serde_json::to_string(&untracked).unwrap(),
@@ -1415,6 +1667,7 @@ mod tests {
             tiers: Vec::new(),
             probe: None,
             remind_every_check: false,
+            gate: None,
         };
         let json = serde_json::to_string(&provider).unwrap();
         assert!(json.contains(r#""daily_cap_mins":45"#), "got {json}");
@@ -1422,6 +1675,7 @@ mod tests {
         let tracked = EarnedDay {
             date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
             minutes: Some(16),
+            bar_met: false,
         };
         let back: EarnedDay = serde_json::from_str(&serde_json::to_string(&tracked).unwrap())
             .expect("the tracked form must round trip");
@@ -1910,6 +2164,174 @@ mod tests {
         assert!(probe("p", MAX_PROBE_MINS + 1).validate().is_err());
     }
 
+    use std::collections::BTreeSet;
+
+    /// The gate's arithmetic, which is the whole of what a practice gate is.
+    ///
+    /// A ceiling on the day, raised by what this provider has already granted, gone once the bar
+    /// is met — and gone entirely when the provider is off, removed, or cannot be checked. Every
+    /// number here is written as a literal rather than derived from the fixture, because a test
+    /// that computes its expectation the way the code does agrees with the code however wrong it
+    /// is.
+    #[test]
+    fn a_gate_caps_the_day_until_its_bar_is_met() {
+        let gated = || Provider {
+            enabled: true,
+            minutes: 0,
+            daily_cap_mins: None,
+            tiers: vec![Tier {
+                questions: 10,
+                minutes_practised: 20,
+                reward_mins: 16,
+            }],
+            probe: None,
+            remind_every_check: false,
+            gate: Some(Gate {
+                allowance_mins: 35,
+                questions: 15,
+                minutes_practised: 30,
+            }),
+        };
+        let day = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
+        let none = BTreeSet::new();
+
+        let mut cfg = Config::default();
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            None,
+            "no provider, no ceiling — a household with no integration is not gated"
+        );
+
+        cfg.providers.insert("studygo".into(), gated());
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            Some(35),
+            "installed and nothing done: the allowance is the day"
+        );
+
+        // A lower rung: the minutes it grants extend the GATE, not the day. That is the whole of
+        // the difference between this and the shape it replaced, and it is why meeting the bar
+        // afterwards lands on the normal day exactly rather than the normal day plus sixteen.
+        cfg.earned.insert(
+            "studygo".into(),
+            EarnedDay {
+                date: day,
+                minutes: Some(16),
+                bar_met: false,
+            },
+        );
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            Some(51),
+            "35 + the rung he reached"
+        );
+
+        // Yesterday's rung buys nothing today.
+        assert_eq!(
+            cfg.gate_cap_mins(day.succ_opt().unwrap(), &none),
+            Some(35),
+            "a new day starts at the allowance again"
+        );
+
+        // The bar, recorded on the day it was met. The ceiling does not merely rise — it goes.
+        cfg.earned.get_mut("studygo").unwrap().bar_met = true;
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            None,
+            "the bar is met, so the parent's own limits are the only limits left"
+        );
+
+        // And the three ways a gate stops applying without any work being done.
+        cfg.earned.get_mut("studygo").unwrap().bar_met = false;
+        cfg.providers.get_mut("studygo").unwrap().enabled = false;
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            None,
+            "switched off means the day is his again — this is the whole point of the switch"
+        );
+        cfg.providers.get_mut("studygo").unwrap().enabled = true;
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            Some(51),
+            "and back on, it binds again"
+        );
+
+        let broken: BTreeSet<String> = ["studygo".to_string()].into_iter().collect();
+        assert_eq!(
+            cfg.gate_cap_mins(day, &broken),
+            None,
+            "a check that cannot run is not a child who has not practised: an outage must not \
+             cost him his day"
+        );
+
+        cfg.providers.remove("studygo");
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            None,
+            "removed takes the ceiling with it"
+        );
+    }
+
+    /// Two gates, and which one governs.
+    #[test]
+    fn the_tightest_gate_is_the_one_that_binds() {
+        let gate = |allowance| Provider {
+            enabled: true,
+            minutes: 0,
+            daily_cap_mins: None,
+            tiers: Vec::new(),
+            probe: None,
+            remind_every_check: false,
+            gate: Some(Gate {
+                allowance_mins: allowance,
+                questions: 15,
+                minutes_practised: 0,
+            }),
+        };
+        let day = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
+        let none = BTreeSet::new();
+        let mut cfg = Config::default();
+        cfg.providers.insert("studygo".into(), gate(35));
+        cfg.providers.insert("reading".into(), gate(90));
+        // The tighter one, not the first one and not the sum: two households' rules both applying
+        // means the child is under both, and being under both is being under the smaller.
+        assert_eq!(cfg.gate_cap_mins(day, &none), Some(35));
+        cfg.providers.get_mut("studygo").unwrap().enabled = false;
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            Some(90),
+            "switching the tighter one off leaves the looser one in force, not nothing"
+        );
+    }
+
+    /// A gate must have a bar, and the refusal is deliberate rather than advisory.
+    #[test]
+    fn a_gate_with_no_bar_is_refused_outright() {
+        let gate = |allowance, questions, minutes_practised| Gate {
+            allowance_mins: allowance,
+            questions,
+            minutes_practised,
+        };
+        assert!(gate(35, 15, 30).validate().is_ok());
+        assert!(gate(35, 15, 0).validate().is_ok(), "one condition is a bar");
+        assert!(gate(35, 0, 30).validate().is_ok());
+        assert!(
+            gate(35, 0, 0).validate().is_err(),
+            "a gate nothing can lift caps the child every day until a parent notices"
+        );
+        assert!(
+            gate(0, 15, 0).validate().is_err(),
+            "an allowance of nothing is not a gate"
+        );
+        assert!(gate(1, 15, 0).validate().is_ok());
+        assert!(gate(MAX_GATE_ALLOWANCE_MINS, 15, 0).validate().is_ok());
+        assert!(gate(MAX_GATE_ALLOWANCE_MINS + 1, 15, 0).validate().is_err());
+        assert!(gate(35, MAX_TIER_QUESTIONS, 0).validate().is_ok());
+        assert!(gate(35, MAX_TIER_QUESTIONS + 1, 0).validate().is_err());
+        assert!(gate(35, 0, MAX_TIER_MINUTES).validate().is_ok());
+        assert!(gate(35, 0, MAX_TIER_MINUTES + 1).validate().is_err());
+    }
+
     /// The settling period is optional and bounded above only. Zero is a real answer — *no
     /// settling period*, which is every config written before the field existed — so the floor is
     /// the absence of a floor, and that is asserted rather than left to the type.
@@ -1939,6 +2361,7 @@ mod tests {
             tiers: Vec::new(),
             probe: None,
             remind_every_check: false,
+            gate: None,
         };
         assert_eq!(
             serde_json::to_string(&provider).unwrap(),
@@ -1961,7 +2384,11 @@ mod tests {
     fn a_provider_is_exhausted_once_today_has_paid_it_in_full() {
         let today = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
         let yesterday = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
-        let entry = |date, minutes| EarnedDay { date, minutes };
+        let entry = |date, minutes| EarnedDay {
+            date,
+            minutes,
+            bar_met: false,
+        };
 
         let latched = Provider {
             enabled: true,
@@ -1970,6 +2397,7 @@ mod tests {
             tiers: Vec::new(),
             probe: None,
             remind_every_check: false,
+            gate: None,
         };
         assert!(!latched.exhausted_for(today, None));
         assert!(latched.exhausted_for(today, Some(&entry(today, None))));
@@ -2031,7 +2459,8 @@ mod tests {
             cfg.earned.get("studygo"),
             Some(&EarnedDay {
                 date: today,
-                minutes: None
+                minutes: None,
+                bar_met: false
             })
         );
         assert_eq!(

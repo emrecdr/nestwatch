@@ -859,13 +859,30 @@ async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<
     let usage = spawn(move || crate::rules::Usage::load_for_today(today))
         .await
         .ok()?;
+    let not_checking = {
+        let cfg = crate::state::recover_read(&state.config);
+        crate::probe::providers_not_checking(
+            &cfg,
+            &state.probe_status,
+            crate::probe::scheduler_stale(),
+        )
+    };
     let (left, budget_action) = {
         let cfg = crate::state::recover_read(&state.config);
         // Whether a later bedtime is worth granting depends on the budget in force, which a
-        // scheduled routine may have replaced.
+        // scheduled routine may have replaced — and on any practice gate, because a gated child
+        // may have far less of today left than his daily limit suggests, which is exactly when
+        // this warning is worth printing.
         let rules = cfg.rules_at(crate::clock::now());
-        let left =
-            rules.budget_cuts_extension_short(today, cfg.extra.for_day(today), &usage, minutes)?;
+        let left = rules.budget_cuts_extension_short(
+            today,
+            crate::rules::Adjustments::new(
+                cfg.extra.for_day(today),
+                cfg.gate_cap_mins(today, &not_checking),
+            ),
+            &usage,
+            minutes,
+        )?;
         (left, rules.budget_action)
     };
     // Exhaustive rather than a `_` fallback. `Warn` cannot reach here — it interrupts nobody, so
@@ -1217,6 +1234,12 @@ pub struct ProviderBody {
     /// how it comes off.
     #[serde(default)]
     remind_every_check: Option<bool>,
+    /// The ceiling this provider puts on the day until its bar is met, or `null` to take it off.
+    /// Absent leaves it alone, like the probe, and needs the same `absent_or_null` to tell the
+    /// two apart — this is the field whose accidental clear would silently hand a gated child his
+    /// whole day, so "a client that has never heard of it" and "remove it" must not be one state.
+    #[serde(default, deserialize_with = "absent_or_null")]
+    gate: Option<Option<crate::config::Gate>>,
 }
 
 /// `GET /api/providers` → the installed integrations, as `{ name: { enabled, minutes, … } }`.
@@ -1446,9 +1469,15 @@ pub async fn set_provider(
     if let Some(Some(probe)) = &body.probe {
         probe.validate().map_err(AppError::BadRequest)?;
     }
+    // And the gate's, which refuse a bar nothing can meet — the one bad value here that costs the
+    // child every day until somebody notices, rather than costing a number.
+    if let Some(Some(gate)) = &body.gate {
+        gate.validate().map_err(AppError::BadRequest)?;
+    }
     let (enabled, minutes, ceiling) = (body.enabled, body.minutes, body.daily_cap_mins);
     let tiers = body.tiers;
     let probe_field = body.probe;
+    let gate_field = body.gate;
     let remind = body.remind_every_check;
     // Cap check + upsert under one write guard, the shape `save_routine` uses and for the same
     // reason. **Reconfiguring a provider that already exists is always allowed** — only a new
@@ -1491,6 +1520,13 @@ pub async fn set_provider(
                         .providers
                         .get(&name)
                         .and_then(|existing| existing.probe.clone()),
+                },
+                gate: match &gate_field {
+                    Some(explicit) => explicit.clone(),
+                    None => c
+                        .providers
+                        .get(&name)
+                        .and_then(|existing| existing.gate.clone()),
                 },
                 remind_every_check: match remind {
                     Some(explicit) => explicit,
@@ -1737,12 +1773,20 @@ pub async fn usage_today(
     // `rules_at`, not `rules`: while a scheduled routine is in force it is that routine's budget
     // the enforcer counts against, so showing the base one here would put a number on the
     // dashboard that nothing is enforcing.
-    let (rules, extra, active_routine) = {
+    let (rules, extra, gate_cap, active_routine) = {
         let cfg = crate::state::recover_read(&state.config);
         let at = crate::clock::now();
+        // The ceiling a practice gate puts on today, computed from the same guard. A gated child's
+        // dashboard must show the day he actually has, not the one his daily limit names.
+        let not_checking = crate::probe::providers_not_checking(
+            &cfg,
+            &state.probe_status,
+            crate::probe::scheduler_stale(),
+        );
         (
             cfg.rules_at(at).clone(),
             cfg.extra.for_day(today),
+            cfg.gate_cap_mins(today, &not_checking),
             cfg.active_routine_at(at).map(str::to_string),
         )
     };
@@ -1763,7 +1807,7 @@ pub async fn usage_today(
     let summary = crate::rules::today_summary(
         &rules,
         today,
-        extra,
+        crate::rules::Adjustments::new(extra, gate_cap),
         &usage,
         enforcer_age_secs,
         cert_days_left,
@@ -1803,6 +1847,14 @@ pub async fn child_status(
     state
         .status_limiter
         .count_and_check(peer.ip(), std::time::Instant::now())?;
+    let not_checking = {
+        let cfg = crate::state::recover_read(&state.config);
+        crate::probe::providers_not_checking(
+            &cfg,
+            &state.probe_status,
+            crate::probe::scheduler_stale(),
+        )
+    };
     let today = crate::config::today();
     // Only the two numbers, computed under the guard — cloning `Rules` here would deep-copy the
     // blocklist, app limits and groups just to read a budget off them.
@@ -1815,7 +1867,10 @@ pub async fn child_status(
         let rules = cfg.rules_at(crate::clock::now());
         (
             rules.enabled,
-            rules.effective_budget_mins(today, extra),
+            rules.effective_budget_mins(
+                today,
+                crate::rules::Adjustments::new(extra, cfg.gate_cap_mins(today, &not_checking)),
+            ),
             cfg.language,
         )
     };

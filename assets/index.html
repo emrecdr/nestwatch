@@ -1042,8 +1042,39 @@
                         <button class="btn btn-ghost btn-xs w-fit" x-show="row.tiers.length < 4"
                                 @click="addTier(row)" x-text="t('addTier')"></button>
                         <p class="text-xs opacity-60" x-text="t('eitherConditionMeetsATier')"></p>
-                        <!-- The same two numbers as a whole day, because a reward is a difference
-                             and a budget is a total. See `gateTotals`. -->
+                        <!-- The practice gate: a CEILING this integration puts on the day until
+                             the child has done the work, never a replacement for the parent's own
+                             limit. Off by default, because most households want a reward and no
+                             gate — and because a gate is the one thing on this card that can make
+                             a child's day shorter rather than longer. See `config::Gate`. -->
+                        <label class="flex cursor-pointer items-start gap-2">
+                          <input type="checkbox" class="checkbox checkbox-sm mt-0.5"
+                                 x-model="row.gateOn" @change="saveProvider(row)" />
+                          <span class="text-xs opacity-60" x-text="t('gateCapHisDay')"></span>
+                        </label>
+                        <div class="flex flex-wrap items-center gap-2 pl-6" x-show="row.gateOn">
+                          <span class="text-sm" x-text="t('gateAllowance')"></span>
+                          <input type="number" min="1" max="1440" class="input input-sm w-20"
+                                 x-model.number="row.gateAllowance" :aria-label="t('gateAllowance')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-sm opacity-60" x-text="t('min')"></span>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-2 pl-6" x-show="row.gateOn">
+                          <span class="text-sm" x-text="t('gateBarPrefix')"></span>
+                          <input type="number" min="0" max="1000" class="input input-sm w-16"
+                                 x-model.number="row.gateQuestions" :aria-label="t('questionsShort')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-xs opacity-60" x-text="t('questionsOrShort')"></span>
+                          <input type="number" min="0" max="1440" class="input input-sm w-16"
+                                 x-model.number="row.gateMinutes" :aria-label="t('minutesPractisedShort')"
+                                 @change="saveProvider(row)" />
+                          <span class="text-xs opacity-60" x-text="t('min')"></span>
+                        </div>
+                        <p class="text-xs text-warning pl-6" x-show="row.gateOn && !row.gateQuestions && !row.gateMinutes"
+                           x-text="t('gateNoBar')"></p>
+
+                        <!-- The two days those numbers actually produce, which neither of them
+                             names. See `gateTotals`. -->
                         <p class="text-xs opacity-60" x-text="gateTotals(row)" x-show="gateTotals(row)"></p>
 
                         <!-- The cadence of the notice he gets while he is short. Off is once a

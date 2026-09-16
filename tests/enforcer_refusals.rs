@@ -75,6 +75,9 @@ async fn a_refusal_counted_anywhere_reaches_the_day_the_parent_reads() {
         Arc::new(RwLock::new(cfg)),
         Arc::new(UsageLog::new(tmp.join("usage.jsonl"))),
         Arc::new(ScreentimeLog::disabled()),
+        // No probe scheduler in this binary, so no provider can be reported as un-checkable —
+        // which is the same answer an install with no integrations gives.
+        Default::default(),
         Feed::new(),
         wake,
     ));

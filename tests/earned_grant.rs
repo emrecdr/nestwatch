@@ -633,7 +633,7 @@ async fn earned_grants_latch_replay_and_validate() {
         let (status, body) = grant(
             &app,
             &cookie,
-            json!({ "minutes": 0, "source": "chores" }),
+            json!({ "minutes": 1, "source": "chores" }),
             None,
         )
         .await;
@@ -1040,33 +1040,27 @@ async fn earned_grants_latch_replay_and_validate() {
             );
         }
     }
-    // --- Practice governs the day, stated the way a household states it. ------------------
+    // --- A practice gate caps the day; it does not become the day. --------------------------
     //
-    // The question this section answers is not "does a grant land" — everything above covers
-    // that — but whether the registry and the screen-time budget COMPOSE into the rule a parent
-    // actually describes: *thirty-five minutes, and he earns the rest of his day by practising.*
+    // The household rule: *he has thirty-five minutes; two-thirds of his practice buys another
+    // quarter of an hour; finishing it gives him his normal day.* The question this section
+    // answers is whether the registry and the screen-time budget compose into that **without the
+    // plugin rewriting anything the parent owns**.
     //
-    // They do, and that is worth pinning rather than rediscovering, because the answer is
-    // surprising in a useful direction: a gate needs **no subtractive mechanism**. A budget of 35
-    // with the top rung worth the difference is arithmetically identical to "capped at 35 until
-    // the bar is met, then his normal day", and it reaches that through
-    // `Rules::effective_budget_mins`, which is the single home for the number the enforcer acts
-    // on. Nothing new decides when the machine locks.
-    //
-    // What that leaves genuinely open is a *comprehension* problem rather than a mechanism one:
-    // the parent has to type 85 when they are thinking 120, and nothing here holds the two
-    // together if either moves. That is what the dashboard has to solve; it is not what the
-    // enforcer has to.
+    // **The shape this replaces got the numbers right and the ownership wrong.** It wrote 35 into
+    // `daily_budget_mins` and made the top rung worth the difference — arithmetically identical,
+    // and broken at the off switch: the parent's own limit had been spent as the gate's allowance,
+    // so the number meaning *his normal day* existed nowhere and switching the integration off
+    // left the short day standing. A plugin may not redefine the household's settings. So the
+    // allowance belongs to the provider and **caps** the day, and the assertions below are as much
+    // about what stays 120 as about what becomes 35.
     {
         let (app, cookie, config) = fresh_app().await;
+        // The parent's own day, written once and never touched again by anything in this section.
         nestwatch::state::recover_write(&config)
             .rules
-            .daily_budget_mins = 35;
+            .daily_budget_mins = 120;
 
-        // The household rule: 35 minutes without practice, 120 with it, and a partial credit for
-        // two-thirds of the way. The top rung is the DIFFERENCE, which is exactly the arithmetic
-        // this section exists to pin — and the ceiling is set to it, so the day totals the best
-        // rung reached rather than the sum of the rungs.
         assert_eq!(
             common::post_json(
                 &app,
@@ -1074,12 +1068,9 @@ async fn earned_grants_latch_replay_and_validate() {
                 Some(&cookie),
                 json!({
                     "enabled": true,
-                    "minutes": 85,
-                    "daily_cap_mins": 85,
-                    "tiers": [
-                        { "questions": 10, "minutes_practised": 20, "reward_mins": 16 },
-                        { "questions": 15, "minutes_practised": 30, "reward_mins": 85 }
-                    ]
+                    "minutes": 1,
+                    "tiers": [{ "questions": 10, "minutes_practised": 20, "reward_mins": 16 }],
+                    "gate": { "allowance_mins": 35, "questions": 15, "minutes_practised": 30 }
                 }),
             )
             .await
@@ -1087,18 +1078,33 @@ async fn earned_grants_latch_replay_and_validate() {
             StatusCode::OK
         );
 
-        // Read through the same call the enforcer makes, not by adding the numbers here: an
-        // expected value computed the way the code computes it agrees with the code however
-        // wrong it is, and `expected-value-must-not-come-from-the-code` is why this file spells
-        // its totals as literals.
+        // Read through the same call the enforcer makes, not by adding numbers here: an expected
+        // value computed the way the code computes it agrees with the code however wrong it is.
         let budget = || {
             let cfg = nestwatch::state::recover_read(&config);
-            cfg.rules
-                .effective_budget_mins(today, cfg.extra.for_day(today))
+            cfg.rules.effective_budget_mins(
+                today,
+                nestwatch::rules::Adjustments::new(
+                    cfg.extra.for_day(today),
+                    cfg.gate_cap_mins(today, &Default::default()),
+                ),
+            )
         };
-        assert_eq!(budget(), 35, "before any practice, the day is the gate");
+        assert_eq!(
+            budget(),
+            35,
+            "installed and nothing practised: the gate is the day"
+        );
+        assert_eq!(
+            nestwatch::state::recover_read(&config)
+                .rules
+                .daily_budget_mins,
+            120,
+            "and the parent's own limit is untouched — this is the whole difference between a \
+             ceiling and a budget, and it is what the off switch below depends on"
+        );
 
-        // Short of every rung: the answer is "not yet", and the day does not move.
+        // Short of every rung: "not yet", and nothing moves.
         let (status, body) = grant(
             &app,
             &cookie,
@@ -1110,8 +1116,8 @@ async fn earned_grants_latch_replay_and_validate() {
         assert_eq!(body["reason"], json!("below_threshold"));
         assert_eq!(budget(), 35, "a refusal grants nothing, so nothing changes");
 
-        // Two-thirds of the way: the lower rung, and the extra two eight-minute checks a
-        // household asks for land as sixteen minutes.
+        // Two-thirds of the way: the extra two eight-minute checks a household asks for, landing
+        // as a longer leash rather than as a bonus on the day.
         let (_, body) = grant(
             &app,
             &cookie,
@@ -1120,10 +1126,21 @@ async fn earned_grants_latch_replay_and_validate() {
         )
         .await;
         assert_eq!(body["minutes"], json!(16));
-        assert_eq!(budget(), 51, "35 + the lower rung");
+        assert_eq!(budget(), 51, "35 + the rung he reached");
+        assert_eq!(
+            nestwatch::state::recover_read(&config).extra.for_day(today),
+            0,
+            "a gated provider's minutes raise ITS gate and never the parent's pool — this is what \
+             makes the line below land on 120 exactly rather than 136"
+        );
 
-        // The bar, reached later on minutes alone. The ceiling pays the difference rather than a
-        // second full reward, so the day ends at the normal budget and not past it.
+        // The bar. The ceiling does not rise to meet the day; it goes.
+        //
+        // **And it goes on work done, not on minutes paid**, which this push is the proof of: the
+        // lower rung already spent this provider's one grant for the day, so the minutes are
+        // refused — and the gate opens regardless. Without that the child who finishes his
+        // practice after taking partial credit would be the one child the gate could never open,
+        // having done everything asked of him.
         let (_, body) = grant(
             &app,
             &cookie,
@@ -1131,40 +1148,94 @@ async fn earned_grants_latch_replay_and_validate() {
             None,
         )
         .await;
-        assert_eq!(body["minutes"], json!(69), "the difference, not another 85");
+        assert_eq!(
+            body["reason"],
+            json!("already_granted_today"),
+            "the day's minutes are spent, which is the interesting half of this case: {body}"
+        );
         assert_eq!(
             budget(),
             120,
-            "the bar is met, so the day is his normal one — exactly, not 35 + 85 + 16"
+            "the bar is met, so his day is the one his parent set — exactly, not 120 + the 16 he \
+             earned on the way, and not 51 because a latch had opinions about minutes"
         );
 
-        // And it cannot be farmed past it: the ceiling binds however many times the client pushes.
-        let (_, body) = grant(
+        // Once open, it stays open for the day. A provider that resets a counter, or a probe that
+        // reads a stale page, must not shut a gate the child has already been through and send him
+        // from his normal day back to the allowance at four in the afternoon.
+        let (_, _) = grant(
             &app,
             &cookie,
-            json!({ "source": "reading", "progress": { "questions": 99, "minutes": 99 } }),
+            json!({ "source": "reading", "progress": { "questions": 0, "minutes": 0 } }),
             None,
         )
         .await;
-        assert_eq!(body["ok"], json!(false));
-        assert_eq!(body["reason"], json!("daily_cap_reached"));
-        assert_eq!(budget(), 120, "a refused push leaves the day where it was");
+        assert_eq!(
+            budget(),
+            120,
+            "a later, poorer reading cannot re-close today's gate"
+        );
+    }
 
-        // AND WHAT THE PARENT'S OFF SWITCH DOES TO A DAY SHAPED LIKE THIS, which is the half of
-        // the composition nothing had asked about.
-        //
-        // The switch is honoured everywhere — `probe.rs` will not run its probe and
-        // `Config::provider_authority` refuses its pushes — but the *budget* is not the
-        // provider's to restore. A gate is spelled as a short base plus a ladder worth the
-        // difference, so the number a parent thinks of as his normal day (120) is written down
-        // nowhere: only 35 and 85 are. Switching the provider off therefore removes the only way
-        // to reach 120 and leaves 35 standing.
+    // --- The two ways a gated day gets longer, and both belong to the parent -------------------
+    {
+        let (app, cookie, config) = fresh_app().await;
+        nestwatch::state::recover_write(&config)
+            .rules
+            .daily_budget_mins = 120;
         assert_eq!(
             common::post_json(
                 &app,
                 "/api/providers/reading",
                 Some(&cookie),
-                json!({ "enabled": false, "minutes": 85 }),
+                json!({
+                    "enabled": true,
+                    "minutes": 1,
+                    "gate": { "allowance_mins": 35, "questions": 15, "minutes_practised": 30 }
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let budget = || {
+            let cfg = nestwatch::state::recover_read(&config);
+            cfg.rules.effective_budget_mins(
+                today,
+                nestwatch::rules::Adjustments::new(
+                    cfg.extra.for_day(today),
+                    cfg.gate_cap_mins(today, &Default::default()),
+                ),
+            )
+        };
+        assert_eq!(budget(), 35);
+
+        // ONE: a grant. This is *"unlock the PC and give him another try"* — the parent's own
+        // minutes, which the gate must not swallow, or the unlock would do nothing and the parent
+        // would be told it had worked. The cap applies to the base and the grant is added after
+        // it, which is the whole of why this reads 65 and not 35.
+        let (status, _) = grant(
+            &app,
+            &cookie,
+            json!({ "source": "parent", "minutes": 30 }),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            budget(),
+            65,
+            "a parent's grant reaches a gated child in full: 35 of allowance plus the 30 they gave"
+        );
+
+        // TWO: the switch. Off must hand the day back — anything else makes the off switch a
+        // punishment, and makes an integration something a household cannot get out of.
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": false, "minutes": 1 }),
             )
             .await
             .status(),
@@ -1172,27 +1243,39 @@ async fn earned_grants_latch_replay_and_validate() {
         );
         assert_eq!(
             budget(),
-            120,
-            "minutes already earned are not taken back by switching the source off — a grant is \
-             spent time, and retracting it mid-afternoon would lock a child out of a day he had \
-             already been given"
+            150,
+            "switched off, his day is his parent's 120 plus their 30 — the gate is gone, not \
+             merely satisfied"
         );
 
-        // Tomorrow is the one that matters, and this assertion is a statement of a *problem*
-        // rather than of a desired behaviour. `extra` is per-day, so reading tomorrow's is what
-        // the enforcer will see tomorrow.
-        let tomorrow = today.succ_opt().expect("a next day");
-        let tomorrows_budget = {
-            let cfg = nestwatch::state::recover_read(&config);
-            cfg.rules
-                .effective_budget_mins(tomorrow, cfg.extra.for_day(tomorrow))
-        };
+        // And removing it entirely is the same answer one step further.
         assert_eq!(
-            tomorrows_budget, 35,
-            "with the gate's provider switched off, the day stays at the gate — the child cannot \
-             earn past it and nothing has told the parent that their off switch left him on the \
-             short day. This is pinned because it is surprising, not because it is right: see \
-             docs/PLUGIN-SYSTEM.md, `An off switch cannot give back what it never took`."
+            common::post_json(
+                &app,
+                "/api/providers/reading",
+                Some(&cookie),
+                json!({ "enabled": true, "minutes": 1 }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(budget(), 65, "back on, it binds again");
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/reading/delete",
+                Some(&cookie),
+                json!({})
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            budget(),
+            150,
+            "removed takes the ceiling with it, leaving numbers nothing ever rewrote"
         );
     }
 

@@ -142,10 +142,11 @@ const MASQUERADE_MIN_DEVICES: usize = 3;
 ///
 /// **Not [`crate::heartbeat`]'s enforcement threshold of 150, and the difference is the period
 /// rather than the tolerance**: the enforcers tick every 30 seconds and this loop every 60, so
-/// three missed ticks here is 180 where it is 90 there. Mirrored in `assets/app.js` as
-/// `PROBE_STALE_SECS`, which carries the same note — the two are read by a parent on the same
-/// screen and must not disagree about the same age, the way the enforcement pair once did.
-const EARNED_CHECK_STALE_SECS: i64 = 180;
+/// three missed ticks here is 180 where it is 90 there. Taken from `probe` rather than written a
+/// second time, because the same number now decides whether a child's day is capped — the
+/// sentence a parent reads here and the ceiling their child is under must not disagree about one
+/// age, the way the enforcement pair once did. `assets/app.js` mirrors it as `PROBE_STALE_SECS`.
+const EARNED_CHECK_STALE_SECS: i64 = crate::probe::SCHEDULER_STALE_SECS;
 
 /// Does the access log look like a router that rewrites source addresses?
 ///

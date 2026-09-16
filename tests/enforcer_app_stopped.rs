@@ -98,6 +98,9 @@ async fn a_dutch_child_is_told_which_app_a_rule_closed_and_where_to_ask() {
         Arc::new(RwLock::new(cfg)),
         usage_log.clone(),
         Arc::new(ScreentimeLog::disabled()),
+        // No probe scheduler in this binary, so no provider can be reported as un-checkable —
+        // which is the same answer an install with no integrations gives.
+        Default::default(),
         Feed::new(),
         wake,
     ));

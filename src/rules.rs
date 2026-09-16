@@ -324,20 +324,40 @@ impl Rules {
     }
 
     /// The effective budget in minutes for `today`: that day's base budget (per-weekday override
-    /// or the everyday default) plus any granted extra, or `0` when the day has **no** base budget
-    /// (unlimited). Returning 0 in that case — rather than `extra` — keeps the dashboard card and
-    /// the enforcer in agreement: granted extra on an unlimited day must not display a phantom
-    /// budget the enforcer never applies. The single home for the "budget today" value so
-    /// `decide`, its logging, and the summary can't drift.
-    pub fn effective_budget_mins(&self, today: NaiveDate, extra: u32) -> u32 {
+    /// or the everyday default), held under any practice gate, plus any granted extra — or `0`
+    /// when the day has **no** base budget and no gate (unlimited). Returning 0 in that case —
+    /// rather than `extra` — keeps the dashboard card and the enforcer in agreement: granted extra
+    /// on an unlimited day must not display a phantom budget the enforcer never applies. The
+    /// single home for the "budget today" value so `decide`, its logging, and the summary can't
+    /// drift.
+    ///
+    /// `gate_cap` comes from [`crate::config::Config::gate_cap_mins`] and is passed in for the
+    /// same reason `extra` is: this type does not know what a provider is, and the property that
+    /// the whole integration registry can be deleted without touching this file depends on it not
+    /// finding out. It is a number, and this applies it.
+    ///
+    /// **Two orderings matter and both are deliberate.**
+    ///
+    /// The cap is applied to the **base**, and `extra` is added after it. So a parent granting
+    /// half an hour to a gated child gives him half an hour — the grant is *their* decision about
+    /// *their* limit and a plugin must not be able to swallow it. That is also what makes "unlock
+    /// the PC and give him another round" work: the round is a grant, and the gate does not eat it.
+    ///
+    /// And a gate binds an **unlimited** day rather than being ignored on one. A household that
+    /// sets no daily limit at all still means something by installing a gate, and the alternative
+    /// reading — no base, so nothing to cap — would make the feature silently do nothing for
+    /// exactly the households who expressed the rule only once.
+    pub fn effective_budget_mins(&self, today: NaiveDate, adj: Adjustments) -> u32 {
+        let Adjustments { extra, gate_cap } = adj;
         let base = self.base_budget_for(today.weekday());
         // Saturating: release builds don't check overflow, so a large `daily_budget_mins` in a
         // hand-edited config plus a granted minute would WRAP to a near-zero budget — enforcement
         // silently inverted, with no error anywhere. Same reasoning for every accumulator below.
-        if base > 0 {
-            base.saturating_add(extra)
-        } else {
-            0
+        match (base, gate_cap) {
+            (0, None) => 0,
+            (0, Some(cap)) => cap.saturating_add(extra),
+            (base, None) => base.saturating_add(extra),
+            (base, Some(cap)) => base.min(cap).saturating_add(extra),
         }
     }
 
@@ -364,14 +384,14 @@ impl Rules {
     pub fn budget_cuts_extension_short(
         &self,
         today: NaiveDate,
-        extra: u32,
+        adj: Adjustments,
         usage: &Usage,
         minutes: u32,
     ) -> Option<u32> {
         if !self.enabled || self.budget_action == EnforceAction::Warn {
             return None;
         }
-        let remaining = usage.remaining_mins(self.effective_budget_mins(today, extra))?;
+        let remaining = usage.remaining_mins(self.effective_budget_mins(today, adj))?;
         (remaining < minutes).then_some(remaining)
     }
 }
@@ -584,13 +604,13 @@ pub(crate) fn usage_state_path() -> std::path::PathBuf {
 pub fn today_summary(
     rules: &Rules,
     today: NaiveDate,
-    extra: u32,
+    adj: Adjustments,
     usage: &Usage,
     enforcer_age_secs: Option<i64>,
     cert_days_left: Option<u64>,
     active_routine: Option<&str>,
 ) -> serde_json::Value {
-    let budget = rules.effective_budget_mins(today, extra);
+    let budget = rules.effective_budget_mins(today, adj);
     let used_mins = usage.total_secs / 60;
     let remaining_mins = usage.remaining_mins(budget);
     let per_app: Vec<serde_json::Value> = rules
@@ -650,7 +670,7 @@ pub fn today_summary(
         "budget_mins": budget,
         "used_mins": used_mins,
         "remaining_mins": remaining_mins,
-        "extra_mins": extra,
+        "extra_mins": adj.extra,
         "per_app": per_app,
         "groups": groups,
         // Today's focus figures, which until now were measured every thirty seconds, written to
@@ -690,6 +710,30 @@ pub fn today_summary(
 
 /// The per-tick clock/context injected into [`RulesEnforcer::decide`] — keeps that function
 /// pure (no real clock) and exhaustively testable.
+/// The two numbers, computed outside this module, that modify today's budget.
+///
+/// They are a pair because [`Rules::effective_budget_mins`] consumes them as one — the ceiling
+/// applies to the base and the extra is added after it — and because both exist for the same
+/// reason: this module does not know what a grant queue or an integration is, and the property
+/// that either can be removed without touching `rules.rs` rests on it not finding out. Passing
+/// them separately let the two orderings be mixed up at four call sites instead of one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Adjustments {
+    /// Minutes granted on top of today's limit: a parent's grant, a redeemed code, a bedtime
+    /// extension. The parent's own minutes, which nothing else may swallow.
+    pub extra: u32,
+    /// The ceiling an installed practice gate puts on today, or `None` when none applies. See
+    /// [`crate::config::Config::gate_cap_mins`], the only thing that computes it.
+    pub gate_cap: Option<u32>,
+}
+
+impl Adjustments {
+    /// Both numbers at once, for the call sites that have them as locals.
+    pub fn new(extra: u32, gate_cap: Option<u32>) -> Self {
+        Self { extra, gate_cap }
+    }
+}
+
 pub struct Tick {
     /// Monotonic "now" (for deadline math).
     pub now: Instant,
@@ -701,8 +745,8 @@ pub struct Tick {
     pub warn: Duration,
     /// Extra slack past the shutdown deadline before re-issuing (defeats `shutdown /a`).
     pub slack: Duration,
-    /// Extra minutes granted to today's budget (0 if none / not for today).
-    pub extra_minutes: u32,
+    /// What modifies today's budget: granted extra, and any practice gate's ceiling.
+    pub adjustments: Adjustments,
     /// Whether an interactive user is actively using the machine this tick (session unlocked).
     /// When `false` (nobody logged in, or the screen is locked) the budget neither accrues nor
     /// enforces — so a PC left on overnight doesn't burn the day's budget, and a budget lock
@@ -1104,7 +1148,7 @@ impl RulesEnforcer {
         // use: when inactive we disarm below, so a user who steps away (or is locked out by the
         // budget itself) isn't shut down/re-locked in absentia, and gets a fresh warning grace
         // when they return.
-        let budget_mins = rules.effective_budget_mins(t.today, t.extra_minutes);
+        let budget_mins = rules.effective_budget_mins(t.today, t.adjustments);
         if budget_mins > 0 && t.active {
             let budget_secs = budget_mins as u64 * 60;
             if self.usage.total_secs >= budget_secs {
@@ -1340,6 +1384,7 @@ pub async fn run_rules_enforcer(
     config: Arc<RwLock<Config>>,
     usage_log: Arc<crate::usage::UsageLog>,
     screentime_log: Arc<crate::screentime::ScreentimeLog>,
+    probe_status: crate::probe::StatusMap,
     foreground: crate::foreground::Feed,
     mut wake: crate::heartbeat::Wake,
 ) {
@@ -1395,7 +1440,19 @@ pub async fn run_rules_enforcer(
         // Snapshot the config under the lock, then drop the guard before any await.
         // `port` and the curfew reading come out of the same guard the tick already takes, rather
         // than a second acquisition later — they feed `ask_hint`, which needs both.
-        let (rules, extra, lang, port, curfew_now) = {
+        // Which gated providers this machine cannot currently check. Read before the guard so the
+        // lock below covers one snapshot: `providers_not_checking` takes its own lock on the
+        // status map, and taking two in an order nothing else takes them in is how deadlocks are
+        // written.
+        let not_checking = {
+            let guard = crate::state::recover_read(&config);
+            crate::probe::providers_not_checking(
+                &guard,
+                &probe_status,
+                crate::probe::scheduler_stale(),
+            )
+        };
+        let (rules, extra, gate_cap, lang, port, curfew_now) = {
             let guard = crate::state::recover_read(&config);
             // `rules_at`, not `rules`: a routine whose schedule covers this instant is the policy
             // in force, and this is the tick that enforces it. The trusted clock rather than
@@ -1405,6 +1462,7 @@ pub async fn run_rules_enforcer(
             (
                 guard.rules_at(at).clone(),
                 guard.extra.for_day(today),
+                guard.gate_cap_mins(today, &not_checking),
                 guard.language,
                 guard.port,
                 guard.curfew.is_active_now(),
@@ -1509,7 +1567,7 @@ pub async fn run_rules_enforcer(
                 interval: elapsed,
                 warn: Duration::from_secs(rules.warn_secs as u64),
                 slack: CHECK_INTERVAL,
-                extra_minutes: extra,
+                adjustments: Adjustments::new(extra, gate_cap),
                 active,
             },
         );
@@ -1539,7 +1597,7 @@ pub async fn run_rules_enforcer(
 
         save_tally_if_changed(&enforcer.usage, &tally_path, &mut last_saved_tally).await;
 
-        let budget = rules.effective_budget_mins(today, extra);
+        let budget = rules.effective_budget_mins(today, Adjustments::new(extra, gate_cap));
 
         // Log the previous day's total once, on rollover. Report the budget that was in force at
         // the *end of that day* (carried across ticks), not today's — otherwise the fresh day's
@@ -2029,7 +2087,7 @@ mod tests {
             interval: TICK,
             warn: WARN,
             slack: SLACK,
-            extra_minutes: extra,
+            adjustments: Adjustments::new(extra, None),
             active,
         }
     }
@@ -2350,6 +2408,70 @@ mod tests {
     /// minute used to wrap to 0 — inverting enforcement (unlimited becomes instantly-over) with no
     /// error anywhere. `validate` now rejects such a value up front, but the arithmetic must be
     /// safe regardless, since a config can be hand-edited past validation.
+    /// The gate is a **ceiling on the base**, and granted extra is added after it.
+    ///
+    /// Both orderings are asserted because both are a one-character edit away from a rule the
+    /// household did not ask for: `min` over the sum would let a plugin swallow a parent's grant,
+    /// and ignoring the cap on an unlimited day would make the feature silently do nothing for a
+    /// household that set no daily limit.
+    #[test]
+    fn a_gate_caps_the_base_and_never_the_parents_own_minutes() {
+        let day = day();
+        let rules = Rules {
+            daily_budget_mins: 120,
+            ..Default::default()
+        };
+        assert_eq!(
+            rules.effective_budget_mins(day, Adjustments::new(0, None)),
+            120,
+            "no gate, no change: this is every household that has installed nothing"
+        );
+        assert_eq!(
+            rules.effective_budget_mins(day, Adjustments::new(0, Some(35))),
+            35,
+            "the gate binds"
+        );
+        assert_eq!(
+            rules.effective_budget_mins(day, Adjustments::new(30, Some(35))),
+            65,
+            "a parent's 30 minutes reach a gated child in full — 35 + 30, never min(150, 35)"
+        );
+        assert_eq!(
+            rules.effective_budget_mins(day, Adjustments::new(0, Some(200))),
+            120,
+            "a ceiling above the day's limit does not raise it: this caps, it does not grant"
+        );
+        assert_eq!(
+            rules.effective_budget_mins(day, Adjustments::new(0, Some(120))),
+            120,
+            "exactly at the limit is the limit, from either side"
+        );
+
+        // An unlimited day is still gated. A household that sets no daily limit but installs a
+        // practice gate has expressed its rule exactly once, and reading "no base, so nothing to
+        // cap" would throw that away.
+        let unlimited = Rules::default();
+        assert_eq!(
+            unlimited.daily_budget_mins, 0,
+            "the fixture must be the unlimited one"
+        );
+        assert_eq!(
+            unlimited.effective_budget_mins(day, Adjustments::new(0, None)),
+            0,
+            "unlimited and ungated is still unlimited"
+        );
+        assert_eq!(
+            unlimited.effective_budget_mins(day, Adjustments::new(0, Some(35))),
+            35,
+            "unlimited but gated is the gate"
+        );
+        assert_eq!(
+            unlimited.effective_budget_mins(day, Adjustments::new(30, Some(35))),
+            65,
+            "and a grant still reaches him there"
+        );
+    }
+
     #[test]
     fn budget_math_saturates_instead_of_wrapping() {
         let rules = Rules {
@@ -2358,9 +2480,15 @@ mod tests {
         };
         let day = day();
         assert_eq!(
-            rules.effective_budget_mins(day, 1),
+            rules.effective_budget_mins(day, Adjustments::new(1, None)),
             u32::MAX,
             "a huge budget plus a grant must saturate, never wrap to a small number"
+        );
+        assert_eq!(
+            rules.effective_budget_mins(day, Adjustments::new(1, Some(u32::MAX))),
+            u32::MAX,
+            "and a hand-edited gate allowance at the top of the range saturates the same way, \
+             rather than wrapping to a ceiling that locks the child out"
         );
 
         // And the validator refuses it before it can be stored.
@@ -2397,24 +2525,24 @@ mod tests {
 
         // Nothing left: the extension buys the child no screen time at all.
         assert_eq!(
-            rules.budget_cuts_extension_short(day, 0, &spent(60), 30),
+            rules.budget_cuts_extension_short(day, Adjustments::new(0, None), &spent(60), 30),
             Some(0),
             "an extension granted after the budget is spent changes nothing, and saying so is the \
              whole point"
         );
         // Some left, but less than the extension.
         assert_eq!(
-            rules.budget_cuts_extension_short(day, 0, &spent(50), 30),
+            rules.budget_cuts_extension_short(day, Adjustments::new(0, None), &spent(50), 30),
             Some(10)
         );
         // Enough left to cover it — nothing to say.
         assert_eq!(
-            rules.budget_cuts_extension_short(day, 0, &spent(20), 30),
+            rules.budget_cuts_extension_short(day, Adjustments::new(0, None), &spent(20), 30),
             None
         );
         // The grant is counted, so bonus time already given must not be reported as missing.
         assert_eq!(
-            rules.budget_cuts_extension_short(day, 45, &spent(50), 30),
+            rules.budget_cuts_extension_short(day, Adjustments::new(45, None), &spent(50), 30),
             None,
             "60 + 45 granted, 50 used — 55 left, which covers the extension"
         );
@@ -2446,7 +2574,12 @@ mod tests {
                 daily_budget_mins: 0,
                 ..enforcing.clone()
             }
-            .budget_cuts_extension_short(day, 0, &heavily_used, 30),
+            .budget_cuts_extension_short(
+                day,
+                Adjustments::new(0, None),
+                &heavily_used,
+                30
+            ),
             None,
             "no budget means no limit, not a spent one"
         );
@@ -2455,7 +2588,12 @@ mod tests {
                 enabled: false,
                 ..enforcing.clone()
             }
-            .budget_cuts_extension_short(day, 0, &heavily_used, 30),
+            .budget_cuts_extension_short(
+                day,
+                Adjustments::new(0, None),
+                &heavily_used,
+                30
+            ),
             None,
             "paused rules interrupt nobody"
         );
@@ -2464,7 +2602,12 @@ mod tests {
                 budget_action: EnforceAction::Warn,
                 ..enforcing
             }
-            .budget_cuts_extension_short(day, 0, &heavily_used, 30),
+            .budget_cuts_extension_short(
+                day,
+                Adjustments::new(0, None),
+                &heavily_used,
+                30
+            ),
             None,
             "Warn records and never acts, so nothing is cut short"
         );
@@ -2607,7 +2750,15 @@ mod tests {
             for (name, secs) in focus {
                 usage.foreground_secs.insert((*name).to_string(), *secs);
             }
-            today_summary(&rules, day, 0, &usage, Some(1), None, None)
+            today_summary(
+                &rules,
+                day,
+                Adjustments::new(0, None),
+                &usage,
+                Some(1),
+                None,
+                None,
+            )
         };
 
         assert_eq!(
@@ -2645,7 +2796,15 @@ mod tests {
         usage.foreground_secs.insert("roblox.exe".into(), 1_800);
         usage.page_secs.insert("Roblox".into(), 900);
 
-        let s = today_summary(&rules, day, 0, &usage, Some(1), None, None);
+        let s = today_summary(
+            &rules,
+            day,
+            Adjustments::new(0, None),
+            &usage,
+            Some(1),
+            None,
+            None,
+        );
 
         assert_eq!(s["focused"][0]["name"], "roblox.exe");
         assert_eq!(s["focused"][0]["minutes"], 30);
@@ -3049,14 +3208,30 @@ mod tests {
             },
             ..Default::default()
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(5), None, None);
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(5),
+            None,
+            None,
+        );
         assert_eq!(s["refused"]["clock_changes"], 2);
         assert_eq!(s["refused"]["shutdown_cancels"], 5);
         // Summed on the server so the client holds no second copy of the arithmetic — the same
         // argument `cert_expiring` makes for shipping the verdict beside the number.
         assert_eq!(s["refused_total"], 7);
 
-        let quiet = today_summary(&rules, day(), 0, &Usage::default(), Some(5), None, None);
+        let quiet = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &Usage::default(),
+            Some(5),
+            None,
+            None,
+        );
         assert_eq!(
             quiet["refused_total"], 0,
             "a quiet day must still report the field, as zero"
@@ -3556,7 +3731,15 @@ mod tests {
         let rules = Rules::default();
         let usage = Usage::default();
         let verdict = |days: Option<u64>| {
-            let s = today_summary(&rules, day(), 0, &usage, None, days, None);
+            let s = today_summary(
+                &rules,
+                day(),
+                Adjustments::new(0, None),
+                &usage,
+                None,
+                days,
+                None,
+            );
             (s["cert_days_left"].clone(), s["cert_expiring"].clone())
         };
 
@@ -4089,7 +4272,15 @@ mod tests {
             ..Default::default()
         };
 
-        let s = today_summary(&rules, day(), 0, &usage, Some(1), None, None);
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(1),
+            None,
+            None,
+        );
         let per_app = s["per_app"].as_array().unwrap();
 
         assert_eq!(
@@ -4118,7 +4309,15 @@ mod tests {
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
-        let s = today_summary(&rules, day(), 30, &usage, Some(12), None, None);
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(30, None),
+            &usage,
+            Some(12),
+            None,
+            None,
+        );
         assert_eq!(s["budget_mins"], 150);
         assert_eq!(s["used_mins"], 47);
         assert_eq!(s["remaining_mins"], 103);
@@ -4144,7 +4343,15 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(12), None, None);
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(12),
+            None,
+            None,
+        );
         assert_eq!(s["budget_mins"], 0);
         assert_eq!(s["used_mins"], 90);
         assert!(s["remaining_mins"].is_null());
@@ -4164,7 +4371,15 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
         };
-        let s = today_summary(&rules, day(), 30, &usage, Some(12), None, None); // 30 granted, but base is 0
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(30, None),
+            &usage,
+            Some(12),
+            None,
+            None,
+        ); // 30 granted, but base is 0
         assert_eq!(s["budget_mins"], 0);
         assert!(s["remaining_mins"].is_null());
     }
@@ -4185,7 +4400,15 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
         };
-        let s = today_summary(&rules, day(), 0, &usage, Some(12), None, None);
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(12),
+            None,
+            None,
+        );
         assert_eq!(s["budget_mins"], 90);
         assert_eq!(s["remaining_mins"], 60);
     }
@@ -4210,13 +4433,37 @@ mod tests {
             refused: Default::default(),
         };
 
-        let fresh = today_summary(&rules, day(), 0, &usage, Some(7), None, None);
+        let fresh = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(7),
+            None,
+            None,
+        );
         assert_eq!(fresh["enforcer_age_secs"], 7);
 
-        let stale = today_summary(&rules, day(), 0, &usage, Some(3600), None, None);
+        let stale = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(3600),
+            None,
+            None,
+        );
         assert_eq!(stale["enforcer_age_secs"], 3600);
 
-        let never = today_summary(&rules, day(), 0, &usage, None, None, None);
+        let never = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            None,
+            None,
+            None,
+        );
         assert!(
             never["enforcer_age_secs"].is_null(),
             "a never-reported enforcer must surface as null, not as a healthy-looking zero"
@@ -4235,7 +4482,10 @@ mod tests {
         // Thursday uses its override (30), not the everyday default (60).
         assert_eq!(rules.base_budget_for(Weekday::Thu), 30);
         assert_eq!(rules.base_budget_for(Weekday::Sat), 120);
-        assert_eq!(rules.effective_budget_mins(thu, 15), 45); // 30 + 15 granted
+        assert_eq!(
+            rules.effective_budget_mins(thu, Adjustments::new(15, None)),
+            45
+        ); // 30 + 15 granted
         // Without the override, the everyday default applies to every day.
         let plain = Rules {
             daily_budget_mins: 60,

@@ -778,14 +778,14 @@ download page and the behaviour below has never executed on the platform it was 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 48 items across §H1–§H9, where it held 45 at `v0.9.0`, 38 at
+accumulated rather than turned over: 53 items across §H1–§H9, where it held 45 at `v0.9.0`, 38 at
 `v0.8.0` and 32 at `v0.7.0`. The one
 thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
 (§H8) instead of being added to the list later or not at all, which is the failure `O87` records
 against 0.6.0 and 0.7.0.
 
-**Three of the 48 are newer than `v0.9.0` and are not in any release yet** — the probe scheduler's
-heartbeat and the settling period before its first check, both on `main`. They are written here in
+**Eight of the 53 are newer than `v0.9.0` and are not in any release yet** — the probe scheduler's
+heartbeat, the settling period before its first check, and the practice gate, all on `main`. They are written here in
 the commit that added them rather than at the next release, which is the rule `O87` exists to
 enforce and the thing 0.6.0 and 0.7.0 did not do.
 
@@ -1017,6 +1017,28 @@ is launched directly, not through `cmd.exe`.
       checking … Limits still apply; only earning has stopped.* The *enforcement alive* banner on
       the Today card must **not** be the thing that changes; it means limits are off, and they are
       not.
+- [ ] **The gate caps his day, and the daily limit is untouched.** Set the daily limit to 120 and
+      give the integration a gate: allowance 35, bar 15 questions. With HIM signed in, the Today
+      card must show **35 minutes** of budget while the dashboard's own daily-limit box still reads
+      **120**. Let him sit until it runs out: the lock must arrive at 35 minutes, with the normal
+      warning. This is the assertion the whole model exists for and it cannot be read off any
+      single number — it is the *pair* that is the property.
+- [ ] **The off switch hands the day back, on the machine.** With the gate binding at 35, switch
+      the integration off in the dashboard. Within one tick the Today card must read **120**, and
+      the child must not be locked. Switch it on again: back to 35. Then use **Remove** instead:
+      120 again, and it must stay 120 across a service restart.
+- [ ] **A parent's grant reaches a gated child in full.** Gate binding at 35, grant 30 minutes from
+      the dashboard. The budget must become **65**, not 35 — the round reopens. This is what
+      "unlock the PC and give him another try" is, and the arithmetic that makes it work is the one
+      thing a reading of the config cannot confirm.
+- [ ] **Meeting the bar gives exactly the normal day.** With a rung at 10 questions worth 16 and a
+      bar at 15, have the probe report 12 questions: budget **51**. Then 15: budget **120** — not
+      136. Then let the probe report 0: it must stay 120 for the rest of the day.
+- [ ] **A broken check hands the day back, and says so.** With the gate binding, rename the probe
+      program so it cannot run. Within one interval the card must read *This PC has stopped
+      checking* **and** the budget must return to 120. Put the program back: the gate binds again
+      at the next check. Note what this confirms deliberately — a child who disconnects the network
+      gets the same result, which is the trade `docs/PLUGIN-SYSTEM.md` records.
 - [ ] **`doctor` separates the two loops.** Run `nestwatch doctor` on a machine with a probe
       configured and the service running. Enforcement must report `checked in Ns ago` **and** a
       second line must read `earned-time checks running (studygo), last look Ns ago`. With no probe

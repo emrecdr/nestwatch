@@ -55,6 +55,9 @@ fn spawn_enforcer(rules: Rules) -> tokio::task::JoinHandle<()> {
         // actually moved. The event logs are `record`-and-forget and would only add flake.
         Arc::new(UsageLog::disabled()),
         Arc::new(ScreentimeLog::disabled()),
+        // No probe scheduler in this binary, so no provider can be reported as un-checkable —
+        // which is the same answer an install with no integrations gives.
+        Default::default(),
         Feed::new(),
         idle_waker(),
     ))

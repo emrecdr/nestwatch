@@ -59,6 +59,38 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   before; only earning extra time stops. A banner that raised the serious alarm for the smaller
   problem would teach you to ignore it.
 
+### Changed
+
+- **A practice gate is now something the integration owns, not something your daily limit is spent
+  on.** If you want *"thirty-five minutes, and once he has practised he has his normal day"*, the
+  thirty-five now belongs to the integration: tick **Cap his day until he has practised** under its
+  reward rules, set the allowance and the bar that lifts it, and leave your daily limit alone.
+  <br>The old way of getting those numbers was to set the daily limit itself to 35 and make the top
+  reward worth the difference. It produced the right figures and it was wrong, for a reason that
+  only showed up at the off switch: it spent *your* setting on the integration's rule, so the
+  number meaning his normal day existed nowhere, and switching the integration off left him on the
+  short day with no way back. Now switching it off — or removing it — hands the day back, because
+  nothing ever rewrote it.
+  <br>**If you set your gate up the old way, it still behaves exactly as it did** — nothing was
+  migrated and nothing broke. But the daily limit is still doing the gate's job there, with the off
+  switch still unable to undo it. To move over: set your daily limit back to his normal day, tick
+  the new box, and put the short number in the allowance.
+  <br>Three things worth knowing about how it behaves. A reward tier now raises the *gate* rather
+  than his day, so two-thirds of the practice buys a longer leash (35 → 51) and finishing lands on
+  his normal day exactly, not his normal day plus what he earned on the way. **Minutes you grant
+  him yourself are never swallowed by the gate** — grant 30 to a gated child and he has 65, which
+  is what "unlock it and give him another try" is. And the gate opens on *work done*, not on
+  minutes paid: if he took partial credit earlier, the push that proves he finished is refused for
+  minutes and still opens his gate.
+- **A check that cannot run hands the day back rather than holding it shut.** If the checking
+  program is missing, StudyGo is unreachable, or this PC's checking has stopped, a gate stops
+  applying and your normal limits are what's left. *"We can't tell"* is not *"he hasn't
+  practised"*, and an outage on someone else's service should not cost him his day.
+  <br>The trade, stated plainly: a child who can stop the check can lift the gate — turning the
+  machine's Wi-Fi off is enough. What stands against that is that you are told. The integration's
+  line reads *This PC has stopped checking* the whole time it lasts, and `nestwatch doctor` says
+  the same.
+
 ### Fixed
 
 - **A switched-off integration no longer advertises time your child cannot earn.** The reward-rules

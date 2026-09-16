@@ -242,9 +242,21 @@ pub async fn serve_with_handle(
         let screentime = state.screentime.clone();
         let foreground = foreground.clone();
         let wake = state.enforcement_wake.subscribe();
+        // The probe status map, for the practice gate: the enforcer applies the ceiling, and
+        // whether this machine can currently check is the one input to it that is not in the
+        // config. See `probe::providers_not_checking`.
+        let probe_status = state.probe_status.clone();
         tokio::spawn(async move {
-            crate::rules::run_rules_enforcer(control, config, usage, screentime, foreground, wake)
-                .await;
+            crate::rules::run_rules_enforcer(
+                control,
+                config,
+                usage,
+                screentime,
+                probe_status,
+                foreground,
+                wake,
+            )
+            .await;
             tracing::error!(
                 "rules enforcer exited unexpectedly — usage rules are no longer enforced"
             );

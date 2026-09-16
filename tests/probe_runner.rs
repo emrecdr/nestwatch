@@ -47,6 +47,7 @@ fn laddered_studygo() -> Provider {
             first_check_after_mins: 0,
         }),
         remind_every_check: false,
+        gate: None,
     }
 }
 
@@ -59,6 +60,7 @@ fn plain_chores() -> Provider {
         tiers: Vec::new(),
         probe: None,
         remind_every_check: false,
+        gate: None,
     }
 }
 
@@ -186,7 +188,8 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
         recover_read(&state.config).earned["studygo"],
         EarnedDay {
             date: today,
-            minutes: Some(16)
+            minutes: Some(16),
+            bar_met: false
         }
     );
     let status = status_of(&state, "studygo");
@@ -551,6 +554,93 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
             fake.probe_calls().len(),
             3,
             "and ends it the same way the first one did"
+        );
+    }
+
+    // --- A gate is lifted by a check that cannot run, and by nothing else ---------------------
+    //
+    // `probe::providers_not_checking` is the one input to the ceiling that is not in the config,
+    // and it is the one the household chose deliberately: *"we cannot tell"* is not *"he has not
+    // practised"*, so an outage must not cost him his day. Driven through a real failing probe
+    // rather than by hand-building a status map, because the thing under test is which OUTCOME
+    // counts, and only a real run produces one.
+    {
+        let fake = Arc::new(FakeControl::new());
+        let mut cfg = test_config();
+        let mut gated = laddered_studygo();
+        gated.gate = Some(nestwatch::config::Gate {
+            allowance_mins: 35,
+            questions: 15,
+            minutes_practised: 30,
+        });
+        cfg.providers.insert("studygo".into(), gated.clone());
+        // A gated provider with no probe: nothing to observe, so it is never in the set. Its
+        // checking arrives as a push, and a push that has not come is indistinguishable from a
+        // child who has not practised — which is the honest answer for that shape.
+        let mut push_only = gated.clone();
+        push_only.probe = None;
+        cfg.providers.insert("pushonly".into(), push_only);
+        // And a probe with no gate: nothing to lift, so it is never in the set either.
+        cfg.providers.insert("chores".into(), {
+            let mut p = laddered_studygo();
+            p.gate = None;
+            p
+        });
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+        let not_checking = |state: &AppState, scheduler_stale: bool| {
+            nestwatch::probe::providers_not_checking(
+                &recover_read(&state.config),
+                &state.probe_status,
+                scheduler_stale,
+            )
+        };
+
+        // Before any check has run, nothing is known to be broken — and the gate binds, which is
+        // the right default: he starts his day under it.
+        assert!(
+            not_checking(&state, false).is_empty(),
+            "a probe that has not run yet is not a probe that failed"
+        );
+
+        fake.script_probe(Err("no network".into()));
+        probe::run_once(&state, t0).await;
+        let broken = not_checking(&state, false);
+        assert!(
+            broken.contains("studygo"),
+            "a failed check must lift the gate: {broken:?}"
+        );
+        assert!(
+            !broken.contains("pushonly") && !broken.contains("chores"),
+            "only a gated provider with an observable check belongs here: {broken:?}"
+        );
+
+        // And it comes back the moment the check works again. A gate that stayed lifted after one
+        // bad minute would be a gate a child could open once and leave open.
+        fake.script_probe(Ok(br#"{"questions":1,"minutes":1}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(20)).await;
+        assert!(
+            not_checking(&state, false).is_empty(),
+            "a check that worked is not a check that cannot run"
+        );
+
+        // A dead scheduler lifts every gate it could have been checking — and **only** those. The
+        // second half is why the staleness is a parameter rather than a process global read in
+        // here: a gated provider with no probe has no scheduler to be waiting on, so a stopped
+        // loop says nothing about it, and the mutant that dropped that distinction survived while
+        // no test could reach the state that shows it.
+        let stopped = not_checking(&state, true);
+        assert!(
+            stopped.contains("studygo"),
+            "a stopped scheduler must lift the gate it was checking: {stopped:?}"
+        );
+        assert!(
+            !stopped.contains("pushonly"),
+            "but not a gate whose checking never went through the scheduler: {stopped:?}"
+        );
+        assert!(
+            !stopped.contains("chores"),
+            "and not a provider with no gate to lift: {stopped:?}"
         );
     }
 

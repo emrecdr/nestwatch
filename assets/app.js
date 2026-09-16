@@ -227,10 +227,16 @@ const UI = {
     addTier: "Add tier",
     eitherConditionMeetsATier: "Either condition is enough. The highest tier reached decides the reward.",
     remindEveryCheck: "Tell him at every check while he is short of the lowest tier (otherwise once a day)",
-    gateWithoutPractice: "Without practice he has {} min today",
-    gateWithFullReward: "with the highest tier met, {} min",
-    gateSwitchedOffDayIs: "Switched off, so nothing is earned here — his day is {} min",
-    gateSwitchedOffWouldBe: "switched on, and the highest tier met, it would be {} min",
+    gateWhileShort: "While he is short he has {} min",
+    gateAfterRungs: "part-way through, {} min",
+    gateOnceMet: "once he has practised, his normal {} min",
+    gateOnceMetNoLimit: "once he has practised, his normal day",
+    gateOffDay: "Gate off — his day is his normal {} min",
+    gateOffDayNoLimit: "Gate off — his day is his normal day",
+    gateCapHisDay: "Cap his day until he has practised",
+    gateAllowance: "Until then he has",
+    gateBarPrefix: "Lift it at",
+    gateNoBar: "Set a bar, or this caps his day with nothing that can lift it",
     appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here. You choose whether each is on and how many minutes it grants — and, under Check from this PC, whether this PC asks on its own instead.",
     checkFromThisPc: "Check from this PC",
     probeExplained: "Name a program in the Nestwatch folder and this PC runs it as your child on a schedule, with the session your phone forwarded, and judges what it reports by the rules above. Leave it blank to keep the checking on the phone.",
@@ -256,6 +262,8 @@ const UI = {
     sessionDaysAgo: "Session from the phone: {} days ago",
     tProbeEveryBetween5And240: "Check interval must be between 5 and 240 minutes",
     tProbeSettleBetween0And240: "The wait before the first check must be between 0 and 240 minutes",
+    tGateAllowanceBetween1And1440: "The allowance before he has practised must be between 1 and 1440 minutes",
+    tGateNeedsABar: "Set a bar that lifts the gate — questions, practised minutes, or both",
     tProbeNameInvalid: "The program is a file name in the Nestwatch folder, not a path",
     min: "min",
     pair: "Pair",
@@ -477,10 +485,16 @@ const UI = {
     addTier: "Niveau toevoegen",
     eitherConditionMeetsATier: "Eén van beide voorwaarden is genoeg. Het hoogst behaalde niveau bepaalt de beloning.",
     remindEveryCheck: "Zeg het bij elke controle zolang hij onder het laagste niveau blijft (anders één keer per dag)",
-    gateWithoutPractice: "Zonder oefenen heeft hij vandaag {} min",
-    gateWithFullReward: "met het hoogste niveau gehaald {} min",
-    gateSwitchedOffDayIs: "Uitgeschakeld, dus hier wordt niets verdiend — zijn dag is {} min",
-    gateSwitchedOffWouldBe: "ingeschakeld en het hoogste niveau gehaald zou het {} min zijn",
+    gateWhileShort: "Zolang hij achterloopt heeft hij {} min",
+    gateAfterRungs: "halverwege {} min",
+    gateOnceMet: "als hij geoefend heeft, zijn gewone {} min",
+    gateOnceMetNoLimit: "als hij geoefend heeft, zijn gewone dag",
+    gateOffDay: "Poort uit — zijn dag is zijn gewone {} min",
+    gateOffDayNoLimit: "Poort uit — zijn dag is zijn gewone dag",
+    gateCapHisDay: "Beperk zijn dag tot hij geoefend heeft",
+    gateAllowance: "Tot dan heeft hij",
+    gateBarPrefix: "Open bij",
+    gateNoBar: "Stel een grens in, anders beperkt dit zijn dag zonder dat iets het opheft",
     appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft — en onder Controleren vanaf deze pc of deze pc het in plaats daarvan zelf vraagt.",
     checkFromThisPc: "Controleren vanaf deze pc",
     probeExplained: "Noem een programma in de Nestwatch-map en deze pc voert het volgens schema uit als je kind, met de sessie die je telefoon doorgaf, en beoordeelt wat het meldt volgens de regels hierboven. Laat het leeg om de controle op de telefoon te houden.",
@@ -506,6 +520,8 @@ const UI = {
     sessionDaysAgo: "Sessie van de telefoon: {} dagen geleden",
     tProbeEveryBetween5And240: "Het controle-interval moet tussen 5 en 240 minuten liggen",
     tProbeSettleBetween0And240: "De wachttijd voor de eerste controle moet tussen 0 en 240 minuten liggen",
+    tGateAllowanceBetween1And1440: "De tijd voordat hij geoefend heeft moet tussen 1 en 1440 minuten liggen",
+    tGateNeedsABar: "Stel een grens in die de poort opent — vragen, geoefende minuten of allebei",
     tProbeNameInvalid: "Het programma is een bestandsnaam in de Nestwatch-map, geen pad",
     min: "min",
     pair: "Koppelen",
@@ -731,10 +747,16 @@ const UI = {
     addTier: "Kademe ekle",
     eitherConditionMeetsATier: "İki koşuldan biri yeterlidir. Ulaşılan en yüksek kademe ödülü belirler.",
     remindEveryCheck: "En düşük kademenin altındayken her kontrolde ona söyle (aksi hâlde günde bir kez)",
-    gateWithoutPractice: "Alıştırma yapmazsa bugün {} dk",
-    gateWithFullReward: "en yüksek kademeye ulaşırsa {} dk",
-    gateSwitchedOffDayIs: "Kapalı, yani burada bir şey kazanılmıyor — günü {} dk",
-    gateSwitchedOffWouldBe: "açık olsa ve en yüksek kademeye ulaşsa {} dk olurdu",
+    gateWhileShort: "Geride kaldığı sürece {} dk",
+    gateAfterRungs: "yarı yolda {} dk",
+    gateOnceMet: "alıştırmasını yapınca normal {} dk",
+    gateOnceMetNoLimit: "alıştırmasını yapınca normal günü",
+    gateOffDay: "Kapı kapalı — günü normal {} dk",
+    gateOffDayNoLimit: "Kapı kapalı — günü normal günü",
+    gateCapHisDay: "Alıştırmasını yapana kadar gününü sınırla",
+    gateAllowance: "O zamana kadar",
+    gateBarPrefix: "Şununla aç:",
+    gateNoBar: "Bir eşik belirleyin; yoksa bu, gününü hiçbir şeyin açamayacağı şekilde sınırlar",
     appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz — ve Bu bilgisayardan kontrol et altında, bunun yerine bu bilgisayarın kendisinin sormasına.",
     checkFromThisPc: "Bu bilgisayardan kontrol et",
     probeExplained: "Nestwatch klasöründe bir program adı verin; bu bilgisayar onu çocuğunuz adına, telefonunuzun ilettiği oturumla düzenli aralıklarla çalıştırır ve bildirdiklerini yukarıdaki kurallara göre değerlendirir. Kontrolü telefonda tutmak için boş bırakın.",
@@ -760,6 +782,8 @@ const UI = {
     sessionDaysAgo: "Telefondan oturum: {} gün önce",
     tProbeEveryBetween5And240: "Kontrol aralığı 5 ile 240 dakika arasında olmalı",
     tProbeSettleBetween0And240: "İlk kontrolden önceki bekleme 0 ile 240 dakika arasında olmalı",
+    tGateAllowanceBetween1And1440: "Alıştırma yapmadan önceki süre 1 ile 1440 dakika arasında olmalı",
+    tGateNeedsABar: "Kapıyı açacak bir eşik belirleyin — soru, alıştırma dakikası veya ikisi",
     tProbeNameInvalid: "Program, Nestwatch klasöründeki bir dosya adıdır, yol değil",
     min: "dk",
     pair: "Eşleştir",
@@ -1917,53 +1941,68 @@ function app() {
         // Absent means off, the way the server writes it: the field is skipped entirely unless a
         // household has switched it on, so `undefined` and `false` are the same answer here.
         remindEveryCheck: this.providers[name].remind_every_check === true,
+        // The gate, flattened to camelCase like the tiers and the probe. `null` when the provider
+        // has none, which is the common case and the shape `saveProvider` sends back to take one
+        // off. The three numbers are kept beside it so the boxes have something to bind to even
+        // before a parent switches the gate on.
+        gate: this.providers[name].gate
+          ? {
+              allowanceMins: this.providers[name].gate.allowance_mins,
+              questions: this.providers[name].gate.questions || 0,
+              minutesPractised: this.providers[name].gate.minutes_practised || 0,
+            }
+          : null,
+        gateOn: !!this.providers[name].gate,
+        gateAllowance: this.providers[name].gate ? this.providers[name].gate.allowance_mins : 35,
+        gateQuestions: this.providers[name].gate ? this.providers[name].gate.questions || 0 : 0,
+        gateMinutes: this.providers[name].gate ? this.providers[name].gate.minutes_practised || 0 : 0,
       }));
     },
 
-    // What this ladder is worth as a WHOLE DAY, which is the one thing this card cannot show by
-    // listing rewards.
+    // What a practice gate actually does to his day, in the totals a parent thinks in.
     //
-    // A reward is a difference and a budget is a total, and a parent setting a practice gate is
-    // thinking in totals: *thirty-five minutes, and a hundred and twenty once he has done his
-    // work.* To get that they must type 85, and nothing holds 35 + 85 = 120 together if either
-    // number later moves. `earned_grant.rs` pins that the arithmetic is genuinely all a gate
-    // needs — no subtractive mechanism, no second enforcer — which leaves exactly this: showing
-    // the totals the two numbers produce, computed from the same two places the enforcer reads.
+    // A gate is a CEILING on the day, not a budget: the parent's daily limit stays theirs, and
+    // this puts a lid on it until the bar is met. That is easy to state and easy to mis-picture,
+    // because the two numbers a parent types — an allowance and a bar — never name either of the
+    // days that result. So this names them: what he has while he is short, what a rung buys, and
+    // what he gets once he has practised, which is simply his own limit back.
     //
-    // Not a validation and deliberately not a warning. There is no wrong pair of numbers here;
-    // there is only a pair whose consequence was invisible.
+    // Says nothing for a provider with no gate. A plain reward ladder adds time and takes none,
+    // and the tier rows already say what each rung is worth; a sentence about "his day" there
+    // would be describing a limit this integration has no part in.
+    //
+    // Not a validation. The one genuinely broken pair — a gate with no bar — is refused by the
+    // server, so what is left here is only arithmetic whose consequence was invisible.
     gateTotals(row) {
-      const tiers = row.tiers || [];
-      if (!tiers.length) return "";
+      const gate = row.gate;
+      if (!gate) return "";
       // Monday-first, matching `Rules::budget_by_weekday`; `Date.getDay()` is Sunday-first, and
       // the two disagreeing would misreport one day in seven rather than fail outright.
       const perDay = this.rules.budget_by_weekday;
       const base = Array.isArray(perDay) && perDay.length === 7
         ? Number(perDay[(new Date().getDay() + 6) % 7]) || 0
         : Number(this.rules.daily_budget_mins) || 0;
-      // No budget is no gate. `Rules::effective_budget_mins` returns 0 for an unlimited day and
-      // ignores granted extra there, so a sentence about totals would describe a rule that is
-      // not in force — the same trap the today card avoids by not drawing a phantom budget.
-      if (base <= 0) return "";
-      const cap = row.cap === "" || row.cap === null ? Infinity : Number(row.cap);
-      const best = Math.min(cap, Math.max(...tiers.map((t) => Number(t.rewardMins) || 0)));
-      // Switched off, the ladder is scenery: `Config::provider_authority` refuses this provider's
-      // pushes and `probe.rs` will not run its probe, so nothing can reach a rung. Saying "with
-      // the highest tier met, 120 min" on a row whose own toggle is off names a number the child
-      // has no way to get — and on a gated day it is the *base* that is then the whole day, which
-      // is the thing the parent needs to see and the one thing the card never said. Still names
-      // what turning it back on is worth, because that is the decision they are making.
-      //
-      // `!row.enabled` rather than `=== false`: a real row always carries the flag, so this only
-      // fires on one that lost it, and of the two possible mistakes announcing an unreachable
-      // reward is the misleading one.
+      // `base <= 0` is an unlimited day, which `Rules::effective_budget_mins` still gates — so
+      // there is something to say, it just has no number on the far side.
+      const normal = base > 0 ? this.tf("gateOnceMet", base) : this.t("gateOnceMetNoLimit");
+      // Switched off, the ceiling is gone rather than merely satisfied — the parent's own day,
+      // untouched, which is the property the whole ceiling model exists to keep.
       if (!row.enabled) {
-        return [
-          this.tf("gateSwitchedOffDayIs", base),
-          this.tf("gateSwitchedOffWouldBe", base + best),
-        ].join(" · ");
+        return base > 0 ? this.tf("gateOffDay", base) : this.t("gateOffDayNoLimit");
       }
-      return [this.tf("gateWithoutPractice", base), this.tf("gateWithFullReward", base + best)].join(" · ");
+      const allowance = Number(gate.allowanceMins) || 0;
+      const parts = [this.tf("gateWhileShort", allowance)];
+      // A rung extends the leash rather than adding to the day, so the middle number is the
+      // allowance plus the best rung — and it is only worth printing while it is genuinely in
+      // between. A rung worth more than the whole day would otherwise print a total the child can
+      // never see, since the ceiling stops binding at his limit.
+      const rungs = (row.tiers || []).map((tier) => Number(tier.rewardMins) || 0);
+      const best = rungs.length ? Math.max(...rungs) : 0;
+      if (best > 0 && (base <= 0 || allowance + best < base)) {
+        parts.push(this.tf("gateAfterRungs", allowance + best));
+      }
+      parts.push(normal);
+      return parts.join(" · ");
     },
 
     // What the last check found and whether the phone's session is still there, in one line under
@@ -2050,6 +2089,22 @@ function app() {
           return;
         }
       }
+      // The gate's own two rules, checked here so the parent reads a sentence rather than a 400.
+      // The second is the one that matters: the server refuses a bar nothing can meet, because a
+      // gate with no bar caps the child every day until somebody notices.
+      if (row.gateOn) {
+        const allowance = Number(row.gateAllowance);
+        if (!Number.isInteger(allowance) || allowance < 1 || allowance > 1440) {
+          this.toast(this.t("tGateAllowanceBetween1And1440"), "error");
+          this.loadProviders();
+          return;
+        }
+        if (!(Number(row.gateQuestions) > 0) && !(Number(row.gateMinutes) > 0)) {
+          this.toast(this.t("tGateNeedsABar"), "error");
+          this.loadProviders();
+          return;
+        }
+      }
       this.savingProvider = true;
       try {
         // This client now knows about every field, so it round-trips all of them. The server's
@@ -2068,6 +2123,16 @@ function app() {
         // A switch has two positions, so this is sent as a plain boolean rather than the
         // null-clears dance the ceiling and the probe need.
         body.remind_every_check = row.remindEveryCheck === true;
+        // Null clears it, exactly like the probe and the ceiling: a gate has to be removable
+        // without a second route, and this is the field whose accidental clear hands a gated
+        // child his whole day.
+        body.gate = row.gateOn
+          ? {
+              allowance_mins: Number(row.gateAllowance),
+              questions: Number(row.gateQuestions) || 0,
+              minutes_practised: Number(row.gateMinutes) || 0,
+            }
+          : null;
         body.tiers = (row.tiers || []).map((t) => ({
           questions: Number(t.questions) || 0,
           minutes_practised: Number(t.minutesPractised) || 0,

@@ -84,14 +84,14 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 the downloaded artifacts.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **48 items across §H1–§H9** — the bedtime
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **53 items across §H1–§H9** — the bedtime
 extension, the enforcer wake, the translated shutdown notices, the ask link, the child's page in
 Dutch, the provider probe and the two sentences it says, and the message a parent types — and none
 of them has executed on Windows. Re-measured 2026-09-11; it read 38 across §H1–§H8 when `v0.8.0`
 shipped, §H9 arrived with the message box it covers, and the last three items of §H8 were written
 while cutting this release for a feature that had shipped without any. Worth stating exactly: **no
 commit in this repository's history has ever recorded a ticked item in that file**, in any section,
-so all 219 boxes it carries are still open. The three gates that
+so all 224 boxes it carries are still open. The three gates that
 were green when it shipped are the same three that were green when `install` failed on real hardware
 and again when `remove_file` turned out not to be exclusive. That is not an argument for distrusting
 them; it is the reason the section below exists and the reason the checklist is the only method here
@@ -1669,7 +1669,7 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 48 items that have never executed (measured 2026-09-15; 45 at `v0.9.0`, 38 at `v0.8.0`, and
+carries 53 items that have never executed (measured 2026-09-16; 45 at `v0.9.0`, 38 at `v0.8.0`, and
 32 when this was written), so the gap has a size and a reader can weigh it. A
 feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and

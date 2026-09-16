@@ -2471,35 +2471,83 @@ test("routineScheduleLabel accounts for windows the editor cannot show", () => {
   assert.match(label, /\+1 more/);
 });
 
-// --- What a ladder is worth as a whole day ---------------------------------------------------
+// --- What a practice gate does to his day -----------------------------------------------------
 //
-// `earned_grant.rs` pins that a practice gate needs no subtractive mechanism: a budget of 35 with
-// a top rung worth 85 IS "capped at 35 until the bar is met, then his normal 120". What that
-// leaves is the parent having to type 85 while thinking 120, which is what this line answers.
+// A gate is a CEILING on the day, never a replacement for the parent's daily limit — that
+// distinction is the whole design, and it is invisible in the two numbers a parent types. So this
+// line names the days those numbers produce. `earned_grant.rs` pins the same arithmetic on the
+// server; these pin that the card says the same thing.
 
-test("gateTotals says nothing for a provider with no ladder", () => {
-  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
-  assert.equal(app.gateTotals({ enabled: true, tiers: [], cap: "" }), "");
+const gated = (over) =>
+  Object.assign(
+    {
+      enabled: true,
+      tiers: [],
+      gate: { allowanceMins: 35, questions: 15, minutesPractised: 30 },
+    },
+    over,
+  );
+
+test("gateTotals says nothing for a provider with no gate", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  // Including one with a full ladder: a plain reward adds time and takes none, so a sentence
+  // about "his day" would be describing a limit this integration has no part in.
+  assert.equal(app.gateTotals({ enabled: true, tiers: [{ rewardMins: 85 }], gate: null }), "");
 });
 
-test("gateTotals says nothing on a day with no budget, because there is no gate to describe", () => {
-  const app = withState({ lang: "en", rules: { daily_budget_mins: 0, budget_by_weekday: null } });
-  assert.equal(app.gateTotals({ enabled: true, tiers: [{ rewardMins: 85 }], cap: "" }), "");
-});
-
-test("gateTotals reports the two totals the parent is actually thinking in", () => {
-  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
+test("gateTotals names the days the gate's two numbers do not", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
   assert.equal(
-    app.gateTotals({ enabled: true, tiers: [{ rewardMins: 16 }, { rewardMins: 85 }], cap: 85 }),
-    "Without practice he has 35 min today · with the highest tier met, 120 min",
+    app.gateTotals(gated({ tiers: [{ rewardMins: 16 }] })),
+    "While he is short he has 35 min · part-way through, 51 min · once he has practised, his normal 120 min",
   );
 });
 
-test("gateTotals follows the ceiling, not the rung, when the ceiling is lower", () => {
-  // The ceiling is what actually binds, so a ladder whose top rung is worth more than a day may
-  // hold cannot be reported as though it were payable.
-  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
-  assert.match(app.gateTotals({ enabled: true, tiers: [{ rewardMins: 200 }], cap: 20 }), /55 min$/);
+test("gateTotals omits the middle number when there is no rung to reach", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  assert.equal(
+    app.gateTotals(gated({})),
+    "While he is short he has 35 min · once he has practised, his normal 120 min",
+  );
+});
+
+test("gateTotals does not print a part-way total the child can never see", () => {
+  // The ceiling stops binding at his limit, so a rung worth more than the whole day would name a
+  // number nothing can produce — 35 + 200 on a 120-minute day is just 120.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const line = app.gateTotals(gated({ tiers: [{ rewardMins: 200 }] }));
+  assert.doesNotMatch(line, /235/, `got: ${line}`);
+  assert.match(line, /^While he is short he has 35 min · once he has practised/);
+});
+
+test("gateTotals gates an unlimited day too, and has no number for the far side", () => {
+  // A household that sets no daily limit but installs a gate has stated its rule exactly once.
+  // `Rules::effective_budget_mins` honours it; this has to say so without inventing a total.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 0, budget_by_weekday: null } });
+  assert.equal(
+    app.gateTotals(gated({})),
+    "While he is short he has 35 min · once he has practised, his normal day",
+  );
+});
+
+test("gateTotals reports the parent's own day once the gate is switched off", () => {
+  // The property the whole ceiling model exists for: off means the ceiling is GONE, not satisfied,
+  // and his day is the one his parent set. The shape this replaced left him on the short day.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  assert.equal(
+    app.gateTotals(gated({ enabled: false, tiers: [{ rewardMins: 16 }] })),
+    "Gate off — his day is his normal 120 min",
+  );
+  const noLimit = withState({ lang: "en", rules: { daily_budget_mins: 0, budget_by_weekday: null } });
+  assert.equal(noLimit.gateTotals(gated({ enabled: false })), "Gate off — his day is his normal day");
+});
+
+test("gateTotals treats a row with no enabled flag as off, not as gating", () => {
+  // Fails toward the truth about what is reachable. A real row always carries the flag, so this
+  // only fires on one that lost it — and of the two possible mistakes, showing a ceiling that is
+  // not in force is the one that makes a parent tighten a rule the child is not under.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  assert.match(app.gateTotals({ tiers: [], gate: { allowanceMins: 35 } }), /^Gate off/);
 });
 
 test("gateTotals reads the per-weekday budget Monday-first, like the server", () => {
@@ -2509,143 +2557,14 @@ test("gateTotals reads the per-weekday budget Monday-first, like the server", ()
   const week = [10, 20, 30, 40, 50, 60, 70];
   const app = withState({ lang: "en", rules: { daily_budget_mins: 999, budget_by_weekday: week } });
   const todaysBase = week[(new Date().getDay() + 6) % 7];
-  assert.match(
-    app.gateTotals({ enabled: true, tiers: [{ rewardMins: 5 }], cap: "" }),
-    new RegExp(`has ${todaysBase} min today`),
-  );
+  assert.match(app.gateTotals(gated({})), new RegExp(`his normal ${todaysBase} min$`));
 });
 
-test("gateTotals stops advertising a reward a switched-off integration cannot pay", () => {
-  // The defect this closes, observed rather than imagined: with the toggle OFF the card still read
-  // *with the highest tier met, 120 min*. Nothing can meet a tier while the provider is off —
-  // `Config::provider_authority` refuses its pushes and `probe.rs` will not run its probe — so the
-  // card was naming a number the child had no way to reach, on the very row saying it was off.
-  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
-  const ladder = { tiers: [{ rewardMins: 16 }, { rewardMins: 85 }], cap: 85 };
-  const off = app.gateTotals({ enabled: false, ...ladder });
-  assert.match(off, /^Switched off/, `got: ${off}`);
-  assert.match(off, /his day is 35 min/, "it must say what the day actually IS, not only what it is not");
-  assert.match(off, /120 min/, "and still say what turning it on would be worth, or the parent cannot weigh it");
-  assert.doesNotMatch(
-    off,
-    /with the highest tier met/,
-    "the reward must not be stated as reachable while nothing can reach it",
-  );
-});
-
-test("gateTotals treats a row with no enabled flag as off, not as earning", () => {
-  // Fails toward the truth about what is reachable. A real row always carries `enabled` — the
-  // server never skips it — so this only fires on a row that lost the field, and of the two
-  // possible mistakes, announcing an unreachable 120 is the one that misleads.
-  const app = withState({ lang: "en", rules: { daily_budget_mins: 35, budget_by_weekday: null } });
-  assert.match(app.gateTotals({ tiers: [{ rewardMins: 85 }], cap: 85 }), /^Switched off/);
-});
-
-// --- The probe's status line -----------------------------------------------------------------
-//
-// One sentence under the integration row that says what the last check found and whether the
-// phone's session is still there. Built entirely from the language tables, because the guard at
-// the foot of this file pins the set of methods allowed to assemble English, and this one is not
-// joining it.
-
-test("probeSummary says nothing for a provider that runs no probe", () => {
-  const app = withState({ lang: "en" });
-  assert.equal(app.probeSummary({ probeExe: "", probeStatus: null, secretAt: null }), "");
-});
-
-test("probeSummary reports a probe that has never run and no session yet", () => {
-  const app = withState({ lang: "en" });
-  assert.equal(
-    app.probeSummary({
-      probeExe: "studygo-probe.exe",
-      probeSchedulerAge: 0,
-      probeStatus: null,
-      secretAt: null,
-    }),
-    "Not checked yet · No session from the phone yet",
-  );
-});
-
-test("probeSummary reads the last check back: when, what was found, what it earned", () => {
-  const app = withState({ lang: "en" });
-  const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000 - 1000).toISOString();
-  const line = app.probeSummary({
-    probeExe: "studygo-probe.exe",
-    probeSchedulerAge: 0,
-    probeStatus: { at: "2026-09-08T16:00:00+02:00", questions: 12, minutes: 5, granted: 16 },
-    secretAt: twoDaysAgo,
-  });
-  assert.match(line, /^Checked at \d\d:\d\d · 12 questions · 5 min practised · \+16 min · /);
-  assert.match(line, /Session from the phone: 2 days ago$/);
-});
-
-test("probeSummary names a refusal in the parent's words and a failure in the probe's", () => {
-  const app = withState({ lang: "en" });
-  const today = new Date().toISOString();
-  const refused = app.probeSummary({
-    probeExe: "p",
-    probeStatus: { at: today, questions: 3, minutes: 1, refused: "below_threshold" },
-    secretAt: today,
-  });
-  assert.match(refused, /3 questions · 1 min practised · Nothing added: below the bar · Session from the phone: today$/);
-  for (const [reason, words] of [
-    ["already_granted_today", "already earned today"],
-    ["daily_cap_reached", "today's maximum reached"],
-  ]) {
-    const line = app.probeSummary({ probeExe: "p", probeSchedulerAge: 0, probeStatus: { at: today, refused: reason }, secretAt: null });
-    assert.match(line, new RegExp(`Nothing added: ${words.replace("'", "'")} · No session`));
-  }
-  const failed = app.probeSummary({
-    probeExe: "p",
-    probeSchedulerAge: 0,
-    probeStatus: { at: today, error: "probe exited with code 3" },
-    secretAt: null,
-  });
-  assert.match(failed, /^Checked at \d\d:\d\d · Check failed: probe exited with code 3 · No session from the phone yet$/);
-});
-
-// The scheduler half of this line: a stale `Checked at 16:00` reads as recent until you know nothing
-// has looked since, so the scheduler's own state has to come FIRST or it changes nothing.
-
-test("probeSummary leads with a scheduler that has stopped", () => {
-  const app = withState({ lang: "en" });
-  const line = app.probeSummary({
-    probeExe: "studygo-probe.exe",
-    probeSchedulerAge: 600,
-    probeStatus: { at: "2026-09-08T16:00:00+02:00", questions: 12, minutes: 5, granted: 16 },
-    secretAt: null,
-  });
-  assert.match(line, /^This PC has stopped checking — last look 10 min ago\./);
-  assert.match(line, /Limits still apply/, "and says what has NOT stopped, or it reads as an outage");
-  assert.match(line, /Checked at \d\d:\d\d/, "without swallowing what the last check found");
-});
-
-test("probeSummary reads a scheduler that never reported as not running, not as fine", () => {
-  const app = withState({ lang: "en" });
-  // The case the age exists for and `probe_status` cannot cover: the loop died before its first
-  // run, so there is no check to be stale. `null` and an absent key are one answer here.
-  for (const age of [null, undefined]) {
-    const line = app.probeSummary({ probeExe: "p", probeSchedulerAge: age, probeStatus: null, secretAt: null });
-    assert.match(line, /^This PC is not checking\./, `age ${age} must not read as healthy`);
-  }
-});
-
-test("probeSummary draws the scheduler's line at the shared threshold", () => {
-  const app = withState({ lang: "en" });
-  const at = (age) =>
-    app.probeSummary({ probeExe: "p", probeSchedulerAge: age, probeStatus: null, secretAt: null });
-  // Both sides, and zero on its own: `age == null` rather than a falsy test is the only thing
-  // keeping a scheduler that stamped this very second out of the "never reported" branch.
-  assert.match(at(0), /^Not checked yet/, "stamped a second ago is the healthiest it gets");
-  assert.match(at(180), /^Not checked yet/, "exactly at the threshold is not yet stopped");
-  assert.match(at(181), /^This PC has stopped checking/, "past it");
-});
-
-test("probeSummary is translated, not assembled in English", () => {
-  const app = withState({ lang: "nl" });
-  const line = app.probeSummary({ probeExe: "p", probeSchedulerAge: 0, probeStatus: null, secretAt: null });
-  assert.equal(line, app.t("probeNotRunYet") + " · " + app.t("noSessionYet"));
-  assert.notEqual(line, "Not checked yet · No session from the phone yet");
+test("gateTotals is translated, not assembled in English", () => {
+  const app = withState({ lang: "nl", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const line = app.gateTotals(gated({}));
+  assert.equal(line, app.tf("gateWhileShort", 35) + " · " + app.tf("gateOnceMet", 120));
+  assert.doesNotMatch(line, /While he is short/);
 });
 
 // --- The settling period, across the two edges that rename it --------------------------------

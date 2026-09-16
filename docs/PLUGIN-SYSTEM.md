@@ -680,7 +680,15 @@ changed since the top of this file: **a provider is a registry entry plus a cred
 it**, and everything bolted to the entry inherits an assumption about the entry that nothing
 restates at the bolt.
 
-## A gate needs no gate — 2026-09-11
+## A gate needs no gate — 2026-09-11 — **SUPERSEDED 2026-09-16**
+
+> **This conclusion was wrong, and the section below is kept because the way it was wrong is the
+> useful part.** The arithmetic is correct: a budget of 35 with a top rung worth 85 does produce
+> 35 / 51 / 120. What it never asked was *whose 35 that is*. It is the parent's — written into
+> `daily_budget_mins`, the household's own setting — so the gate was not built without a mechanism,
+> it was built out of a mechanism that belonged to someone else. Everything that followed from
+> that is in *A gate is a ceiling, not a budget*, below.
+
 
 The household rule this registry was built towards is *thirty-five minutes, and he earns the rest
 of his day by practising*. Every design sketch for it, including the ones in this document,
@@ -793,7 +801,14 @@ it, not to forbid it. Here it is `MAX_SETTLE_MINS`, a hint under the box in the 
 and this paragraph — and unlike the totals line, this one has no second number on the card to show it
 against, which is the honest limit of the remedy.
 
-## An off switch cannot give back what it never took — 2026-09-16
+## An off switch cannot give back what it never took — 2026-09-16 — **RESOLVED the same day**
+
+> The finding stands; its conclusion does not. It weighed three ways to make the off switch restore
+> a normal day and recommended the cheapest — a dashboard prompt. The household's answer was that
+> the premise was wrong: *the 35 minutes is set by the plugin; before that there is no 35-minute
+> limit at all.* That makes this not a comprehension problem with a signposting fix but a
+> misplaced number with a structural one. See *A gate is a ceiling, not a budget*.
+
 
 Asked directly: *is this module easily enabled and disabled from the parent portal?* The switch is
 there and is honoured everywhere — a toggle per provider on the Integrations card, a Remove button
@@ -845,3 +860,83 @@ and stored in differences reads correctly forwards and misleads backwards. `gate
 forward direction — the parent types 85 while thinking 120. This is the reverse: they remove the 85
 and the 120 does not come back, because it was never there. Both are comprehension failures of the
 same arithmetic, and both are answered by showing the consequence rather than by adding a mechanism.
+
+## A gate is a ceiling, not a budget — 2026-09-16
+
+Asked whether the integration could be switched off easily, and answering it honestly turned up
+that it could not — not in the way that matters. The switch worked everywhere a switch is read, and
+the child still woke up to a thirty-five-minute day. Two sections above say why. This says what it
+cost and what replaced it.
+
+**The mistake, in one line: the gate was built out of the parent's own daily limit.** *A gate needs
+no gate* found that `daily_budget_mins = 35` plus a top rung worth 85 produces exactly 35 / 51 /
+120, and concluded that no mechanism was needed. The arithmetic was right and the ownership was
+wrong. Writing 35 into `daily_budget_mins` spends the household's setting on the plugin's rule, and
+the consequences all follow from that one move:
+
+- the number meaning *his normal day* — 120 — is then recorded **nowhere**, so nothing can restore
+  it;
+- switching the integration off leaves the short day standing, which makes the off switch a
+  punishment;
+- removing the integration does the same, so the registry is no longer removable in the sense the
+  whole architecture claims;
+- and a parent who later changes their daily limit is silently editing the gate.
+
+The household's own correction was the clearest statement of it: *the 35 minutes is set by the
+StudyGo plugin; before that, there is no 35-minute preset usage time.*
+
+**So the allowance moved to the provider, and it caps rather than replaces.** `Provider::gate` is
+`{ allowance_mins, questions, minutes_practised }` — what he has before the bar, and the bar.
+`Config::gate_cap_mins` turns every installed, enabled, unmet gate into one number, and
+`Rules::effective_budget_mins` applies it:
+
+```
+budget = min(base, gate_cap) + extra          base > 0
+       = gate_cap + extra                     base == 0  (an unlimited day is still gated)
+       = base + extra                         no gate
+```
+
+Read that in the order it is written, because both orderings are load-bearing:
+
+- **The cap applies to the base, and `extra` is added after it.** A parent granting half an hour to
+  a gated child gives him half an hour — their minutes, which a plugin must not swallow. That is
+  also exactly *"unlock the PC and give him another try"*: the round is a grant, and the gate does
+  not eat it.
+- **A rung raises the gate, not the day.** `Config::earn` records a gated provider's minutes in
+  `Config::earned` as it always did, and does **not** add them to `Config::extra`. So two-thirds of
+  the practice buys a longer leash (35 → 51) rather than a bonus, and meeting the bar afterwards
+  lands on the normal day *exactly* rather than the normal day plus change.
+- **The bar is recorded on work done, not on minutes paid.** `EarnedDay::bar_met` is written before
+  every refusal path in `earn`. Without that the child who takes partial credit and then finishes
+  would be the one child whose gate could never open: the lower rung spends the day's single grant,
+  so the push that proves he finished comes back `already_granted_today`. It opens the gate anyway.
+- **And once open it stays open for the day.** A provider that resets a counter, or a probe reading
+  a stale page, must not send a child who has finished back to the allowance at four in the
+  afternoon.
+
+**What the off switch now does is the point of the whole change.** Switched off, removed, or unable
+to be checked, the gate contributes no ceiling, and the day is the parent's own — untouched,
+because nothing ever rewrote it. `earned_grant.rs` drives all four states through the real
+endpoint.
+
+**The fourth of those is a trade the household made explicitly.** A check that cannot run — probe
+missing, StudyGo down, scheduler stopped — lifts the gate rather than holding it shut, on the
+grounds that *"we cannot tell"* is not *"he has not practised"*, and that an outage must not cost a
+child his day. `probe::providers_not_checking` decides it, and the cost is stated rather than
+buried: **a child who can stop the check can lift the gate**, and turning the machine's network off
+is enough. What stands against that is visibility — the card and `doctor` both say *this PC has
+stopped checking* while it lasts — and, if it ever proves to matter, requiring the failure to
+persist before it counts. That would keep the outage case and close the Wi-Fi case, at the price of
+a delay nobody has yet needed.
+
+**`Rules` still does not know what a provider is**, which is the property all of this is in service
+of. The ceiling reaches it as a number, through `rules::Adjustments`, exactly as granted extra
+already did — and `Adjustments` exists because the two now travel together to four call sites and
+passing them loose let their order be mixed up at each.
+
+**The general form, and it is a different failure from the five above it.** Those are questions left
+unasked beside questions answered. This one is a question answered *in the wrong currency*: the
+design reasoned entirely about numbers — do 35, 51 and 120 come out right? — when the thing that
+mattered was whose numbers they were. Every check passed. The tests were green, the arithmetic was
+pinned, and the feature was wrong in a way no amount of checking the arithmetic could have found,
+because the arithmetic was never the part that was wrong.

@@ -44,6 +44,13 @@ use crate::state::AppState;
 /// letting the route that deposits it write a file of any size into the data dir.
 pub const MAX_SECRET_BYTES: usize = 8 * 1024;
 
+/// Past this many seconds without a heartbeat, the scheduler is not running.
+///
+/// Three missed ticks of [`SCHEDULER_TICK`]. Read by `doctor` for its earned-time check and by
+/// [`providers_not_checking`] for the gate, so the sentence a parent reads and the ceiling their
+/// child is actually under cannot disagree about the same age.
+pub const SCHEDULER_STALE_SECS: i64 = 180;
+
 /// How often the scheduler looks for due probes. A parent's interval is in minutes, so a minute
 /// is the finest it needs to be — and the check itself is a read of the config.
 const SCHEDULER_TICK: std::time::Duration = std::time::Duration::from_secs(60);
@@ -590,6 +597,67 @@ async fn run_one(
         (Ok(()), None) => ProbeOutcome::Failed("the registry gave no verdict".into()),
     };
     (Some(progress), outcome)
+}
+
+/// The gated providers this machine currently **cannot** check.
+///
+/// Feeds [`crate::config::Config::gate_cap_mins`], which lifts a gate for every name in here. The
+/// rule behind that is *"we cannot tell" is not "he has not practised"*: a StudyGo outage, an
+/// uninstalled probe or a scheduler that has stopped are all failures of this machine's ability to
+/// ask, and charging a child his whole day for one of those punishes him for someone else's fault.
+///
+/// **What counts as cannot-check, and the one case that deliberately does not.** A probe whose last
+/// run *failed* counts — that is an observed inability to ask. A scheduler that has gone stale
+/// counts. A scheduler that has **never** stamped does not, and that is the deliberate edge: in a
+/// live service the first tick lands within milliseconds of startup, so `None` here means a test or
+/// a one-off process rather than a broken service — and the realistic version of "the loop never
+/// worked" reaches this function the other way, as a probe that ran and failed. Reading `None` as
+/// broken would instead switch every gate off in any process that does not run the scheduler,
+/// which is the loudest possible failure for the quietest possible cause.
+///
+/// `scheduler_stale` is [`scheduler_stale`], passed in rather than read here for the reason
+/// `today_summary` gives about the enforcer heartbeat: it touches a process global, and keeping it
+/// at the edge is what lets this be tested against both answers. That is not hygiene — the one
+/// filter below that *only* matters when the scheduler is stale survived a mutant while this
+/// function read the global itself, because no test could reach the state that distinguishes it.
+///
+/// **A gated provider with no probe is never in here**, because there is nothing to observe: its
+/// checking arrives as a push from the phone, and a push that has not come is indistinguishable
+/// from a child who has not practised. That is the honest answer for that shape, and it is why the
+/// dashboard tells a parent plainly when a gate has no probe behind it.
+///
+/// **The cost of this rule, stated because it is real.** A child who can stop the check can lift
+/// the gate — turning the machine's network off is enough, and needs no privilege. The mitigation
+/// is not in this function: it is that the card and `doctor` both say *this PC has stopped
+/// checking* while it lasts, so the gap is visible rather than silent. `docs/PLUGIN-SYSTEM.md`
+/// weighs the alternative.
+pub fn providers_not_checking(
+    cfg: &crate::config::Config,
+    status: &StatusMap,
+    scheduler_stale: bool,
+) -> std::collections::BTreeSet<String> {
+    let status = crate::api::recover_lock(status);
+    cfg.providers
+        .iter()
+        .filter(|(_, provider)| provider.gate.is_some() && provider.probe.is_some())
+        .filter(|(name, _)| {
+            scheduler_stale
+                || matches!(
+                    status.get(name.as_str()).map(|entry| &entry.last.outcome),
+                    Some(ProbeOutcome::Failed(_))
+                )
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Whether the scheduler has stopped reporting in, for [`providers_not_checking`].
+///
+/// A **never-stamped** heartbeat is deliberately not stale — see that function, which explains why
+/// `None` here means a process that does not run this loop rather than a loop that has died.
+pub fn scheduler_stale() -> bool {
+    crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe)
+        .is_some_and(|age| age > SCHEDULER_STALE_SECS)
 }
 
 /// Run [`run_once`] once a minute for the life of the service, stamping a heartbeat each time.
