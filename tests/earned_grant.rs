@@ -1137,8 +1137,8 @@ async fn earned_grants_latch_replay_and_validate() {
         // The bar. The ceiling does not rise to meet the day; it goes.
         //
         // **And it goes on work done, not on minutes paid**, which this push is the proof of: the
-        // lower rung already spent this provider's one grant for the day, so the minutes are
-        // refused — and the gate opens regardless. Without that the child who finishes his
+        // lower rung already took the ladder to its top, so the minutes are refused — and the gate
+        // opens regardless. Without that the child who finishes his
         // practice after taking partial credit would be the one child the gate could never open,
         // having done everything asked of him.
         let (_, body) = grant(
@@ -1150,8 +1150,9 @@ async fn earned_grants_latch_replay_and_validate() {
         .await;
         assert_eq!(
             body["reason"],
-            json!("already_granted_today"),
-            "the day's minutes are spent, which is the interesting half of this case: {body}"
+            json!("daily_cap_reached"),
+            "the ladder is spent — this provider's implicit ceiling is its own top rung — which \
+             is the interesting half of this case: {body}"
         );
         assert_eq!(
             budget(),

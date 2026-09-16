@@ -1113,7 +1113,22 @@ impl Config {
         let (mut minutes, ceiling) = {
             let provider = self.provider_authority(source)?;
             match provider.reward_for(reported) {
-                Some(reward) => (reward, provider.daily_cap_mins),
+                // **A gated provider has a ceiling whether or not one was typed, and it is its own
+                // top rung.** The legacy rule below is one grant per source per day, which bounds
+                // a compromised client to a single reward. Under a gate it bounds nothing that was
+                // not already bounded — the ceiling is applied as `min(base, cap)`, so pushing
+                // forever reaches the day the parent already set — and what it does instead is
+                // break the ladder: the second rung of a two-rung gate came back
+                // `already_granted_today`, and the child stayed on the first one for the day with
+                // nothing said. The parent's own numbers answer it, so this needs no second field,
+                // and an explicit `daily_cap_mins` still wins.
+                Some(reward) => (
+                    reward,
+                    provider.daily_cap_mins.or_else(|| {
+                        provider.gate.as_ref()?;
+                        provider.tiers.iter().map(|tier| tier.reward_mins).max()
+                    }),
+                ),
                 // Work was reported and it meets no tier. Not an error: a client that pushes
                 // whatever it sees and lets this machine judge is exactly what tiers are for, so
                 // "not yet" has to be an ordinary answer rather than a rejection. Unreachable for
@@ -2165,6 +2180,140 @@ mod tests {
     }
 
     use std::collections::BTreeSet;
+
+    /// A gate's rungs accumulate, because a gate's ceiling is its own top rung.
+    ///
+    /// The trap this closes, found by driving it rather than by reading it: the legacy rule is
+    /// **one grant per source per day** unless a ceiling is set, and a gate makes rungs the thing
+    /// that extends the leash. So a parent who wrote a two-rung ladder under a gate and set no
+    /// daily maximum got the first rung and silence — the second was refused as
+    /// `already_granted_today`, and the card said nothing, because from the registry's point of
+    /// view the day was paid.
+    ///
+    /// The latch exists to bound a compromised client to one reward. Under a gate it bounds
+    /// nothing that was not already bounded: the ceiling is applied as `min(base, cap)`, so the
+    /// worst a client can do by pushing forever is reach the day the parent already set. What it
+    /// does instead is break the ladder. So a gated provider's ceiling **defaults to its highest
+    /// rung** — the parent's own number, requiring no second field — and an explicit
+    /// `daily_cap_mins` still wins.
+    #[test]
+    fn a_gates_rungs_accumulate_up_to_the_top_one() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
+        let none = BTreeSet::new();
+        let mut cfg = Config::default();
+        cfg.providers.insert(
+            "studygo".into(),
+            Provider {
+                enabled: true,
+                minutes: 1,
+                daily_cap_mins: None,
+                tiers: vec![
+                    Tier {
+                        questions: 5,
+                        minutes_practised: 0,
+                        reward_mins: 8,
+                    },
+                    Tier {
+                        questions: 10,
+                        minutes_practised: 0,
+                        reward_mins: 16,
+                    },
+                ],
+                probe: None,
+                remind_every_check: false,
+                gate: Some(Gate {
+                    allowance_mins: 35,
+                    questions: 15,
+                    minutes_practised: 0,
+                }),
+            },
+        );
+        let p = |questions| {
+            Some(Progress {
+                questions,
+                minutes: 0,
+            })
+        };
+
+        assert_eq!(cfg.gate_cap_mins(day, &none), Some(35));
+        assert_eq!(cfg.earn("studygo", day, p(5)), Ok(Earn::Granted(8)));
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            Some(43),
+            "35 + the first rung"
+        );
+
+        // The line the latch used to refuse. The second rung is worth 16 IN TOTAL, so what lands
+        // is the difference — the same arithmetic `A ceiling instead of a latch` already applies,
+        // and the reason the ladder reads as a ladder rather than as a set of alternatives.
+        assert_eq!(cfg.earn("studygo", day, p(10)), Ok(Earn::Granted(8)));
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            Some(51),
+            "35 + the second rung, not + both"
+        );
+
+        // And the top rung is the end of it: nothing further can be farmed out of the ladder.
+        assert_eq!(
+            cfg.earn("studygo", day, p(10)),
+            Ok(Earn::Refused(Refused::DailyCapReached))
+        );
+        assert_eq!(cfg.gate_cap_mins(day, &none), Some(51));
+
+        // The bar still opens the gate, on work done rather than on minutes paid — which is the
+        // only thing that could open it once the ladder is spent.
+        assert_eq!(
+            cfg.earn("studygo", day, p(15)),
+            Ok(Earn::Refused(Refused::DailyCapReached))
+        );
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            None,
+            "the bar is met, so the gate is gone"
+        );
+
+        // **And none of that reaches a provider without a gate**, which is the guarantee every
+        // field in this registry has kept: a laddered, ungated, uncapped provider still takes the
+        // original rule — one grant per source per day, whatever it was worth. Pinned here rather
+        // than assumed, because the implicit ceiling above is a *default*, and a default that
+        // leaked would quietly turn every existing ladder into a repeatable one.
+        let mut plain = Config::default();
+        plain.providers.insert(
+            "chores".into(),
+            Provider {
+                enabled: true,
+                minutes: 1,
+                daily_cap_mins: None,
+                tiers: vec![
+                    Tier {
+                        questions: 5,
+                        minutes_practised: 0,
+                        reward_mins: 8,
+                    },
+                    Tier {
+                        questions: 10,
+                        minutes_practised: 0,
+                        reward_mins: 16,
+                    },
+                ],
+                probe: None,
+                remind_every_check: false,
+                gate: None,
+            },
+        );
+        assert_eq!(plain.earn("chores", day, p(5)), Ok(Earn::Granted(8)));
+        assert_eq!(
+            plain.earn("chores", day, p(10)),
+            Ok(Earn::Refused(Refused::AlreadyGrantedToday)),
+            "an ungated ladder still latches: the implicit ceiling is the gate's, not every \
+             ladder's"
+        );
+        assert_eq!(
+            plain.extra.for_day(day),
+            8,
+            "and its minutes still reach the day, unlike a gate's"
+        );
+    }
 
     /// The gate's arithmetic, which is the whole of what a practice gate is.
     ///

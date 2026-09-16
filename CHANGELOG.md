@@ -82,6 +82,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   is what "unlock it and give him another try" is. And the gate opens on *work done*, not on
   minutes paid: if he took partial credit earlier, the push that proves he finished is refused for
   minutes and still opens his gate.
+  <br>One more thing about tiers under a gate: if you write more than one, they now build on each
+  other through the day without you having to set a daily maximum — reaching the second rung tops
+  him up to what that rung is worth. Before this they did not: the first rung was taken and the
+  second was silently refused as already paid. Tiers on an integration with **no** gate are
+  unchanged, and still pay once a day unless you set a maximum.
 - **A check that cannot run hands the day back rather than holding it shut.** If the checking
   program is missing, StudyGo is unreachable, or this PC's checking has stopped, a gate stops
   applying and your normal limits are what's left. *"We can't tell"* is not *"he hasn't

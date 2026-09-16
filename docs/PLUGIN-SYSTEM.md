@@ -906,6 +906,15 @@ Read that in the order it is written, because both orderings are load-bearing:
   `Config::earned` as it always did, and does **not** add them to `Config::extra`. So two-thirds of
   the practice buys a longer leash (35 → 51) rather than a bonus, and meeting the bar afterwards
   lands on the normal day *exactly* rather than the normal day plus change.
+- **A gated provider's ceiling defaults to its own top rung**, found by driving a two-rung ladder
+  rather than by reading it. The legacy rule is *one grant per source per day* unless
+  `daily_cap_mins` is set, so a parent who wrote two rungs under a gate and no daily maximum got the
+  first rung and silence — the second came back `already_granted_today`, and from the registry's
+  point of view the day was paid. The latch exists to bound a compromised client to one reward;
+  under a gate it bounds nothing that `min(base, cap)` did not already bound, and it breaks the
+  ladder. The parent's own numbers answer it, so no second field was needed, and an explicit
+  ceiling still wins. It reaches **only** gated providers: an ungated ladder still latches, which
+  is pinned rather than assumed.
 - **The bar is recorded on work done, not on minutes paid.** `EarnedDay::bar_met` is written before
   every refusal path in `earn`. Without that the child who takes partial credit and then finishes
   would be the one child whose gate could never open: the lower rung spends the day's single grant,
