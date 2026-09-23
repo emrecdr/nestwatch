@@ -76,16 +76,7 @@ fn at(s: &str) -> DateTime<FixedOffset> {
 /// fixture into "no time used" — which is the *refused* side of every assertion below, and would
 /// pass while proving nothing.
 fn seed_used(day: chrono::NaiveDate, mins: u64) {
-    let usage = nestwatch::rules::Usage {
-        day: Some(day),
-        total_secs: mins * 60,
-        ..Default::default()
-    };
-    std::fs::write(
-        nestwatch::config::data_paths().dir.join("usage_state.json"),
-        serde_json::to_string(&usage).expect("usage serializes"),
-    )
-    .expect("seeding the tally");
+    common::seed_tally(day, mins * 60);
 }
 
 fn status_of(state: &AppState, name: &str) -> ProbeStatus {
@@ -641,6 +632,84 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
         assert!(
             !stopped.contains("chores"),
             "and not a provider with no gate to lift: {stopped:?}"
+        );
+    }
+
+    // --- A gate's ladder stays climbable when nobody typed a ceiling --------------------------
+    //
+    // Driven through `run_once` rather than through `Config::earn`, because the two disagreed and
+    // only the scheduler could see it. `earn` reads the ceiling a gate implies; `exhausted_for` —
+    // the filter deciding whether to spend a request at all — read only the typed
+    // `daily_cap_mins`. So a gated provider with none was paid its first rung and then dropped out
+    // of the due list for the rest of the day: the child did the work, took the lowest reward, and
+    // sat under the gate with nothing said, which is the exact failure the ladder exists to
+    // prevent. Every other section here shares a fixture that sets `daily_cap_mins`, and that is
+    // the one arm where the two spellings agreed.
+    {
+        let fake = Arc::new(FakeControl::new());
+        let mut cfg = test_config();
+        let mut uncapped = laddered_studygo();
+        uncapped.daily_cap_mins = None;
+        uncapped.gate = Some(nestwatch::config::Gate {
+            allowance_mins: 35,
+            questions: 15,
+            minutes_practised: 30,
+        });
+        cfg.providers.insert("studygo".into(), uncapped);
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+
+        // Asserted on the gate's own ledger, not on `Config::extra`: a gated provider's minutes
+        // raise its ceiling rather than the day, which is the rule `Config::earn`'s closing lines
+        // state. Reading `extra` here would assert 0 whatever the scheduler did.
+        let earned_mins = |state: &AppState| {
+            recover_read(&state.config)
+                .earned
+                .get("studygo")
+                .map(|entry| (entry.minutes, entry.bar_met))
+        };
+
+        // The lower rung: worth something, and short of the bar.
+        fake.script_probe(Ok(br#"{"questions":10,"minutes":20}"#.to_vec()));
+        probe::run_once(&state, t0).await;
+        assert_eq!(fake.probe_calls().len(), 1);
+        assert_eq!(
+            earned_mins(&state),
+            Some((Some(16), false)),
+            "the first rung pays, and does not lift the bar"
+        );
+
+        // The assertion the defect failed: a rung is still unclimbed, so it is still worth asking.
+        fake.script_probe(Ok(br#"{"questions":15,"minutes":30}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(15)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            2,
+            "a gate with a rung left to climb must still be polled"
+        );
+        assert_eq!(
+            status_of(&state, "studygo").outcome,
+            ProbeOutcome::Granted(14),
+            "and the top rung pays the remainder, not a second full reward"
+        );
+        assert_eq!(
+            earned_mins(&state),
+            Some((Some(30), true)),
+            "which tops the ladder out and lifts the bar"
+        );
+        assert_eq!(
+            recover_read(&state.config)
+                .gate_cap_mins(t0.date_naive(), &std::collections::BTreeSet::new()),
+            None,
+            "a lifted gate stops capping the day, which is the point of climbing it"
+        );
+
+        // And now it really is paid in full — by its own top rung, not by a number anyone typed.
+        probe::run_once(&state, t0 + Duration::minutes(30)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            2,
+            "the top rung is the ceiling when no other was set"
         );
     }
 

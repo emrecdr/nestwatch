@@ -27,8 +27,7 @@ use axum::http::{Request, StatusCode, header};
 use serde_json::json;
 use tower::ServiceExt;
 
-use nestwatch::config::data_paths;
-use nestwatch::rules::{EnforceAction, Rules, Usage};
+use nestwatch::rules::{EnforceAction, Rules};
 
 mod common;
 use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
@@ -162,16 +161,7 @@ async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
         "with screen time to spare there is nothing to warn about: {before}"
     );
 
-    let spent = Usage {
-        day: Some(nestwatch::config::today()),
-        total_secs: 999 * 60,
-        ..Default::default()
-    };
-    std::fs::write(
-        data_paths().dir.join("usage_state.json"),
-        serde_json::to_string(&spent).unwrap(),
-    )
-    .unwrap();
+    common::seed_tally(nestwatch::config::today(), 999 * 60);
 
     let (status, body) = post(&app, "/api/curfew/extend", &cookie, json!({"minutes": 30})).await;
     assert_eq!(status, StatusCode::OK, "the extension still lands");

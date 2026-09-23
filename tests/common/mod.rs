@@ -345,6 +345,30 @@ pub fn idle_waker() -> nestwatch::heartbeat::Wake {
     rx
 }
 
+/// Write the day's screen-time tally that the enforcer and the probe's settling period read.
+///
+/// Serialized from a real [`nestwatch::rules::Usage`] rather than hand-written JSON, because
+/// `load_or_default` swallows a parse error and hands back a **zeroed** tally. A field gaining a
+/// `serde` attribute would therefore turn a hand-written fixture into "no time used" silently —
+/// which is the *refused* side of most assertions that read it, so the test would keep passing
+/// while proving nothing.
+///
+/// Here rather than in each binary because this was a copy each in `probe_runner`,
+/// `enforcer_shutdown` and `curfew_extend`, the hazard above explained in three wordings, and
+/// nothing keeping the three in step.
+pub fn seed_tally(day: chrono::NaiveDate, total_secs: u64) {
+    let usage = nestwatch::rules::Usage {
+        day: Some(day),
+        total_secs,
+        ..Default::default()
+    };
+    std::fs::write(
+        nestwatch::config::data_paths().dir.join("usage_state.json"),
+        serde_json::to_string(&usage).expect("usage serializes"),
+    )
+    .expect("seeding the tally");
+}
+
 // ---------------------------------------------------------------------------
 // Reading the crate's own source
 // ---------------------------------------------------------------------------

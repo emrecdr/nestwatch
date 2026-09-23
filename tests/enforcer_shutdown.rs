@@ -24,10 +24,10 @@
 
 use std::sync::{Arc, RwLock};
 
-use nestwatch::config::{Language, data_paths};
+use nestwatch::config::Language;
 use nestwatch::control::{FakeControl, SystemControl};
 use nestwatch::foreground::Feed;
-use nestwatch::rules::{EnforceAction, Rules, Usage, run_rules_enforcer};
+use nestwatch::rules::{EnforceAction, Rules, run_rules_enforcer};
 use nestwatch::screentime::ScreentimeLog;
 use nestwatch::usage::UsageLog;
 
@@ -40,18 +40,12 @@ const PORT: u16 = 9443;
 
 /// Write a tally that leaves the child well over budget the moment the loop starts.
 ///
-/// Serialized from a real [`Usage`] rather than hand-written JSON so a field gaining a `serde`
-/// attribute cannot make this fixture silently stop parsing — `load_or_default` swallows a parse
-/// error and returns a zeroed tally, which would leave the child *under* budget and the test
-/// waiting on a shutdown that never comes, for a reason having nothing to do with the assertion.
+/// The serde hazard this guards against, and why the write is not hand-written JSON, is recorded
+/// once on `common::seed_tally`. What it costs *here* specifically: a fixture that silently
+/// stopped parsing would leave the child **under** budget, and this test would wait out its
+/// timeout on a shutdown that never comes, for a reason having nothing to do with its assertion.
 fn seed_spent_budget(total_secs: u64) {
-    let usage = Usage {
-        day: Some(nestwatch::config::today()),
-        total_secs,
-        ..Default::default()
-    };
-    let json = serde_json::to_string(&usage).expect("usage serializes");
-    std::fs::write(data_paths().dir.join("usage_state.json"), json).expect("seeding the tally");
+    common::seed_tally(nestwatch::config::today(), total_secs);
 }
 
 #[tokio::test]

@@ -385,6 +385,21 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
     if due_now.is_empty() {
         return;
     }
+    // Only while the child is signed in and at the machine. Nothing is marked when he is not, so
+    // the first minute after he signs in runs whatever was waiting.
+    let control = state.control.clone();
+    match tokio::task::spawn_blocking(move || control.session_state()).await {
+        Ok(Ok(crate::control::SessionState::Active)) => {}
+        Ok(Ok(_)) => return,
+        Ok(Err(e)) => {
+            tracing::debug!(error = %e, "probe: session state unknown, not running");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "probe: session query panicked");
+            return;
+        }
+    }
     // The settling period: how long the child gets before anything asks what he has practised.
     //
     // **Measured in screen time used today, not in wall clock**, and that is the whole of the
@@ -406,7 +421,9 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
     // The read is behind a condition, so it costs nothing to a household that has not asked for
     // one: a provider must be due *and* name a period. What it costs the household that did, said
     // exactly: during the period the probe is due on every tick, so it is one file read a minute
-    // (plus one per config write, which also wakes this loop) for as long as the period lasts;
+    // (plus one per config write, which also wakes this loop) for as long as the period lasts,
+    // and only while he is signed in — the session check above returns first on a machine nobody
+    // is at, which is most of the day and used to be read and parsed for nothing;
     // afterwards the interval has to pass first, so it is one read per check. Both are on the
     // blocking pool, and neither reaches the controller or the network.
     if due_now
@@ -427,21 +444,6 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
         };
         due_now.retain(|(_, probe)| used_mins >= u64::from(probe.first_check_after_mins));
         if due_now.is_empty() {
-            return;
-        }
-    }
-    // Only while the child is signed in and at the machine. Nothing is marked when he is not, so
-    // the first minute after he signs in runs whatever was waiting.
-    let control = state.control.clone();
-    match tokio::task::spawn_blocking(move || control.session_state()).await {
-        Ok(Ok(crate::control::SessionState::Active)) => {}
-        Ok(Ok(_)) => return,
-        Ok(Err(e)) => {
-            tracing::debug!(error = %e, "probe: session state unknown, not running");
-            return;
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "probe: session query panicked");
             return;
         }
     }

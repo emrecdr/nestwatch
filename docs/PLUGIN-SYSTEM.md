@@ -915,6 +915,12 @@ Read that in the order it is written, because both orderings are load-bearing:
   ladder. The parent's own numbers answer it, so no second field was needed, and an explicit
   ceiling still wins. It reaches **only** gated providers: an ungated ladder still latches, which
   is pinned rather than assumed.
+  The same rule then turned out to be spelled twice: `earn` had learned it and
+  `Provider::exhausted_for` — the question the scheduler asks before spending a probe — had not,
+  so a gated provider with no typed ceiling was paid its first rung and never polled again that
+  day. Every probe test shared a fixture that set `daily_cap_mins`, the one shape where the two
+  spellings agree. They are one function now, `Provider::ceiling_mins`, and the regression test
+  drives the scheduler rather than `earn`, because only the scheduler could see the difference.
 - **The bar is recorded on work done, not on minutes paid.** `EarnedDay::bar_met` is written before
   every refusal path in `earn`. Without that the child who takes partial credit and then finishes
   would be the one child whose gate could never open: the lower rung spends the day's single grant,

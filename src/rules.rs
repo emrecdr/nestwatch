@@ -708,8 +708,6 @@ pub fn today_summary(
     })
 }
 
-/// The per-tick clock/context injected into [`RulesEnforcer::decide`] — keeps that function
-/// pure (no real clock) and exhaustively testable.
 /// The two numbers, computed outside this module, that modify today's budget.
 ///
 /// They are a pair because [`Rules::effective_budget_mins`] consumes them as one — the ceiling
@@ -734,6 +732,8 @@ impl Adjustments {
     }
 }
 
+/// The per-tick clock/context injected into [`RulesEnforcer::decide`] — keeps that function
+/// pure (no real clock) and exhaustively testable.
 pub struct Tick {
     /// Monotonic "now" (for deadline math).
     pub now: Instant,

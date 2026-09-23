@@ -538,6 +538,30 @@ impl Provider {
             .min_by_key(|tier| tier.reward_mins)
     }
 
+    /// The most this provider may grant across one local day, or `None` for the original
+    /// one-grant-per-day latch.
+    ///
+    /// **One spelling, and that is the point of it being a function.** [`Config::earn`] and
+    /// [`Provider::exhausted_for`] both need this number, and while they each derived it the two
+    /// disagreed: `earn` had learned that a gate's ladder is bounded by its own top rung and
+    /// `exhausted_for` had not. A gated provider with no typed `daily_cap_mins` was therefore paid
+    /// its first rung and then dropped out of `probe::run_once`'s due list for the rest of the
+    /// day — the child did the work, took the lowest reward, and the gate stayed shut with nothing
+    /// said, which is the exact failure the ladder exists to prevent. Every probe test missed it
+    /// because the fixture they share sets `daily_cap_mins`, which is the one arm where the two
+    /// spellings agreed.
+    ///
+    /// An explicit ceiling always wins. A gate without one is bounded by its top rung, because
+    /// that is the most the ladder can pay and a gate paying past it would be a ceiling nobody
+    /// chose. A provider with neither keeps the latch, which is how every config that has not
+    /// opted in loads — and a gate with no tiers keeps it too, since there is no ladder to climb.
+    pub fn ceiling_mins(&self) -> Option<u32> {
+        self.daily_cap_mins.or_else(|| {
+            self.gate.as_ref()?;
+            self.tiers.iter().map(|tier| tier.reward_mins).max()
+        })
+    }
+
     /// Whether another grant today could pay anything — the question the probe scheduler asks
     /// before spending a request, so a source paid in full stops being polled for the day.
     ///
@@ -549,7 +573,7 @@ impl Provider {
         let Some(entry) = earned.filter(|e| e.date == today) else {
             return false;
         };
-        match (self.daily_cap_mins, entry.minutes) {
+        match (self.ceiling_mins(), entry.minutes) {
             (None, _) | (Some(_), None) => true,
             (Some(cap), Some(used)) => used >= cap,
         }
@@ -1113,22 +1137,11 @@ impl Config {
         let (mut minutes, ceiling) = {
             let provider = self.provider_authority(source)?;
             match provider.reward_for(reported) {
-                // **A gated provider has a ceiling whether or not one was typed, and it is its own
-                // top rung.** The legacy rule below is one grant per source per day, which bounds
-                // a compromised client to a single reward. Under a gate it bounds nothing that was
-                // not already bounded — the ceiling is applied as `min(base, cap)`, so pushing
-                // forever reaches the day the parent already set — and what it does instead is
-                // break the ladder: the second rung of a two-rung gate came back
-                // `already_granted_today`, and the child stayed on the first one for the day with
-                // nothing said. The parent's own numbers answer it, so this needs no second field,
-                // and an explicit `daily_cap_mins` still wins.
-                Some(reward) => (
-                    reward,
-                    provider.daily_cap_mins.or_else(|| {
-                        provider.gate.as_ref()?;
-                        provider.tiers.iter().map(|tier| tier.reward_mins).max()
-                    }),
-                ),
+                // What this provider may pay across today. Under a gate that is its own top
+                // rung whether or not one was typed, which bounds a compromised client exactly as
+                // the latch did while leaving the ladder climbable. [`Provider::ceiling_mins`]
+                // holds the rule and the reason it is not written twice.
+                Some(reward) => (reward, provider.ceiling_mins()),
                 // Work was reported and it meets no tier. Not an error: a client that pushes
                 // whatever it sees and lets this machine judge is exactly what tiers are for, so
                 // "not yet" has to be an ordinary answer rather than a rejection. Unreachable for
@@ -1217,11 +1230,7 @@ impl Config {
         let bar_met = self
             .earned
             .get(source)
-            .is_some_and(|entry| entry.date == today && entry.bar_met)
-            || match (gated, reported) {
-                (Some(gate), Some(done)) => gate.met(done),
-                _ => false,
-            };
+            .is_some_and(|entry| entry.date == today && entry.bar_met);
         self.earned.insert(
             source.to_string(),
             EarnedDay {
