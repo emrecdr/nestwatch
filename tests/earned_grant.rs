@@ -1328,4 +1328,117 @@ async fn earned_grants_latch_replay_and_validate() {
             "a refused grant woke the enforcers, which have nothing to re-read"
         );
     }
+
+    // --- A check that cannot run hands his day back on every screen that shows it --------------
+    //
+    // The household chose this: *"we cannot tell"* is not *"he has not practised"*, so a probe
+    // that fails lifts the gate. `enforcer_gate.rs` holds the enforcer to it. This holds the three
+    // places a person reads the day from — the parent's dashboard, the child's own page, and the
+    // note on the bedtime button — and it exists because none of them was held to the gate at
+    // all. Measured, not feared: each of the three, set to apply no gate or to ignore a failed
+    // check, passed the whole suite — six changes, 700 tests, nothing red.
+    //
+    // **Read through the endpoints, not recomputed here**, which is the thing the sections above
+    // cannot say. Their `budget()` asks the config directly with nothing marked as un-checkable,
+    // so an endpoint could tell a parent 120 while the enforcer held the child at 35, and every
+    // assertion above would still pass.
+    //
+    // Last in this function, because it seeds the day's tally and nothing after it should inherit
+    // an hour of screen time it did not ask for.
+    {
+        let mut cfg = test_config();
+        cfg.rules = nestwatch::rules::Rules {
+            enabled: true,
+            daily_budget_mins: 120,
+            // Lock rather than Warn, because a Warn install interrupts nobody and so the bedtime
+            // note is never written for it — which would make its absence below mean nothing.
+            budget_action: nestwatch::rules::EnforceAction::Lock,
+            ..Default::default()
+        };
+        // Bedtime on, so the extension button exists to press.
+        cfg.curfew.enabled = true;
+        cfg.curfew.start = "22:00".into();
+        cfg.curfew.end = "07:00".into();
+        cfg.providers.insert(
+            "studygo".into(),
+            nestwatch::config::Provider {
+                enabled: true,
+                minutes: 30,
+                daily_cap_mins: None,
+                tiers: Vec::new(),
+                // A probe, because only a provider this machine checks itself can be seen to fail.
+                probe: Some(nestwatch::config::Probe {
+                    exe: "studygo-probe".into(),
+                    every_mins: 15,
+                    first_check_after_mins: 0,
+                }),
+                remind_every_check: false,
+                gate: Some(nestwatch::config::Gate {
+                    allowance_mins: 35,
+                    questions: 15,
+                    minutes_practised: 30,
+                }),
+            },
+        );
+        let state = state_with(cfg);
+        let status = state.probe_status.clone();
+        let app = app_with(state);
+        let cookie = login(&app, PASSWORD).await.unwrap();
+        // An hour used: past the gate, and half of his normal day.
+        common::seed_tally(today, 60 * 60);
+
+        // Each screen's own number, and whether the bedtime button warns that a later bedtime
+        // will not help because screen time runs out first.
+        let screens = || async {
+            let dashboard =
+                common::body_json(common::get(&app, "/api/usage/today", Some(&cookie)).await).await;
+            let child = common::body_json(common::get(&app, "/status", None).await).await;
+            let extended = common::body_json(
+                common::post_json(
+                    &app,
+                    "/api/curfew/extend",
+                    Some(&cookie),
+                    json!({ "minutes": 30 }),
+                )
+                .await,
+            )
+            .await;
+            (
+                dashboard["budget_mins"].clone(),
+                child["budget_mins"].clone(),
+                extended["budget_note"].is_string(),
+            )
+        };
+
+        // The check works — nothing has failed — so every screen shows the gate.
+        assert_eq!(
+            screens().await,
+            (json!(35), json!(35), true),
+            "(dashboard, child's page, bedtime note): with the check working, all three must show \
+             the gate — and the note must warn that a later bedtime is no use to a child whose \
+             screen time ran out at 35"
+        );
+
+        // Then StudyGo stops answering.
+        status.lock().unwrap().insert(
+            "studygo".into(),
+            nestwatch::probe::ProbeState {
+                last: nestwatch::probe::ProbeStatus {
+                    at: chrono::Local::now().fixed_offset(),
+                    reported: None,
+                    outcome: nestwatch::probe::ProbeOutcome::Failed(
+                        "StudyGo did not answer".into(),
+                    ),
+                },
+                reminded_on: None,
+            },
+        );
+        assert_eq!(
+            screens().await,
+            (json!(120), json!(120), false),
+            "(dashboard, child's page, bedtime note): with the check failing the gate is lifted, so \
+             every screen must show his parent's own 120 — and with an hour of it left, a later \
+             bedtime is not cut short by anything"
+        );
+    }
 }

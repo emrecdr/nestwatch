@@ -931,13 +931,15 @@ Read that in the order it is written, because both orderings are load-bearing:
 
 **What the off switch now does is the point of the whole change.** Switched off, removed, or unable
 to be checked, the gate contributes no ceiling, and the day is the parent's own — untouched,
-because nothing ever rewrote it. `earned_grant.rs` drives the gate, the switch and removal through
-the real endpoints. *Unable to be checked* is driven through the enforcer instead, by
-`enforcer_gate.rs`: a check fails while a shutdown is counting down, and the shutdown has to be
-called off at the parent's own number. That test exists because nothing did — with the
-enforcer's ceiling replaced by `None`, or its cannot-check set by an empty one, all 699 tests
-passed. The endpoints and the enforcer now take the ceiling from one function,
-`probe::live_gate_cap`, where they had four copies of it.
+because nothing ever rewrote it. `earned_grant.rs` changes the gate, the switch and removal
+through the real endpoints and checks the arithmetic after each; its last section reads the day
+back through the three screens a person sees — the dashboard, the child's page, the bedtime
+note — with the check working and then failing. `enforcer_gate.rs` holds the enforcer to the
+same two states: a check fails while a shutdown is counting down, and the shutdown has to be
+called off at the parent's own number. Both exist because nothing did. With the enforcer's
+ceiling replaced by `None`, or its cannot-check set by an empty one, all 699 tests passed, and
+each of the three screens survived the same two changes against all 700. All four now take the
+ceiling from one function, `probe::live_gate_cap`, where they had four copies of it.
 
 **The fourth of those is a trade the household made explicitly.** A check that cannot run — probe
 missing, StudyGo down, scheduler stopped — lifts the gate rather than holding it shut, on the
