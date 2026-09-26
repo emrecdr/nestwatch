@@ -1379,12 +1379,19 @@ fn rollup_row(prev: &PreRollover, date: NaiveDate, budget: Option<u32>) -> Value
 
 /// Background loop: every [`CHECK_INTERVAL`], enforce the usage rules. Runs for the life of the
 /// server; if it ever returns, the caller logs that loudly.
+///
+/// `gate_ceiling` is the ceiling the practice gates put on a day, asked under the same config guard
+/// as the rest of the tick. A function rather than a number because it moves under the loop — a
+/// check that fails lifts a gate mid-afternoon, and that has to reach a shutdown already counting
+/// down — and a function rather than the probe status map because this module is not told what a
+/// probe is, for the reason [`Adjustments`] gives. The server builds it from the probe scheduler's
+/// status; a household with no gates gets `None` from it on every tick.
 pub async fn run_rules_enforcer(
     control: Arc<dyn SystemControl>,
     config: Arc<RwLock<Config>>,
     usage_log: Arc<crate::usage::UsageLog>,
     screentime_log: Arc<crate::screentime::ScreentimeLog>,
-    probe_status: crate::probe::StatusMap,
+    gate_ceiling: impl Fn(&Config, NaiveDate) -> Option<u32> + Send,
     foreground: crate::foreground::Feed,
     mut wake: crate::heartbeat::Wake,
 ) {
@@ -1440,18 +1447,6 @@ pub async fn run_rules_enforcer(
         // Snapshot the config under the lock, then drop the guard before any await.
         // `port` and the curfew reading come out of the same guard the tick already takes, rather
         // than a second acquisition later — they feed `ask_hint`, which needs both.
-        // Which gated providers this machine cannot currently check. Read before the guard so the
-        // lock below covers one snapshot: `providers_not_checking` takes its own lock on the
-        // status map, and taking two in an order nothing else takes them in is how deadlocks are
-        // written.
-        let not_checking = {
-            let guard = crate::state::recover_read(&config);
-            crate::probe::providers_not_checking(
-                &guard,
-                &probe_status,
-                crate::probe::scheduler_stale(),
-            )
-        };
         let (rules, extra, gate_cap, lang, port, curfew_now) = {
             let guard = crate::state::recover_read(&config);
             // `rules_at`, not `rules`: a routine whose schedule covers this instant is the policy
@@ -1462,7 +1457,7 @@ pub async fn run_rules_enforcer(
             (
                 guard.rules_at(at).clone(),
                 guard.extra.for_day(today),
-                guard.gate_cap_mins(today, &not_checking),
+                gate_ceiling(&guard, today),
                 guard.language,
                 guard.port,
                 guard.curfew.is_active_now(),

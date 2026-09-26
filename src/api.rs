@@ -859,14 +859,6 @@ async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<
     let usage = spawn(move || crate::rules::Usage::load_for_today(today))
         .await
         .ok()?;
-    let not_checking = {
-        let cfg = crate::state::recover_read(&state.config);
-        crate::probe::providers_not_checking(
-            &cfg,
-            &state.probe_status,
-            crate::probe::scheduler_stale(),
-        )
-    };
     let (left, budget_action) = {
         let cfg = crate::state::recover_read(&state.config);
         // Whether a later bedtime is worth granting depends on the budget in force, which a
@@ -878,7 +870,7 @@ async fn extension_shadowed_by_budget(state: &AppState, minutes: u32) -> Option<
             today,
             crate::rules::Adjustments::new(
                 cfg.extra.for_day(today),
-                cfg.gate_cap_mins(today, &not_checking),
+                crate::probe::live_gate_cap(&cfg, &state.probe_status, today),
             ),
             &usage,
             minutes,
@@ -1776,17 +1768,12 @@ pub async fn usage_today(
     let (rules, extra, gate_cap, active_routine) = {
         let cfg = crate::state::recover_read(&state.config);
         let at = crate::clock::now();
-        // The ceiling a practice gate puts on today, computed from the same guard. A gated child's
-        // dashboard must show the day he actually has, not the one his daily limit names.
-        let not_checking = crate::probe::providers_not_checking(
-            &cfg,
-            &state.probe_status,
-            crate::probe::scheduler_stale(),
-        );
         (
             cfg.rules_at(at).clone(),
             cfg.extra.for_day(today),
-            cfg.gate_cap_mins(today, &not_checking),
+            // The ceiling a practice gate puts on today, from the same guard. A gated child's
+            // dashboard must show the day he actually has, not the one his daily limit names.
+            crate::probe::live_gate_cap(&cfg, &state.probe_status, today),
             cfg.active_routine_at(at).map(str::to_string),
         )
     };
@@ -1847,14 +1834,6 @@ pub async fn child_status(
     state
         .status_limiter
         .count_and_check(peer.ip(), std::time::Instant::now())?;
-    let not_checking = {
-        let cfg = crate::state::recover_read(&state.config);
-        crate::probe::providers_not_checking(
-            &cfg,
-            &state.probe_status,
-            crate::probe::scheduler_stale(),
-        )
-    };
     let today = crate::config::today();
     // Only the two numbers, computed under the guard — cloning `Rules` here would deep-copy the
     // blocklist, app limits and groups just to read a budget off them.
@@ -1869,7 +1848,10 @@ pub async fn child_status(
             rules.enabled,
             rules.effective_budget_mins(
                 today,
-                crate::rules::Adjustments::new(extra, cfg.gate_cap_mins(today, &not_checking)),
+                crate::rules::Adjustments::new(
+                    extra,
+                    crate::probe::live_gate_cap(&cfg, &state.probe_status, today),
+                ),
             ),
             cfg.language,
         )

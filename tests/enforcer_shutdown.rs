@@ -79,9 +79,10 @@ async fn a_dutch_child_is_told_in_dutch_why_the_pc_is_shutting_down_and_where_to
         Arc::new(RwLock::new(cfg)),
         Arc::new(UsageLog::disabled()),
         Arc::new(ScreentimeLog::disabled()),
-        // No probe scheduler in this binary, so no provider can be reported as un-checkable —
-        // which is the same answer an install with no integrations gives.
-        Default::default(),
+        // The production ceiling over an empty status map: no probe scheduler in this binary, so
+        // no provider can be reported as un-checkable — the same answer an install with no
+        // integrations gives.
+        nestwatch::probe::gate_ceiling(Default::default()),
         Feed::new(),
         idle_waker(),
     ));

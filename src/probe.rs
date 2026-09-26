@@ -662,6 +662,41 @@ pub fn scheduler_stale() -> bool {
         .is_some_and(|age| age > SCHEDULER_STALE_SECS)
 }
 
+/// The ceiling the practice gates put on `today`, as this machine can enforce it **right now**.
+///
+/// [`crate::config::Config::gate_cap_mins`] with its one live input filled in — the providers
+/// this machine cannot currently check, whose gates it lifts. Everything that enforces or reports
+/// today's budget calls this: the enforcer (through [`gate_ceiling`]), the dashboard, the child's
+/// page and the bedtime warning. So they cannot disagree about whether an outage has handed the
+/// child his day back. It was four copies of the same lines, and two of them took the config lock
+/// twice, reading the gates and the providers from different snapshots.
+///
+/// Takes the caller's config **guard**, not the lock, for both of the reasons that matter: the
+/// ceiling comes from the same snapshot as everything else the caller reads, and the lock order
+/// is the one every reader here takes — config, then the status map.
+pub fn live_gate_cap(
+    cfg: &crate::config::Config,
+    status: &StatusMap,
+    today: NaiveDate,
+) -> Option<u32> {
+    cfg.gate_cap_mins(
+        today,
+        &providers_not_checking(cfg, status, scheduler_stale()),
+    )
+}
+
+/// [`live_gate_cap`] as the function `rules::run_rules_enforcer` asks for.
+///
+/// The enforcer is handed this rather than the status map because `rules` is not told what a
+/// probe is — the property that lets this whole module be deleted without touching it. The server
+/// and the enforcer's own tests both build it here, so the wiring they test is the wiring that
+/// runs.
+pub fn gate_ceiling(
+    status: StatusMap,
+) -> impl Fn(&crate::config::Config, NaiveDate) -> Option<u32> + Send + 'static {
+    move |cfg: &crate::config::Config, today: NaiveDate| live_gate_cap(cfg, &status, today)
+}
+
 /// Run [`run_once`] once a minute for the life of the service, stamping a heartbeat each time.
 ///
 /// **This loop used to stamp nothing, on an argument that has since expired** — it enforces

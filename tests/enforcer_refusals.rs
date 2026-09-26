@@ -75,9 +75,10 @@ async fn a_refusal_counted_anywhere_reaches_the_day_the_parent_reads() {
         Arc::new(RwLock::new(cfg)),
         Arc::new(UsageLog::new(tmp.join("usage.jsonl"))),
         Arc::new(ScreentimeLog::disabled()),
-        // No probe scheduler in this binary, so no provider can be reported as un-checkable —
-        // which is the same answer an install with no integrations gives.
-        Default::default(),
+        // The production ceiling over an empty status map: no probe scheduler in this binary, so
+        // no provider can be reported as un-checkable — the same answer an install with no
+        // integrations gives.
+        nestwatch::probe::gate_ceiling(Default::default()),
         Feed::new(),
         wake,
     ));
