@@ -237,6 +237,7 @@ const UI = {
     gateAllowance: "Until then he has",
     gateBarPrefix: "Lift it at",
     gateNoBar: "Set a bar, or this caps his day with nothing that can lift it",
+    gateUnchecked: "Only the app on your phone can lift this gate — this PC checks nothing. If it stops reporting, he stays at {} min until you switch the app off or add bonus time.",
     appsThatCanAddBonus: "Apps that can add bonus screen time when your child has done something — StudyGo adds minutes after enough practice. The app on your phone does the checking and sends the result here. You choose whether each is on and how many minutes it grants — and, under Check from this PC, whether this PC asks on its own instead.",
     checkFromThisPc: "Check from this PC",
     probeExplained: "Name a program in the Nestwatch folder and this PC runs it as your child on a schedule, with the session your phone forwarded, and judges what it reports by the rules above. Leave it blank to keep the checking on the phone.",
@@ -495,6 +496,7 @@ const UI = {
     gateAllowance: "Tot dan heeft hij",
     gateBarPrefix: "Open bij",
     gateNoBar: "Stel een grens in, anders beperkt dit zijn dag zonder dat iets het opheft",
+    gateUnchecked: "Alleen de app op je telefoon kan deze poort openen — deze pc controleert niets. Geeft die niets meer door, dan blijft hij op {} min tot je de app uitzet of extra tijd toevoegt.",
     appsThatCanAddBonus: "Apps die extra schermtijd kunnen toevoegen als je kind iets gedaan heeft — StudyGo geeft minuten na genoeg oefenen. De app op je telefoon doet de controle en stuurt het resultaat hierheen. Jij bepaalt of elke app aanstaat en hoeveel minuten hij geeft — en onder Controleren vanaf deze pc of deze pc het in plaats daarvan zelf vraagt.",
     checkFromThisPc: "Controleren vanaf deze pc",
     probeExplained: "Noem een programma in de Nestwatch-map en deze pc voert het volgens schema uit als je kind, met de sessie die je telefoon doorgaf, en beoordeelt wat het meldt volgens de regels hierboven. Laat het leeg om de controle op de telefoon te houden.",
@@ -757,6 +759,7 @@ const UI = {
     gateAllowance: "O zamana kadar",
     gateBarPrefix: "Şununla aç:",
     gateNoBar: "Bir eşik belirleyin; yoksa bu, gününü hiçbir şeyin açamayacağı şekilde sınırlar",
+    gateUnchecked: "Bu kapıyı yalnızca telefonunuzdaki uygulama açabilir — bu bilgisayar hiçbir şeyi kontrol etmez. Uygulama bildirmeyi bırakırsa, siz uygulamayı kapatana ya da ek süre ekleyene kadar süresi {} dk ile sınırlı kalır.",
     appsThatCanAddBonus: "Çocuğunuz bir şey yaptığında ek ekran süresi verebilen uygulamalar — StudyGo yeterli alıştırmadan sonra dakika ekler. Kontrolü telefonunuzdaki uygulama yapar ve sonucu buraya gönderir. Her birinin açık olup olmadığına ve kaç dakika vereceğine siz karar verirsiniz — ve Bu bilgisayardan kontrol et altında, bunun yerine bu bilgisayarın kendisinin sormasına.",
     checkFromThisPc: "Bu bilgisayardan kontrol et",
     probeExplained: "Nestwatch klasöründe bir program adı verin; bu bilgisayar onu çocuğunuz adına, telefonunuzun ilettiği oturumla düzenli aralıklarla çalıştırır ve bildirdiklerini yukarıdaki kurallara göre değerlendirir. Kontrolü telefonda tutmak için boş bırakın.",
@@ -2003,6 +2006,16 @@ function app() {
       }
       parts.push(normal);
       return parts.join(" · ");
+    },
+
+    // A gate nothing on this PC checks. Only the phone's push can lift it, and a push that never
+    // comes is indistinguishable from a child who has not practised — so unlike a gate with a
+    // probe, an outage does NOT hand him his day back (`probe::providers_not_checking`). Empty
+    // where that is not true: no gate, the provider switched off (the gate is then not in force),
+    // or a probe named. Blank is "none" here for the same reason `saveProvider` trims it.
+    gateUnchecked(row) {
+      if (!row.gate || !row.enabled || String(row.probeExe || "").trim()) return "";
+      return this.tf("gateUnchecked", Number(row.gate.allowanceMins) || 0);
     },
 
     // What the last check found and whether the phone's session is still there, in one line under

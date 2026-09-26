@@ -1076,6 +1076,9 @@
                         <!-- The two days those numbers actually produce, which neither of them
                              names. See `gateTotals`. -->
                         <p class="text-xs opacity-60" x-text="gateTotals(row)" x-show="gateTotals(row)"></p>
+                        <!-- And what those days depend on when nothing on this PC checks: an outage
+                             holds him at the allowance instead of lifting it. See `gateUnchecked`. -->
+                        <p class="text-xs text-warning" x-text="gateUnchecked(row)" x-show="gateUnchecked(row)"></p>
 
                         <!-- The cadence of the notice he gets while he is short. Off is once a
                              day, which is the anti-nag default `docs/PLUGIN-SYSTEM.md` argues

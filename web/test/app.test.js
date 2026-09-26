@@ -2567,6 +2567,56 @@ test("gateTotals is translated, not assembled in English", () => {
   assert.doesNotMatch(line, /While he is short/);
 });
 
+// --- A gate nothing on this PC checks ----------------------------------------------------------
+//
+// With a probe, a check that cannot run lifts the gate — *"we cannot tell"* is not *"he has not
+// practised"*. Without one there is nothing on this PC to see a failure: the phone's push is the
+// only evidence, and a push that never comes looks exactly like a child who has not practised. So
+// an outage holds him at the allowance, the opposite of what a probe-backed gate does, and this
+// line is the only place a parent learns that before it happens. `probe::providers_not_checking`
+// is where the server decides it.
+
+test("gateUnchecked warns when only the phone can lift the gate", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const expected =
+    "Only the app on your phone can lift this gate — this PC checks nothing. If it stops " +
+    "reporting, he stays at 35 min until you switch the app off or add bonus time.";
+  assert.equal(app.gateUnchecked(gated({ probeExe: "" })), expected);
+  // Absent and blank are the same answer as empty: `providerRows` writes "" for no probe, and
+  // `saveProvider` trims what a parent typed before deciding whether one was named.
+  assert.equal(app.gateUnchecked(gated({})), expected, "a row with no probe field at all");
+  assert.equal(app.gateUnchecked(gated({ probeExe: "   " })), expected, "a probe name of spaces");
+});
+
+test("gateUnchecked says nothing where the warning would not be true", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  assert.equal(
+    app.gateUnchecked(gated({ probeExe: "studygo-probe.exe" })),
+    "",
+    "a probe sees its own failure, and a failure lifts the gate — so an outage does not hold him",
+  );
+  assert.equal(
+    app.gateUnchecked({ enabled: true, tiers: [], gate: null, probeExe: "" }),
+    "",
+    "no gate, nothing to be held under",
+  );
+  assert.equal(
+    app.gateUnchecked(gated({ enabled: false, probeExe: "" })),
+    "",
+    "switched off, the gate is not in force, and gateTotals already says his day is his own",
+  );
+});
+
+test("gateUnchecked is translated, not assembled in English", () => {
+  for (const lang of ["nl", "tr"]) {
+    const app = withState({ lang, rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+    const line = app.gateUnchecked(gated({ probeExe: "" }));
+    assert.equal(line, app.tf("gateUnchecked", 35));
+    assert.match(line, /35/, `${lang} must carry the allowance: ${line}`);
+    assert.doesNotMatch(line, /Only the app/, `${lang} fell back to English: ${line}`);
+  }
+});
+
 // --- The settling period, across the two edges that rename it --------------------------------
 //
 // `first_check_after_mins` on the wire, `probeSettle` in the row, and nothing but these two

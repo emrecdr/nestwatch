@@ -626,7 +626,8 @@ async fn run_one(
 /// **A gated provider with no probe is never in here**, because there is nothing to observe: its
 /// checking arrives as a push from the phone, and a push that has not come is indistinguishable
 /// from a child who has not practised. That is the honest answer for that shape, and it is why the
-/// dashboard tells a parent plainly when a gate has no probe behind it.
+/// gate's card tells a parent plainly when no probe stands behind it — that an outage will hold
+/// the child at the allowance rather than lift it (`gateUnchecked` in `assets/app.js`).
 ///
 /// **The cost of this rule, stated because it is real.** A child who can stop the check can lift
 /// the gate — turning the machine's network off is enough, and needs no privilege. The mitigation
