@@ -1014,9 +1014,11 @@ is launched directly, not through `cmd.exe`.
       service (`sc stop HostHealthService`) with the dashboard open in another browser, wait three
       minutes, and reload from a machine that can still reach it — or simply read the card after a
       restart that fails. The line under *Check from this PC* must lead with *This PC has stopped
-      checking … Limits still apply; only earning has stopped.* The *enforcement alive* banner on
-      the Today card must **not** be the thing that changes; it means limits are off, and they are
-      not.
+      checking …* — then, for an integration with no gate, *Limits still apply; only earning has
+      stopped*, and for one with a gate, *Until a check works again the gate is lifted — his
+      normal limits apply, not the 35 min*, because a check that cannot run lifts the gate. The
+      *enforcement alive* banner on the Today card must **not** be the thing that changes; it means
+      limits are off, and they are not.
 - [ ] **The gate caps his day, and the daily limit is untouched.** Set the daily limit to 120 and
       give the integration a gate: allowance 35, bar 15 questions. With HIM signed in, the Today
       card must show **35 minutes** of budget while the dashboard's own daily-limit box still reads

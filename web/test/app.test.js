@@ -2617,6 +2617,99 @@ test("gateUnchecked is translated, not assembled in English", () => {
   }
 });
 
+// --- What a check that cannot run does to a gate, said on the line that reports it ----------------
+//
+// The household chose that a check which cannot run LIFTS the gate — *"we cannot tell"* is not *"he
+// has not practised"* — and `probe::providers_not_checking` does exactly that when the loop has gone
+// quiet past `PROBE_STALE_SECS` or the last check failed. This line used to answer both with
+// "Limits still apply; only earning has stopped", which is true for a plain reward and false for a
+// gate: the parent read a 35-minute ceiling the server had already stopped applying.
+
+const probed = (over) =>
+  gated(
+    Object.assign(
+      {
+        probeExe: "studygo-probe.exe",
+        probeSchedulerAge: 30,
+        probeStatus: null,
+        secretAt: null,
+      },
+      over,
+    ),
+  );
+const LIFTED = "Until a check works again the gate is lifted — his normal limits apply, not the 35 min.";
+const failed = { at: new Date().toISOString(), error: "no network" };
+
+test("probeSummary says the gate is lifted once this PC has stopped checking", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const line = app.probeSummary(probed({ probeSchedulerAge: 600 }));
+  assert.match(line, /^This PC has stopped checking — last look 10 min ago\. · /, line);
+  assert.ok(line.includes(LIFTED), `the lift must be said: ${line}`);
+  assert.doesNotMatch(line, /Limits still apply/, `a lifted gate is not a limit that applies: ${line}`);
+});
+
+test("probeSummary says the gate is lifted when the last check failed", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const line = app.probeSummary(probed({ probeStatus: failed }));
+  assert.ok(line.includes("Check failed: no network"), line);
+  assert.ok(line.includes(LIFTED), `the lift must be said: ${line}`);
+  assert.doesNotMatch(line, /stopped checking/, `the loop is alive; only the check failed: ${line}`);
+});
+
+test("probeSummary says the lift once when both causes are true", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const line = app.probeSummary(probed({ probeSchedulerAge: 600, probeStatus: failed }));
+  assert.equal(line.split(LIFTED).length - 1, 1, line);
+});
+
+test("probeSummary keeps 'limits still apply' where no gate is in force", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const stopped = "This PC has stopped checking — last look 10 min ago. Limits still apply; only earning has stopped.";
+  // A plain reward: a stopped check costs minutes not earned, and nothing else.
+  const plain = app.probeSummary(probed({ gate: null, probeSchedulerAge: 600, probeStatus: failed }));
+  assert.ok(plain.startsWith(stopped), plain);
+  assert.doesNotMatch(plain, /gate is lifted/, plain);
+  // A gate on a provider that is switched off is not in force, so there is nothing to lift.
+  const off = app.probeSummary(probed({ enabled: false, probeSchedulerAge: 600, probeStatus: failed }));
+  assert.ok(off.startsWith(stopped), off);
+  assert.doesNotMatch(off, /gate is lifted/, off);
+});
+
+test("probeSummary calls the loop stopped at the server's own boundary, not one tick early", () => {
+  // `probe::scheduler_stale` is `age > SCHEDULER_STALE_SECS`: at exactly 180 the server still keeps
+  // the gate, and one second later it lifts it. Both sides, because a `>=` here would tell a parent
+  // his gate was lifted for a second in which the server was still enforcing it.
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  const at = app.probeSummary(probed({ probeSchedulerAge: 180 }));
+  assert.doesNotMatch(at, /stopped checking|gate is lifted/, `at the boundary: ${at}`);
+  const past = app.probeSummary(probed({ probeSchedulerAge: 181 }));
+  assert.ok(past.startsWith("This PC has stopped checking — last look 3 min ago. · "), past);
+  assert.ok(past.includes(LIFTED), past);
+});
+
+test("probeSummary claims no lift the server does not make", () => {
+  const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+  // Never ticked: the server reads a heartbeat that was never stamped as a process that has not
+  // started its loop yet, not as one that died, and keeps the gate. The line must agree with it.
+  const fresh = app.probeSummary(probed({ probeSchedulerAge: null }));
+  assert.ok(fresh.startsWith("This PC is not checking. Limits still apply"), fresh);
+  assert.doesNotMatch(fresh, /gate is lifted/, fresh);
+  // Healthy, and a check that worked: nothing to say about the gate at all.
+  const ok = app.probeSummary(probed({ probeStatus: { at: new Date().toISOString(), granted: 16 } }));
+  assert.ok(ok.includes("+16 min"), ok);
+  assert.doesNotMatch(ok, /gate is lifted|Limits still apply/, ok);
+});
+
+test("probeSummary's lifted gate is translated, not assembled in English", () => {
+  for (const lang of ["nl", "tr"]) {
+    const app = withState({ lang, rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+    const line = app.probeSummary(probed({ probeSchedulerAge: 600 }));
+    assert.ok(line.startsWith(app.tf("probeChecksStoppedGated", 10) + " · "), `${lang}: ${line}`);
+    assert.ok(line.includes(app.tf("probeGateLifted", 35)), `${lang}: ${line}`);
+    assert.doesNotMatch(line, /gate is lifted|stopped checking/, `${lang} fell back to English: ${line}`);
+  }
+});
+
 // --- The settling period, across the two edges that rename it --------------------------------
 //
 // `first_check_after_mins` on the wire, `probeSettle` in the row, and nothing but these two

@@ -907,6 +907,28 @@ mod tests {
         );
     }
 
+    /// The card says a gate is lifted once the probe loop has been quiet longer than
+    /// `PROBE_STALE_SECS`; the server lifts it past `probe::SCHEDULER_STALE_SECS`. One fact, two
+    /// numbers in two languages — and a parent reads the card's as a statement about what the
+    /// server is doing to the child's day, so a mismatch reports a lift that has not happened or
+    /// hides one that has.
+    ///
+    /// Both halves, for the reason the message-box guard above gives: the declaration, and the
+    /// comparison that reads it — strictly greater, as `probe::scheduler_stale` is.
+    #[test]
+    fn the_card_calls_the_probe_loop_stopped_exactly_when_the_server_lifts_the_gate() {
+        let stale = crate::probe::SCHEDULER_STALE_SECS;
+        assert!(
+            APP_JS.contains(&format!("const PROBE_STALE_SECS = {stale};")),
+            "app.js's PROBE_STALE_SECS must equal probe::SCHEDULER_STALE_SECS ({stale})"
+        );
+        assert!(
+            APP_JS.contains("age > PROBE_STALE_SECS"),
+            "app.js declares PROBE_STALE_SECS but no longer compares against it the way \
+             probe::scheduler_stale does, strictly greater"
+        );
+    }
+
     /// The lockout a parent is told to wait out matches the one actually enforced.
     ///
     /// `app.js` says "wait a minute". That sentence cannot interpolate a constant — it is prose in

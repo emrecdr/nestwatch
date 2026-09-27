@@ -6,10 +6,10 @@
 const ENFORCER_STALE_SECS = 150;
 
 // The provider-probe scheduler stamps its own heartbeat every 60s. Three missed ticks, where the
-// enforcers' 150 above is five — the tolerance is the same, the period is not. Mirrored from
-// `doctor.rs::EARNED_CHECK_STALE_SECS`, and the reason the two are written down rather than
-// inlined is the note above: a parent reads both on one screen, and the enforcement pair once
-// disagreed about the same age.
+// enforcers' 150 above is five — the tolerance is the same, the period is not. It must equal
+// `probe::SCHEDULER_STALE_SECS`, which `doctor.rs` also reads: past it the server lifts every gate
+// this PC checks, and this line says so, so a mismatch would report a lift that has not happened
+// or hide one that has. `web.rs` pins the two together.
 const PROBE_STALE_SECS = 180;
 
 // The longest message a parent may put on the child's screen. Named here rather than written into
@@ -249,6 +249,8 @@ const UI = {
     probeNotRunYet: "Not checked yet",
     probeChecksStopped: "This PC has stopped checking — last look {} min ago. Limits still apply; only earning has stopped.",
     probeChecksNotRunning: "This PC is not checking. Limits still apply; only earning has stopped.",
+    probeChecksStoppedGated: "This PC has stopped checking — last look {} min ago.",
+    probeGateLifted: "Until a check works again the gate is lifted — his normal limits apply, not the {} min.",
     probeCheckedAt: "Checked at {}",
     probeQuestions: "{} questions",
     probeMinutesPractised: "{} min practised",
@@ -508,6 +510,8 @@ const UI = {
     probeNotRunYet: "Nog niet gecontroleerd",
     probeChecksStopped: "Deze pc controleert niet meer — laatste keer {} min geleden. De limieten gelden nog; alleen verdienen is gestopt.",
     probeChecksNotRunning: "Deze pc controleert niet. De limieten gelden nog; alleen verdienen is gestopt.",
+    probeChecksStoppedGated: "Deze pc controleert niet meer — laatste keer {} min geleden.",
+    probeGateLifted: "Tot een controle weer lukt, staat de poort open — zijn gewone limieten gelden, niet de {} min.",
     probeCheckedAt: "Gecontroleerd om {}",
     probeQuestions: "{} vragen",
     probeMinutesPractised: "{} min geoefend",
@@ -771,6 +775,8 @@ const UI = {
     probeNotRunYet: "Henüz kontrol edilmedi",
     probeChecksStopped: "Bu bilgisayar artık kontrol etmiyor — son bakış {} dk önce. Sınırlar hâlâ geçerli; yalnızca süre kazanma durdu.",
     probeChecksNotRunning: "Bu bilgisayar kontrol etmiyor. Sınırlar hâlâ geçerli; yalnızca süre kazanma durdu.",
+    probeChecksStoppedGated: "Bu bilgisayar artık kontrol etmiyor — son bakış {} dk önce.",
+    probeGateLifted: "Bir kontrol yeniden başarılı olana kadar kapı açık — {} dk değil, normal sınırları geçerli.",
     probeCheckedAt: "Kontrol saati: {}",
     probeQuestions: "{} soru",
     probeMinutesPractised: "{} dk çalışıldı",
@@ -2025,14 +2031,27 @@ function app() {
     probeSummary(row) {
       if (!row.probeExe) return "";
       const parts = [];
+      // A gate in force changes what a failure here means. The household chose that a check which
+      // cannot run LIFTS the gate — "we cannot tell" is not "he has not practised" — and the server
+      // does it in exactly the two cases below (`probe::providers_not_checking`). So for a gated
+      // provider "limits still apply" named a ceiling that was no longer being applied. Off, the
+      // gate is not in force and there is nothing to lift.
+      const gated = Boolean(row.gate) && Boolean(row.enabled);
+      let lifted = false;
       // Leads the line, because it is the fact that decides what the rest of it means: a check
       // "at 16:00" reads as recent until you know nothing has looked since. `== null` rather than
       // a falsy test, so an age of 0 — stamped this second — is not read as never.
       const age = row.probeSchedulerAge;
       if (age == null) {
+        // Never ticked is deliberately NOT a lift, matching the server: a heartbeat that was never
+        // stamped is a process that has not started its loop, not a loop that has died.
         parts.push(this.t("probeChecksNotRunning"));
       } else if (age > PROBE_STALE_SECS) {
-        parts.push(this.tf("probeChecksStopped", Math.round(age / 60)));
+        lifted = gated;
+        // Two literal calls rather than one with a chosen key: the key-usage guard in
+        // `web/test/app.test.js` can only see a key that is written out.
+        const mins = Math.round(age / 60);
+        parts.push(gated ? this.tf("probeChecksStoppedGated", mins) : this.tf("probeChecksStopped", mins));
       }
       const status = row.probeStatus;
       if (!status) {
@@ -2056,8 +2075,12 @@ function app() {
           parts.push(this.tf("probeRefused", reasons[status.refused] || status.refused));
         } else if (status.error) {
           parts.push(this.tf("probeError", status.error));
+          lifted = lifted || gated;
         }
       }
+      // Said once, after whichever failure caused it and before the session's age, which is about
+      // whether the next check can work rather than about what this one did to his day.
+      if (lifted) parts.push(this.tf("probeGateLifted", Number(row.gate.allowanceMins) || 0));
       if (!row.secretAt) {
         parts.push(this.t("noSessionYet"));
       } else {
