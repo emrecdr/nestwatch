@@ -121,6 +121,10 @@ async fn a_gate_holds_the_child_in_the_loop_that_enforces_and_lets_go_when_it_ca
         "an hour into a day gated at {ALLOWANCE} minutes, the enforcer never asked for a \
          shutdown — the gate was on every card and did nothing to the child"
     );
+    // Waited for, not read straight after the shutdown: the loop asks for the shutdown and writes
+    // this line later in the same tick (`log_transition`), so reading at once raced it and failed
+    // about one run in eight on a loaded machine.
+    wait_for(|| budget_logged(&log, "budget_shutdown").is_some()).await;
     assert_eq!(
         budget_logged(&log, "budget_shutdown"),
         Some(ALLOWANCE),
