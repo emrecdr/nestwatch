@@ -2576,10 +2576,10 @@ test("gateTotals is translated, not assembled in English", () => {
 // line is the only place a parent learns that before it happens. `probe::providers_not_checking`
 // is where the server decides it.
 
-test("gateUnchecked warns when only the phone can lift the gate", () => {
+test("gateUnchecked warns when only the reporting app can lift the gate", () => {
   const app = withState({ lang: "en", rules: { daily_budget_mins: 120, budget_by_weekday: null } });
   const expected =
-    "Only the app on your phone can lift this gate — this PC checks nothing. If it stops " +
+    "Only the app on your device can lift this gate — this PC checks nothing. If it stops " +
     "reporting, he stays at 35 min until you switch the app off or add bonus time.";
   assert.equal(app.gateUnchecked(gated({ probeExe: "" })), expected);
   // Absent and blank are the same answer as empty: `providerRows` writes "" for no probe, and
@@ -2605,6 +2605,23 @@ test("gateUnchecked says nothing where the warning would not be true", () => {
     "",
     "switched off, the gate is not in force, and gateTotals already says his day is his own",
   );
+});
+
+test("the app that does the checking is not assumed to be on a phone", () => {
+  // Voortgang runs on a Mac as well as a phone, and the household this was built for uses the Mac
+  // build — so "the app on your phone" told them where to look and was wrong. The intro may name
+  // both; everything after it says "your device". Checked in every language, because a sentence
+  // corrected only in English is still wrong on the page a Dutch or Turkish parent reads.
+  const keys = ["gateUnchecked", "appsThatCanAddBonus", "probeExplained", "noSessionYet", "sessionToday", "sessionDaysAgo"];
+  const phoneAlone = { en: /\bphone\b(?! or computer)/i, nl: /\btelefoon\b(?! of computer)/i, tr: /telefon(?!unuzdaki ya da bilgisayar)/i };
+  for (const [lang, phone] of Object.entries(phoneAlone)) {
+    const app = withState({ lang, rules: { daily_budget_mins: 120, budget_by_weekday: null } });
+    for (const key of keys) {
+      const text = app.t(key);
+      assert.ok(text && text !== key, `${lang}.${key} must exist`);
+      assert.doesNotMatch(text, phone, `${lang}.${key} still assumes a phone: ${text}`);
+    }
+  }
 });
 
 test("gateUnchecked is translated, not assembled in English", () => {
