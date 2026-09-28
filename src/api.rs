@@ -1071,6 +1071,17 @@ pub async fn extra_time(
         // refusal worth retrying after more practice from one that will stand until midnight.
         json!({ "ok": false, "reason": refused.map(|r| r.wire()) })
     };
+    // What the child hears about it — the same as when a probe reports the same work, and through
+    // the same function (`probe::tell_child`), because the road the report took is not his
+    // concern. Only a provider's push: a parent's grant is theirs to announce. A replay never gets
+    // here, so a retried push is not announced twice.
+    if robot {
+        let outcome = match refused {
+            None => crate::probe::ProbeOutcome::Granted(minutes),
+            Some(reason) => crate::probe::ProbeOutcome::Refused(reason),
+        };
+        crate::probe::tell_child(&state, &source, &outcome, reported, today).await;
+    }
     if let Some(key) = replay_key {
         recover_lock(&state.grant_replays).record(
             key,

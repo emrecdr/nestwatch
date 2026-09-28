@@ -1008,3 +1008,21 @@ What is still true until the client changes: the gate cannot be lifted by practi
 *only the app on your device can lift this gate* states the contract rather than today's client,
 and a household using a gate should know that its remedy in the meantime is the switch beside
 the provider or a grant of its own.
+
+## A push says it too — 2026-09-29
+
+*The gate says something*, above, gave the gate a voice — inside the probe loop, which was then the
+only road a report took. When the probe was deferred the push became the only road in this
+household, and it said nothing at all: measured, short → rung → bar moved a gated day 35 → 51 →
+120 without one notification. `probe::tell_child` is now the single decision, called by the probe
+loop and by `api::extra_time` with the outcome a probe would have produced, so the child cannot
+tell which road reported his work and neither road can drift from the other.
+
+* **The day's reminder is one ration for both roads.** It moved out of `ProbeState` into
+  `probe::ReminderMap`, because it is about what *he* has been told rather than about which road
+  reported: a probe at 16:00 and a push at 16:05 must not each tell him about the same rung.
+  `remind_every_check` still overrides it, from either road.
+* **A replay never reaches it**, so a retried push is neither a second grant nor a second notice.
+* **A parent's own grant is not practice** and is not announced as if it were.
+
+What is still silent is the moment the gate lifts — `O106`.

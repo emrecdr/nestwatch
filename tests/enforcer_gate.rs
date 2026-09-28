@@ -144,7 +144,6 @@ async fn a_gate_holds_the_child_in_the_loop_that_enforces_and_lets_go_when_it_ca
                 reported: None,
                 outcome: ProbeOutcome::Failed("StudyGo did not answer".into()),
             },
-            reminded_on: None,
         },
     );
     waker.send_modify(|n| *n += 1);

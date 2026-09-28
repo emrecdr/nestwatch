@@ -2152,3 +2152,23 @@ already half-present in this repository. Left open because the registration touc
 an install-time step that can fail silently is exactly the class this project spends the most
 effort avoiding.
 
+
+### O106 · Nothing tells the child when his gate lifts
+
+A gate's whole purpose is the moment it opens — *finish your practice and your normal day is
+back* — and that is the one moment neither road says anything about. `probe::tell_child` announces
+a grant and names the next rung; it has no sentence for the bar being met. And the push that meets
+the bar is usually refused its *minutes*, because the lower rung already paid the ladder to its top
+(`daily_cap_reached`), which by design says nothing to him. So the usual shape of a good afternoon
+is: told *16 more minutes*, practises the rest, and his day quietly becomes two hours with no word
+that it happened or why — the half of the feature that rewards him is the half that is silent.
+
+**What it needs is a sentence and a trigger, not a mechanism.** `Config::earn` already records the
+transition (`note_bar_met` flips `EarnedDay::bar_met`), so a caller can see *false before, true
+after* within the same critical section; the notice would ride `tell_child` for both roads, like
+the rest. The open questions are the words, in three languages, and whether to say it when the gate
+was not binding anyway — a gated child on a day whose base is below the allowance gains nothing
+from the gate lifting, and telling him he did would be the first false sentence this feature says.
+
+Filed 2026-09-29, found while giving the push road the probe's voice (see *A push says it too* in
+`docs/PLUGIN-SYSTEM.md`).

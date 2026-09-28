@@ -1430,7 +1430,6 @@ async fn earned_grants_latch_replay_and_validate() {
                         "StudyGo did not answer".into(),
                     ),
                 },
-                reminded_on: None,
             },
         );
         assert_eq!(
@@ -1439,6 +1438,149 @@ async fn earned_grants_latch_replay_and_validate() {
             "(dashboard, child's page, bedtime note): with the check failing the gate is lifted, so \
              every screen must show his parent's own 120 — and with an hour of it left, a later \
              bedtime is not cut short by anything"
+        );
+    }
+
+    // --- A push speaks to the child the way a probe does ---------------------------------------
+    //
+    // Every sentence about practice — a grant announced, the nearest rung named — was said only by
+    // the probe loop, so a household whose checking arrives as a push heard nothing: measured on
+    // 2026-09-28, short, rung and bar moved a gated day 35 -> 51 -> 120 with no notification at
+    // all. With the probe deferred, that is every household running a StudyGo gate. The rules are
+    // the probe's, unchanged — every grant announced, a shortfall once a day unless the provider
+    // asks for every check — and the day's reminder is one ration for both roads, so a probe and a
+    // push cannot each remind him of the same rung.
+    {
+        let rung = || {
+            vec![nestwatch::config::Tier {
+                questions: 10,
+                minutes_practised: 20,
+                reward_mins: 16,
+            }]
+        };
+        let gated = |remind_every_check: bool| nestwatch::config::Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: None,
+            tiers: rung(),
+            probe: Some(nestwatch::config::Probe {
+                exe: "studygo-probe".into(),
+                every_mins: 15,
+                first_check_after_mins: 0,
+            }),
+            remind_every_check,
+            gate: Some(nestwatch::config::Gate {
+                allowance_mins: 35,
+                questions: 15,
+                minutes_practised: 30,
+            }),
+        };
+        let fake = std::sync::Arc::new(nestwatch::control::FakeControl::new());
+        let mut cfg = test_config();
+        cfg.providers.insert("studygo".into(), gated(false));
+        // No probe on this one, so the probe run below reaches `studygo` alone.
+        cfg.providers.insert(
+            "reading".into(),
+            nestwatch::config::Provider {
+                probe: None,
+                ..gated(true)
+            },
+        );
+        cfg.providers.insert(
+            "chores".into(),
+            nestwatch::config::Provider {
+                enabled: true,
+                minutes: 10,
+                daily_cap_mins: None,
+                tiers: Vec::new(),
+                probe: None,
+                remind_every_check: false,
+                gate: None,
+            },
+        );
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+        let app = app_with(state.clone());
+        let cookie = login(&app, PASSWORD).await.unwrap();
+        let heard = || fake.notification_bodies();
+        let short = |source: &str, questions: u32| json!({ "source": source, "progress": { "questions": questions, "minutes": 5 } });
+
+        // Short of the rung: the nearest rung, what it is worth, and the score so far.
+        grant(&app, &cookie, short("studygo", 3), None).await;
+        let said = heard();
+        assert_eq!(
+            said.len(),
+            1,
+            "a push short of every rung says what the next one is worth: {said:?}"
+        );
+        assert!(
+            said[0].contains("studygo")
+                && said[0].contains("earns 16 more minutes")
+                && said[0].contains("3 questions and 5 minutes"),
+            "the reminder names the rung, its reward and the work so far: {}",
+            said[0]
+        );
+
+        // The same day again, from either road: rationed.
+        grant(&app, &cookie, short("studygo", 4), None).await;
+        fake.script_probe(Ok(br#"{"questions":5,"minutes":6}"#.to_vec()));
+        nestwatch::probe::run_once(&state, chrono::Local::now().fixed_offset()).await;
+        assert_eq!(
+            heard().len(),
+            1,
+            "one shortfall notice a day, whichever road reports it — a probe and a push must not \
+             each remind him: {:?}",
+            heard()
+        );
+
+        // The rung: announced, once, however often the push is retried.
+        let rung_push =
+            json!({ "source": "studygo", "progress": { "questions": 12, "minutes": 5 } });
+        let (_, body) = grant(&app, &cookie, rung_push.clone(), Some("rung-1")).await;
+        assert_eq!(body["minutes"], json!(16), "{body}");
+        let said = heard();
+        assert_eq!(said.len(), 2, "every grant is announced: {said:?}");
+        assert!(
+            said[1].contains("16 more minutes") && said[1].contains("practice"),
+            "{}",
+            said[1]
+        );
+        grant(&app, &cookie, rung_push, Some("rung-1")).await;
+        assert_eq!(
+            heard().len(),
+            2,
+            "a replay is not a second grant, and not a second notice"
+        );
+
+        // A provider set to remind at every check does, from a push as from a probe.
+        grant(&app, &cookie, short("reading", 3), None).await;
+        grant(&app, &cookie, short("reading", 4), None).await;
+        assert_eq!(
+            heard().len(),
+            4,
+            "`remind_every_check` is the provider's to say, whichever road reports: {:?}",
+            heard()
+        );
+
+        // An ungated reward pushed bare is still a grant, and still announced.
+        grant(&app, &cookie, json!({ "source": "chores" }), None).await;
+        let said = heard();
+        assert_eq!(said.len(), 5, "{said:?}");
+        assert!(said[4].contains("10 more minutes"), "{}", said[4]);
+
+        // A parent's own minutes are theirs to announce, not a practice notice.
+        grant(
+            &app,
+            &cookie,
+            json!({ "source": "parent", "minutes": 20 }),
+            None,
+        )
+        .await;
+        assert_eq!(
+            heard().len(),
+            5,
+            "a parent's grant is not practice: {:?}",
+            heard()
         );
     }
 }

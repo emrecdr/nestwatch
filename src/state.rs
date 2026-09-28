@@ -93,6 +93,9 @@ pub struct AppState {
     pub sessions: FileSessionStore,
     /// The last run of each provider's probe, for the dashboard. See [`crate::probe`].
     pub probe_status: crate::probe::StatusMap,
+    /// The day each provider's shortfall reminder last reached the child — one ration for a probe
+    /// and a push alike. See [`crate::probe::ReminderMap`].
+    pub reminded: crate::probe::ReminderMap,
 }
 
 impl AppState {
@@ -135,6 +138,7 @@ impl AppState {
             enforcement_wake: Arc::new(tokio::sync::watch::channel(0).0),
             sessions,
             probe_status: Arc::new(std::sync::Mutex::new(Default::default())),
+            reminded: Arc::new(std::sync::Mutex::new(Default::default())),
         }
     }
 }

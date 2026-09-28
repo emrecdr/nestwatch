@@ -216,23 +216,28 @@ fn practice_earned_message(minutes: u32, lang: crate::config::Language) -> Strin
 
 /// What this machine remembers about one provider's probe between runs.
 ///
-/// Both halves are in memory only and deliberately so: a restart forgets them, which re-runs every
-/// due probe and re-offers the day's reminder once. Both are the right thing after a service has
-/// been down for hours, and the facts that must survive — what was actually earned — live in the
-/// config where [`crate::config::Config::earn`] put them.
+/// In memory only, and deliberately so: a restart forgets it, which re-runs every due probe. That
+/// is the right thing after a service has been down for hours, and the facts that must survive —
+/// what was actually earned — live in the config where [`crate::config::Config::earn`] put them.
 #[derive(Debug, Clone)]
 pub struct ProbeState {
     /// The last run. Not optional: an entry in this map *is* a run, written only after one has
     /// happened, so there is no state in which a provider has a record and no result in it.
     pub last: ProbeStatus,
-    /// The local day this provider last got its reminder *delivered* to the child. Absent until
-    /// one lands, so an undeliverable notice is retried at the next check rather than counted as
-    /// said — the same distinction `rules.rs` draws before recording a countdown warning.
-    pub reminded_on: Option<NaiveDate>,
 }
 
 /// Per-provider [`ProbeState`], keyed by provider name. Held in `AppState`.
 pub type StatusMap = Arc<Mutex<BTreeMap<String, ProbeState>>>;
+
+/// The local day each provider last had its shortfall reminder *delivered* to the child.
+///
+/// One map for both roads — a probe this machine ran and a push from the provider's app — because
+/// the ration is about what *he* has been told, not about which road reported the work. It used to
+/// be a field of [`ProbeState`], so a push had nowhere to record it and a probe could not see one.
+/// Absent until a reminder lands, so an undeliverable notice is retried rather than counted as said
+/// — the same distinction `rules.rs` draws before recording a countdown warning. In memory, like
+/// [`StatusMap`]: a restart re-offers the day's reminder once. Held in `AppState`.
+pub type ReminderMap = Arc<Mutex<BTreeMap<String, NaiveDate>>>;
 
 /// Where probes live: the one directory the child can execute from and cannot write to.
 ///
@@ -460,63 +465,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 tracing::warn!(provider = %name, error = %error, "probe failed")
             }
         }
-        // Read after `run_one` rather than carried from the snapshot above, which costs one
-        // uncontended lock and buys the property that this stays correct if anything ever runs a
-        // second scheduler: the value it reads is the one that is true now, not before the await.
-        let reminded_before = crate::api::recover_lock(&state.probe_status)
-            .get(&name)
-            .and_then(|entry| entry.reminded_on);
-        // What, if anything, the child hears. Decided from a config snapshot released before the
-        // await below, and `true` marks the reminder — the one that is rationed.
-        let (lang, speak) = {
-            let cfg = crate::state::recover_read(&state.config);
-            let lang = cfg.language;
-            let speak: Option<String> = match (&outcome, reported) {
-                // Every grant is announced. A rule that only ever says "not yet" is the
-                // controlling frame this feature is written to avoid, and the ceiling already
-                // bounds how many times this can happen.
-                (ProbeOutcome::Granted(minutes), _) => {
-                    Some(practice_earned_message(*minutes, lang))
-                }
-                // Short of the bar, and either not yet told today or set to say it every time.
-                // The other two refusals mean the day is already paid, so there is nothing to aim
-                // at and nothing to say.
-                //
-                // The rationing moved inside the lookup rather than staying a match guard,
-                // because which rule applies is now the *provider's* to say and the guard ran
-                // before anything had been looked up. `filter` before `and_then` keeps the two
-                // questions in the order they are asked: may he be told, and is there a rung to
-                // tell him about.
-                (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done)) => cfg
-                    .providers
-                    .get(&name)
-                    .filter(|provider| {
-                        provider.remind_every_check || reminded_before != Some(today)
-                    })
-                    .and_then(|provider| provider.next_rung(done))
-                    .map(|tier| practice_reminder_message(&name, tier, done, lang)),
-                // Enumerated rather than caught. The day latch and the ceiling both mean the day
-                // is already paid, so there is no rung to aim at and nothing worth saying; a failed
-                // check is the parent's to read, not his. A fourth refusal fails to compile here,
-                // which is the whole point of the reason being a type. `BelowThreshold` reaches
-                // this arm only with nothing reported, which a probe cannot produce and a push
-                // can.
-                (ProbeOutcome::Refused(Refused::BelowThreshold), _)
-                | (ProbeOutcome::Refused(Refused::AlreadyGrantedToday), _)
-                | (ProbeOutcome::Refused(Refused::DailyCapReached), _)
-                | (ProbeOutcome::Failed(_), _) => None,
-            };
-            (lang, speak)
-        };
-        // Only the reminder is rationed, and which one this was is already written in `outcome` —
-        // carrying a second flag alongside the sentence would be a fact stored twice.
-        let mut reminded_on = reminded_before;
-        if let Some(body) = speak {
-            let delivered = crate::control::notify_child(&state.control, &body, lang).await;
-            if delivered && matches!(outcome, ProbeOutcome::Refused(Refused::BelowThreshold)) {
-                reminded_on = Some(today);
-            }
-        }
+        tell_child(state, &name, &outcome, reported, today).await;
         crate::api::recover_lock(&state.probe_status).insert(
             name,
             ProbeState {
@@ -525,9 +474,79 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                     reported,
                     outcome,
                 },
-                reminded_on,
             },
         );
+    }
+}
+
+/// Tell the child what `source`'s judged work bought him — the same whether this machine ran a
+/// probe or the provider's own app pushed.
+///
+/// **One function because there are two roads and the child should not be able to tell them
+/// apart.** This decision lived inside [`run_once`], so a household whose checking arrives as a
+/// push — every StudyGo household once the probe was deferred — heard nothing at all: measured on
+/// 2026-09-28, a gated day went 35 → 51 → 120 without one notification. `api::extra_time` now calls
+/// this with the same outcome a probe would have produced.
+///
+/// **The day's reminder is one ration for both roads** ([`ReminderMap`]), so a probe at 16:00 and a
+/// push at 16:05 cannot each tell him about the same rung.
+pub(crate) async fn tell_child(
+    state: &AppState,
+    source: &str,
+    outcome: &ProbeOutcome,
+    reported: Option<Progress>,
+    today: NaiveDate,
+) {
+    // Read now rather than carried from a snapshot, which costs one uncontended lock and buys the
+    // property that this stays correct however many callers there are: the value it reads is the
+    // one that is true now.
+    let reminded_before = crate::api::recover_lock(&state.reminded)
+        .get(source)
+        .copied();
+    // What, if anything, the child hears. Decided from a config snapshot released before the
+    // await below.
+    let (lang, speak) = {
+        let cfg = crate::state::recover_read(&state.config);
+        let lang = cfg.language;
+        let speak: Option<String> = match (outcome, reported) {
+            // Every grant is announced. A rule that only ever says "not yet" is the controlling
+            // frame this feature is written to avoid, and the ceiling already bounds how many
+            // times this can happen.
+            (ProbeOutcome::Granted(minutes), _) => Some(practice_earned_message(*minutes, lang)),
+            // Short of the bar, and either not yet told today or set to say it every time. The
+            // other two refusals mean the day is already paid, so there is nothing to aim at and
+            // nothing to say.
+            //
+            // The rationing is inside the lookup rather than a match guard, because which rule
+            // applies is the *provider's* to say and a guard runs before anything is looked up.
+            // `filter` before `and_then` keeps the two questions in the order they are asked: may
+            // he be told, and is there a rung to tell him about.
+            (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done)) => cfg
+                .providers
+                .get(source)
+                .filter(|provider| provider.remind_every_check || reminded_before != Some(today))
+                .and_then(|provider| provider.next_rung(done))
+                .map(|tier| practice_reminder_message(source, tier, done, lang)),
+            // Enumerated rather than caught. The day latch and the ceiling both mean the day is
+            // already paid, so there is no rung to aim at and nothing worth saying; a failed check
+            // is the parent's to read, not his. A fourth refusal fails to compile here, which is
+            // the whole point of the reason being a type. `BelowThreshold` reaches this arm only
+            // with nothing reported, which a probe cannot produce and a push can.
+            (ProbeOutcome::Refused(Refused::BelowThreshold), _)
+            | (ProbeOutcome::Refused(Refused::AlreadyGrantedToday), _)
+            | (ProbeOutcome::Refused(Refused::DailyCapReached), _)
+            | (ProbeOutcome::Failed(_), _) => None,
+        };
+        (lang, speak)
+    };
+    // Only the reminder is rationed, and which one this was is already written in `outcome` —
+    // carrying a second flag alongside the sentence would be a fact stored twice. A reminder the
+    // OS refused is not a reminder he got, so it is recorded only once delivered.
+    if let Some(body) = speak {
+        let delivered = crate::control::notify_child(&state.control, &body, lang).await;
+        if delivered && matches!(outcome, ProbeOutcome::Refused(Refused::BelowThreshold)) {
+            crate::api::recover_lock(&state.reminded).insert(source.to_string(), today);
+        }
     }
 }
 
