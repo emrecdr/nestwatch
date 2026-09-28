@@ -87,6 +87,12 @@ handed answers the dashboard's whole day — per-app minutes, group pools, focus
 `auth::INTEGRATION_USAGE_FIELDS`, which is `extra_mins`. `Scope::Dashboard` is unchanged, because
 the same route is the browser's and the Android client's.
 
+**Plus its own gate, where it has one.** A gated provider's grant raises its gate and never reaches
+`extra_mins`, so that field alone told a parent a real grant had failed. An integration whose
+provider has a gate also reads `gate` — `{lifted, earned_mins}`, whether the work *it* reported met
+the bar today and how far *its* rungs raised the gate (`Config::gate_read_back`). Both are facts the
+integration caused; nothing else of the child's day is added.
+
 **A pairing may now be minted from the dashboard, behind a second password check.**
 `POST /api/providers/{name}/pair` mints an `Integration`-scoped token for an installed provider.
 Until this, `pairing::mint` had one caller — `nestwatch pair`, behind `install::ensure_elevated`.

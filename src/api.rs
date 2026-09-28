@@ -1765,7 +1765,7 @@ pub async fn usage_today(
     // `rules_at`, not `rules`: while a scheduled routine is in force it is that routine's budget
     // the enforcer counts against, so showing the base one here would put a number on the
     // dashboard that nothing is enforcing.
-    let (rules, extra, gate_cap, active_routine) = {
+    let (rules, extra, gate_cap, active_routine, own_gate) = {
         let cfg = crate::state::recover_read(&state.config);
         let at = crate::clock::now();
         (
@@ -1775,6 +1775,12 @@ pub async fn usage_today(
             // dashboard must show the day he actually has, not the one his daily limit names.
             crate::probe::live_gate_cap(&cfg, &state.probe_status, today),
             cfg.active_routine_at(at).map(str::to_string),
+            // An integration's own gate, for the read-back below — from the same guard, so it
+            // agrees with the ceiling above about what the ledger said.
+            match &*scope {
+                crate::pairing::Scope::Integration { source } => cfg.gate_read_back(source, today),
+                crate::pairing::Scope::Dashboard => None,
+            },
         )
     };
     // One hop to the blocking pool for both file reads, not two. The certificate check is a
@@ -1804,9 +1810,19 @@ pub async fn usage_today(
     // whole day goes only to a session entitled to the whole day. See
     // [`crate::auth::INTEGRATION_USAGE_FIELDS`] for why the list is one field and how that was
     // checked against the consumer rather than assumed.
+    //
+    // Beside that one field, an integration whose provider has a gate reads `gate` — its own gate,
+    // which `extra_mins` cannot show (see `Config::gate_read_back`). Added here rather than to the
+    // summary because it is about the caller, and the summary is about the child.
     Ok(Json(match &*scope {
         crate::pairing::Scope::Dashboard => summary,
-        crate::pairing::Scope::Integration { .. } => crate::auth::usage_for_integration(&summary),
+        crate::pairing::Scope::Integration { .. } => {
+            let mut narrowed = crate::auth::usage_for_integration(&summary);
+            if let Some(gate) = own_gate {
+                narrowed["gate"] = json!(gate);
+            }
+            narrowed
+        }
     }))
 }
 

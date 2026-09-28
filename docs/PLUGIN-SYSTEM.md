@@ -239,9 +239,10 @@ does not show (`O85`). The route it was handed to do that answers the dashboard'
 seventeen fields, including per-app minutes and up to `MAX_PAGES` window titles. So the allowlist
 was route-scoped where the justification was field-scoped, and every provider that ever reaches
 this route inherits the wider answer. It now returns `auth::INTEGRATION_USAGE_FIELDS`, which is
-`extra_mins`. **`Scope::Dashboard` is untouched**: the same route is the browser's and the Android
-client's, and narrowing a shared route for one caller would break a full dashboard to bound an
-integration.
+`extra_mins` — plus, since 2026-09-29, the caller's own `gate` where it has one (*The counts never
+reached this machine*, below). **`Scope::Dashboard` is untouched**: the same route is the browser's
+and the Android client's, and narrowing a shared route for one caller would break a full dashboard
+to bound an integration.
 
 That the consumer reads exactly one field was checked, not assumed — its contract test is named
 "one field out of fourteen" and derives what it depends on from its own source, and its maintainer
@@ -962,3 +963,48 @@ design reasoned entirely about numbers — do 35, 51 and 120 come out right? —
 mattered was whose numbers they were. Every check passed. The tests were green, the arithmetic was
 pinned, and the feature was wrong in a way no amount of checking the arithmetic could have found,
 because the arithmetic was never the part that was wrong.
+
+## The counts never reached this machine — 2026-09-29
+
+**With the only client this household runs, practice could never lift the gate.** Voortgang's push
+is `{"minutes": 0, "source": "studygo"}` — read from its source, `nestwatch_client.dart`, not
+inferred — sent once a day when the app's *own* threshold is met. It carries no counts, and a gate
+lifts only when a push carries counts that meet the bar (`Gate::met` on `progress`). Replaying those
+exact bytes against a gated provider: the day went 35 → 51 with one rung configured, 35 → 65 with
+none, and never to 120 however much he practised. Then Voortgang's read-back — it confirms every
+push by reading `extra_mins`, and treats a shortfall as failure — saw `0`, because a gated grant
+raises the gate and never the parent's pool, and it told the parent the grant had not happened.
+
+*Facts instead of a verdict*, above, made this machine able to judge counts "from the side that can
+move without the other repository agreeing to anything". The other side never moved, and nothing
+here could see that: every test pushed `progress`, the shape this repository designed, and none
+replayed what the client actually sends. The probe — which *would* have reported counts, from this
+PC — was then deferred on the stated premise that the count already reached this machine. That
+premise was a relayed claim about another repository's code, and two minutes in that code
+disproved it.
+
+**Decided 2026-09-28: Voortgang sends counts.** The bar a parent sets on the card is then the bar,
+and this machine judges it — the arrangement the ladder was designed for. The contract Voortgang has
+to meet, stated from this side:
+
+1. **Push the work, not a verdict.** `POST /api/extra-time` with
+   `{"source": "studygo", "progress": {"questions": N, "minutes": M}}` — questions answered and
+   minutes practised *today*, both required, both non-negative integers. A top-level `minutes` is
+   optional and ignored for any source but `parent`.
+2. **Push on every sync, not once a day behind the app's own threshold.** The rungs and the bar are
+   judged here. `200 {"ok": false, "reason": "below_threshold"}` means *not yet*: nothing is
+   recorded, and the next sync should push again.
+3. **Under a gate, a refusal of minutes is not the end of the day.** `daily_cap_reached` and
+   `already_granted_today` mean no more *minutes* today, but the bar is recorded on work done,
+   before any refusal — so a later push whose counts meet it still lifts the gate. Keep pushing
+   until the read-back says `gate.lifted`.
+4. **Confirm by the gate when there is one.** An integration whose provider has a gate reads
+   `gate: {"lifted": bool, "earned_mins": n}` beside `extra_mins` on `GET /api/usage/today`
+   (`Config::gate_read_back`, added for this). A rung is confirmed by `earned_mins` reaching what
+   the push was told, the bar by `lifted`. A body with no `gate` is an ungated provider, and
+   `extra_mins` still confirms it exactly as before.
+
+What is still true until the client changes: the gate cannot be lifted by practice. The card's
+*only the app on your device can lift this gate* states the contract rather than today's client,
+and a household using a gate should know that its remedy in the meantime is the switch beside
+the provider or a grant of its own.

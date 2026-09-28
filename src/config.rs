@@ -418,6 +418,21 @@ impl Gate {
     }
 }
 
+/// What an integration reads back about its own gate today — see [`Config::gate_read_back`].
+///
+/// Two facts, both caused by the integration itself: whether the work it reported has met the bar
+/// today, and how many minutes its rungs have raised the gate by. Neither says anything about the
+/// child's day that the integration did not put there, which is the line
+/// `auth::INTEGRATION_USAGE_FIELDS` draws for everything else on that route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct GateReadBack {
+    /// The bar was met today, so the gate no longer binds — [`EarnedDay::bar_met`].
+    pub lifted: bool,
+    /// Minutes this source's rungs have raised its gate by today. Not `extra_mins`: a gated grant
+    /// never reaches the parent's pool (`Config::earn`), so that field cannot confirm it.
+    pub earned_mins: u32,
+}
+
 /// A program this machine runs, as the child, to ask a provider what the child has done today.
 ///
 /// The half of a gate the phone cannot do. Voortgang signs in to StudyGo and forwards the session
@@ -1331,6 +1346,27 @@ impl Config {
                 )
             })
             .min()
+    }
+
+    /// What `source` may read back about its own gate on `today`, or `None` when it has no gate.
+    ///
+    /// **Why this exists: `extra_mins` cannot see a gated grant.** A gated provider's minutes raise
+    /// its gate and never `Config::extra`, so a client that confirms a push by reading
+    /// `extra_mins` back — Voortgang does, and treats a shortfall as failure — sees `0` after being
+    /// paid and tells the parent nothing happened. Replaying its exact request against a gated
+    /// provider showed exactly that. This is the gate's own ledger, [`Config::earned`], read for
+    /// the one source asking.
+    ///
+    /// Present whenever the provider has a gate, lifted or not, so its absence means *no gate*
+    /// rather than *nothing yet*. The provider being switched off or removed is not a case here:
+    /// `auth::require_auth` refuses such an integration before any read.
+    pub fn gate_read_back(&self, source: &str, today: NaiveDate) -> Option<GateReadBack> {
+        self.providers.get(source)?.gate.as_ref()?;
+        let entry = self.earned.get(source).filter(|entry| entry.date == today);
+        Some(GateReadBack {
+            lifted: entry.is_some_and(|entry| entry.bar_met),
+            earned_mins: entry.and_then(|entry| entry.minutes).unwrap_or(0),
+        })
     }
 
     pub fn rules_at(&self, at: DateTime<FixedOffset>) -> &crate::rules::Rules {

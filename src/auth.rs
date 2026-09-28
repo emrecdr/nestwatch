@@ -973,6 +973,11 @@ fn integration_may_reach(method: &axum::http::Method, path: &str, source: &str) 
 /// so it stays true as that client changes; asked directly, its maintainer ran `extraMinutesFrom`
 /// against `{"extra_mins":60}` and the full payload and got `60` from both. A body carrying none
 /// of these yields `null` there, not zero, and `null` cannot retract a confirmed grant.
+///
+/// **Beside it, an integration whose provider has a gate reads `gate`** — its own gate, from
+/// [`crate::config::Config::gate_read_back`] — because a gated grant never reaches `extra_mins`,
+/// and that field alone told a parent a real grant had failed. It is not a field of the summary,
+/// which is about the child; `api::usage_today` adds it, because it is about the caller.
 pub const INTEGRATION_USAGE_FIELDS: [&str; 1] = ["extra_mins"];
 
 /// Reduce today's summary to [`INTEGRATION_USAGE_FIELDS`].

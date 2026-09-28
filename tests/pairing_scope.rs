@@ -43,6 +43,13 @@ async fn send(
     app.clone().oneshot(req).await.unwrap().status()
 }
 
+/// What `cookie` reads back from `GET /api/usage/today`.
+async fn read_back(app: &axum::Router, cookie: &str) -> Value {
+    send_json(app, cookie, "GET", "/api/usage/today", json!({}))
+        .await
+        .1
+}
+
 #[tokio::test]
 async fn a_pairing_can_only_do_what_it_was_minted_for() {
     let tmp = ScratchDir::new("pairscope");
@@ -440,6 +447,120 @@ async fn a_pairing_can_only_do_what_it_was_minted_for() {
             )
             .await,
             StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // --- An integration reads back its own gate, because `extra_mins` cannot see it ----------
+    //
+    // A gated provider's grant raises its *gate* and never `extra_mins` (`Config::earn`), so the
+    // one field this route answered could not confirm it. Voortgang reads back after every push and
+    // treats a shortfall as failure — replaying its exact request against a gated provider on
+    // 2026-09-28 gave `{"ok":true,"minutes":16}` and then `extra_mins: 0`, and the parent was told
+    // the grant had not happened. The answer added here is still the caller's own grant — whether
+    // the work it reported met the bar, and how far its rungs raised its gate — and nothing of the
+    // child's day.
+    {
+        let state = state_with(test_config());
+        let config = state.config.clone();
+        let app = app_with(state);
+        let parent = login(&app, PASSWORD).await.unwrap();
+        assert_eq!(
+            common::post_json(
+                &app,
+                "/api/providers/studygo",
+                Some(&parent),
+                json!({
+                    "enabled": true,
+                    "minutes": 1,
+                    "tiers": [{ "questions": 10, "minutes_practised": 20, "reward_mins": 16 }],
+                    "gate": { "allowance_mins": 35, "questions": 15, "minutes_practised": 30 }
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            configure_provider(&app, &parent, "chores", true, 10).await,
+            StatusCode::OK
+        );
+        let studygo = pair_with(
+            &app,
+            Scope::Integration {
+                source: "studygo".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let chores = pair_with(
+            &app,
+            Scope::Integration {
+                source: "chores".into(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let push = |questions: u32, minutes: u32| json!({ "source": "studygo", "progress": { "questions": questions, "minutes": minutes } });
+
+        // Yesterday's ledger, met and paid, still in the map: nothing prunes it until today's first
+        // grant. Read as today's, the first sync of the morning would report the gate already
+        // lifted before he has practised at all.
+        let today = nestwatch::config::today();
+        nestwatch::state::recover_write(&config).earned.insert(
+            "studygo".into(),
+            nestwatch::config::EarnedDay {
+                date: today.pred_opt().unwrap(),
+                minutes: Some(16),
+                bar_met: true,
+            },
+        );
+
+        assert_eq!(
+            read_back(&app, &studygo).await["gate"],
+            json!({ "lifted": false, "earned_mins": 0 }),
+            "a gated integration can see its gate before it has pushed anything — and yesterday's \
+             lifted gate is not today's"
+        );
+
+        let (_, short) = send_json(&app, &studygo, "POST", "/api/extra-time", push(3, 5)).await;
+        assert_eq!(short["reason"], json!("below_threshold"), "{short}");
+        assert_eq!(
+            read_back(&app, &studygo).await["gate"],
+            json!({ "lifted": false, "earned_mins": 0 }),
+            "work short of every rung moves nothing"
+        );
+
+        let (_, rung) = send_json(&app, &studygo, "POST", "/api/extra-time", push(12, 5)).await;
+        assert_eq!(rung["minutes"], json!(16), "{rung}");
+        let back = read_back(&app, &studygo).await;
+        assert_eq!(
+            back["gate"],
+            json!({ "lifted": false, "earned_mins": 16 }),
+            "the rung it was just paid is readable where it landed: {back}"
+        );
+        assert_eq!(
+            back["extra_mins"],
+            json!(0),
+            "and not in `extra_mins`, which is why that field alone told the parent it had failed"
+        );
+
+        let (_, bar) = send_json(&app, &studygo, "POST", "/api/extra-time", push(15, 30)).await;
+        assert_eq!(
+            read_back(&app, &studygo).await["gate"],
+            json!({ "lifted": true, "earned_mins": 16 }),
+            "meeting the bar lifts the gate, which the integration can now say to the parent — even \
+             though this push's minutes were refused because the ladder was already paid: {bar}"
+        );
+
+        assert!(
+            read_back(&app, &chores).await.get("gate").is_none(),
+            "an integration with no gate has no gate to read back"
+        );
+        assert!(
+            read_back(&app, &parent).await.get("gate").is_none(),
+            "the dashboard's day is unchanged: this is an integration's answer about itself"
         );
     }
 }
