@@ -493,6 +493,17 @@ arrangement this change exists to end. The body's key set is unchanged, so the c
 holds — and a client that wants to behave well can now tell a refusal worth retrying after more
 practice from one that stands until midnight.
 
+**Without tiers, work still has to be work — added 2026-09-29.** A provider with no ladder paid its
+single reward for any push that carried counts, including `{"questions": 0, "minutes": 0}`. That was
+harmless while a client pushed only once it had judged the bar met, and it is payment for a sync
+once a client reports as it goes. So a report of no work now earns nothing, whatever is configured.
+Under a gate with no rungs the gate's bar is the only rung: a partial report used to pay the reward
+into the gate's ledger, raising it by a step nobody configured, and now nothing is paid until the
+bar is met. A push that reports *nothing* is still worth the single reward — clients that predate
+counts, and the catch-up push for yesterday, are unchanged. Voortgang decides when it publishes and
+does not shape itself around this rule, so this side holds it either way (`reward_for`,
+`a_provider_without_tiers_pays_for_work_and_only_work`).
+
 **The two features compose into the rule a household actually states.** Set the ceiling to the top
 rung's reward and a day totals *exactly the best tier the child reached*, however many pushes it
 took: clear the lower rung for 16, clear the upper one later, and the second grant pays the 14-minute

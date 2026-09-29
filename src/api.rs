@@ -694,7 +694,7 @@ pub struct ExtraTimeBody {
     /// a robot names itself (`studygo`) so the audit log stays honest.
     #[serde(default)]
     source: Option<String>,
-    /// What the child actually did, for a provider that has reward tiers configured.
+    /// What the child actually did, judged against the provider's tiers or its gate's bar.
     ///
     /// **Facts, not a verdict.** Until now a push carried the client's *conclusion* — it sent the
     /// request only when it judged the bar met — so the bar lived in the client and the reward
@@ -702,8 +702,9 @@ pub struct ExtraTimeBody {
     /// this machine hold both halves, which means a parent can move the bar from here without
     /// anyone shipping a new client.
     ///
-    /// Absent is the original contract and stays fully supported: with no tiers configured, or
-    /// nothing reported, a push is worth the provider's single reward exactly as before.
+    /// Absent is the original contract and stays fully supported: with nothing reported, a push
+    /// is worth the provider's single reward exactly as before. Present, it is paid for work —
+    /// a report of none earns nothing, whatever is configured (`Provider::reward_for`).
     ///
     /// It does not make the client more trusted. A client willing to inflate these numbers was
     /// already willing to push when it had not earned anything; what bounds either is

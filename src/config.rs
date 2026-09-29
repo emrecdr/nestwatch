@@ -515,17 +515,26 @@ impl Provider {
     /// `require_minutes` refuses a zero reward at the point a tier is configured. A caller must
     /// therefore treat `None` as a refusal to grant, not as a grant of nothing.
     ///
-    /// **Both fallbacks land on the original behaviour, and that is deliberate.** A provider with
-    /// no tiers is worth [`Provider::minutes`] however much detail a push carries, and a push that
-    /// reports nothing is worth [`Provider::minutes`] however many tiers are configured. So this
-    /// only ever changes the answer where a parent has configured a ladder *and* the client has
-    /// said enough to place the child on it; every other combination is what shipped before.
+    /// **A push that reports nothing lands on the original behaviour, and that is deliberate:** it
+    /// is worth [`Provider::minutes`] however many tiers are configured, which is what a client
+    /// that predates counts sends, and what a catch-up push for yesterday sends.
+    ///
+    /// **A push that reports work is paid for work.** With tiers, the best one it meets. With
+    /// none, the single reward — for any work at all, or under a gate for work that meets the
+    /// gate's bar, since then the bar is the only rung there is. A report of no work earns
+    /// nothing: once a client pushes counts rather than a verdict, it pushes them when nothing has
+    /// happened yet too, and paying that would pay for a sync.
     ///
     /// The best matching tier wins rather than the first, so the answer does not depend on the
     /// order a parent happened to enter them in.
     pub fn reward_for(&self, progress: Option<Progress>) -> Option<u32> {
         match (progress, self.tiers.as_slice()) {
-            (_, []) | (None, _) => Some(self.minutes),
+            (None, _) => Some(self.minutes),
+            (Some(done), []) => match &self.gate {
+                Some(gate) => gate.met(done),
+                None => done.questions > 0 || done.minutes > 0,
+            }
+            .then_some(self.minutes),
             (Some(done), tiers) => tiers
                 .iter()
                 .filter(|tier| tier.met(done.questions, done.minutes))
@@ -544,8 +553,7 @@ impl Provider {
     /// tiers in, which is the same property [`Provider::reward_for`] holds on the paying side.
     ///
     /// `None` when every tier is met — there is nothing left to earn, so there is nothing to say —
-    /// and when there are no tiers at all, which is a provider whose single reward has no bar in
-    /// front of it.
+    /// and when there are no tiers at all, which is a provider with no ladder to name a step on.
     pub fn next_rung(&self, done: Progress) -> Option<&Tier> {
         self.tiers
             .iter()
@@ -650,8 +658,9 @@ pub struct Progress {
 /// used to live as four scattered literals; one function and one test now hold them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refused {
-    /// Work was reported and met no tier. The only one worth telling the child about: it is the one
-    /// with a rung still to aim at.
+    /// Work was reported and earned nothing: it met no tier, or — for a provider with none — it was
+    /// no work at all, or short of the gate's bar. The only one worth telling the child about: it is
+    /// the one with something still to aim at.
     BelowThreshold,
     /// This source already granted today and has no ceiling to top up against.
     AlreadyGrantedToday,
@@ -1199,9 +1208,9 @@ impl Config {
         if bar_met_now {
             self.note_bar_met(source, today);
         }
-        // Work was reported and it meets no tier. Not an error: a client that pushes whatever it
-        // sees and lets this machine judge is exactly what tiers are for, so "not yet" has to be
-        // an ordinary answer rather than a rejection.
+        // Work was reported and it earns nothing yet — see `Provider::reward_for`. Not an error: a
+        // client that pushes whatever it sees and lets this machine judge is exactly what tiers
+        // and the bar are for, so "not yet" has to be an ordinary answer rather than a rejection.
         let Some(mut minutes) = reward else {
             return Ok(Earn::Refused(Refused::BelowThreshold));
         };
@@ -1636,13 +1645,19 @@ mod tests {
         assert_eq!(laddered().reward_for(Some(done(9, 19))), None);
     }
 
-    /// Both roads back to the original behaviour.
+    /// A provider with no tiers pays for work, and a report of none is not work.
     ///
-    /// This is the compatibility guarantee for tiers, in the same shape as the ceiling's: a
-    /// provider that configures no ladder, and a push that reports nothing, both land on the
-    /// single reward that shipped before any of this existed.
+    /// Its single reward used to be paid for any push that carried counts, whatever they said —
+    /// including zero questions and zero minutes, which is what a client reports when it syncs
+    /// before the child has practised. Once a client pushes the work rather than a verdict, that
+    /// paid for nothing. Under a gate the gate's own bar is the only rung there is: a tierless
+    /// gated provider paid its reward on the first partial report, raising the gate by a step
+    /// nobody configured.
+    ///
+    /// **A push that reports nothing is still the single reward**, tiers or not, which is the
+    /// compatibility guarantee for clients that predate counts and the shape of a catch-up push.
     #[test]
-    fn a_provider_without_tiers_is_worth_what_it_always_was() {
+    fn a_provider_without_tiers_pays_for_work_and_only_work() {
         let plain = Provider {
             enabled: true,
             minutes: 25,
@@ -1654,8 +1669,14 @@ mod tests {
         };
         assert_eq!(
             plain.reward_for(Some(done(0, 0))),
+            None,
+            "a report of no work earns nothing"
+        );
+        assert_eq!(plain.reward_for(Some(done(1, 0))), Some(25));
+        assert_eq!(
+            plain.reward_for(Some(done(0, 1))),
             Some(25),
-            "no tiers means the single reward, however detailed the push"
+            "and any work at all is what the single reward was always for"
         );
         assert_eq!(plain.reward_for(None), Some(25));
         assert_eq!(
@@ -1663,6 +1684,27 @@ mod tests {
             Some(30),
             "and a push reporting nothing is the single reward, however many tiers exist"
         );
+
+        let gated = Provider {
+            gate: Some(Gate {
+                allowance_mins: 35,
+                questions: 15,
+                minutes_practised: 30,
+            }),
+            ..plain
+        };
+        assert_eq!(
+            gated.reward_for(Some(done(14, 29))),
+            None,
+            "under a gate with no rungs, work short of the bar earns nothing"
+        );
+        assert_eq!(gated.reward_for(Some(done(15, 0))), Some(25));
+        assert_eq!(
+            gated.reward_for(Some(done(0, 30))),
+            Some(25),
+            "and the bar — either half of it — is what pays"
+        );
+        assert_eq!(gated.reward_for(None), Some(25));
     }
 
     /// Both spellings of an [`EarnedDay`] load, and mean what they should.

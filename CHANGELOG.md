@@ -99,6 +99,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   machine's Wi-Fi off is enough. What stands against that is that you are told. The integration's
   line reads *This PC has stopped checking* the whole time it lasts, and `nestwatch doctor` says
   the same.
+- **An integration with no reward tiers no longer pays for a report of no practice.** If its app,
+  or the check from this PC, reports *0 questions and 0 minutes*, that is now *not yet* rather than
+  its full reward — it was being paid for syncing, not for practising. Any practice at all still
+  earns it, and an app that reports no numbers is unchanged. Under a practice gate with no tiers,
+  the reward now comes only with the bar, where before the first partial report paid it.
 
 ### Fixed
 
