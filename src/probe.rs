@@ -46,9 +46,13 @@ pub const MAX_SECRET_BYTES: usize = 8 * 1024;
 
 /// Past this many seconds without a heartbeat, the scheduler is not running.
 ///
-/// Three missed ticks of [`SCHEDULER_TICK`]. Read by `doctor` for its earned-time check and by
-/// [`providers_not_checking`] for the gate, so the sentence a parent reads and the ceiling their
-/// child is actually under cannot disagree about the same age.
+/// Three missed ticks of [`SCHEDULER_TICK`]. Applied by [`scheduler_age_is_stale`] for `doctor`'s
+/// earned-time check and for the gate, so the sentence a parent reads and the ceiling their child
+/// is actually under cannot disagree about the same age; `assets/app.js` mirrors it as
+/// `PROBE_STALE_SECS`.
+///
+/// **Not [`crate::heartbeat`]'s enforcement threshold of 150, and the difference is the period
+/// rather than the tolerance**: the enforcers tick every 30 seconds and this loop every 60.
 pub const SCHEDULER_STALE_SECS: i64 = 180;
 
 /// How often the scheduler looks for due probes. A parent's interval is in minutes, so a minute

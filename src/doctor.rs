@@ -138,16 +138,6 @@ fn warn(text: impl Into<String>, fix: impl Into<String>) -> Check {
 /// threshold of two fire on a healthy install. A parent-facing diagnostic that cries wolf gets
 /// ignored, which is the failure mode `DECLINED-OPTIONS.md` gives for refusing a coverage gate.
 const MASQUERADE_MIN_DEVICES: usize = 3;
-/// Past this many seconds without a stamp, the provider-probe scheduler is not running.
-///
-/// **Not [`crate::heartbeat`]'s enforcement threshold of 150, and the difference is the period
-/// rather than the tolerance**: the enforcers tick every 30 seconds and this loop every 60, so
-/// three missed ticks here is 180 where it is 90 there. Taken from `probe` rather than written a
-/// second time, because the same number now decides whether a child's day is capped — the
-/// sentence a parent reads here and the ceiling their child is under must not disagree about one
-/// age, the way the enforcement pair once did. `assets/app.js` mirrors it as `PROBE_STALE_SECS`.
-const EARNED_CHECK_STALE_SECS: i64 = crate::probe::SCHEDULER_STALE_SECS;
-
 /// Does the access log look like a router that rewrites source addresses?
 ///
 /// **Why this is worth a check at all.** `docs/REMOTE-ACCESS.md` records it as the one
@@ -433,6 +423,76 @@ fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool
     })
 }
 
+/// The probe scheduler's line, or `None` for a household with no probe on a switched-on
+/// integration.
+///
+/// Separate from the enforcement check because it is not enforcement — nothing that check covers
+/// stops when this loop dies, and `heartbeat::worst_age_secs` deliberately does not hear it, so a
+/// parent reading "enforcement checked in 3s ago" is reading something true. Asked only of a
+/// household that named a probe, because the loop runs either way and has nothing to say to one
+/// that has not asked it to do anything.
+///
+/// **What a stopped loop costs depends on whether a gate stands behind it.** Without one, only
+/// earning stops and the day is the parent's own. With one the gate is lifted — a check that
+/// cannot run is not taken as no practice (`probe::providers_not_checking`) — so the child has his
+/// normal day without practising, and the sentence names the gates that are open. Where "stopped"
+/// starts is [`crate::probe::scheduler_age_is_stale`], the bound the gate itself uses.
+fn earned_time_check(
+    providers: &std::collections::BTreeMap<String, config::Provider>,
+    age: Option<i64>,
+) -> Option<Check> {
+    let probing: Vec<(&str, &config::Provider)> = providers
+        .iter()
+        .filter(|(_, p)| p.enabled && p.probe.is_some())
+        .map(|(name, p)| (name.as_str(), p))
+        .collect();
+    if probing.is_empty() {
+        return None;
+    }
+    let named = |gated_only: bool| {
+        probing
+            .iter()
+            .filter(|(_, p)| !gated_only || p.gate.is_some())
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    Some(match age {
+        Some(age) if !crate::probe::scheduler_age_is_stale(age) => ok(format!(
+            "earned-time checks running ({}), last look {age}s ago",
+            named(false)
+        )),
+        Some(age) => {
+            let gated = named(true);
+            let cost = if gated.is_empty() {
+                "Limits are still being applied — this only stops time being EARNED,\n\
+                 so the day stays at its base budget and the child hears nothing\n\
+                 about practising."
+                    .to_string()
+            } else {
+                format!(
+                    "The practice gate on {gated} is LIFTED while this lasts: a check\n\
+                     that cannot run is not taken as no practice, so the child has his\n\
+                     normal limits without practising, and nothing is being earned."
+                )
+            };
+            warn(
+                format!("earned-time checks stopped {} min ago", age / 60),
+                format!(
+                    "{cost} Restart the service:\n\
+                     sc stop HostHealthService && sc start HostHealthService"
+                ),
+            )
+        }
+        None => warn(
+            format!("no earned-time check seen yet ({})", named(false)),
+            "Expected when running `doctor` as a one-off — the live service keeps\n\
+             its own. In the running service it means the loop has not reached its\n\
+             first minute, or never will; the Integrations card says which.",
+        ),
+    })
+}
+
 /// Run every check and print the report. Exits non-zero if anything is outright broken, so it's
 /// usable from a script; warnings alone still exit 0.
 pub fn run() -> Result<()> {
@@ -681,39 +741,11 @@ pub fn run() -> Result<()> {
                     )),
                 }
 
-                // The probe scheduler, asked separately and only of a household that named a
-                // probe. Separate because it is not enforcement — nothing above stops when this
-                // loop dies, and `heartbeat::worst_age_secs` deliberately does not hear it, so a
-                // parent reading "enforcement checked in 3s ago" is reading something true. Only
-                // when a probe is named because the loop is running either way; it simply has
-                // nothing to say to a household that has not asked it to do anything.
-                let probing: Vec<&str> = cfg
-                    .providers
-                    .iter()
-                    .filter(|(_, p)| p.enabled && p.probe.is_some())
-                    .map(|(name, _)| name.as_str())
-                    .collect();
-                if !probing.is_empty() {
-                    let named = probing.join(", ");
-                    match crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe) {
-                        Some(age) if age <= EARNED_CHECK_STALE_SECS => checks.push(ok(format!(
-                            "earned-time checks running ({named}), last look {age}s ago"
-                        ))),
-                        Some(age) => checks.push(warn(
-                            format!("earned-time checks stopped {} min ago", age / 60),
-                            "Limits are still being applied — this only stops time being EARNED,\n\
-                             so the day stays at its base budget and the child hears nothing\n\
-                             about practising. Restart the service:\n\
-                             sc stop HostHealthService && sc start HostHealthService",
-                        )),
-                        None => checks.push(warn(
-                            format!("no earned-time check seen yet ({named})"),
-                            "Expected when running `doctor` as a one-off — the live service keeps\n\
-                             its own. In the running service it means the loop has not reached its\n\
-                             first minute, or never will; the Integrations card says which.",
-                        )),
-                    }
-                }
+                // The probe scheduler, asked separately — see `earned_time_check`.
+                checks.extend(earned_time_check(
+                    &cfg.providers,
+                    crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe),
+                ));
 
                 if configured && cfg.rules.warn_secs == 0 {
                     checks.push(warn(
@@ -1487,5 +1519,111 @@ mod tests {
         let out = r.render();
         assert!(out.contains("           line one"));
         assert!(out.contains("           line two"));
+    }
+
+    /// The earned-time check: which households it speaks to, where "stopped" starts, and what it
+    /// says a stopped check costs. Five mutants of it survived the backlog sweep while it lived
+    /// inline in `run`, which no test reaches.
+    mod earned_time {
+        use super::super::{Level, earned_time_check};
+        use crate::config::{Gate, Probe, Provider};
+        use crate::probe::SCHEDULER_STALE_SECS;
+        use std::collections::BTreeMap;
+
+        fn provider(enabled: bool, probed: bool, gated: bool) -> Provider {
+            Provider {
+                enabled,
+                minutes: 30,
+                daily_cap_mins: None,
+                tiers: Vec::new(),
+                probe: probed.then(|| Probe {
+                    exe: "studygo-probe.exe".into(),
+                    every_mins: 15,
+                    first_check_after_mins: 0,
+                }),
+                remind_every_check: false,
+                gate: gated.then_some(Gate {
+                    allowance_mins: 35,
+                    questions: 15,
+                    minutes_practised: 30,
+                }),
+            }
+        }
+
+        fn only(name: &str, provider: Provider) -> BTreeMap<String, Provider> {
+            BTreeMap::from([(name.to_string(), provider)])
+        }
+
+        /// Asked only of a probe that can run: the loop runs either way, and has nothing to say
+        /// to a household that has not asked it to do anything.
+        #[test]
+        fn it_speaks_only_for_a_probe_on_a_switched_on_integration() {
+            let fresh = Some(5);
+            assert!(earned_time_check(&BTreeMap::new(), fresh).is_none());
+            assert!(
+                earned_time_check(&only("chores", provider(true, false, false)), fresh).is_none(),
+                "an integration that only pushes has no loop here to report on"
+            );
+            assert!(
+                earned_time_check(&only("studygo", provider(false, true, false)), fresh).is_none(),
+                "a switched-off probe is never run, so its loop has nothing to say"
+            );
+            let running = earned_time_check(&only("studygo", provider(true, true, false)), fresh)
+                .expect("a probe that runs is reported");
+            assert_eq!(running.level, Level::Ok);
+            assert!(running.text.contains("studygo"), "{}", running.text);
+        }
+
+        /// The bound is the gate's own: three missed ticks is still running, a second past is
+        /// stopped, and never is its own case.
+        #[test]
+        fn it_calls_the_loop_stopped_exactly_where_the_gate_lifts() {
+            let probing = only("studygo", provider(true, true, false));
+            let level = |age| earned_time_check(&probing, age).expect("reported").level;
+            assert_eq!(level(Some(SCHEDULER_STALE_SECS)), Level::Ok);
+            assert_eq!(level(Some(SCHEDULER_STALE_SECS + 1)), Level::Warn);
+            let never = earned_time_check(&probing, None).expect("reported");
+            assert_eq!(never.level, Level::Warn);
+            assert!(
+                never.text.contains("no earned-time check seen yet"),
+                "{}",
+                never.text
+            );
+        }
+
+        /// A stopped check lifts a gate, so the sentence must not say the day is unchanged.
+        ///
+        /// It said *this only stops time being EARNED* whatever was configured. Without a gate
+        /// that is true. With one it leaves out what is happening: a check that cannot run lifts
+        /// the gate, so the child has his normal day without practising — which is what the
+        /// dashboard's card already says.
+        #[test]
+        fn a_stopped_check_names_the_gates_it_has_lifted() {
+            let stopped = Some(SCHEDULER_STALE_SECS + 60);
+
+            let plain = earned_time_check(&only("chores", provider(true, true, false)), stopped)
+                .expect("reported");
+            let fix = plain.fix.expect("a stopped loop says what to do");
+            assert!(fix.contains("only stops time being EARNED"), "{fix}");
+            assert!(!fix.contains("gate"), "{fix}");
+
+            let mut both = only("chores", provider(true, true, false));
+            both.insert("studygo".into(), provider(true, true, true));
+            let gated = earned_time_check(&both, stopped).expect("reported");
+            let fix = gated.fix.expect("a stopped loop says what to do");
+            assert!(fix.contains("gate on studygo is LIFTED"), "{fix}");
+            assert!(
+                !fix.contains("chores"),
+                "only the gated integration has a gate to lift: {fix}"
+            );
+            assert!(
+                !fix.contains("only stops time being EARNED"),
+                "and with a gate open, earning is not the only thing that stopped: {fix}"
+            );
+            assert!(
+                fix.contains("sc start"),
+                "and it still says how to restart: {fix}"
+            );
+        }
     }
 }
