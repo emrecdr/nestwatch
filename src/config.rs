@@ -1149,46 +1149,50 @@ impl Config {
     ) -> Result<Earn, String> {
         // A provider grant is governed by the registry: it must name an enabled provider, and
         // the reward is that provider's — read here, never taken from the push.
-        let (mut minutes, ceiling) = {
+        let (reward, ceiling, bar_met_now) = {
             let provider = self.provider_authority(source)?;
-            match provider.reward_for(reported) {
+            (
+                provider.reward_for(reported),
                 // What this provider may pay across today. Under a gate that is its own top
                 // rung whether or not one was typed, which bounds a compromised client exactly as
                 // the latch did while leaving the ladder climbable. [`Provider::ceiling_mins`]
                 // holds the rule and the reason it is not written twice.
-                Some(reward) => (reward, provider.ceiling_mins()),
-                // Work was reported and it meets no tier. Not an error: a client that pushes
-                // whatever it sees and lets this machine judge is exactly what tiers are for, so
-                // "not yet" has to be an ordinary answer rather than a rejection. Unreachable for
-                // a provider with no tiers configured.
-                None => return Ok(Earn::Refused(Refused::BelowThreshold)),
-            }
+                provider.ceiling_mins(),
+                provider
+                    .gate
+                    .as_ref()
+                    .zip(reported)
+                    .is_some_and(|(gate, done)| gate.met(done)),
+            )
         };
         // Read out as an owned value, not held as a borrow: the map is mutated a few lines
         // below, and `Option<Option<u32>>` says the two things that matter separately — whether
         // this source has an entry for today at all, and whether that entry's amount was ever
-        // measured.
+        // measured. Read **before** the bar is recorded, because recording it can create today's
+        // entry, and a first push that meets the bar must not then find itself already paid.
         let spent = self
             .earned
             .get(source)
             .filter(|entry| entry.date == today)
             .map(|entry| entry.minutes);
         // **The gate opens on work done, not on minutes paid, and that has to happen before every
-        // refusal below.** A child who does two-thirds of his practice takes the lower rung, which
-        // spends the day's single grant; finishing afterwards then arrives here and is refused as
-        // `already_granted_today`. If the bar were only recorded on the granting path, the one
-        // push that proves he finished would be the one push that could not open his gate, and he
-        // would sit at the extended allowance having done everything asked of him. The minutes
-        // rules below are unchanged — this records a fact about the child, not a payment.
-        if self
-            .providers
-            .get(source)
-            .and_then(|provider| provider.gate.as_ref())
-            .zip(reported)
-            .is_some_and(|(gate, done)| gate.met(done))
-        {
+        // refusal below — `below_threshold` included.** A child who does two-thirds of his
+        // practice takes the lower rung, which spends the day's single grant; finishing afterwards
+        // then arrives here and is refused as `already_granted_today`. And nothing ties a ladder
+        // to the bar, so work can meet the bar and no rung at all. If the bar were only recorded on
+        // the granting path, the push that proves he finished would be the one push that could not
+        // open his gate, and he would sit at the allowance having done everything asked of him.
+        // The minutes rules below are unchanged — this records a fact about the child, not a
+        // payment.
+        if bar_met_now {
             self.note_bar_met(source, today);
         }
+        // Work was reported and it meets no tier. Not an error: a client that pushes whatever it
+        // sees and lets this machine judge is exactly what tiers are for, so "not yet" has to be
+        // an ordinary answer rather than a rejection.
+        let Some(mut minutes) = reward else {
+            return Ok(Earn::Refused(Refused::BelowThreshold));
+        };
         match (ceiling, spent) {
             // The original rule, and the one every config that has not opted in takes: one
             // grant per source per day, whatever it was worth.
@@ -2357,6 +2361,108 @@ mod tests {
             plain.extra.for_day(day),
             8,
             "and its minutes still reach the day, unlike a gate's"
+        );
+    }
+
+    /// Work that meets the bar opens the gate even when it meets no rung.
+    ///
+    /// Nothing ties a ladder to the bar: a parent may put every rung above it, and with *either
+    /// condition suffices* on both sides there is no single order to require anyway. `earn`
+    /// recorded the bar only after deciding the push was worth something, so a push that met the
+    /// bar and no rung returned `below_threshold` first — and the child who had done exactly the
+    /// practice asked of him stayed at the allowance. Measured before the fix: 35.
+    #[test]
+    fn meeting_the_bar_opens_the_gate_even_below_every_rung() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
+        let none = BTreeSet::new();
+        let mut cfg = Config::default();
+        cfg.providers.insert(
+            "studygo".into(),
+            Provider {
+                enabled: true,
+                minutes: 30,
+                daily_cap_mins: None,
+                // The only rung is past the bar.
+                tiers: vec![Tier {
+                    questions: 20,
+                    minutes_practised: 0,
+                    reward_mins: 16,
+                }],
+                probe: None,
+                remind_every_check: false,
+                gate: Some(Gate {
+                    allowance_mins: 35,
+                    questions: 15,
+                    minutes_practised: 0,
+                }),
+            },
+        );
+
+        assert_eq!(
+            cfg.earn("studygo", day, Some(done(15, 0))),
+            Ok(Earn::Refused(Refused::BelowThreshold)),
+            "no rung is met, so nothing is paid"
+        );
+        assert_eq!(
+            cfg.gate_cap_mins(day, &none),
+            None,
+            "but the bar is, so the gate is gone"
+        );
+        assert_eq!(
+            cfg.gate_read_back("studygo", day),
+            Some(GateReadBack {
+                lifted: true,
+                earned_mins: 0,
+            }),
+            "and the integration reads back a lifted gate that paid nothing, which is the truth"
+        );
+    }
+
+    /// The first push of the day that meets the bar is paid as well as opening the gate.
+    ///
+    /// Recording the bar can create today's entry, so `earn` reads what was already spent before
+    /// it records anything. Read afterwards, a first push found the entry the bar had just made
+    /// and was refused as `already_granted_today`: the gate opened, the integration was told it
+    /// had been paid already, and its read-back showed nothing earned. No test failed with the
+    /// two reads swapped, which is why this one exists.
+    #[test]
+    fn a_first_push_that_meets_the_bar_is_paid_and_opens_the_gate() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
+        let mut cfg = Config::default();
+        cfg.providers.insert(
+            "studygo".into(),
+            Provider {
+                enabled: true,
+                minutes: 30,
+                daily_cap_mins: None,
+                tiers: Vec::new(),
+                probe: None,
+                remind_every_check: false,
+                gate: Some(Gate {
+                    allowance_mins: 35,
+                    questions: 15,
+                    minutes_practised: 0,
+                }),
+            },
+        );
+
+        assert_eq!(
+            cfg.earn("studygo", day, Some(done(15, 0))),
+            Ok(Earn::Granted(30)),
+            "nothing was granted before this push, so it is paid"
+        );
+        assert_eq!(
+            cfg.gate_read_back("studygo", day),
+            Some(GateReadBack {
+                lifted: true,
+                earned_mins: 30,
+            }),
+            "and it opened the gate on the same push"
+        );
+        assert_eq!(
+            cfg.earn("studygo", day, Some(done(15, 0))),
+            Ok(Earn::Refused(Refused::AlreadyGrantedToday)),
+            "while the day's latch still holds for the next one"
         );
     }
 

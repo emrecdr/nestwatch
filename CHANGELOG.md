@@ -81,7 +81,8 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   him yourself are never swallowed by the gate** — grant 30 to a gated child and he has 65, which
   is what "unlock it and give him another try" is. And the gate opens on *work done*, not on
   minutes paid: if he took partial credit earlier, the push that proves he finished is refused for
-  minutes and still opens his gate.
+  minutes and still opens his gate. The same holds when your tiers ask for more than the bar does —
+  work that meets the bar and no tier earns nothing extra, and opens the gate.
   <br>One more thing about tiers under a gate: if you write more than one, they now build on each
   other through the day without you having to set a daily maximum — reaching the second rung tops
   him up to what that rung is worth. Before this they did not: the first rung was taken and the

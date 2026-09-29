@@ -926,6 +926,10 @@ Read that in the order it is written, because both orderings are load-bearing:
   every refusal path in `earn`. Without that the child who takes partial credit and then finishes
   would be the one child whose gate could never open: the lower rung spends the day's single grant,
   so the push that proves he finished comes back `already_granted_today`. It opens the gate anyway.
+  `below_threshold` is one of those refusals, which was missed at first: nothing ties the rungs to
+  the bar, so work can meet the bar and no rung, and that push returned before the bar was
+  recorded — the gate stayed at 35 for a child who had done what was asked
+  (`meeting_the_bar_opens_the_gate_even_below_every_rung`).
 - **And once open it stays open for the day.** A provider that resets a counter, or a probe reading
   a stale page, must not send a child who has finished back to the allowance at four in the
   afternoon.
@@ -993,7 +997,8 @@ to meet, stated from this side:
    optional and ignored for any source but `parent`.
 2. **Push on every sync, not once a day behind the app's own threshold.** The rungs and the bar are
    judged here. `200 {"ok": false, "reason": "below_threshold"}` means *not yet*: nothing is
-   recorded, and the next sync should push again.
+   paid, and the next sync should push again. (Counts that meet a gate's bar but no rung still
+   open the gate, so under a gate the read-back, not this reason, says whether it is open.)
 3. **Under a gate, a refusal of minutes is not the end of the day.** `daily_cap_reached` and
    `already_granted_today` mean no more *minutes* today, but the bar is recorded on work done,
    before any refusal — so a later push whose counts meet it still lifts the gate. Keep pushing
