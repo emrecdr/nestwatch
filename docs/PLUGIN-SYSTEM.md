@@ -987,8 +987,8 @@ because the arithmetic was never the part that was wrong.
 ## The counts never reached this machine — 2026-09-29
 
 **With the only client this household runs, practice could never lift the gate.** Voortgang's push
-is `{"minutes": 0, "source": "studygo"}` — read from its source, `nestwatch_client.dart`, not
-inferred — sent once a day when the app's *own* threshold is met. It carries no counts, and a gate
+was `{"minutes": 0, "source": "studygo"}` — read from its source, `nestwatch_client.dart`, not
+inferred — sent once a day when the app's *own* threshold was met. It carried no counts, and a gate
 lifts only when a push carries counts that meet the bar (`Gate::met` on `progress`). Replaying those
 exact bytes against a gated provider: the day went 35 → 51 with one rung configured, 35 → 65 with
 none, and never to 120 however much he practised. Then Voortgang's read-back — it confirms every
@@ -1004,31 +1004,43 @@ premise was a relayed claim about another repository's code, and two minutes in 
 disproved it.
 
 **Decided 2026-09-28: Voortgang sends counts.** The bar a parent sets on the card is then the bar,
-and this machine judges it — the arrangement the ladder was designed for. The contract Voortgang has
-to meet, stated from this side:
+and this machine judges it — the arrangement the ladder was designed for. What this side accepts,
+and how it answers:
 
 1. **Push the work, not a verdict.** `POST /api/extra-time` with
    `{"source": "studygo", "progress": {"questions": N, "minutes": M}}` — questions answered and
    minutes practised *today*, both required, both non-negative integers. A top-level `minutes` is
    optional and ignored for any source but `parent`.
-2. **Push on every sync, not once a day behind the app's own threshold.** The rungs and the bar are
-   judged here. `200 {"ok": false, "reason": "below_threshold"}` means *not yet*: nothing is
+2. **Any sync may carry the work; the rungs and the bar are judged here.**
+   `200 {"ok": false, "reason": "below_threshold"}` means *not yet*: nothing is
    paid, and the next sync should push again. (Counts that meet a gate's bar but no rung still
    open the gate, so under a gate the read-back, not this reason, says whether it is open.)
 3. **Under a gate, a refusal of minutes is not the end of the day.** `daily_cap_reached` and
    `already_granted_today` mean no more *minutes* today, but the bar is recorded on work done,
-   before any refusal — so a later push whose counts meet it still lifts the gate. Keep pushing
-   until the read-back says `gate.lifted`.
+   before any refusal — so a later push whose counts meet it still lifts the gate, and the
+   read-back says when it has.
 4. **Confirm by the gate when there is one.** An integration whose provider has a gate reads
    `gate: {"lifted": bool, "earned_mins": n}` beside `extra_mins` on `GET /api/usage/today`
    (`Config::gate_read_back`, added for this). A rung is confirmed by `earned_mins` reaching what
    the push was told, the bar by `lifted`. A body with no `gate` is an ungated provider, and
    `extra_mins` still confirms it exactly as before.
 
-What is still true until the client changes: the gate cannot be lifted by practice. The card's
-*only the app on your device can lift this gate* states the contract rather than today's client,
-and a household using a gate should know that its remedy in the meantime is the switch beside
-the provider or a grant of its own.
+**Voortgang sends them — its `7e37f8b`, read in its source (`practice_push.dart`).** The push is
+`{"minutes": 0, "source": "studygo", "progress": {"questions": Q, "minutes": M}}`: today's honest
+questions and the capped minutes of the same attempts, on every sync once the app's own *questions
+needed* bar is met. A catch-up push for yesterday carries no counts, so last night's work cannot
+lift today's gate. **Voortgang does not depend on nestwatch** — the household's rule, relayed by the
+StudyGo session on 2026-09-29 — so the list above is what this side accepts, not a contract
+Voortgang implements. When it publishes is decided there, and every rule above holds whatever
+schedule it keeps. One consequence worth knowing: nothing reaches this machine until the app's own
+bar is met, so an app bar set higher than the gate's opens the gate later than the practice did.
+
+**Considered and not built: telling the integration the bar.** The integration's `/session` could
+carry its provider's tiers and gate, for the app to show the bar a parent set here — no new power,
+since an integration would read only its own provider's numbers. It is not built because nothing
+would read it: Voortgang decides when to publish by its own bar and does not shape itself around
+this side's policy. If a client ever wants it, the integration branch of `auth::me` and
+`tests/golden/session-integration.json` are where it belongs.
 
 ## A push says it too — 2026-09-29
 
