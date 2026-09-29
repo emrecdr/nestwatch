@@ -564,7 +564,9 @@ impl Provider {
     /// day — the child did the work, took the lowest reward, and the gate stayed shut with nothing
     /// said, which is the exact failure the ladder exists to prevent. Every probe test missed it
     /// because the fixture they share sets `daily_cap_mins`, which is the one arm where the two
-    /// spellings agreed.
+    /// spellings agreed. That fix was necessary and not sufficient: a ladder topped out *below*
+    /// the bar was still paid in full with the gate shut, so `exhausted_for` now asks a gated
+    /// provider about its bar instead of about this number.
     ///
     /// An explicit ceiling always wins. A gate without one is bounded by its top rung, because
     /// that is the most the ladder can pay and a gate paying past it would be a ceiling nobody
@@ -577,17 +579,27 @@ impl Provider {
         })
     }
 
-    /// Whether another grant today could pay anything — the question the probe scheduler asks
-    /// before spending a request, so a source paid in full stops being polled for the day.
+    /// Whether another check today could change anything — the question the probe scheduler asks
+    /// before spending a request, so a source with nothing left to decide stops being polled for
+    /// the day.
     ///
-    /// Reads the same entry [`Config::earn`] writes, under the same rules: with no ceiling the
-    /// first grant latches the day; with one, an untracked entry counts as the ceiling reached
-    /// (see [`EarnedDay::minutes`]) and a tracked one is compared against it. An entry from
+    /// **Under a gate that is whether the bar has been met, not whether the rungs are paid.** A
+    /// check can open a gate as well as pay, and a ladder whose top rung sits below the bar is paid
+    /// in full with the gate still shut: stopping there took the provider off the due list before
+    /// the one check that could have opened it. Once the bar is met the reverse holds — a rung
+    /// still unclimbed could only raise a ceiling that no longer applies.
+    ///
+    /// Otherwise it reads the same entry [`Config::earn`] writes, under the same rules: with no
+    /// ceiling the first grant latches the day; with one, an untracked entry counts as the ceiling
+    /// reached (see [`EarnedDay::minutes`]) and a tracked one is compared against it. An entry from
     /// another day says nothing about today.
     pub fn exhausted_for(&self, today: NaiveDate, earned: Option<&EarnedDay>) -> bool {
         let Some(entry) = earned.filter(|e| e.date == today) else {
             return false;
         };
+        if self.gate.is_some() {
+            return entry.bar_met;
+        }
         match (self.ceiling_mins(), entry.minutes) {
             (None, _) | (Some(_), None) => true,
             (Some(cap), Some(used)) => used >= cap,
@@ -2717,6 +2729,67 @@ mod tests {
             "an untracked grant under a ceiling reads as the ceiling reached, as EarnedDay says"
         );
         assert!(!capped.exhausted_for(today, Some(&entry(yesterday, Some(30)))));
+    }
+
+    /// A gated provider is worth checking until its bar is met, whatever its rungs have paid.
+    ///
+    /// Under a gate a check can do one more thing than pay: it can open the gate. So *paid in
+    /// full* is the wrong place to stop. A ladder whose top rung sits below the bar is paid in full
+    /// while the gate is still shut, and a scheduler that stopped there never saw the practice that
+    /// would have opened it. The reverse holds once the bar is met: a rung still unclimbed could
+    /// only raise a ceiling that no longer applies, so there is nothing left to ask.
+    #[test]
+    fn a_gated_provider_is_checked_until_its_bar_is_met() {
+        let today = NaiveDate::from_ymd_opt(2026, 9, 8).unwrap();
+        let yesterday = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+        let entry = |date, minutes, bar_met| EarnedDay {
+            date,
+            minutes,
+            bar_met,
+        };
+        let gated = Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: None,
+            // One rung, below the bar.
+            tiers: vec![Tier {
+                questions: 10,
+                minutes_practised: 0,
+                reward_mins: 16,
+            }],
+            probe: None,
+            remind_every_check: false,
+            gate: Some(Gate {
+                allowance_mins: 35,
+                questions: 15,
+                minutes_practised: 0,
+            }),
+        };
+
+        assert!(!gated.exhausted_for(today, None));
+        assert!(
+            !gated.exhausted_for(today, Some(&entry(today, Some(16), false))),
+            "its only rung is paid and the gate is still shut: the next check is the one that can \
+             open it"
+        );
+        assert!(
+            !gated.exhausted_for(today, Some(&entry(today, None, false))),
+            "nor does an unmeasured grant from before the gate was added stop the checking"
+        );
+        assert!(
+            gated.exhausted_for(today, Some(&entry(today, Some(0), true))),
+            "open with its rung unclimbed: that rung could only raise a ceiling that has gone"
+        );
+        assert!(!gated.exhausted_for(today, Some(&entry(yesterday, Some(16), true))));
+
+        let capped = Provider {
+            daily_cap_mins: Some(16),
+            ..gated
+        };
+        assert!(
+            !capped.exhausted_for(today, Some(&entry(today, Some(16), false))),
+            "a typed maximum bounds what is paid, not whether the gate can still open"
+        );
     }
 
     // ----- the grant itself, out of the handler and into the registry -----

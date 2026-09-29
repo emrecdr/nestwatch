@@ -713,6 +713,69 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
         );
     }
 
+    // --- A gate is checked until its bar is met, however much its rungs have paid ---------------
+    //
+    // The section above tops its ladder out *at* the bar, the one shape where "paid in full" and
+    // "gate open" arrive on the same check. Here the only rung sits below the bar, so the first
+    // check pays it in full with the gate still shut — and `exhausted_for`, reading only minutes,
+    // took the provider off the due list. The child finished his practice and nothing on this PC
+    // looked again that day.
+    {
+        let fake = Arc::new(FakeControl::new());
+        let mut cfg = test_config();
+        let mut short_ladder = laddered_studygo();
+        short_ladder.daily_cap_mins = None;
+        // Just the lower rung: ten questions or twenty minutes, worth sixteen.
+        short_ladder.tiers.truncate(1);
+        short_ladder.gate = Some(nestwatch::config::Gate {
+            allowance_mins: 35,
+            questions: 15,
+            minutes_practised: 30,
+        });
+        cfg.providers.insert("studygo".into(), short_ladder);
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+        let entry = |state: &AppState| {
+            recover_read(&state.config)
+                .earned
+                .get("studygo")
+                .map(|entry| (entry.minutes, entry.bar_met))
+        };
+
+        fake.script_probe(Ok(br#"{"questions":10,"minutes":20}"#.to_vec()));
+        probe::run_once(&state, t0).await;
+        assert_eq!(
+            entry(&state),
+            Some((Some(16), false)),
+            "the only rung is paid, and the gate is still shut"
+        );
+
+        fake.script_probe(Ok(br#"{"questions":15,"minutes":30}"#.to_vec()));
+        probe::run_once(&state, t0 + Duration::minutes(15)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            2,
+            "a shut gate must still be checked once its rungs are paid"
+        );
+        assert_eq!(
+            entry(&state),
+            Some((Some(16), true)),
+            "and the check that sees the finished practice opens it, paying nothing more"
+        );
+        assert_eq!(
+            recover_read(&state.config)
+                .gate_cap_mins(t0.date_naive(), &std::collections::BTreeSet::new()),
+            None
+        );
+
+        probe::run_once(&state, t0 + Duration::minutes(30)).await;
+        assert_eq!(
+            fake.probe_calls().len(),
+            2,
+            "and once it is open there is nothing left to ask"
+        );
+    }
+
     // --- Nothing configured means nothing happens --------------------------------------------
     let fake = Arc::new(FakeControl::new());
     let mut cfg = test_config();

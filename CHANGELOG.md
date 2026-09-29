@@ -87,7 +87,10 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   other through the day without you having to set a daily maximum — reaching the second rung tops
   him up to what that rung is worth. Before this they did not: the first rung was taken and the
   second was silently refused as already paid. Tiers on an integration with **no** gate are
-  unchanged, and still pay once a day unless you set a maximum.
+  unchanged, and still pay once a day unless you set a maximum. And with *Check from this PC*, the
+  checking now carries on until the bar is met: if every tier asked for less than the bar, it used
+  to stop as soon as they were paid, and the practice that would have opened the gate was never
+  seen.
 - **A check that cannot run hands the day back rather than holding it shut.** If the checking
   program is missing, StudyGo is unreachable, or this PC's checking has stopped, a gate stops
   applying and your normal limits are what's left. *"We can't tell"* is not *"he hasn't

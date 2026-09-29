@@ -922,6 +922,11 @@ Read that in the order it is written, because both orderings are load-bearing:
   day. Every probe test shared a fixture that set `daily_cap_mins`, the one shape where the two
   spellings agree. They are one function now, `Provider::ceiling_mins`, and the regression test
   drives the scheduler rather than `earn`, because only the scheduler could see the difference.
+  That fixed the ladder topped out *at* the bar and not the one topped out below it: its only rung
+  was paid on the first check, the gate was still shut, and the scheduler — asking whether
+  anything was left to *pay* — stopped. Under a gate a check can also open the gate, so
+  `exhausted_for` now asks a gated provider whether its bar has been met, and nothing else; once it
+  has, a rung still unclimbed could only raise a ceiling that is gone.
 - **The bar is recorded on work done, not on minutes paid.** `EarnedDay::bar_met` is written before
   every refusal path in `earn`. Without that the child who takes partial credit and then finishes
   would be the one child whose gate could never open: the lower rung spends the day's single grant,
