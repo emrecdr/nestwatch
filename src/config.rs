@@ -1798,6 +1798,58 @@ mod tests {
         let back: EarnedDay = serde_json::from_str(&serde_json::to_string(&tracked).unwrap())
             .expect("the tracked form must round trip");
         assert_eq!(back, tracked);
+
+        // And the two shapes a gate adds, one of which carries no amount at all: a bar met on a
+        // day whose earlier grant was never measured — a gate added after an untracked grant.
+        // The object's length is counted from the fields present, and serde_json writes `{}` at
+        // once for a length of zero, so a count that came to zero for exactly that shape would
+        // write a `config.json` no build could read back.
+        for (minutes, bar_met) in [(Some(16), true), (None, true)] {
+            let gated = EarnedDay {
+                date: NaiveDate::from_ymd_opt(2026, 9, 8).unwrap(),
+                minutes,
+                bar_met,
+            };
+            let json = serde_json::to_string(&gated).unwrap();
+            let back: EarnedDay = serde_json::from_str(&json)
+                .unwrap_or_else(|e| panic!("{json} must round trip: {e}"));
+            assert_eq!(back, gated);
+        }
+    }
+
+    /// Every opt-in a provider carries survives a save and a load.
+    ///
+    /// Each is skipped when unset, so that a household which never opted in keeps a
+    /// byte-identical `config.json` — which leaves each `skip_serializing_if` one wrong answer
+    /// away from dropping the setting of a household that did. Nothing caught that: with
+    /// `is_false` or `is_zero` answering *skip* for everything, every test passed, and the tick box
+    /// and the settling period would have come back unset after each restart.
+    #[test]
+    fn a_providers_opt_ins_survive_a_round_trip() {
+        let provider = Provider {
+            enabled: true,
+            minutes: 30,
+            daily_cap_mins: Some(45),
+            tiers: vec![Tier {
+                questions: 10,
+                minutes_practised: 20,
+                reward_mins: 16,
+            }],
+            probe: Some(Probe {
+                exe: "studygo-probe.exe".into(),
+                every_mins: 15,
+                first_check_after_mins: 5,
+            }),
+            remind_every_check: true,
+            gate: Some(Gate {
+                allowance_mins: 35,
+                questions: 15,
+                minutes_practised: 30,
+            }),
+        };
+        let json = serde_json::to_string(&provider).unwrap();
+        let back: Provider = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, provider, "lost in {json}");
     }
 
     /// [`Language::ALL`] really does list every variant.
@@ -2517,6 +2569,59 @@ mod tests {
             cfg.earn("studygo", day, Some(done(15, 0))),
             Ok(Earn::Refused(Refused::AlreadyGrantedToday)),
             "while the day's latch still holds for the next one"
+        );
+    }
+
+    /// Recording the bar admits a new source under the same cap a grant does, and no further.
+    ///
+    /// Otherwise the cap on [`Config::earned`] would be one door with a second beside it: a source
+    /// that could not be granted could still open a gate. One under the limit is asserted beside
+    /// exactly at it, because the bound is a `<` and a test of one side passes its neighbours.
+    #[test]
+    fn recording_the_bar_admits_a_new_source_only_below_the_cap() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 16).unwrap();
+        let with_others = |count: usize, date: NaiveDate| {
+            let mut cfg = Config::default();
+            for i in 0..count {
+                cfg.earned.insert(
+                    format!("other{i}"),
+                    EarnedDay {
+                        date,
+                        minutes: Some(1),
+                        bar_met: false,
+                    },
+                );
+            }
+            cfg
+        };
+        let opened = EarnedDay {
+            date: day,
+            minutes: Some(0),
+            bar_met: true,
+        };
+
+        let mut room = with_others(MAX_EARNED_SOURCES - 1, day);
+        room.note_bar_met("studygo", day);
+        assert_eq!(
+            room.earned.get("studygo"),
+            Some(&opened),
+            "one under the cap: admitted, with nothing paid rather than an unmeasured grant"
+        );
+
+        let mut full = with_others(MAX_EARNED_SOURCES, day);
+        full.note_bar_met("studygo", day);
+        assert_eq!(
+            full.earned.get("studygo"),
+            None,
+            "at the cap: a source that could not be granted cannot open a gate either"
+        );
+
+        let mut stale = with_others(MAX_EARNED_SOURCES, day.pred_opt().unwrap());
+        stale.note_bar_met("studygo", day);
+        assert_eq!(
+            stale.earned.get("studygo"),
+            Some(&opened),
+            "yesterday's sources do not count against today"
         );
     }
 
