@@ -679,7 +679,15 @@ pub fn providers_not_checking(
 /// `None` here means a process that does not run this loop rather than a loop that has died.
 pub fn scheduler_stale() -> bool {
     crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe)
-        .is_some_and(|age| age > SCHEDULER_STALE_SECS)
+        .is_some_and(scheduler_age_is_stale)
+}
+
+/// Whether a scheduler last seen `age_secs` ago has stopped: past [`SCHEDULER_STALE_SECS`].
+///
+/// The one spelling of the bound, so `doctor`'s sentence and the gate [`scheduler_stale`] lifts
+/// cannot disagree about one second, and so the bound can be tested without a process global.
+pub fn scheduler_age_is_stale(age_secs: i64) -> bool {
+    age_secs > SCHEDULER_STALE_SECS
 }
 
 /// The ceiling the practice gates put on `today`, as this machine can enforce it **right now**.
@@ -1143,6 +1151,27 @@ mod tests {
         assert!(
             due(t0 - chrono::Duration::minutes(1), Some(t0), 15),
             "a clock that went backwards reads as due, never as not-until-it-catches-up"
+        );
+    }
+
+    /// The age at which the scheduler counts as stopped, on both sides of the bound.
+    ///
+    /// The number lifts every probed gate in the house, so its edge is pinned rather than read:
+    /// three missed ticks is still running, one second past is not. The sweep that first ran this
+    /// file's mutants found `>` could be `>=`, `<` or `==` with nothing failing, because the only
+    /// test that could reach the global was the heartbeat's and it asked about a day, not a second.
+    #[test]
+    fn the_scheduler_is_stopped_one_second_past_three_missed_ticks() {
+        assert!(!scheduler_age_is_stale(0));
+        assert!(
+            !scheduler_age_is_stale(SCHEDULER_STALE_SECS),
+            "exactly three missed ticks is late, not stopped"
+        );
+        assert!(scheduler_age_is_stale(SCHEDULER_STALE_SECS + 1));
+        assert_eq!(
+            SCHEDULER_STALE_SECS,
+            3 * SCHEDULER_TICK.as_secs() as i64,
+            "the bound is three ticks, whatever the tick becomes"
         );
     }
 

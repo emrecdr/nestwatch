@@ -213,6 +213,20 @@ mod tests {
             "with both enforcers healthy the banner must read healthy, whatever the probe loop \
              is doing"
         );
+
+        // And the probe cell is the one the gate reads. Asked here because this is the one test
+        // that may move these cells: `probe::scheduler_stale` could answer `false` for ever — no
+        // gate ever lifted for a stopped scheduler — and nothing failed, since every other caller
+        // takes the answer as a parameter.
+        assert!(
+            crate::probe::scheduler_stale(),
+            "a probe loop silent for a day has stopped, and the gate must hear it"
+        );
+        beat(Enforcer::Probe);
+        assert!(
+            !crate::probe::scheduler_stale(),
+            "and one that has just ticked has not"
+        );
     }
 
     /// The point of the wake: a pending shutdown must not outlive the decision to cancel it.
