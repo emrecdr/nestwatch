@@ -1058,4 +1058,17 @@ tell which road reported his work and neither road can drift from the other.
 * **A replay never reaches it**, so a retried push is neither a second grant nor a second notice.
 * **A parent's own grant is not practice** and is not announced as if it were.
 
-What is still silent is the moment the gate lifts — `O106`.
+**The moment the gate opens is said too — 2026-10-03, was `O106`.** The push that meets the bar is
+usually refused its minutes, because the lower rung already paid the ladder to its top, and a
+refusal says nothing — so the usual good afternoon was *16 more minutes*, then a day that was
+quietly two hours long with no word that it had happened or why. `Config::judge` wraps `earn` and
+reports *false before, true after* on `EarnedDay::bar_met` inside the same critical section as the
+grant; `tell_child` then says one sentence — *Practice done — studygo no longer caps your screen
+time today* — in place of the grant or reminder that report would otherwise have earned, since any
+minutes it was paid raised a gate that has just gone. It names whose gate rather than what the day
+is now, because that number has no single honest form (unlimited, or another gate's ceiling), and
+the child's page already shows it. And it is said only when the opening lengthened his day:
+`probe::gate_lift_changes_day` compares today's budget with the gate open against the budget with
+it shut, so a 35-minute allowance on a 30-minute day, or a second gate still shut at the same
+number, opens nothing and says nothing. Pinned on both roads, in `earned_grant.rs` and
+`probe_runner.rs`.

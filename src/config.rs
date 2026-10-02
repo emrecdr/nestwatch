@@ -697,6 +697,20 @@ pub enum Earn {
     Refused(Refused),
 }
 
+/// [`Config::earn`]'s verdict, with the one fact beside it that the verdict cannot carry.
+///
+/// The push that meets a gate's bar is usually refused its *minutes* — the lower rung already paid
+/// the ladder to its top — so [`Earn`] alone cannot say that the gate has just opened, and the child
+/// heard nothing at the one moment the gate exists for (was `O106`). Read as *false before, true after*
+/// inside the same critical section as the grant, so a push and a probe racing each other cannot
+/// both see the opening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Judgement {
+    pub earn: Earn,
+    /// Whether this is the report that met the bar today.
+    pub gate_opened: bool,
+}
+
 /// What one grant source has already been given on one local day.
 ///
 /// Replaces the bare `NaiveDate` [`Config::earned`] used to hold. The date
@@ -1149,10 +1163,11 @@ impl Config {
 
     /// Grant earned time from `source` for what it reported about today, or say why not.
     ///
-    /// **The one place a provider grant is decided.** `api::extra_time` calls it for a push from
-    /// the phone and `probe::run_once` for a probe this machine ran itself. The two arrive by
-    /// different roads — one authenticated over the LAN, one launched as the child and read back
-    /// over a pipe — and neither is believed about anything but the two numbers it reports: the
+    /// **The one place a provider grant is decided.** `api::extra_time` reaches it for a push from
+    /// the phone and `probe::run_once` for a probe this machine ran itself, both through
+    /// [`Config::judge`]. The two arrive by different roads — one authenticated over the LAN, one
+    /// launched as the child and read back over a pipe — and neither is believed about anything
+    /// but the two numbers it reports: the
     /// provider must exist and be on, the reward is the registry's, the day latch or the ceiling
     /// is applied, and only then does the budget move.
     ///
@@ -1288,6 +1303,29 @@ impl Config {
             self.extra.add(today, minutes);
         }
         Ok(Earn::Granted(minutes))
+    }
+
+    /// [`Config::earn`], and whether it opened the gate — what both roads call.
+    ///
+    /// The observation lives beside the grant rather than inside it so that `earn` stays the
+    /// registry's decision and nothing else, and so the many tests that pin its verdicts go on
+    /// reading one value. See [`Judgement`] for why the second fact is needed at all.
+    pub fn judge(
+        &mut self,
+        source: &str,
+        today: NaiveDate,
+        reported: Option<Progress>,
+    ) -> Result<Judgement, String> {
+        let lifted = |cfg: &Self| {
+            cfg.gate_read_back(source, today)
+                .is_some_and(|gate| gate.lifted)
+        };
+        let before = lifted(self);
+        let earn = self.earn(source, today, reported)?;
+        Ok(Judgement {
+            earn,
+            gate_opened: !before && lifted(self),
+        })
     }
 
     /// Record that a gated source's bar was met today, whatever today's minutes have done.
@@ -2622,6 +2660,86 @@ mod tests {
             stale.earned.get("studygo"),
             Some(&opened),
             "yesterday's sources do not count against today"
+        );
+    }
+
+    /// `judge` reports the one push that opens the gate, and no other.
+    ///
+    /// The push that opens it is usually refused its minutes, because the lower rung paid the
+    /// ladder to its top — so the verdict alone cannot say it happened, and a caller that wants to
+    /// tell the child needs this second fact beside it.
+    #[test]
+    fn judge_reports_the_push_that_opens_the_gate_and_no_other() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let mut cfg = Config::default();
+        cfg.providers.insert(
+            "studygo".into(),
+            Provider {
+                enabled: true,
+                minutes: 30,
+                daily_cap_mins: None,
+                tiers: vec![Tier {
+                    questions: 10,
+                    minutes_practised: 0,
+                    reward_mins: 16,
+                }],
+                probe: None,
+                remind_every_check: false,
+                gate: Some(Gate {
+                    allowance_mins: 35,
+                    questions: 15,
+                    minutes_practised: 0,
+                }),
+            },
+        );
+        cfg.providers.insert(
+            "chores".into(),
+            Provider {
+                enabled: true,
+                minutes: 10,
+                daily_cap_mins: None,
+                tiers: Vec::new(),
+                probe: None,
+                remind_every_check: false,
+                gate: None,
+            },
+        );
+
+        assert_eq!(
+            cfg.judge("studygo", day, Some(done(10, 0))),
+            Ok(Judgement {
+                earn: Earn::Granted(16),
+                gate_opened: false,
+            }),
+            "the rung is paid and the bar is not met"
+        );
+        assert_eq!(
+            cfg.judge("studygo", day, Some(done(15, 0))),
+            Ok(Judgement {
+                earn: Earn::Refused(Refused::DailyCapReached),
+                gate_opened: true,
+            }),
+            "refused its minutes, and the one push that opens the gate"
+        );
+        assert_eq!(
+            cfg.judge("studygo", day, Some(done(20, 0))),
+            Ok(Judgement {
+                earn: Earn::Refused(Refused::DailyCapReached),
+                gate_opened: false,
+            }),
+            "already open, so not opened again"
+        );
+        assert_eq!(
+            cfg.judge("chores", day, Some(done(1, 0))),
+            Ok(Judgement {
+                earn: Earn::Granted(10),
+                gate_opened: false,
+            }),
+            "no gate, nothing to open"
+        );
+        assert!(
+            cfg.judge("nobody", day, None).is_err(),
+            "the registry's rejection passes through unchanged"
         );
     }
 

@@ -58,6 +58,16 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   thing — limits are not being applied — and a dead checking loop applies every limit exactly as
   before; only earning extra time stops. A banner that raised the serious alarm for the smaller
   problem would teach you to ignore it.
+- **He is told when his practice opens the gate.** Until now the moment a gate exists for was the
+  one moment nothing mentioned: the report that meets the bar is usually refused extra minutes,
+  because an earlier tier already paid the most it could, and a refusal said nothing. So he heard
+  *16 more minutes*, finished his practice, and his day quietly became his normal day with no word
+  that it had or why. Now that report earns one line — *Practice done — StudyGo no longer caps your
+  screen time today* — whether the app reported it or this PC checked.
+  <br>It says whose cap is off rather than how long his day is now, because that number depends on
+  your other settings and his page already shows it. And it is only said when it is true: a gate
+  whose allowance is already his whole day, or a second gate still shut at the same number, opens
+  nothing, and he is not told that it did.
 
 ### Changed
 

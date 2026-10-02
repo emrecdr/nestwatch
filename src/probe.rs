@@ -218,6 +218,47 @@ fn practice_earned_message(minutes: u32, lang: crate::config::Language) -> Strin
     }
 }
 
+/// What the child is told when his practice has just opened the gate.
+///
+/// Names *whose* gate rather than what his day is now, because that number has no single honest
+/// form — unlimited for a household with no daily limit, another gate's ceiling where two are
+/// installed — and the child's page already shows it. This says why it changed. Said once, since
+/// the bar latches for the day, and only when the opening lengthened his day
+/// ([`gate_lift_changes_day`]).
+fn gate_opened_message(source: &str, lang: crate::config::Language) -> String {
+    use crate::config::Language;
+    match lang {
+        Language::En => {
+            format!("Practice done — {source} no longer caps your screen time today.")
+        }
+        Language::Nl => {
+            format!("Oefenwerk klaar — {source} beperkt je schermtijd vandaag niet meer.")
+        }
+        Language::Tr => format!("Çalışma tamam — {source} bugün artık ekran süreni sınırlamıyor."),
+    }
+}
+
+/// Whether a gate opening lengthens today, given the ceiling the other gates leave (`others`) and
+/// what this one held the day at while shut (`this_gate`: its allowance plus what its rungs paid).
+///
+/// The honesty check behind `gate_opened_message`. A gated child on a day whose base is below
+/// the allowance gains nothing from the gate opening, and nor does one whose second gate is still
+/// shut at the same number; telling either that he did would be the first false sentence this
+/// feature says. Decided by the same arithmetic the enforcer uses,
+/// [`crate::rules::Rules::effective_budget_mins`], with the parent's granted extra left at zero
+/// because it is added to both sides alike.
+pub fn gate_lift_changes_day(
+    rules: &crate::rules::Rules,
+    today: NaiveDate,
+    others: Option<u32>,
+    this_gate: u32,
+) -> bool {
+    use crate::rules::Adjustments;
+    let shut = Some(others.map_or(this_gate, |cap| cap.min(this_gate)));
+    rules.effective_budget_mins(today, Adjustments::new(0, others))
+        != rules.effective_budget_mins(today, Adjustments::new(0, shut))
+}
+
 /// What this machine remembers about one provider's probe between runs.
 ///
 /// In memory only, and deliberately so: a restart forgets it, which re-runs every due probe. That
@@ -457,7 +498,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
         }
     }
     for (name, probe) in due_now {
-        let (reported, outcome) = run_one(state, &name, &probe, today).await;
+        let (reported, outcome, gate_opened) = run_one(state, &name, &probe, today).await;
         match &outcome {
             ProbeOutcome::Granted(minutes) => {
                 tracing::info!(provider = %name, minutes, "probe grant")
@@ -469,7 +510,7 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
                 tracing::warn!(provider = %name, error = %error, "probe failed")
             }
         }
-        tell_child(state, &name, &outcome, reported, today).await;
+        tell_child(state, &name, &outcome, reported, today, gate_opened).await;
         crate::api::recover_lock(&state.probe_status).insert(
             name,
             ProbeState {
@@ -494,12 +535,15 @@ pub async fn run_once(state: &AppState, now: DateTime<FixedOffset>) {
 ///
 /// **The day's reminder is one ration for both roads** ([`ReminderMap`]), so a probe at 16:00 and a
 /// push at 16:05 cannot each tell him about the same rung.
+///
+/// `gate_opened` is [`crate::config::Judgement::gate_opened`]: whether this report met the bar.
 pub(crate) async fn tell_child(
     state: &AppState,
     source: &str,
     outcome: &ProbeOutcome,
     reported: Option<Progress>,
     today: NaiveDate,
+    gate_opened: bool,
 ) {
     // Read now rather than carried from a snapshot, which costs one uncontended lock and buys the
     // property that this stays correct however many callers there are: the value it reads is the
@@ -512,34 +556,60 @@ pub(crate) async fn tell_child(
     let (lang, speak) = {
         let cfg = crate::state::recover_read(&state.config);
         let lang = cfg.language;
-        let speak: Option<String> = match (outcome, reported) {
-            // Every grant is announced. A rule that only ever says "not yet" is the controlling
-            // frame this feature is written to avoid, and the ceiling already bounds how many
-            // times this can happen.
-            (ProbeOutcome::Granted(minutes), _) => Some(practice_earned_message(*minutes, lang)),
-            // Short of the bar, and either not yet told today or set to say it every time. The
-            // other two refusals mean the day is already paid, so there is nothing to aim at and
-            // nothing to say.
-            //
-            // The rationing is inside the lookup rather than a match guard, because which rule
-            // applies is the *provider's* to say and a guard runs before anything is looked up.
-            // `filter` before `and_then` keeps the two questions in the order they are asked: may
-            // he be told, and is there a rung to tell him about.
-            (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done)) => cfg
+        // The gate opening is said first and alone: it is the sentence the rest of this exists
+        // for, and any minutes the same report was paid raised a gate that has just gone. Only
+        // when it lengthened his day — the ceiling the remaining gates leave is read here, under
+        // the same guard, the way every other reader of the day's ceiling reads it.
+        let opened_his_day = gate_opened
+            && cfg
                 .providers
                 .get(source)
-                .filter(|provider| provider.remind_every_check || reminded_before != Some(today))
-                .and_then(|provider| provider.next_rung(done))
-                .map(|tier| practice_reminder_message(source, tier, done, lang)),
-            // Enumerated rather than caught. The day latch and the ceiling both mean the day is
-            // already paid, so there is no rung to aim at and nothing worth saying; a failed check
-            // is the parent's to read, not his. A fourth refusal fails to compile here, which is
-            // the whole point of the reason being a type. `BelowThreshold` reaches this arm only
-            // with nothing reported, which a probe cannot produce and a push can.
-            (ProbeOutcome::Refused(Refused::BelowThreshold), _)
-            | (ProbeOutcome::Refused(Refused::AlreadyGrantedToday), _)
-            | (ProbeOutcome::Refused(Refused::DailyCapReached), _)
-            | (ProbeOutcome::Failed(_), _) => None,
+                .and_then(|provider| provider.gate.as_ref())
+                .zip(cfg.gate_read_back(source, today))
+                .is_some_and(|(gate, read)| {
+                    gate_lift_changes_day(
+                        &cfg.rules,
+                        today,
+                        live_gate_cap(&cfg, &state.probe_status, today),
+                        gate.allowance_mins.saturating_add(read.earned_mins),
+                    )
+                });
+        let speak: Option<String> = if opened_his_day {
+            Some(gate_opened_message(source, lang))
+        } else {
+            match (outcome, reported) {
+                // Every grant is announced. A rule that only ever says "not yet" is the controlling
+                // frame this feature is written to avoid, and the ceiling already bounds how many
+                // times this can happen.
+                (ProbeOutcome::Granted(minutes), _) => {
+                    Some(practice_earned_message(*minutes, lang))
+                }
+                // Short of the bar, and either not yet told today or set to say it every time. The
+                // other two refusals mean the day is already paid, so there is nothing to aim at and
+                // nothing to say.
+                //
+                // The rationing is inside the lookup rather than a match guard, because which rule
+                // applies is the *provider's* to say and a guard runs before anything is looked up.
+                // `filter` before `and_then` keeps the two questions in the order they are asked: may
+                // he be told, and is there a rung to tell him about.
+                (ProbeOutcome::Refused(Refused::BelowThreshold), Some(done)) => cfg
+                    .providers
+                    .get(source)
+                    .filter(|provider| {
+                        provider.remind_every_check || reminded_before != Some(today)
+                    })
+                    .and_then(|provider| provider.next_rung(done))
+                    .map(|tier| practice_reminder_message(source, tier, done, lang)),
+                // Enumerated rather than caught. The day latch and the ceiling both mean the day is
+                // already paid, so there is no rung to aim at and nothing worth saying; a failed check
+                // is the parent's to read, not his. A fourth refusal fails to compile here, which is
+                // the whole point of the reason being a type. `BelowThreshold` reaches this arm only
+                // with nothing reported, which a probe cannot produce and a push can.
+                (ProbeOutcome::Refused(Refused::BelowThreshold), _)
+                | (ProbeOutcome::Refused(Refused::AlreadyGrantedToday), _)
+                | (ProbeOutcome::Refused(Refused::DailyCapReached), _)
+                | (ProbeOutcome::Failed(_), _) => None,
+            }
         };
         (lang, speak)
     };
@@ -554,13 +624,14 @@ pub(crate) async fn tell_child(
     }
 }
 
-/// Run one provider's probe and judge its answer.
+/// Run one provider's probe and judge its answer: what it reported, what that came to, and whether
+/// it opened the gate ([`crate::config::Judgement::gate_opened`]).
 async fn run_one(
     state: &AppState,
     name: &str,
     probe: &Probe,
     today: NaiveDate,
-) -> (Option<Progress>, ProbeOutcome) {
+) -> (Option<Progress>, ProbeOutcome, bool) {
     let data_dir = crate::config::data_paths().dir;
     let exe = probe_dir().join(&probe.exe);
     let control = state.control.clone();
@@ -576,17 +647,18 @@ async fn run_one(
     .await;
     let output = match output {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(error)) => return (None, ProbeOutcome::Failed(error)),
+        Ok(Err(error)) => return (None, ProbeOutcome::Failed(error), false),
         Err(e) => {
             return (
                 None,
                 ProbeOutcome::Failed(format!("probe task panicked: {e}")),
+                false,
             );
         }
     };
     let progress = match parse_output(&output) {
         Ok(progress) => progress,
-        Err(error) => return (None, ProbeOutcome::Failed(error)),
+        Err(error) => return (None, ProbeOutcome::Failed(error), false),
     };
     // Judged inside the config critical section, exactly as a push is: the provider it is read
     // from is the one the latch is written against, and a push arriving in the same instant
@@ -596,32 +668,47 @@ async fn run_one(
     let reported = Some(progress);
     let persisted = crate::api::try_update_config(state, |c| {
         verdict = Some(
-            c.earn(&source, today, reported)
+            c.judge(&source, today, reported)
                 .map_err(crate::error::AppError::BadRequest)?,
         );
         Ok(())
     })
     .await;
-    let outcome = match (persisted, verdict) {
-        (Ok(()), Some(Earn::Granted(minutes))) => {
+    let (outcome, gate_opened) = match (persisted, verdict) {
+        (
+            Ok(()),
+            Some(crate::config::Judgement {
+                earn: Earn::Granted(minutes),
+                gate_opened,
+            }),
+        ) => {
             // The same two records a pushed grant leaves, plus the one fact that distinguishes
             // them — absent from a push's line, so nothing that reads those changes shape.
             let line = json!({ "minutes": minutes, "source": name, "probe": true });
             state.audit.record("extra_time_granted", line.clone());
             state.usage.record("extra_time_granted", line);
             crate::api::notify(state, "usage");
-            ProbeOutcome::Granted(minutes)
+            (ProbeOutcome::Granted(minutes), gate_opened)
         }
-        (Ok(()), Some(Earn::Refused(reason))) => ProbeOutcome::Refused(reason),
+        (
+            Ok(()),
+            Some(crate::config::Judgement {
+                earn: Earn::Refused(reason),
+                gate_opened,
+            }),
+        ) => (ProbeOutcome::Refused(reason), gate_opened),
         // The provider was switched off or removed between the snapshot and the judgement, or
         // the config could not be saved. Either way nothing was granted.
-        (Err(e), _) => ProbeOutcome::Failed(e.to_string()),
+        (Err(e), _) => (ProbeOutcome::Failed(e.to_string()), false),
         // Unreachable: `try_update_config` answers `Ok` only after the closure above returned
         // `Ok`, and that closure sets `verdict` before it does. Stated as an outcome rather than
         // an `expect`, because a panic here would be inside the service that enforces the rules.
-        (Ok(()), None) => ProbeOutcome::Failed("the registry gave no verdict".into()),
+        (Ok(()), None) => (
+            ProbeOutcome::Failed("the registry gave no verdict".into()),
+            false,
+        ),
     };
-    (Some(progress), outcome)
+    (Some(progress), outcome, gate_opened)
 }
 
 /// The gated providers this machine currently **cannot** check.
@@ -968,6 +1055,61 @@ mod tests {
             assert!(text.contains("16"), "{lang:?} must say how much: {text}");
         }
         crate::testutil::assert_each_language_differs(&said);
+    }
+
+    /// Every language gets its own notice that the gate is open, and each names whose gate.
+    #[test]
+    fn every_language_gets_its_own_gate_open_notice() {
+        let said: Vec<String> = crate::config::Language::ALL
+            .iter()
+            .map(|&lang| gate_opened_message("studygo", lang))
+            .collect();
+        for (lang, text) in crate::config::Language::ALL.iter().zip(&said) {
+            assert!(
+                text.contains("studygo"),
+                "{lang:?} must name the gate: {text}"
+            );
+        }
+        crate::testutil::assert_each_language_differs(&said);
+    }
+
+    /// The gate opening is news only when it lengthens the day.
+    ///
+    /// `this_gate` is what the gate would hold the day at while shut — allowance plus what its
+    /// rungs have paid, 51 for the usual household — and `others` is the ceiling the remaining
+    /// gates put on the day now. Both sides of each bound are asserted.
+    #[test]
+    fn a_gate_opening_is_news_only_when_it_lengthens_the_day() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let rules = |base: u32| crate::rules::Rules {
+            daily_budget_mins: base,
+            ..Default::default()
+        };
+        assert!(
+            gate_lift_changes_day(&rules(120), day, None, 51),
+            "a two-hour day held at 51: he gains the rest of it"
+        );
+        assert!(
+            !gate_lift_changes_day(&rules(30), day, None, 35),
+            "a 30-minute day under a 35-minute allowance was never capped, so nothing opened"
+        );
+        assert!(
+            !gate_lift_changes_day(&rules(51), day, None, 51),
+            "a day exactly at the gate gains nothing"
+        );
+        assert!(gate_lift_changes_day(&rules(52), day, None, 51));
+        assert!(
+            gate_lift_changes_day(&rules(0), day, None, 51),
+            "an unlimited day was held at 51, and is unlimited again"
+        );
+        assert!(
+            gate_lift_changes_day(&rules(120), day, Some(40), 35),
+            "another gate at 40 still binds, and 35 to 40 is still five minutes gained"
+        );
+        assert!(
+            !gate_lift_changes_day(&rules(120), day, Some(35), 51),
+            "another gate holds him exactly where this one did"
+        );
     }
 
     /// The provider name is a path segment, so it is validated here as well as at the door.

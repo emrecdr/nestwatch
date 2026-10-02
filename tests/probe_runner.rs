@@ -762,6 +762,14 @@ async fn a_probe_is_run_judged_and_bounded_by_the_registry() {
             Some((Some(16), true)),
             "and the check that sees the finished practice opens it, paying nothing more"
         );
+        // The same sentence a push would earn: the road is not his concern.
+        let said = fake.notification_bodies();
+        assert_eq!(said.len(), 2, "the rung, then the gate: {said:?}");
+        assert!(
+            said[1].contains("studygo") && said[1].contains("no longer caps"),
+            "a check that opens the gate says so: {}",
+            said[1]
+        );
         assert_eq!(
             recover_read(&state.config)
                 .gate_cap_mins(t0.date_naive(), &std::collections::BTreeSet::new()),

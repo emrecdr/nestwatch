@@ -1583,4 +1583,93 @@ async fn earned_grants_latch_replay_and_validate() {
             heard()
         );
     }
+
+    // --- The moment the gate opens is said, once, and only when it lengthens his day -----------
+    //
+    // A gate's whole purpose is this moment, and it was the one moment neither road spoke about
+    // (was `O106`): the push that meets the bar is usually refused its minutes, because the lower rung
+    // already paid the ladder to its top, and a refusal says nothing. So the usual good afternoon
+    // was *16 more minutes*, then silence, then a day that was quietly two hours long.
+    {
+        let gated = |allowance_mins: u32, tiers: Vec<nestwatch::config::Tier>| {
+            nestwatch::config::Provider {
+                enabled: true,
+                minutes: 30,
+                daily_cap_mins: None,
+                tiers,
+                probe: None,
+                remind_every_check: false,
+                gate: Some(nestwatch::config::Gate {
+                    allowance_mins,
+                    questions: 15,
+                    minutes_practised: 30,
+                }),
+            }
+        };
+        let fake = std::sync::Arc::new(nestwatch::control::FakeControl::new());
+        let mut cfg = test_config();
+        cfg.rules.daily_budget_mins = 120;
+        // One rung below the bar: the push that meets the bar is refused its minutes.
+        cfg.providers.insert(
+            "studygo".into(),
+            gated(
+                35,
+                vec![nestwatch::config::Tier {
+                    questions: 10,
+                    minutes_practised: 20,
+                    reward_mins: 16,
+                }],
+            ),
+        );
+        // A gate that never binds: the allowance is his whole day already.
+        cfg.providers.insert("music".into(), gated(120, Vec::new()));
+        let mut state = state_with(cfg);
+        state.control = fake.clone();
+        let app = app_with(state.clone());
+        let cookie = login(&app, PASSWORD).await.unwrap();
+        let heard = || fake.notification_bodies();
+        let did = |source: &str, questions: u32| json!({ "source": source, "progress": { "questions": questions, "minutes": 5 } });
+
+        grant(&app, &cookie, did("studygo", 12), None).await;
+        assert_eq!(heard().len(), 1, "the rung is announced: {:?}", heard());
+
+        let (_, body) = grant(&app, &cookie, did("studygo", 15), Some("bar-1")).await;
+        assert_eq!(
+            body,
+            json!({ "ok": false, "reason": "daily_cap_reached" }),
+            "the ladder is paid to its top, so the push that meets the bar earns no minutes"
+        );
+        let said = heard();
+        assert_eq!(
+            said.len(),
+            2,
+            "and that is exactly the push that must be announced: {said:?}"
+        );
+        assert!(
+            said[1].contains("studygo") && said[1].contains("no longer caps"),
+            "he is told the gate is open, not about minutes: {}",
+            said[1]
+        );
+
+        grant(&app, &cookie, did("studygo", 15), Some("bar-1")).await;
+        grant(&app, &cookie, did("studygo", 20), None).await;
+        assert_eq!(
+            heard().len(),
+            2,
+            "a replay and a later push find the gate already open, and say nothing: {:?}",
+            heard()
+        );
+
+        // The bar met on a gate that was not binding: he gains nothing, so he is not told he did.
+        // The reward is still announced, as it is for any grant.
+        let (_, body) = grant(&app, &cookie, did("music", 15), None).await;
+        assert_eq!(body["minutes"], json!(30), "{body}");
+        let said = heard();
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[2].contains("30 more minutes") && !said[2].contains("no longer caps"),
+            "a 120-minute allowance on a 120-minute day lifted nothing: {}",
+            said[2]
+        );
+    }
 }

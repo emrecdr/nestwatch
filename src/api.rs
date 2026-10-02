@@ -1024,6 +1024,9 @@ pub async fn extra_time(
     // `None` means the grant happened. The refusals are ordinary outcomes rather than errors, and
     // only the first can be reached by a provider that has opted into nothing.
     let mut refused: Option<crate::config::Refused> = None;
+    // Whether this push met the gate's bar — for the child's ears only; nothing in the response
+    // changes shape for it, since the read-back already carries `gate.lifted`.
+    let mut gate_opened = false;
     {
         let source = source.clone();
         try_update_config(&state, |c| {
@@ -1032,10 +1035,11 @@ pub async fn extra_time(
                 // again here because this one is inside the write guard: it is atomic with the
                 // day latch, and it is the only check at all for a `Scope::Dashboard` caller
                 // naming a `source` in its body, which never reaches that middleware arm.
-                match c
-                    .earn(&source, today, reported)
-                    .map_err(AppError::BadRequest)?
-                {
+                let judged = c
+                    .judge(&source, today, reported)
+                    .map_err(AppError::BadRequest)?;
+                gate_opened = judged.gate_opened;
+                match judged.earn {
                     crate::config::Earn::Granted(granted) => minutes = granted,
                     crate::config::Earn::Refused(reason) => refused = Some(reason),
                 }
@@ -1081,7 +1085,7 @@ pub async fn extra_time(
             None => crate::probe::ProbeOutcome::Granted(minutes),
             Some(reason) => crate::probe::ProbeOutcome::Refused(reason),
         };
-        crate::probe::tell_child(&state, &source, &outcome, reported, today).await;
+        crate::probe::tell_child(&state, &source, &outcome, reported, today, gate_opened).await;
     }
     if let Some(key) = replay_key {
         recover_lock(&state.grant_replays).record(
