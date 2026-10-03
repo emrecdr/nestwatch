@@ -74,7 +74,7 @@ entry was last looked at *together*.
 
 ## Release state
 
-**`v0.9.0`, published 2026-09-11.** Everything below is open against a release that is on the
+**`v0.10.0`, published 2026-10-04.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -84,18 +84,28 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 the downloaded artifacts.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **53 items across §H1–§H9** — the bedtime
-extension, the enforcer wake, the translated shutdown notices, the ask link, the child's page in
-Dutch, the provider probe and the two sentences it says, and the message a parent types — and none
-of them has executed on Windows. Re-measured 2026-09-11; it read 38 across §H1–§H8 when `v0.8.0`
-shipped, §H9 arrived with the message box it covers, and the last three items of §H8 were written
-while cutting this release for a feature that had shipped without any. Worth stating exactly: **no
-commit in this repository's history has ever recorded a ticked item in that file**, in any section,
-so all 224 boxes it carries are still open. The three gates that
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **59 items across §H1–§H10** — the bedtime
+extension and its undo, the enforcer wake, the translated shutdown notices, the ask link, the
+child's page in Dutch, the provider probe and the three sentences it says, the practice gate, the
+message a parent types, the summer mark across a reboot and `install`'s sessions note — and none
+of them has executed on Windows. Re-measured 2026-10-04; it read 53 across §H1–§H9 when this
+release's work began and 45 when `v0.9.0` shipped, and six of the fourteen new items were written
+while cutting this release for features that would otherwise have shipped without any. Worth
+stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
+file**, in any section, so all 230 boxes it carries are still open. The three gates that
 were green when it shipped are the same three that were green when `install` failed on real hardware
 and again when `remove_file` turned out not to be exclusive. That is not an argument for distrusting
 them; it is the reason the section below exists and the reason the checklist is the only method here
 with a track record.
+
+**0.10.0 touches two lines of Windows-only code, both at install time.** Measured 2026-10-04 with
+`git diff v0.9.0..HEAD`: of 3,417 lines added under `src/`, two are inside a `#[cfg(windows)]`
+block — `install::deploy` gained the hook that reads and, on `--revoke-sessions`, empties the
+sessions file while the service is stopped — and `session.rs`, `control/windows.rs` and
+`control/service_control.rs` are untouched. The running service gained no platform code; it gained
+three more sentences on the child's screen through `WTSSendMessageW`, a clock mark written beside
+the tally and read back at startup, a span around every request, and the gate the integration
+owns. The unverified surface grew again; §H2, §H7, §H8 and §H10 name what to run first.
 
 **0.9.0 adds no Windows-only code, which inverts what 0.8.0 had to say and moves the risk rather
 than removing it.** Measured 2026-09-11 with `git diff v0.8.0..HEAD`: of 1,057 lines added under
@@ -107,12 +117,13 @@ did: two new things now appear on the child's screen on a call whose real return
 decides, and `notify_child` treats that return value as load-bearing — a notice the OS refused is
 deliberately *not* recorded as said.
 
-**0.8.0's entry, kept because it is still the newest Windows-only code in the download.** It was
+**0.8.0's entry, kept because its probe launch is still the newest Windows-only code in the running
+service** (0.10.0's two lines run at install time). It was
 the first release since `v0.5.1` to add any: the probe runs the check program *as the child*, which
 on Windows means launching it into the interactive session the way the screenshot helper already
 does. Measured 2026-09-09 with `git diff v0.7.0..HEAD`: the `#[cfg(windows)]` module `session.rs`
 gained 129 lines, and both Windows implementations of `SystemControl::run_probe` were new —
-`control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.9.0 unchanged
+`control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.10.0 unchanged
 and still unrun, so §H8 remains the section to run second.
 
 **And neither 0.6.0's nor 0.7.0's headline features are in the checklist at all** — which is worse
@@ -1580,7 +1591,7 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 53 items that have never executed (measured 2026-09-16; 45 at `v0.9.0`, 38 at `v0.8.0`, and
+carries 59 items that have never executed (measured 2026-10-04; 53 on 2026-09-16, 45 at `v0.9.0`, 38 at `v0.8.0`, and
 32 when this was written), so the gap has a size and a reader can weigh it. A
 feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and

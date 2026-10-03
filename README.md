@@ -395,33 +395,37 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.9.0` (2026-09-11) is the newest published release — the
-check that watches your son's practice now *says* something to him instead of granting and refusing
-in silence, you can send him a sentence in your own words, and every box on the dashboard is held to
-the limit its endpoint actually enforces. The release before it, `v0.8.0`, is the one that lets this
-PC ask an integration what your child has done: that is the second of the two exceptions named at
-the top of this file, under **Check from this PC** on the Integrations card, and nothing here
-changes it.
+**Where the current release stands.** `v0.10.0` (2026-10-04) is the newest published release — the
+practice gate now belongs to the integration rather than to your daily limit, so switching it off
+hands his day back; the app on your device can lift it, and he is told the moment it opens; the
+trusted clock keeps the summer across a reboot; a later bedtime can be taken back; `install` says
+how many devices stay signed in; `doctor` warns when an older build is about to rewrite a newer
+file; and the dashboard speaks your language in every dialog. The release before it, `v0.9.0`, gave
+the check a voice; `v0.8.0` is the one that lets this PC ask an integration what your child has
+done — the second of the two exceptions named at the top of this file, under **Check from this
+PC** on the Integrations card, and nothing here changes it.
 
-**Unlike the release before it, this one adds no Windows-only code at all.** Measured with `git
-diff v0.8.0..HEAD` rather than asserted: of the 1,057 lines added under `src/`, **not one** sits
-inside a `#[cfg(windows)]` block, and `session.rs`, `control/windows.rs` and
-`control/service_control.rs` are untouched. What is new is code that *drives* a Windows path that
-already existed — both new sentences reach your child through `WTSSendMessageW`, the same call the
-countdown warnings have always used. So this release's risk is not new platform code. It is that
-neither of the two things it puts on your child's screen has ever been seen on a Windows screen.
+**This one touches two lines of Windows-only code, and both run at install time.** Measured with
+`git diff v0.9.0..HEAD` rather than asserted: of the 3,417 lines added under `src/`, two sit inside
+a `#[cfg(windows)]` block — the hook that signs devices out while the service is stopped, for
+`install --revoke-sessions` — and `session.rs`, `control/windows.rs` and
+`control/service_control.rs` are untouched. Everything else that is new drives Windows paths that
+already existed: three more sentences reach your child through `WTSSendMessageW`, the same call the
+countdown warnings have always used, and the trusted clock's summer mark is written beside the
+tally the enforcer already writes. So this release's risk is, again, not new platform code. It is
+that none of what it newly puts on your child's screen has ever been seen on a Windows screen.
 
-**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for five releases: section H of the
-checklist now carries 53 items across §H1–§H9 — the bedtime extension, the enforcer wake, the
-translated shutdown notices, the ask link, the child's page in Dutch, the probe and what it says,
-and the message a parent types — and none has been executed on a Windows machine. No box anywhere
-in that file has ever been ticked in a commit. That is stated here rather than only in the
+**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for six releases: section H of the
+checklist now carries 59 items across §H1–§H10 — the bedtime extension and its undo, the enforcer
+wake, the translated shutdown notices, the ask link, the child's page in Dutch, the probe and the
+three things it says, the practice gate, the message a parent types, the summer mark across a
+reboot, and `install`'s sessions note — and none has been executed on a Windows machine. No box
+anywhere in that file has ever been ticked in a commit. That is stated here rather than only in the
 changelog, because tier 3 is the tier the sentence above says every serious bug has lived in, and a
 reader deciding whether to install this is entitled to know which tier the newest features sit in.
-Three of those items were written while cutting this release, for a feature that had shipped
-without any — the honest half of a rule working is saying when it nearly did not. Eight more have
-been written since it shipped and are not in it: the probe scheduler's liveness, the settling
-period before its first check, and the practice gate — all on `main` and unreleased.
+Fourteen of those items are new since `v0.9.0`: eight written with the features they cover, and
+six written while cutting this release for features that would otherwise have shipped without
+any — the honest half of a rule working is saying when it nearly did not.
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were

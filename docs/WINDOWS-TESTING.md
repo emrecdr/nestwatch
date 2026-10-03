@@ -768,26 +768,29 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in 0.5.0 through 0.9.0, and since — none of it has run on Windows
+## H. New in 0.5.0 through 0.10.0, and since — none of it has run on Windows
 
-**Five releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
-2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, and `v0.9.0` on 2026-09-11. That is a deliberate decision rather
+**Six releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
+2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, and `v0.10.0` on 2026-10-04.
+That is a deliberate decision rather
 than an oversight, and it is recorded in each release commit as well as here: the binary is on the
 download page and the behaviour below has never executed on the platform it was written for.
 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 53 items across §H1–§H9, where it held 45 at `v0.9.0`, 38 at
-`v0.8.0` and 32 at `v0.7.0`. The one
+accumulated rather than turned over: 59 items across §H1–§H10, where it held 53 before this
+release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`. The one
 thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
 (§H8) instead of being added to the list later or not at all, which is the failure `O87` records
 against 0.6.0 and 0.7.0.
 
-**Eight of the 53 are newer than `v0.9.0` and are not in any release yet** — the probe scheduler's
-heartbeat, the settling period before its first check, and the practice gate, all on `main`. They are written here in
-the commit that added them rather than at the next release, which is the rule `O87` exists to
-enforce and the thing 0.6.0 and 0.7.0 did not do.
+**Fourteen of the 59 are newer than `v0.9.0` and ship in `v0.10.0`.** Eight were written in the
+commits that added their features — the probe scheduler's heartbeat, the settling period before its
+first check, and the practice gate — which is the rule `O87` exists to enforce and the thing 0.6.0
+and 0.7.0 did not do. Six were written while cutting 0.10.0, for features that would otherwise have
+shipped without any: the summer mark across a reboot (§H2), the undo of a later bedtime (§H7), the
+gate-opened notice (§H8) and `install`'s sessions note (§H10).
 
 **`v0.9.0` half-repeated that failure, and the three items at the end of §H8 are the repair.** Its
 message box arrived with §H9 in the same commit; the gate's two sentences to the child arrived with
@@ -835,6 +838,12 @@ item, and is left as written; H is the only section whose whole meaning is *not 
       act (a `GET` is not routed; there is no unauthenticated path). The automated test covers both
       routes, but this is the one place where "parent-authenticated" and "the child cannot reach it"
       have to be the same sentence.
+- [ ] **The summer mark survives a reboot.** On an install anchored in winter, during summer time:
+      as HIM, change the time zone to UTC, then reboot. Bedtime must still fall at the configured
+      hour — not an hour later — and `type C:\ProgramData\HostHealth\clock.json` as admin must show
+      `high_water_mins` at the summer offset beside `anchor_mins`. Before `v0.10.0` the mark lived
+      in memory, and this exact sequence moved a 21:00 bedtime to 22:00 for the rest of the summer
+      (`O82`, closed). Nothing off Windows can run it: the zone identity the check reads is Windows'.
 
 ### H3. Taking the history off the machine
 
@@ -920,8 +929,8 @@ The one control bedtime never had. Screen time could always be topped up three w
 only be edited, which meant remembering to put it back. Several items below check that it *stops*
 on its own — an extension that outlived the night would be worse than no extension at all.
 
-**Known and deliberate: there is no way to shorten or cancel one** (`O74`). Press +60 when you
-meant +15 and the only route back is editing the window. Do not file that as a defect here.
+**There is a way back since `v0.10.0`** (`O74`, closed): **Back to normal** appears beside the
+running extension and shortens it to fifteen minutes from now, never less — the last item below.
 
 - [ ] **It moves tonight's bedtime.** With a window covering now, press **+30** on the Curfew card.
       The toast says *"Bedtime pushed back 30 min"*, and the shutdown that was due now falls 30
@@ -944,6 +953,11 @@ meant +15 and the only route back is editing the window. Do not file that as a d
 - [ ] **It cannot switch a disabled curfew on.** With curfew **off**, press +30. Nothing about the
       evening changes — no window opens, no shutdown is scheduled. Extending a bedtime that does
       not exist must not create one.
+- [ ] **Back to normal keeps the warning.** With a window covering now, press **+60**, then
+      **Back to normal**. The card's *until* time must jump to fifteen minutes from now, and HIS
+      screen must get the *bedtime in 15 minutes* notice straight away, then 5 and 1, then the
+      shutdown — the same sequence as with no extension at all. Pressing it again must change
+      nothing, and with no extension running the button must not be shown.
 - [ ] **A spent screen-time budget is admitted, not hidden.** Run the daily budget out, then press
       **+30**. A second warning appears beside the success toast: *"Screen time is already used up,
       so the PC will still lock"* (or *shut down*, matching your configured action), pointing you at
@@ -1036,6 +1050,11 @@ is launched directly, not through `cmd.exe`.
 - [ ] **Meeting the bar gives exactly the normal day.** With a rung at 10 questions worth 16 and a
       bar at 15, have the probe report 12 questions: budget **51**. Then 15: budget **120** — not
       136. Then let the probe report 0: it must stay 120 for the rest of the day.
+- [ ] **He is told the moment the gate opens.** With the gate binding at 35 on a 120-minute day,
+      have the probe report counts that meet the bar. One notice must appear on his screen —
+      *Practice done — studygo no longer caps your screen time today* — and a later report that
+      meets the bar again must not repeat it. Then set the allowance to 120 and repeat: the bar is
+      met, the Today card does not move, and nothing is said about the gate.
 - [ ] **A broken check hands the day back, and says so.** With the gate binding, rename the probe
       program so it cannot run. Within one interval the card must read *This PC has stopped
       checking* **and** the budget must return to 120. Put the program back: the gate binds again
@@ -1066,6 +1085,23 @@ it was shown.
       calls this a nudge rather than a note.
 - [ ] **A long message does not become a wall.** Send 500 characters. It must display without
       pushing the buttons off screen, and 501 must be refused by the dashboard before it is sent.
+
+### H10. `install`'s sessions note and `--revoke-sessions` (never run on Windows)
+
+The only Windows-only code in `v0.10.0`: two lines inside `deploy`, between stopping the service and
+copying the binary, where the sessions file is read and — on request — emptied while nothing can
+write it back. Everything else about the feature is tested off Windows; this is the window.
+
+- [ ] **It counts, and keeps them.** With your phone and a laptop both signed in, run `install`
+      again from an elevated console and set the same password. After *Installed.* it must print
+      *2 devices are still signed in and stay signed in …*, and both devices must still be signed in
+      once the service is back.
+- [ ] **`--revoke-sessions` ends them all.** The same, with `install --revoke-sessions`: it must
+      print *Signed out 2 devices …*, and both devices must land on the login page once the service
+      is back — not after the next restart, which is what writing the file while the service still
+      ran would have given.
+- [ ] **Nobody signed in is said, not skipped.** With no devices signed in,
+      `install --revoke-sessions` must print *No devices were signed in.*
 
 ## Troubleshooting
 
