@@ -261,7 +261,9 @@ still covers the machine — so **devices you have already paired will not warn 
 not need to re-pair them. Only the password changes — and it changes *only* the password:
 devices already signed in stay signed in. If what you want is to end someone else's access,
 sign that device out from **Signed-in devices**, or change the password from the dashboard,
-which signs every other device out.
+which signs every other device out — or run `install --revoke-sessions`, which sets the new
+password and signs every device out in one go. Either way, `install` tells you how many devices
+are still signed in when it finishes, so you can decide with the number in front of you.
 
 Two things worth knowing before you need this. It requires being **at the PC, with an
 administrator account** — so it is not something you can do from a hotel. And you will type this
@@ -295,6 +297,10 @@ nestwatch.exe remote-setup # print a script that enables remote admin (--off to 
 #                     routine upgrade does NOT make every paired device warn again. Reach
 #                     for this when the PC's addresses have changed, or when you want a
 #                     fresh key — and expect to accept the warning once more on each device.
+#   --revoke-sessions also sign every device out. By default a new password changes only the
+#                     password and devices already signed in stay signed in — right when you
+#                     simply forgot it. Use this when someone else may know the old one.
+#                     install tells you how many devices are still signed in either way.
 ```
 
 - **`install` checks everything first.** Before it changes anything — and before it asks for a

@@ -116,7 +116,10 @@ struct Accepts {
 fn accepts(cmd: &str) -> Option<Accepts> {
     let a = |bare, valued| Some(Accepts { bare, valued });
     match cmd {
-        "install" => a(&["--fix", "--reset-config", "--new-cert"], &["--port"]),
+        "install" => a(
+            &["--fix", "--reset-config", "--new-cert", "--revoke-sessions"],
+            &["--port"],
+        ),
         "uninstall" => a(&["--purge"], &[]),
         "remote-setup" => a(&["--off"], &[]),
         "pair" => a(&[], &["--integration"]),
@@ -433,6 +436,8 @@ USAGE:
                           --fix           apply pre-flight fixes without asking
                           --reset-config  replace an unreadable config.json
                           --new-cert      reissue the TLS cert (devices re-warn)
+                          --revoke-sessions  also sign every device out (the old
+                                          password may be known to someone else)
   nestwatch uninstall     remove the service, firewall rule and files; fails if any
                           remain, naming them (--purge also removes settings + history)
   nestwatch doctor        check the install and report anything wrong
@@ -494,6 +499,7 @@ mod tests {
                     "--fix",
                     "--new-cert",
                     "--reset-config",
+                    "--revoke-sessions",
                     "--port",
                     "9000"
                 ])

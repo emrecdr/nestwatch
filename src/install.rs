@@ -207,7 +207,13 @@ pub fn install() -> Result<()> {
         fp
     };
 
-    deploy(cfg.port)?;
+    // Decided here, applied inside deploy's stop-start window, reported after "Installed." —
+    // see `settle_sessions` and `sessions_note` for why install does not simply sign everyone out.
+    let revoke_sessions = args.iter().any(|a| a == "--revoke-sessions");
+    let mut live_sessions = 0;
+    deploy(cfg.port, || {
+        live_sessions = settle_sessions(&paths.sessions, revoke_sessions);
+    })?;
 
     // After `deploy`, never before: the stamp records what is *installed*, and deploy is the step
     // that can fail and roll back to the previous binary. Writing it earlier would leave a machine
@@ -218,6 +224,9 @@ pub fn install() -> Result<()> {
     }
 
     println!("\nInstalled.");
+    if let Some(note) = sessions_note(live_sessions, revoke_sessions) {
+        println!("{note}");
+    }
     print_access_block(cfg.port, crate::pairing::Scope::Dashboard);
     println!("\nTLS cert SHA-256 — verify this the first time your browser warns, so you know");
     println!("you're trusting THIS machine and not a LAN impostor:");
@@ -674,8 +683,58 @@ const UPDATE_ACCESS: windows_service::service::ServiceAccess = {
         .union(A::CHANGE_CONFIG)
 };
 
+/// The sessions that outlive a password change, counted and — on `--revoke-sessions` — ended,
+/// while the service is stopped.
+///
+/// Inside `deploy`'s stop-start window deliberately: a running service holds its own copy of the
+/// store and writes it back on its next change, so a file cleared while it runs is a file it
+/// restores a minute later. Loads through [`crate::sessionstore::FileSessionStore`] so *live*
+/// means what the service means by it (expired records are dropped at load), and revokes through
+/// the same `clear_all` the dashboard's password change uses, so there is one spelling of "sign
+/// everyone out".
+fn settle_sessions(sessions: &std::path::Path, revoke: bool) -> usize {
+    let store = crate::sessionstore::FileSessionStore::new(sessions.to_path_buf());
+    let live = store.snapshot().len();
+    if revoke && live > 0 {
+        store.clear_all();
+    }
+    live
+}
+
+/// The two ways to end a session that `install` left alone.
+const HOW_TO_END_SESSIONS: &str = "Sign one out from Signed-in devices on the dashboard, or run \
+                                   install again with --revoke-sessions to sign out all of them.";
+
+/// What `install` tells the parent about the devices still signed in after it set a password.
+///
+/// `install` is the documented way back in for a parent who has forgotten the password, and for
+/// that parent keeping every device signed in is the feature (README, *If you forget the
+/// password*). But the same door is the one a parent reaches for when they think someone else has
+/// the password, and the other path that sets it — `api::change_password` — signs every device
+/// out. Making the two agree by signing the house out on every reinstall would cost each routine
+/// upgrade a round of sign-ins, so instead the door says how many devices stay signed in, and
+/// `--revoke-sessions` ends them all. `None` when there is nothing to say. Was `O90`.
+fn sessions_note(live: usize, revoked: bool) -> Option<String> {
+    match (live, revoked) {
+        (0, false) => None,
+        (0, true) => Some("No devices were signed in.".into()),
+        (1, true) => Some("Signed out 1 device. It signs in again with the new password.".into()),
+        (n, true) => Some(format!(
+            "Signed out {n} devices. Everyone signs in again with the new password."
+        )),
+        (1, false) => Some(format!(
+            "1 device is still signed in and stays signed in — the password changed, its session \
+             did not. {HOW_TO_END_SESSIONS}"
+        )),
+        (n, false) => Some(format!(
+            "{n} devices are still signed in and stay signed in — the password changed, their \
+             sessions did not. {HOW_TO_END_SESSIONS}"
+        )),
+    }
+}
+
 #[cfg(windows)]
-fn deploy(port: u16) -> Result<()> {
+fn deploy(port: u16, while_stopped: impl FnOnce()) -> Result<()> {
     use std::ffi::{OsStr, OsString};
 
     use windows_service::service::{
@@ -713,6 +772,9 @@ fn deploy(port: u16) -> Result<()> {
     // After the stop and before the copy, deliberately: killing them earlier lets the still-running
     // supervisor spawn replacements, and killing them later is too late for the copy.
     terminate_resident_helpers();
+
+    // The one moment the service cannot write its sessions back — see `settle_sessions`.
+    while_stopped();
 
     // Everything from the stop above until the service is started again is a window where an
     // upgrade has enforcement switched OFF. Any `?` in here used to abort the install and leave
@@ -1490,7 +1552,9 @@ fn show_firewall_rule() -> std::io::Result<std::process::Output> {
 // ---------------------------------------------------------------------------
 
 #[cfg(not(windows))]
-fn deploy(_port: u16) -> Result<()> {
+fn deploy(_port: u16, while_stopped: impl FnOnce()) -> Result<()> {
+    // Nothing is running to stop here; the hook still runs so the host does what the target does.
+    while_stopped();
     println!("(service install is Windows-only — config + cert written for dev `run`)");
     Ok(())
 }
@@ -1755,6 +1819,84 @@ pub(crate) fn helpers_to_terminate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `install` says about the devices still signed in after it set a password: nothing
+    /// when there are none, how many stay signed in otherwise, and what `--revoke-sessions` did.
+    /// Singular and plural both, because "1 devices are" reads as a bug in the tool.
+    #[test]
+    fn install_says_how_many_devices_stay_signed_in_and_what_revoking_did() {
+        assert_eq!(sessions_note(0, false), None, "nothing to say about nobody");
+        let one = sessions_note(1, false).expect("one device is worth a line");
+        assert!(
+            one.starts_with("1 device is still signed in") && one.contains("--revoke-sessions"),
+            "{one}"
+        );
+        let two = sessions_note(2, false).expect("two devices are worth a line");
+        assert!(
+            two.starts_with("2 devices are still signed in") && two.contains("Signed-in devices"),
+            "{two}"
+        );
+        assert_eq!(
+            sessions_note(0, true).as_deref(),
+            Some("No devices were signed in."),
+            "asking to revoke when nobody was signed in is answered, not ignored"
+        );
+        let revoked = sessions_note(3, true).expect("a revocation is reported");
+        assert!(
+            revoked.starts_with("Signed out 3 devices") && revoked.contains("new password"),
+            "{revoked}"
+        );
+        assert!(
+            sessions_note(1, true)
+                .unwrap()
+                .starts_with("Signed out 1 device.")
+        );
+    }
+
+    /// The count is read from disk the way the service reads it, and nothing is ended unless
+    /// asked — against a real store file, because the point of the hook is what survives on disk.
+    #[tokio::test]
+    async fn settle_sessions_counts_the_live_ones_and_revokes_only_when_asked() {
+        use tower_sessions::SessionStore as _;
+        use tower_sessions::session::{Id, Record};
+        let dir = crate::testutil::ScratchDir::new("install-settle");
+        let path = dir.join("sessions.json");
+        let store = crate::sessionstore::FileSessionStore::new(path.clone());
+        for _ in 0..2 {
+            let record = Record {
+                id: Id::default(),
+                data: Default::default(),
+                expiry_date: time::OffsetDateTime::now_utc() + time::Duration::days(30),
+            };
+            store.save(&record).await.unwrap();
+        }
+        drop(store);
+
+        assert_eq!(
+            settle_sessions(&path, false),
+            2,
+            "two devices are signed in"
+        );
+        assert_eq!(
+            crate::sessionstore::FileSessionStore::new(path.clone())
+                .snapshot()
+                .len(),
+            2,
+            "counting is not revoking"
+        );
+        assert_eq!(
+            settle_sessions(&path, true),
+            2,
+            "the count is what was ended"
+        );
+        assert!(
+            crate::sessionstore::FileSessionStore::new(path.clone())
+                .snapshot()
+                .is_empty(),
+            "revoked on disk, so the restarted service loads nobody"
+        );
+        assert_eq!(settle_sessions(&path, false), 0);
+    }
 
     /// The installed layout, as a path with a space in it — which every real install has and which
     /// is what the quoting below exists for.

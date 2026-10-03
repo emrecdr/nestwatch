@@ -1764,48 +1764,6 @@ desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
 `ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
 and a third size axis is exactly what it was written against. Weigh those before touching it.
 
-### O90 · The password path that revokes is not the one a parent reaches for when control is lost
-
-Two commands set the control password, and only one of them ends the sessions that password
-protected.
-
-**Measured 2026-09-04.** `api::change_password` (`src/api.rs:1767`) re-hashes, saves, calls
-`state.sessions.clear_all()` and rotates the caller's own id. `install` re-hashes into
-`Config.password_hash` (`src/install.rs:157`) and never touches the session store — `clear_all` has
-exactly one caller in the whole tree, and it is not this one. Confirmed by grep, not by reading the
-control flow.
-
-**Why the asymmetry points the wrong way.** `install` is the *documented recovery path*: the README
-tells a parent who has lost the password to re-run it, and reassures them that paired devices "will
-not warn again" and need no re-pairing. That reassurance is accurate and it is the feature —
-preserving sessions is exactly right for the common case, which is a forgotten password. But
-"forgotten" and "compromised" arrive by the same door, and the compromised case gets the weaker
-lever silently. A parent who re-runs `install` because they think someone else has the password has
-performed the ritual of locking the door and changed nothing about who is already inside.
-
-**The honest counter-argument, which is strong.** `install` needs an elevated console physically at
-the child's PC. An adversary with that has better options than a stolen cookie, so the realistic
-threat is not an attacker — it is the parent's own wrong mental model, formed by every other system
-they have used, where "reset the password" means "everyone is signed out".
-
-**This is not obviously a code fix.** Making `install` call `clear_all` would sign out the whole
-house on every routine reinstall, which is the cost the README currently advertises *against* — and
-reinstall is also how an upgrade is applied. The candidates, cheapest first:
-
-1. ~~Say so where the promise is made.~~ **Done 2026-09-04.** The README's "Only the password
-   changes" was true and read as more than it meant; it now states that devices already signed in
-   stay signed in, and points at *Signed-in devices* or a dashboard password change. That closes
-   the mental-model gap, which was the part of this worth fixing without a decision.
-2. `install --revoke-sessions`, for the parent who means the other thing.
-3. Prompt when `install` finds an existing config with live sessions.
-
-**What is left is 2 and 3, and neither is urgent.** With the documentation corrected, this is no
-longer a parent being misled — it is a missing convenience for an uncommon case that still has a
-working answer (change the password from the dashboard).
-
-**Found by** auditing the docs rather than the code: the README claim was checked against
-`install.rs` to confirm it was true, and it is — the gap is in what it leaves unsaid.
-
 ### O91 · The firewall rule and the app-layer gate would disagree about a tunnel peer, and neither would say so
 
 Two independent gates decide whether a client may reach this service, and they encode the same

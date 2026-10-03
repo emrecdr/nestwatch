@@ -68,6 +68,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   your other settings and his page already shows it. And it is only said when it is true: a gate
   whose allowance is already his whole day, or a second gate still shut at the same number, opens
   nothing, and he is not told that it did.
+- **`install` now says how many devices are still signed in, and `--revoke-sessions` signs them all
+  out.** Running `install` to set a new password keeps every signed-in device signed in — right
+  when you simply forgot the password, and silent when you reset it because someone else might
+  know it. It now prints how many devices stay signed in and how to end them, and
+  `install --revoke-sessions` ends them all in one go, the way changing the password from the
+  dashboard already did.
 
 ### Changed
 
