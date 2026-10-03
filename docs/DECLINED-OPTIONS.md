@@ -65,6 +65,30 @@ Weighed in review and deliberately not done. Re-raise only with new evidence.
 
 ## Withdrawn after measurement
 
+### The child's page should show him his rules — bedtime, the routine in force, his gate's bar
+
+**Raised in the 2026-10-03 audit and withdrawn the same day, before a line was written.** The claim
+rested on `api::child_status` returning four numbers (`budget_mins`, `limited`, `remaining_mins`,
+`used_mins`) and on the research the audit cited — that transparency and autonomy serve older
+children better than bare restriction. Both are true. What the audit had not read was the
+endpoint's own doc comment and the test beside it, `child_status_is_unauthenticated_and_leaks_no_rules`
+(`tests/api.rs`): `/status` needs no sign-in, so **anyone on the home network** can open the page it
+feeds, and the endpoint therefore carries "no curfew window … and nothing about *why* a limit
+exists" — a schedule handed out that way is a map for planning around, and not only the child's.
+The test forbids the word `curfew` in the body and pins each day to a date and a number, so the
+proposed block would have failed it first.
+
+**Why the research does not override the test.** The transparency it argues for is already
+delivered, where only the child can see it: the practice notices and the gate-opened sentence land
+in *his* session (`probe::tell_child`), the request flow is his to start, and the page tells him
+how much of his day is left. None of that publishes the household's rules to the LAN. The one gap
+the audit found — the moment the gate opens was silent — was closed by `ecde32d` through that same
+channel, not through the page.
+
+**The method lesson, which is the part worth keeping:** a surface's *fields* say what it does; its
+test says what it must not do. The audit ranked from the fields. Before proposing that an endpoint
+grow, read the test that pins its shape — this repository writes one for every boundary it means.
+
 ### The dashboard needs navigation — fourteen cards in one flat scroll
 
 **Raised and withdrawn the same day, 2026-08-31. The claim was false and the method that produced
