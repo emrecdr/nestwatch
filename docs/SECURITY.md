@@ -1074,13 +1074,6 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   and no setting reaches it. Bounded and measured — ~42 KB and one handle each, ~690 MB for one
   machine's worth of ephemeral ports — and it costs an unauthenticated LAN device nothing but a
   loop. Enforcement is unaffected; what degrades is the parent's dashboard. See O81.
-- **A substituted time zone still buys an hour, if the child reboots afterwards.** The zone-identity
-  check is the real defence and it holds; what is short-lived is the DST high-water mark it falls
-  back to, which lives in memory and is reset to the install-time offset at every startup. Change
-  the zone and then reboot and the mark never recovers, so in the DST half of the year the trusted
-  clock runs an hour behind true local — a 21:00 curfew fires at 22:00. Measured, not estimated;
-  see `O82` for the table and the three candidate fixes. The two-hour version of this attack, which
-  the offset-only check permitted, is closed.
 - **The certificate expires after 825 days and nothing renews it.** `install` regenerates it, so an
   install that is ever upgraded is fine; one left alone reaches the end and the browser then
   hard-fails, which means the dashboard is the thing that breaks. The dashboard now warns in its

@@ -1414,6 +1414,9 @@ pub async fn run_rules_enforcer(
     let mut last_tick = Instant::now();
     // The last tally bytes we know reached disk — see `save_tally_if_changed`.
     let mut last_saved_tally: Option<String> = None;
+    // And the last clock mark that did — see `save_mark_if_changed`.
+    let mark_path = crate::clock::mark_path();
+    let mut last_saved_mark: Option<crate::clock::Mark> = None;
 
     loop {
         crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Rules, &mut wake).await;
@@ -1464,6 +1467,10 @@ pub async fn run_rules_enforcer(
             )
         };
         let hint = ask_hint(port, lang, curfew_now);
+
+        // The trusted clock's own state, persisted whenever the `clock::now()` above moved it.
+        // Before the stand-down check deliberately — see `save_mark_if_changed`.
+        save_mark_if_changed(crate::clock::mark(), &mark_path, &mut last_saved_mark).await;
 
         let mode = rules.tick_mode();
 
@@ -1838,6 +1845,30 @@ async fn save_tally_if_changed(
     }
 }
 
+/// Persist the trusted clock's high-water mark when it moves — see [`crate::clock::Mark`].
+///
+/// Beside [`save_tally_if_changed`] and shaped like it: compared against the last value known to
+/// have reached disk, written on the blocking pool, and left to retry next tick on failure. Called
+/// before the stand-down check, because the mark is about the machine's clock rather than the
+/// child: a household that pauses for a fortnight across a DST change and then reboots must not
+/// lose the summer.
+async fn save_mark_if_changed(
+    mark: Option<crate::clock::Mark>,
+    path: &std::path::Path,
+    last_saved: &mut Option<crate::clock::Mark>,
+) {
+    let Some(mark) = mark else { return };
+    if *last_saved == Some(mark) {
+        return;
+    }
+    let target = path.to_path_buf();
+    match tokio::task::spawn_blocking(move || crate::clock::save_mark(&target, mark)).await {
+        Ok(Ok(())) => *last_saved = Some(mark),
+        Ok(Err(e)) => tracing::warn!(error = %e, "clock mark save failed"),
+        Err(e) => tracing::error!(error = %e, "clock mark save task panicked"),
+    }
+}
+
 /// Whether the rules enforcer should cancel a pending OS shutdown *it* previously scheduled.
 /// True only on the falling edge of "a budget shutdown is wanted" (e.g. a grant lifted the child
 /// back under budget, or the action changed) AND when curfew isn't itself calling for a shutdown
@@ -2043,6 +2074,44 @@ fn log_transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The clock mark reaches disk when it changes and only then — proved by deleting the file
+    /// between calls, so a rewrite of unchanged bytes would show up as the file coming back.
+    #[tokio::test]
+    async fn the_clock_mark_is_written_when_it_changes_and_not_otherwise() {
+        use crate::clock::{Mark, load_mark};
+        let dir = crate::testutil::ScratchDir::new("rules-clock-mark");
+        let path = dir.join("clock.json");
+        let mut last = None;
+
+        save_mark_if_changed(None, &path, &mut last).await;
+        assert!(!path.exists(), "no anchor, no file");
+
+        let winter = Mark {
+            anchor_mins: 60,
+            high_water_mins: 60,
+        };
+        save_mark_if_changed(Some(winter), &path, &mut last).await;
+        assert_eq!(load_mark(&path), Some(winter));
+
+        std::fs::remove_file(&path).unwrap();
+        save_mark_if_changed(Some(winter), &path, &mut last).await;
+        assert!(
+            !path.exists(),
+            "unchanged bytes are not rewritten every thirty seconds"
+        );
+
+        let summer = Mark {
+            high_water_mins: 120,
+            ..winter
+        };
+        save_mark_if_changed(Some(summer), &path, &mut last).await;
+        assert_eq!(
+            load_mark(&path),
+            Some(summer),
+            "a raised mark is written at once"
+        );
+    }
 
     fn proc(pid: u32, name: &str) -> RunningProcess {
         RunningProcess {

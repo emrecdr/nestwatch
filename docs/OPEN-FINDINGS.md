@@ -1475,52 +1475,6 @@ bundled into a protocol decision.
 **Trigger.** Any report of the dashboard becoming slow or unreachable while the PC is otherwise
 healthy, or any work that puts this service anywhere other than a home LAN.
 
-### O82 · The DST high-water mark does not survive a reboot, so tamper resistance loses an hour
-
-**The mechanism is right and its memory is too short.** `clock::decide` catches a substituted time
-zone by comparing the zone *identity* rather than the offset, which is correct and is the whole
-point of the module. What it falls back to when the identity differs is
-`high_water.max(anchor)` — and `HIGH_WATER_MINS` is a process-global `AtomicI32` that
-`set_anchor` overwrites with the config's install-time offset at every startup. Nothing persists it.
-
-**The order is what makes it reachable: change the zone, *then* reboot.** After the reboot the zone
-is still changed, so the identity never matches again, so the mark is never re-seeded from the OS
-and stays at the install-time anchor for the life of the install. Both steps are free — changing
-the time zone raises no UAC prompt (`SeTimeZonePrivilege` is granted to Users), and a child owns
-the console.
-
-Measured against the real decision table. Installed at `+60` in winter, true local `+120` in
-summer, child selects `UTC`:
-
-| | fallback offset | error vs true local |
-|---|---|---|
-| service kept running through the DST change | `+120` | 0 min |
-| after a reboot | `+60` | **60 min** |
-
-A trusted clock an hour *behind* true local makes a **21:00 curfew fire at 22:00**, every night of
-the half-year DST is in force. That is half of the two hours this module's own header says the
-identity check closed, and `HIGH_WATER_MINS`' doc claimed outright that the fallback was "correct
-rather than merely bounded" — corrected in place, because the claim was the more dangerous half.
-
-**Why it is not fixed here.** Three candidate fixes, and choosing between them is a design decision
-in the highest-consequence code in the project — the one that decides when a child's PC turns off:
-
-* **Persist the mark.** Honest and complete. `config.json` is the natural home beside
-  `tz_offset_mins`, but `clock::now()` is synchronous, has no `AppState`, and is called from pure
-  helpers — so the write has to happen somewhere else that already owns a safe path. The enforcer's
-  `usage_state.json` sidecar is written atomically every tick and is the one candidate that needs
-  no new lock, at the cost of putting clock state in the tally file.
-* **Assume maximum DST excursion on the tamper branch** (`anchor + MAX_DRIFT_MINS`). No persistence
-  at all, and never fails open. It over-enforces by an hour in winter, which is defensible against a
-  child who chose to tamper and is *not* defensible against a household that genuinely moved and has
-  not re-anchored — the case `POST /api/re-anchor` exists for.
-* **Ask Windows for the recorded zone's current offset** via `GetTimeZoneInformationForYear`. The
-  only one that is exactly right in both seasons, and the only one needing new FFI and a stored
-  `DYNAMIC_TIME_ZONE_INFORMATION` rather than an opaque key name.
-
-**Trigger.** Any work on `clock.rs`, or the first parent who reports bedtime drifting by exactly an
-hour in summer.
-
 ### O83 · The phone app cannot say which routine is running
 
 > **Cross-repo** · pairs with `nestwatch-mobile`

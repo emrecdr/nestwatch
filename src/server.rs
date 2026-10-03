@@ -202,6 +202,11 @@ pub async fn serve_with_handle(
         // Order matters only in that both must be in place before the first tick; the zone is the
         // half that actually detects a substituted timezone, the offset the half that answers it.
         crate::clock::set_anchor_zone(cfg.tz_zone.clone());
+        // And the high-water mark the enforcer last wrote beside that anchor, so a zone changed
+        // before a reboot cannot leave the fallback an hour behind true local all summer.
+        if let Some(mark) = crate::clock::load_mark(&crate::clock::mark_path()) {
+            crate::clock::restore(mark);
+        }
     }
 
     let port = crate::state::recover_read(&state.config).port;

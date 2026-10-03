@@ -34,7 +34,8 @@
 //!   because Windows is applying the real rules for the recorded zone. No window, no slack.
 //! - **Identity differs** — the zone was changed under us. Fall back to UTC plus the highest offset
 //!   seen while the identity still matched, which tracks the genuine DST excursion instead of
-//!   freezing at the install-time offset.
+//!   freezing at the install-time offset. That mark is written beside its anchor by the enforcer
+//!   tick and read back at startup, so a reboot does not forget the summer.
 //! - **Identity unavailable** (non-Windows, or a config written before this) — the offset tolerance
 //!   above, unchanged, so nothing regresses.
 //!
@@ -44,10 +45,12 @@
 //! With no anchor recorded (a config from before this existed, or dev runs) it degrades to plain
 //! local time — the previous behavior — rather than guessing.
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, Offset, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Sentinel for "no anchor recorded" — a real offset is within ±14h of UTC.
 const UNSET: i32 = i32::MIN;
@@ -79,27 +82,25 @@ static ANCHOR_ZONE: Mutex<Option<String>> = Mutex::new(None);
 /// A child cannot raise it usefully: raising the offset brings curfew forward, and lowering it
 /// requires changing the zone, which is the thing that stops the mark being updated at all.
 ///
-/// # It is in memory only, and that is a real limit rather than a detail — see `O82`
+/// # Persisted beside its anchor, so a reboot does not forget the summer
 ///
-/// This used to claim it "makes the tamper fallback correct rather than merely bounded". **That is
-/// true only within one process lifetime.** [`set_anchor`] writes the config's install-time offset
-/// into this on every startup, and nothing persists it, so a restart discards whatever DST
-/// excursion had been observed.
-///
-/// The order that matters is *change the zone, then reboot*. After the reboot the zone is still
-/// changed, so the identity never matches again, so the mark is never re-seeded from the OS and
-/// stays at the install-time anchor. Measured against this decision table: installed at `+60` in
-/// winter, true local `+120` in summer, child on `UTC` —
+/// This lived in memory only, and that was a real limit rather than a detail (was `O82`):
+/// [`set_anchor`] seeds it from the config's install-time offset at every startup, and the order
+/// *change the zone, then reboot* meant the identity never matched again afterwards, so the mark
+/// was never re-seeded from the OS and stayed at the install-time anchor for the life of the
+/// install. Measured: installed at `+60` in winter, true local `+120` in summer, child on `UTC` —
 ///
 /// | | fallback offset | error against true local |
 /// |---|---|---|
 /// | service kept running | `+120` | 0 min |
-/// | after a reboot | `+60` | **60 min** |
+/// | after a reboot, mark in memory only | `+60` | **60 min** |
+/// | after a reboot, mark restored from disk | `+120` | 0 min |
 ///
 /// A trusted clock an hour *behind* true local makes a 21:00 curfew fire at 22:00, every night of
 /// the half-year DST is in force, for the price of a settings change and a reboot — neither of
-/// which needs a prompt. That is half of the two hours this module was written to close, and the
-/// paragraph above used to imply it was closed entirely.
+/// which needs a prompt. The enforcer tick now writes the mark as a [`Mark`] whenever it moves,
+/// and startup applies it back through [`restore`] when the anchor it was measured under is still
+/// the anchor in force.
 static HIGH_WATER_MINS: AtomicI32 = AtomicI32::new(UNSET);
 
 /// Record the trusted offset (called at startup from the saved config).
@@ -111,6 +112,62 @@ pub fn set_anchor(offset_mins: i32) {
 /// Record the trusted zone identity (called at startup from the saved config, beside the anchor).
 pub fn set_anchor_zone(zone: Option<String>) {
     *ANCHOR_ZONE.lock().unwrap_or_else(|p| p.into_inner()) = zone;
+}
+
+/// Furthest any real zone is from UTC. A persisted mark beyond it is a corrupt file, not a reading.
+const MAX_OFFSET_MINS: i32 = 14 * 60;
+
+/// The high-water mark, recorded beside the anchor it was measured under — what the enforcer tick
+/// writes to [`mark_path`] and startup reads back.
+///
+/// The anchor travels with it because a mark is only meaningful against its own anchor: a family
+/// that moves house and re-anchors (`POST /api/re-anchor`, or a reinstall) must not have the old
+/// home's summer restored over the new anchor. [`restore`] applies a mark only when the anchors
+/// agree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mark {
+    pub anchor_mins: i32,
+    pub high_water_mins: i32,
+}
+
+/// The current mark, or `None` with no anchor in force — then there is nothing to persist.
+pub fn mark() -> Option<Mark> {
+    let anchor_mins = ANCHOR_MINS.load(Ordering::Relaxed);
+    (anchor_mins != UNSET).then(|| Mark {
+        anchor_mins,
+        high_water_mins: HIGH_WATER_MINS.load(Ordering::Relaxed).max(anchor_mins),
+    })
+}
+
+/// Apply a mark read back from disk: raise the high-water mark to it, and only that.
+///
+/// Three refusals, each pinned by a test: a mark from a different anchor is another install's —
+/// or another home's — reading; a mark below the current one would lower what only ever moves
+/// up; and a mark past any real offset is a corrupt file. None is an error. The mark then stays
+/// where [`set_anchor`] put it, which is exactly what every startup did before persistence.
+pub fn restore(mark: Mark) {
+    let anchor = ANCHOR_MINS.load(Ordering::Relaxed);
+    if anchor == UNSET || mark.anchor_mins != anchor || mark.high_water_mins.abs() > MAX_OFFSET_MINS
+    {
+        return;
+    }
+    HIGH_WATER_MINS.fetch_max(mark.high_water_mins, Ordering::Relaxed);
+}
+
+/// Where the mark lives: in the data directory, beside the tally the same tick writes.
+pub fn mark_path() -> PathBuf {
+    crate::config::data_paths().dir.join("clock.json")
+}
+
+/// The mark on disk, or `None` for a missing or unreadable file — never a guess.
+pub fn load_mark(path: &Path) -> Option<Mark> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// Write the mark atomically, the way the config and the tally are written.
+pub fn save_mark(path: &Path, mark: Mark) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(&mark).map_err(std::io::Error::other)?;
+    crate::config::write_atomic(path, &bytes)
 }
 
 /// The machine's time-zone **identity** — which zone it is set to, not what offset that implies.
@@ -660,5 +717,118 @@ mod tests {
         let _g = guard();
         set_anchor(WINTER);
         assert_eq!(HIGH_WATER_MINS.load(Ordering::Relaxed), WINTER);
+    }
+
+    /// `O82`'s table, closed. A zone changed *before* a reboot never matches again afterwards, so
+    /// the mark was never re-seeded from the OS and the fallback sat at the install-time offset for
+    /// the life of the install: an hour behind true local time every night of the summer.
+    #[test]
+    fn the_mark_persisted_before_a_reboot_keeps_the_summer_offset_after_it() {
+        let _g = guard();
+        // Summer, zone honest: a vouched reading moved the mark to +120, and the tick saved it.
+        set_anchor(WINTER);
+        HIGH_WATER_MINS.store(SUMMER, Ordering::Relaxed);
+        let saved = mark().expect("an anchored install has a mark");
+        assert_eq!(
+            saved,
+            Mark {
+                anchor_mins: WINTER,
+                high_water_mins: SUMMER,
+            }
+        );
+
+        // Reboot: the process starts from the config's anchor again, and the child has chosen UTC.
+        set_anchor(WINTER);
+        let fallback = || {
+            decide(
+                WINTER,
+                0,
+                Some(HOME),
+                Some("UTC"),
+                HIGH_WATER_MINS.load(Ordering::Relaxed),
+            )
+        };
+        assert_eq!(
+            fallback(),
+            Trust::Anchored(WINTER),
+            "without the mark, the table's second row: an hour behind all summer"
+        );
+        restore(saved);
+        assert_eq!(
+            fallback(),
+            Trust::Anchored(SUMMER),
+            "with it, the first row: exact"
+        );
+    }
+
+    /// A mark belongs to the anchor it was measured under. A family that moves house and
+    /// re-anchors must not have the old home's summer restored over the new anchor, and nothing a
+    /// file says may lower the mark or push it past any real offset.
+    #[test]
+    fn a_mark_is_restored_only_for_its_own_anchor_and_only_upwards() {
+        let _g = guard();
+        set_anchor(WINTER);
+        restore(Mark {
+            anchor_mins: SUMMER,
+            high_water_mins: 180,
+        });
+        assert_eq!(
+            HIGH_WATER_MINS.load(Ordering::Relaxed),
+            WINTER,
+            "another anchor's mark is not ours"
+        );
+        restore(Mark {
+            anchor_mins: WINTER,
+            high_water_mins: 0,
+        });
+        assert_eq!(
+            HIGH_WATER_MINS.load(Ordering::Relaxed),
+            WINTER,
+            "a mark never lowers"
+        );
+        restore(Mark {
+            anchor_mins: WINTER,
+            high_water_mins: 15 * 60,
+        });
+        assert_eq!(
+            HIGH_WATER_MINS.load(Ordering::Relaxed),
+            WINTER,
+            "no real zone is fifteen hours from UTC"
+        );
+        restore(Mark {
+            anchor_mins: WINTER,
+            high_water_mins: SUMMER,
+        });
+        assert_eq!(HIGH_WATER_MINS.load(Ordering::Relaxed), SUMMER);
+    }
+
+    /// Without an anchor there is nothing to persist, and nothing a file says is applied.
+    #[test]
+    fn an_unanchored_install_has_no_mark_and_restores_none() {
+        let _g = guard();
+        ANCHOR_MINS.store(UNSET, Ordering::Relaxed);
+        HIGH_WATER_MINS.store(UNSET, Ordering::Relaxed);
+        assert_eq!(mark(), None);
+        restore(Mark {
+            anchor_mins: WINTER,
+            high_water_mins: SUMMER,
+        });
+        assert_eq!(HIGH_WATER_MINS.load(Ordering::Relaxed), UNSET);
+    }
+
+    /// The file round-trips, and anything else on disk is no mark — never a guess.
+    #[test]
+    fn a_mark_round_trips_through_its_file_and_garbage_is_no_mark() {
+        let dir = crate::testutil::ScratchDir::new("clock-mark");
+        let path = dir.join("clock.json");
+        assert_eq!(load_mark(&path), None, "no file is no mark");
+        let m = Mark {
+            anchor_mins: WINTER,
+            high_water_mins: SUMMER,
+        };
+        save_mark(&path, m).unwrap();
+        assert_eq!(load_mark(&path), Some(m));
+        std::fs::write(&path, b"{\"anchor_mins\": \"sixty\"}").unwrap();
+        assert_eq!(load_mark(&path), None, "an unreadable mark is no mark");
     }
 }

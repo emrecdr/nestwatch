@@ -140,6 +140,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   a code were English whatever language the dashboard was set to — the four dialogs being the
   destructive actions where you most need to read what you are agreeing to. The guard that keeps
   dashboard text translated now covers those call shapes too, so they cannot slip back.
+- **Changing the time zone and then rebooting no longer moves bedtime an hour later all summer.**
+  The trusted clock answers a changed zone with the highest offset it saw while the zone was still
+  honest, so summer time is exact rather than frozen at the install-time offset — but that reading
+  lived only in memory, and a reboot forgot it. Change the zone, reboot, and for the rest of the
+  summer a 21:00 bedtime fired at 22:00, from a settings page that needs no administrator. The
+  reading is now written to disk beside the offset it belongs to and read back at startup.
 
 
 ## [0.9.0] — 2026-09-11
