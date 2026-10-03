@@ -91,6 +91,16 @@ async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
     };
     assert!(stored().is_none(), "no extension before one is granted");
 
+    // ---- Phase 0: nothing to undo is an answer, not an error ---------------------------------
+    let (status, body) = post(&app, "/api/curfew/extend/undo", &cookie, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({ "ok": false, "reason": "no_extension" }),
+        "with no extension running the undo says so and changes nothing"
+    );
+    assert!(stored().is_none());
+
     // ---- Phase 1: granting one records an instant -------------------------------------------
     let (status, body) = post(&app, "/api/curfew/extend", &cookie, json!({"minutes": 30})).await;
     assert_eq!(status, StatusCode::OK);
@@ -149,6 +159,35 @@ async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
         stored(),
         Some(second),
         "a refused extension must leave the running one exactly as it was"
+    );
+
+    // ---- Phase 4b: the way back — never sooner than the warning the child would have had ------
+    // The parent meant +15 and pressed +30 twice. "Back to normal" does not drop bedtime on the
+    // child this instant: the extension is shortened to fifteen minutes from now, which is exactly
+    // the lookahead the bedtime countdown speaks from, so he still hears "bedtime in 15 minutes"
+    // (`O74`, middle option). It never lengthens an extension, and pressing it again changes nothing.
+    let now = nestwatch::clock::now();
+    let (status, body) = post(&app, "/api/curfew/extend/undo", &cookie, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true, "{body}");
+    assert!(
+        body["until"].as_str().is_some_and(|s| s.contains(':')),
+        "the parent is told when bedtime now falls: {body}"
+    );
+    let shortened = stored().expect("still an extension, just a shorter one");
+    let left = (shortened - now).num_seconds();
+    assert!(
+        (14 * 60..=15 * 60).contains(&left),
+        "undone to fifteen minutes from now, got {left}s"
+    );
+    assert!(shortened < second, "and it is shorter than what it undid");
+    let (status, body) = post(&app, "/api/curfew/extend/undo", &cookie, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true, "{body}");
+    assert_eq!(
+        stored(),
+        Some(shortened),
+        "pressing it again neither lengthens nor shortens: fifteen minutes is the floor"
     );
 
     // ---- Phase 5: the mirror of the curfew note, on the button built to answer it -------------

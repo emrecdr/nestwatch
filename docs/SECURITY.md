@@ -281,10 +281,10 @@ open the door on its own.
   - The origin check exists because the first two leave a real hole. A "site" is scheme +
     registrable domain and **excludes the port**, so a page served over HTTPS from another port on
     this same machine is *same-site* and the browser attaches the parent's session cookie to it.
-    **10 `/api` endpoints take no JSON body** — `/lock`, `/re-anchor`, `/shutdown`, `.../kill`,
-    `.../approve`, `.../deny`, `.../apply`, `/routines/{name}/delete`,
-    `/providers/{name}/delete` and `/sessions/{handle}/revoke` — so nothing forces a preflight
-    for them and a plain HTML form reaches them. (Counted from the router and the handler
+    **11 `/api` endpoints take no JSON body** — `/lock`, `/re-anchor`, `/shutdown`, `.../kill`,
+    `.../approve`, `.../deny`, `.../apply`, `/routines/{name}/delete`, `/providers/{name}/delete`,
+    `/sessions/{handle}/revoke` and `/curfew/extend/undo` — so nothing forces a preflight for
+    them and a plain HTML form reaches them. (Counted from the router and the handler
     signatures, not by hand: it read *seven* from 2026-08-19 until 2026-09-04 and drifted three
     times in between, once per route added, each time with the whole suite green.
     `tests/doc_claims.rs` now fails when it drifts again.) The child has an account on this PC

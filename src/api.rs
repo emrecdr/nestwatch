@@ -801,6 +801,38 @@ pub async fn extend_curfew(
     })))
 }
 
+/// `POST /api/curfew/extend/undo` → take tonight's extension back, leaving the warning the child
+/// would have had.
+///
+/// The way back `extend_curfew` lacked (`O74`): saving the curfew form and switching curfew off and
+/// on both deliberately preserve the extension, so a parent who meant +15 and pressed +60 had no
+/// route out short of editing `config.json`. Of the three shapes that entry weighs this is the
+/// middle one — see [`crate::curfew::Curfew::undo_extension`] for the floor and why it is there.
+/// An undo rather than a confirmation on every press, because the common case is the parent who
+/// meant it, and a speed bump there protects the rare case at the common one's expense.
+///
+/// `200 {"ok": false, "reason": "no_extension"}` when nothing is running: an answer, not an error,
+/// in the shape the grant refusals use.
+pub async fn undo_curfew_extension(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let now = crate::clock::now();
+    let mut until = None;
+    update_config(&state, |c| {
+        until = c.curfew.undo_extension(now);
+    })
+    .await?;
+    let Some(until) = until else {
+        return Ok(Json(json!({ "ok": false, "reason": "no_extension" })));
+    };
+    let until_local = until.format("%H:%M").to_string();
+    state
+        .audit
+        .record("curfew_extension_undone", json!({ "until": until_local }));
+    state
+        .usage
+        .record("curfew_extension_undone", json!({ "until": until_local }));
+    Ok(Json(json!({ "ok": true, "until": until_local })))
+}
+
 /// What a parent should be told about a grant of `minutes` they have just made, given the curfew.
 ///
 /// `None` when the grant will do what it looks like it does. Otherwise a plain sentence naming

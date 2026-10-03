@@ -397,6 +397,9 @@ const UI = {
     tClosedApp: "Closed {}",
     tCouldNotCloseApp: "Could not close {}",
     tBedtimePushedBack: "Bedtime pushed back {} min",
+    backToNormalBedtime: "Back to normal",
+    tBedtimeBackToNormal: "Bedtime is back to normal — he still gets the fifteen-minute warning.",
+    tCouldNotUndoBedtime: "Could not take the later bedtime back",
     tGrantedMinutes: "Granted +{} min",
     tCodeWorth: "Code {} = {} min",
     tChildPageIsNow: "The child's page is now {}.",
@@ -673,6 +676,9 @@ const UI = {
     tClosedApp: "{} gesloten",
     tCouldNotCloseApp: "Kon {} niet sluiten",
     tBedtimePushedBack: "Bedtijd {} min later",
+    backToNormalBedtime: "Terug naar normaal",
+    tBedtimeBackToNormal: "Bedtijd is weer normaal — hij krijgt nog steeds de waarschuwing van vijftien minuten.",
+    tCouldNotUndoBedtime: "Kon de latere bedtijd niet terugdraaien",
     tGrantedMinutes: "+{} min toegekend",
     tCodeWorth: "Code {} = {} min",
     tChildPageIsNow: "De pagina van je kind is nu {}.",
@@ -953,6 +959,9 @@ const UI = {
     tClosedApp: "{} kapatıldı",
     tCouldNotCloseApp: "{} kapatılamadı",
     tBedtimePushedBack: "Yatma vakti {} dk ertelendi",
+    backToNormalBedtime: "Normale dön",
+    tBedtimeBackToNormal: "Yatma vakti yeniden normal — on beş dakikalık uyarıyı yine alacak.",
+    tCouldNotUndoBedtime: "Daha geç yatma geri alınamadı",
     tGrantedMinutes: "+{} dk verildi",
     tCodeWorth: "Kod {} = {} dk",
     tChildPageIsNow: "Çocuğun sayfası artık {}.",
@@ -3710,6 +3719,28 @@ function app() {
         } else {
           this.toast(this.t("tCouldNotExtendBedtime"), "error");
         }
+      } catch {
+        this.toast(this.t("tRequestFailed"), "error");
+      } finally {
+        this.extendingCurfew = false;
+      }
+    },
+
+    // Take tonight's extension back — to fifteen minutes from now at the earliest, so he still
+    // gets the bedtime warning he would have had (`api::undo_curfew_extension`). The button is
+    // shown only while an extension runs, which is the undo shape rather than a confirm on every
+    // +15: the common case is the parent who meant it.
+    async undoCurfewExtension() {
+      this.extendingCurfew = true;
+      try {
+        const r = await this.postJSON("/api/curfew/extend/undo", {});
+        const j = r.ok ? await r.json().catch(() => ({})) : {};
+        if (r.ok && j.ok) {
+          this.toast(this.t("tBedtimeBackToNormal"), "success");
+        } else {
+          this.toast(this.t("tCouldNotUndoBedtime"), "error");
+        }
+        this.loadCurfew();
       } catch {
         this.toast(this.t("tRequestFailed"), "error");
       } finally {

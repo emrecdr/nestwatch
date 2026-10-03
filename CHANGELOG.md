@@ -79,6 +79,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   installer, a copy on a USB stick, an old install folder — the older build keeps the newer one's
   settings rather than losing them, and until now said nothing about it. `doctor` warns, naming
   both versions, and the service logs the same line when it starts.
+- **A later bedtime can be taken back.** *Later bedtime tonight* had +15, +30 and +60 and no way
+  back: a parent who meant +15 and pressed +60 could only edit the settings file by hand, because
+  saving the Curfew card deliberately keeps tonight's extension. While an extension is running the
+  card now shows **Back to normal**. It does not drop bedtime on him that instant — the extension is
+  shortened to fifteen minutes from now, so he still gets the same *bedtime in 15 minutes* warning
+  he would have had — and pressing it again changes nothing.
 
 ### Changed
 

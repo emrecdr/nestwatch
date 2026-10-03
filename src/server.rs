@@ -105,6 +105,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/message", post(api::send_message))
         .route("/curfew", get(api::get_curfew).post(api::set_curfew))
         .route("/curfew/extend", post(api::extend_curfew))
+        .route("/curfew/extend/undo", post(api::undo_curfew_extension))
         .route("/audit", get(api::audit))
         .route("/usage", get(api::usage))
         .route("/usage/today", get(api::usage_today))

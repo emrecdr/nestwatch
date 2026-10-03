@@ -177,6 +177,21 @@ impl Curfew {
         (1..=LOOKAHEAD_MINS).find(|&m| self.is_active_at(now + TimeDelta::minutes(m.into())))
     }
 
+    /// Take a running extension back — to no sooner than [`LOOKAHEAD_MINS`] from `now`.
+    ///
+    /// The floor is what keeps an undo from becoming an ambush. An extension already announced is a
+    /// promise the child has arranged his evening around; shortened to the countdown's own horizon
+    /// he still hears "bedtime in 15 minutes" exactly as he would have without it
+    /// ([`Curfew::mins_until_active`] sees the first threshold at once). Never lengthens — an
+    /// extension already inside the floor is left as it is — and answers `None` when nothing is
+    /// running, a spent extension included, so the caller can say so rather than invent a field.
+    pub fn undo_extension(&mut self, now: DateTime<FixedOffset>) -> Option<DateTime<FixedOffset>> {
+        let until = self.extra_until.filter(|&t| t > now)?;
+        let shortened = until.min(now + TimeDelta::minutes(LOOKAHEAD_MINS.into()));
+        self.extra_until = Some(shortened);
+        Some(shortened)
+    }
+
     /// How soon a grant of `minutes` made at `now` runs into a closed window — `None` when curfew
     /// will not interrupt it at all, and `Some(0)` when the window is **already open**.
     ///
@@ -834,6 +849,54 @@ mod tests {
             "at the instant, bedtime is back"
         );
         assert!(c.is_active_at(at(2026, 8, 29, 23, 0)), "and after it");
+    }
+
+    /// The way back from an extension, and the floor under it (`O74`): shortened to the bedtime
+    /// countdown's lookahead, so the child keeps the "bedtime in 15 minutes" he would have had;
+    /// never lengthened; and nothing to do once it has run out or never was.
+    #[test]
+    fn undoing_an_extension_leaves_the_warning_the_child_would_have_had() {
+        let now = at(2026, 8, 29, 22, 5);
+        let mut c = Curfew {
+            extra_until: Some(at(2026, 8, 29, 23, 0)),
+            ..nightly("22:00", "07:00")
+        };
+        assert_eq!(
+            c.undo_extension(now),
+            Some(at(2026, 8, 29, 22, 20)),
+            "an hour becomes fifteen minutes from now"
+        );
+        assert_eq!(c.extra_until, Some(at(2026, 8, 29, 22, 20)));
+        assert!(!c.is_active_at(at(2026, 8, 29, 22, 19)));
+        assert!(c.is_active_at(at(2026, 8, 29, 22, 20)));
+        assert_eq!(
+            c.mins_until_active(now),
+            Some(15),
+            "and the countdown sees the first threshold at once"
+        );
+        // Pressing it again changes nothing: fifteen minutes is the floor, not a step.
+        assert_eq!(c.undo_extension(now), Some(at(2026, 8, 29, 22, 20)));
+
+        // An extension already shorter than the floor is left alone — undo never lengthens.
+        let mut short = Curfew {
+            extra_until: Some(at(2026, 8, 29, 22, 10)),
+            ..nightly("22:00", "07:00")
+        };
+        assert_eq!(short.undo_extension(now), Some(at(2026, 8, 29, 22, 10)));
+
+        // Nothing running: nothing to undo, and no field is invented to say so.
+        let mut none = nightly("22:00", "07:00");
+        assert_eq!(none.undo_extension(now), None);
+        assert_eq!(none.extra_until, None);
+        let mut spent = Curfew {
+            extra_until: Some(at(2026, 8, 29, 21, 0)),
+            ..nightly("22:00", "07:00")
+        };
+        assert_eq!(
+            spent.undo_extension(now),
+            None,
+            "a spent extension is already nothing"
+        );
     }
 
     /// **The reason this is an absolute instant and not `date + minutes`.**

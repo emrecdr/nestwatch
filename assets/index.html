@@ -497,6 +497,14 @@
                 <button class="btn btn-outline btn-sm" @click="extendCurfew(60)" :disabled="extendingCurfew">+60</button>
                 <span class="text-xs opacity-70" x-show="curfewUntil" x-cloak
                       x-text="curfewUntilLabel()"></span>
+                <!-- The way back, shown only while an extension runs. `btn-ghost` beside the
+                     outlined grants: it takes something away rather than granting it, and it is
+                     not the card's primary action either. It shortens the extension to fifteen
+                     minutes from now rather than ending it this instant, so he still gets the
+                     bedtime warning — see `api::undo_curfew_extension`. -->
+                <button class="btn btn-ghost btn-sm" x-show="curfewUntil" x-cloak
+                        @click="undoCurfewExtension()" :disabled="extendingCurfew"
+                        x-text="t('backToNormalBedtime')"></button>
               </div>
 
               <div class="mt-3 flex flex-wrap items-end gap-3">
