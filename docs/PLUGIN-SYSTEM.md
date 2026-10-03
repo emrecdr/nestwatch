@@ -617,6 +617,89 @@ good the signal is, not whether the mechanism works.
 `WINDOWS-TESTING.md` §H8. (The scheduler had no heartbeat either, which is closed below — *The
 loop that says nothing when it dies*.)
 
+## Writing a check program — the contract, 2026-10-03
+
+Everything above was built around one provider, and the probe's rules were scattered across the
+code that enforces them. This is the whole contract in one place, so a household can point *Check
+from this PC* at a program of its own — for a reading app, a music practice log, anything that can
+say how much was done today — without reading `probe.rs`. Every number here is the code's; the
+file names the constant beside it.
+
+**Where it lives.** On Windows, in the program directory, `C:\Program Files\HostHealth\` — the one
+directory the child can execute from and cannot write to (SYSTEM and Administrators full, Users
+read-and-execute; `probe::probe_dir`). On a dev machine, `probes/` inside the data directory. The
+parent types only the **file name** under *Check from this PC*: 1–64 characters of letters, digits,
+`.`, `_` and `-`, not starting with a dot, no path separators (`Probe::validate`,
+`MAX_PROBE_NAME`). A name is joined to that directory and must not be able to leave it.
+
+**When it runs.** Every *N* minutes, 5–240 (`every_mins`), while the child is signed in and the
+session is active — never at a lock screen or an empty chair. Not before the day's screen time has
+reached the settling period, 0–240 minutes (`first_check_after_mins`), measured in the tally the
+child cannot reset. And not again once there is nothing a check could change: a provider paid in
+full for the day, or a gate already opened (`Provider::exhausted_for`). A restart forgets when the
+last check was, so the first tick after one runs every due probe.
+
+**How it is run.** As the child, inside his session (`session::run_probe_in_session` on Windows,
+an ordinary child process elsewhere). It gets **stdin**: the secret the paired app deposited with
+`POST /api/providers/{name}/secret` — at most 8 KiB (`MAX_SECRET_BYTES`), a session token for most
+apps — or nothing at all if none was deposited. It gets no arguments. On Windows its environment
+is the child's own, as any program he starts would have; **stderr** goes nowhere.
+
+**What it must answer.** On **stdout**, one JSON object:
+
+```json
+{"questions": 12, "minutes": 25}
+```
+
+Both non-negative integers, both **today's totals** — not since the last check — because the
+registry compares them against tiers and the gate's bar as totals (`Config::judge`). Unknown
+fields are ignored, so a newer program may say more; anything else is refused rather than coerced,
+because the writer runs as the child (`probe::parse_output`). Then **exit 0**.
+
+**Bounds.** 60 seconds from start to exit, output included (`control::PROBE_TIMEOUT`); more than
+4 KiB of output is refused (`MAX_PROBE_OUTPUT`); a non-zero exit is a failed check whatever was
+printed; a program that prints a good answer and then hangs is refused with it.
+
+**What a failed check does.** It is recorded and shown — the integration's line on the dashboard
+and `nestwatch doctor` both say so — and it **lifts a gate** rather than holding it shut: *we
+cannot tell* is not *he has not practised*, and a crashed check must not cost a child his day
+(`probe::providers_not_checking`). The cost of that rule, that a child who can break the check can
+open the gate, is weighed above under *A gate is a ceiling, not a budget*. A check that works
+again binds the gate at the enforcer's next tick, within half a minute.
+
+**What a good answer does.** Exactly what a push from the app does: the registry judges the
+counts, pays a rung or opens the gate, and the child hears about it on his own screen in the
+household's language — the same sentences, through the same function (`probe::tell_child`).
+
+**The smallest program that meets the contract**, in Rust because this repository already has the
+toolchain; any language that can read stdin and print a line will do:
+
+```rust
+use std::io::Read;
+
+fn main() {
+    // The deposited secret, if the paired app left one. Empty is not an error.
+    let mut secret = String::new();
+    std::io::stdin().read_to_string(&mut secret).unwrap_or(0);
+
+    // Ask your app what was done today. On any failure, say nothing and exit non-zero:
+    // nestwatch records a failed check, and a gate behind it is lifted rather than held.
+    let Ok((questions, minutes)) = todays_totals(secret.trim()) else {
+        std::process::exit(1);
+    };
+    println!("{{\"questions\": {questions}, \"minutes\": {minutes}}}");
+}
+
+/// Today's totals from your app — the one function that is yours to write.
+fn todays_totals(_secret: &str) -> Result<(u32, u32), String> {
+    Err("not written yet".into())
+}
+```
+
+Build it with `rustc probe.rs -o my-app-check.exe`, copy it into the program directory from an
+elevated console, and type `my-app-check.exe` under *Check from this PC*. The first check lands
+within a minute of the child's next sign-in, and its result is on the integration's line.
+
 ## The gate says something — 2026-09-09
 
 `O101`, closed the same day it was filed. The probe granted and refused in silence, so the child's
