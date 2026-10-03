@@ -1,0 +1,69 @@
+name: mutants-weekly
+
+# The whole crate's mutants, once a week, in shards.
+#
+# `ci.yml`'s `mutants` job tests the mutants a push introduces, inside a 30-minute budget. That is
+# the right scope for a push of one commit and the wrong one for anything larger: measured at
+# 66.5 s per viable mutant on these runners, the budget holds about 23 of them, so a feature of any
+# size times out and the newest code is the least checked (`docs/OPEN-FINDINGS.md`, `O103`). A
+# manual run of the backlog on 2026-09-29 found 19 survivors — 17 were real test gaps and two were
+# bugs. This makes that run routine.
+#
+# Its own workflow rather than a job in `ci.yml`, because `ci.yml` cancels an in-progress run on the
+# same ref when a new push arrives (`concurrency.cancel-in-progress`). A Monday-morning push would
+# cancel the hour-long run this file exists for; a separate workflow has its own concurrency group,
+# and here nothing cancels anything.
+#
+# 2,293 mutants at HEAD (`cargo mutants --list | wc -l`, 2026-10-03). 32 shards come to 61–72
+# mutants each — roughly an hour a shard after the baseline, inside the budget below with room for
+# a few mutants that time out. The repository is public, so the runner minutes are free. A survivor
+# is a FAILED shard, never a cancelled one, which is the grey outcome `O103` warns about; and every
+# shard uploads its `mutants.out`, so a red shard is read from its artifact rather than re-run.
+#
+# `--shard k/n` is cargo-mutants' own partition of the unshuffled list, so the 32 slices together
+# are the whole list (summed locally: 2,293). Keep `--no-shuffle`, or the slices move between runs.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC, an hour after ci.yml's weekly run
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  mutants-weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    strategy:
+      # One shard's survivor says nothing about another's; let them all report.
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+    steps:
+      - uses: actions/checkout@v7
+      # The toolchain is pinned by `rust-toolchain.toml`; this action only makes `cargo` available.
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
+      # `--in-place` builds into the ordinary `./target`, which is what this action saves, and
+      # every shard pays a full baseline build before its first mutant. Keyed per job, so a shard
+      # warms from its own previous week.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Pinned to a commit because this action downloads and executes binaries, and the tool is
+      # version-pinned too, so a cargo-mutants release cannot change what this gate accepts
+      # without a commit here. Same pins as `ci.yml`; keep them moving together.
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+        with:
+          tool: cargo-mutants@27.1.0
+      # The baseline runs the WHOLE suite, and `web::tests::every_class_*` read `assets/app.css`,
+      # which is generated and gitignored. Without this every mutant is reported unviable.
+      - uses: ./.github/actions/frontend-css
+      - name: Test shard ${{ matrix.shard }} of 32
+        run: cargo mutants --no-shuffle -vV --in-place --shard ${{ matrix.shard }}/32
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-weekly-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore

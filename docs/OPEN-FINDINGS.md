@@ -1944,93 +1944,37 @@ must never reach a log that is not the audit log. Whoever does this has to choos
 deliberately rather than adopt a default formatter, which is a decision about a family's privacy and
 not a plumbing task.
 
-### O103 · The mutants job cannot finish a push that carries a backlog, and it fails as *cancelled* rather than red
+### O103 · The in-diff mutants job still dies grey on a large push
 
-`ci.yml`'s `mutants` job carries `timeout-minutes: 30` and tests the mutants **the diff introduces**,
-where the diff for a push is `github.event.before`...`HEAD`. That is the right scope for a push of one
-commit and the wrong scope for a push of twenty-one, because the budget is fixed and the diff is not.
+`ci.yml`'s `mutants` job tests the mutants a push introduces inside `timeout-minutes: 30`. Measured
+on the runners: **66.5 s median per viable mutant** (2026-09-09, from a cancelled job's own
+`mutants.out`), so after the baseline and setup roughly 1,550 s remain — about **23 viable
+mutants** per run. Any single push that generates more times out, and a job killed by
+`timeout-minutes` is recorded as **cancelled**: grey beside five green jobs, the word a reader
+supplies for it being *somebody stopped it*. Observed twice on backlog pushes (2026-09-09, 21
+commits, 77 mutants; 2026-09-11, the fourteen-commit push that carried `v0.9.0`).
 
-**Observed, not predicted.** Run `34334562215` (2026-09-09, the first push since 2026-09-07, carrying
-21 commits): the job started at 09:24:59, reported `Found 77 mutants`, an unmutated baseline of
-53s build + 76s test, an auto-set per-mutant timeout of 384s — and was killed at 09:55:16, exactly
-30m17s in, with `cargo-mutants`, `cargo` and a test binary terminated as orphan processes. It was never going to finish, and no amount of
-caching closes a gap that size.
+**What is no longer open — 2026-10-03.** The backlog half is answered by
+`.github/workflows/mutants-weekly.yml`: the whole crate (2,293 mutants at that date) in 32 shards
+every Monday, each shard a FAILURE on a survivor rather than a cancellation, each uploading its
+`mutants.out`. Whatever the in-diff job cannot finish is covered within a week. Filed because a
+manual run of the same backlog on 2026-09-29 found 19 survivors, 17 of them real test gaps and two
+of them bugs (`ad21b41`, `bcb4a7f`) — the kind of yield that should not depend on somebody running
+it by hand.
 
-**Corrected 2026-09-09, from the cancelled job's own `mutants.out`** — the upload step is
-`if: always()`, so the artifact survived the cancellation. This entry first reasoned from the
-baseline's 129s as though it were the per-mutant cost, which overstates it: the baseline pays a full
-build *and* a full test run, while each mutant after it re-runs only the test phase. The real
-figures, from the 40 mutants that completed before the wall: **66.5s median per viable mutant**
-(mean 59.0s), 2.7s per unviable one, and 130s for the baseline. So 77 mutants is about 75-80
-minutes, not two and a half hours — still 2.5x over the budget, so the conclusion is unchanged and
-the multiplier is now the right one to choose a budget against.
+**What remains.** The in-diff job's own outcome on a large push is still grey, and grey is the
+problem: a check that cannot fail, reported as though it had run. Two options, both cheap, neither
+taken yet because `ci.yml` belongs to whoever is holding it:
 
-Of those 40: 27 caught, 13 unviable, **0 missed and 0 timed out**. Nothing survived among what ran.
+- Make a timeout **fail** rather than cancel (a `timeout` around the cargo-mutants step, or
+  `continue-on-error: false` with an explicit step deadline), so a red run says what happened.
+- Or shard the in-diff job as well (`--shard`), so a fixed slice per push finishes in budget and the
+  rest is left to the weekly run — which now exists to catch it.
 
-**And the cost lands where it hurts most.** The next push, `000c188`, carried the probe feature —
-new code, a new module, and the largest single body of Rust this repository has added in months.
-Its mutants job timed out too, having reached **15 of that diff's mutants: 2 caught, 13 unviable,
-0 missed**. Two mutants of judgement on a feature that generated dozens. So the budget does not
-merely fail to finish; it silently under-covers whatever is newest, which is the code with the
-least other evidence behind it. What actually covers that feature is a local run and the ten
-misses closed by hand from it — none of which CI knows about or would have found.
-
-**The durable fact is not the backlog.** A 21-commit push will not recur once origin is level, but
-the per-mutant cost will: 66.5s on a GitHub runner against the ~24.7s local measurement the
-30-minute budget was set from means **CI is 2.7x slower than the estimate in the comment above the
-job**. After the baseline and setup, roughly 1,550s remain, which is about **23 viable mutants** per
-run. Any single commit that generates more than that times out, backlog or no backlog.
-
-**And `cancelled` now means at least three different things in this repository**, none
-distinguishable from the run list: a job killed by `timeout-minutes`, a run superseded by a later
-push through `concurrency.cancel-in-progress` (observed on `6f50e10`, where nothing failed), and an
-actual human stop. Only the first is a problem. That is an argument for the second option below —
-making a timeout *fail* — independent of whatever budget is chosen.
-
-**The dangerous half is how it reads.** Every other job in that run passed — both test legs, `fmt`,
-`supply-chain`, `windows-release`. A job killed by `timeout-minutes` is recorded as **cancelled**,
-so the run's conclusion is `cancelled` rather than `failure`: grey, not red, and the word a reader
-supplies for it is *somebody stopped it*. This is the same shape as the guards this repository keeps
-finding — a check that cannot fail, reported as though it had run.
-
-**Why it has never been noticed.** `docs/` has said for weeks that the mutants job "has never run
-outside this machine". This is why: it is triggered, it starts, and it dies at the budget. The local
-runs are the only ones that have ever produced a verdict.
-
-**What is genuinely open**, since the fix is a trade rather than an oversight — the job was
-deliberately scoped to a diff so it would stay cheap, and every option spends something:
-
-- Raise `timeout-minutes` and accept a long job on backlog pushes, which costs runner minutes on
-  exactly the pushes that are already slow.
-- Keep the budget and make a timeout **fail** rather than cancel, so at least it is visible. Cheapest,
-  and it changes a false negative into a true red.
-- Bound the *work* instead of the clock — cargo-mutants has `--shard`, so a fixed slice per run
-  finishes in budget and the coverage accumulates across pushes.
-- Diff against `HEAD~1` rather than `github.event.before`, which makes the mutant count track the
-  last commit instead of the push size. Cheapest to reason about, and it silently skips whatever the
-  other twenty commits changed.
-
-Not decided here, and not this file's call: `ci.yml` belongs to whoever is holding it. Filed so the
-choice is made deliberately rather than by the job continuing to die quietly.
-
-**Second confirmed instance, 2026-09-11, on the fourteen-commit push that carried `v0.9.0`.** Same
-annotation, word for word: *"The job has exceeded the maximum execution time of 30m0s"*, reported as
-`cancelled` beside five green jobs. So this is now measured twice rather than once, and both times
-on a backlog push, which is the shape the entry predicts.
-
-**And it is more valuable than "it dies quietly" implies, which changes the weighting of the four
-options above.** Before the budget killed it, the run had already emitted two surviving mutants as
-check-run warnings — both in `control::child_notice_title`, replacing the child's notification
-heading with `""` and with `"xyzzy"`. Both were real: the only test naming that function asserts it
-*differs* from the parent's heading, which `""` satisfies. Fixed the same day by a test that asserts
-the heading is non-empty and differs across the three languages, and confirmed by re-running both
-mutants against it.
-
-The lesson for the options is that a **sharded** job (the third option) is strictly better than a
-**shorter-diff** one (the fourth): a timed-out run still reports everything it found before it died,
-so partial coverage that accumulates is worth more than complete coverage of a smaller diff. What it
-must not do is stay grey — a job whose findings only reach a reader who goes looking at annotations
-has already lost most of them.
+Before the weekly run existed, a cancelled job had already emitted two surviving mutants as
+check-run warnings (both in `control::child_notice_title`, fixed the same day), which is why the
+sharded shape was preferred over a shorter diff: partial coverage that accumulates is worth more
+than complete coverage of a smaller diff. What it must not do is stay grey.
 
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 
