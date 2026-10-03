@@ -16,12 +16,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   sum yourself, keep it in your head, and redo it every time you changed either number. The card
   now reads *Without practice he has 35 min today · with the highest tier met, 120 min*, computed
   from the budget and the ladder rather than typed anywhere.
-  <br>This is the whole of what a practice gate needed, which was the surprise. Set his day to the
-  short one and make the top tier worth the difference, and *capped until he has practised, then
-  his normal day* is exactly what happens — no second limit, no new thing deciding when the machine
-  locks, and nothing at all for a household that does not use it. That is now pinned as a test
-  rather than left as an observation, because it is the kind of property that is true until
-  somebody tidies one of the two halves.
+  <br>This sentence was first written as the way to build a practice gate — set his day to the
+  short one and make the top tier worth the difference. That shape produced the right numbers and
+  turned out to be the wrong place to keep them; see **A practice gate is now something the
+  integration owns** under *Changed* for what replaced it and why. The sum itself stays useful for
+  any ladder: it tells you what the tiers add up to without doing the arithmetic yourself.
 - **You can choose how often he is told he is behind.** Until now the practice check told him once
   a day and then stayed quiet, deliberately: a fifteen-minute timer that says *not yet* every
   fifteen minutes is a nag, and a child stops reading a nag. A tick box under an integration's
@@ -140,11 +139,13 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   the switch that had just made it unreachable. It now reads *Switched off, so nothing is earned
   here — his day is 35 min · switched on, and the highest tier met, it would be 120 min.*
   <br>Worth knowing what that sentence is telling you, because the switch does less than it looks
-  like. If you set his day up as a practice gate — a short daily limit plus a reward worth the
-  difference — then his normal day is not written down anywhere; only the short one and the reward
-  are. Switching the integration off removes the only way to reach the long day and leaves the
-  short one in force. Minutes he has already earned today are kept, but tomorrow is the short day
-  until you change his daily limit back yourself. Nothing said that before; the card now does.
+  like. If you set his day up the old way — a short daily limit plus a reward worth the difference —
+  then his normal day is not written down anywhere; only the short one and the reward are.
+  Switching the integration off removes the only way to reach the long day and leaves the short
+  one in force. Minutes he has already earned today are kept, but tomorrow is the short day until
+  you change his daily limit back yourself. Nothing said that before; the card now does. The
+  practice gate under *Changed* does not have this problem: switch it off and his normal day is
+  back, because the gate never rewrote it.
 - **The dashboard's confirmation dialogs and a dozen of its notices now appear in your language.**
   *Sign out this device?*, *Remove this integration?*, *Restore settings?*, *Re-anchor the clock?*
   and the short confirmations after saving a routine, closing an app, granting time or redeeming
