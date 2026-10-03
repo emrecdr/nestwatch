@@ -992,16 +992,34 @@ that fires twice, one that fires after the ending, or an audit row written for a
 reached the child.
 
 **Not a coverage gate** — see the row in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md), whose
-re-raise trigger this entry has now tripped. The remaining work is `tokio::time` pause/advance over
-a scripted config, asserting an ordered list of control calls.
+re-raise trigger this entry has now tripped. The remaining work was a scripted sequence asserting
+an ordered list of control calls — not with `tokio::time` pause/advance, which `enforcer_loop.rs`
+shows cannot move a loop that charges `std::time::Instant`, but by walking the budget through the
+config the loop reads on every tick.
+
+**The rules loop has its sequence — 2026-10-03.** `tests/enforcer_day.rs` seeds a hundred minutes
+used and lowers the daily limit step by step with a wake after each write, the way a parent's edit
+wakes the loop: remaining crosses 15, 5, 1 and 0 in four ticks. It asserts, on the fake's recorded
+calls in order, the three warnings each said once with their `budget_countdown` rows, one shutdown
+with the configured grace and no fourth notice (Windows' own box carries that message), a grant
+calling the shutdown off at the day it made and announcing nothing, and the fifteen-minute warning
+said again afterwards because the grant re-armed the countdown. Two hand mutants — announcing the
+reading instead of the threshold, and never aborting a shutdown — each fail it. The re-arm turned
+out to have **two independent spellings**: the stand-down `reset()` when the budget is spent
+(`rules.rs`), and `Countdown::observe`'s rule that a rising reading is not a crossing. Removing
+either alone leaves the harness green, because the other still re-arms; removing both fails it at
+the post-grant warning. That is the shape `control/mod.rs` documents for the probe timeout —
+defence in depth, measured rather than assumed — and it is now written at the test.
 
 **The harness is now whole.** `FakeControl` records every `shutdown` as `(delay_secs, message)` in
 order, bounded at 64, and — since the app-stopped work — every `notify_user` as `(title, body)`,
 bounded at 128, with `notification_bodies()` for the common assertion. This entry used to end by
 naming that gap: *"the warnings — the half of the sequence that carries the ordering risk — cannot
 be asserted on at all until it records too."* They can now, and
-`tests/enforcer_app_stopped.rs` is the first test to do it. What remains is only the scripted
-*sequence*; nothing is missing from the fake any more.
+`tests/enforcer_app_stopped.rs` is the first test to do it. **What remains** is the same sequence
+for the curfew loop — the 15/5/1 before bedtime through `Countdown::observe_upcoming`, the
+shutdown, an extension calling it off — and a midnight rollover driven through either loop, which
+needs the loop's `today` to be injectable rather than read from `config::today()`.
 
 **helper.rs is untouched by any of the above** and stands at 0%: capture, lock and watch are
 Windows shell-outs that no host test reaches. That row of the original measurement is unchanged,
