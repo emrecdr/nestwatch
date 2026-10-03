@@ -2926,6 +2926,14 @@ test("confirmPairing keeps what the server minted", async () => {
 // The same guarantee `ask-i18n.test.js` holds the child's page to, for the parent's. Tables are
 // discovered rather than named, so a fourth language is covered by existing.
 
+test("tf fills one placeholder as it always did, and several in order", () => {
+  const app = loadApp();
+  assert.equal(app.tf("tGrantedMinutes", 30), "Granted +30 min");
+  // Two values, two holes, in the order given — the sentence the redeem toast was gluing from
+  // three English fragments.
+  assert.equal(app.tf("tCodeWorth", "ABCD", 25), "Code ABCD = 25 min");
+});
+
 /** The `UI` object literal from app.js, as `{tag: Set(keys)}`. Read as text: app.js is a browser
  *  script and standing up a DOM to check a data table is a larger decision than the check needs. */
 function uiTables() {
@@ -3053,15 +3061,23 @@ test("every key the markup calls t() with is answered by the English table", () 
 // bare literals instead of going through a function taking the language. A literal cannot be
 // translated by a table it never reaches, and nothing about it looks wrong in review.
 //
-// Scoped to the three calls that put text in front of a person. A broad "no capitalised literals"
+// Scoped to the calls that put text in front of a person. A broad "no capitalised literals"
 // rule would flag URLs, event names and CSS classes, and a guard that cries wolf gets deleted.
+//
+// `confirm()` is a sink too, and a template literal is a literal: four confirmation dialogs and
+// one toast shipped in English on a Dutch dashboard while this guard looked only for `toast("`.
+// A browser dialog is the one place the page cannot style around a wrong language, and these
+// are the destructive actions — signing a device out, removing an integration, replacing the
+// settings — where a parent most needs to read what they are agreeing to.
 test("no dashboard string reaches a person as a literal at the call site", () => {
   const src = asset("app.js");
-  // `toast("...")`, `rejection(r, "...")` — a literal in the message position.
+  // `toast("...")`, `confirm(`...`)`, `rejection(r, "...")` — a literal in the message position,
+  // whichever quote it uses and whether or not it starts on the same line.
   const offenders = [
-    ...src.matchAll(/\b(toast)\(\s*"([^"]{2,})"/g),
+    ...src.matchAll(/\b(toast|confirm)\(\s*"([^"]{2,})"/g),
+    ...src.matchAll(/\b(toast|confirm)\(\s*`([^`]{2,})`/g),
     ...src.matchAll(/\b(rejection)\([A-Za-z_$][\w$]*,\s*"([^"]{2,})"/g),
-  ].map((m) => `${m[1]}(): ${JSON.stringify(m[2])}`);
+  ].map((m) => `${m[1]}(): ${JSON.stringify(m[2].slice(0, 60))}`);
 
   assert.deepEqual(
     offenders,

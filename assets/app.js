@@ -384,6 +384,21 @@ const UI = {
     tSettingsNotRestored: "Settings were not restored",
     tShutdownRequestFailed: "Shutdown request failed",
     tSignedOut: "Signed out {}",
+    tConfirmSignOut: "Sign out {}?",
+    tSignOutCurrentDevice: "This is the device you are using now. You will be signed out and sent back to the login page.",
+    tSignOutOtherDevice: "That device will need to sign in again, or be re-paired if it is an app.",
+    tConfirmReAnchor: "Re-anchor screen time and curfew to this PC's current time zone?\n\nDo this only if the computer genuinely moved to another time zone. If the zone changed for any other reason, this accepts that change as correct.",
+    tConfirmRemoveIntegration: "Remove \"{}\"?\n\nIt stops being able to add time and disappears from this list. You can install it again whenever you like — but if it has already granted today, reinstalling does not give today's bonus a second time.",
+    tRemovedIntegration: "Removed \"{}\"",
+    tConfirmRestoreSettings: "Restore settings from {}?\n\nThis replaces your curfew, daily limits, app rules and routines. Your password, the port and the trusted clock are not touched.",
+    tSavedRoutine: "Saved routine \"{}\"",
+    tAppliedRoutine: "Applied \"{}\"",
+    tDeletedRoutine: "Deleted \"{}\"",
+    tClosedApp: "Closed {}",
+    tCouldNotCloseApp: "Could not close {}",
+    tBedtimePushedBack: "Bedtime pushed back {} min",
+    tGrantedMinutes: "Granted +{} min",
+    tCodeWorth: "Code {} = {} min",
     tChildPageIsNow: "The child's page is now {}.",
   },
   nl: {
@@ -645,6 +660,21 @@ const UI = {
     tSettingsNotRestored: "Instellingen zijn niet teruggezet",
     tShutdownRequestFailed: "Afsluiten mislukt",
     tSignedOut: "{} afgemeld",
+    tConfirmSignOut: "{} afmelden?",
+    tSignOutCurrentDevice: "Dit is het apparaat dat je nu gebruikt. Je wordt afgemeld en teruggestuurd naar de inlogpagina.",
+    tSignOutOtherDevice: "Dat apparaat moet opnieuw inloggen, of opnieuw gekoppeld worden als het een app is.",
+    tConfirmReAnchor: "Schermtijd en bedtijd opnieuw verankeren aan de huidige tijdzone van deze pc?\n\nDoe dit alleen als de computer echt naar een andere tijdzone is verhuisd. Is de tijdzone om een andere reden veranderd, dan wordt die verandering hiermee als juist aanvaard.",
+    tConfirmRemoveIntegration: "\"{}\" verwijderen?\n\nHet kan dan geen tijd meer toevoegen en verdwijnt uit deze lijst. Je kunt het altijd opnieuw installeren — maar als het vandaag al tijd heeft toegekend, geeft opnieuw installeren de bonus van vandaag niet nog een keer.",
+    tRemovedIntegration: "\"{}\" verwijderd",
+    tConfirmRestoreSettings: "Instellingen herstellen uit {}?\n\nDit vervangt je bedtijd, daglimieten, app-regels en routines. Je wachtwoord, de poort en de vertrouwde klok blijven ongewijzigd.",
+    tSavedRoutine: "Routine \"{}\" opgeslagen",
+    tAppliedRoutine: "\"{}\" toegepast",
+    tDeletedRoutine: "Routine \"{}\" verwijderd",
+    tClosedApp: "{} gesloten",
+    tCouldNotCloseApp: "Kon {} niet sluiten",
+    tBedtimePushedBack: "Bedtijd {} min later",
+    tGrantedMinutes: "+{} min toegekend",
+    tCodeWorth: "Code {} = {} min",
     tChildPageIsNow: "De pagina van je kind is nu {}.",
   },
   tr: {
@@ -910,6 +940,21 @@ const UI = {
     tSettingsNotRestored: "Ayarlar geri yüklenmedi",
     tShutdownRequestFailed: "Kapatma isteği başarısız",
     tSignedOut: "{} oturumu kapatıldı",
+    tConfirmSignOut: "{} oturumu kapatılsın mı?",
+    tSignOutCurrentDevice: "Bu, şu anda kullandığınız cihaz. Oturumunuz kapatılacak ve giriş sayfasına yönlendirileceksiniz.",
+    tSignOutOtherDevice: "O cihazın yeniden giriş yapması, bir uygulamaysa yeniden eşleştirilmesi gerekecek.",
+    tConfirmReAnchor: "Ekran süresi ve yatma vakti bu bilgisayarın geçerli saat dilimine yeniden sabitlensin mi?\n\nBunu yalnızca bilgisayar gerçekten başka bir saat dilimine taşındıysa yapın. Saat dilimi başka bir nedenle değiştiyse, bu işlem o değişikliği doğru kabul eder.",
+    tConfirmRemoveIntegration: "\"{}\" kaldırılsın mı?\n\nArtık süre ekleyemez ve bu listeden kaybolur. İstediğiniz zaman yeniden kurabilirsiniz — ancak bugün zaten süre vermişse, yeniden kurmak bugünün bonusunu ikinci kez vermez.",
+    tRemovedIntegration: "\"{}\" kaldırıldı",
+    tConfirmRestoreSettings: "Ayarlar {} dosyasından geri yüklensin mi?\n\nBu, yatma vaktinizi, günlük sınırları, uygulama kurallarını ve rutinleri değiştirir. Parolanız, bağlantı noktası ve güvenilir saat olduğu gibi kalır.",
+    tSavedRoutine: "\"{}\" rutini kaydedildi",
+    tAppliedRoutine: "\"{}\" uygulandı",
+    tDeletedRoutine: "\"{}\" rutini silindi",
+    tClosedApp: "{} kapatıldı",
+    tCouldNotCloseApp: "{} kapatılamadı",
+    tBedtimePushedBack: "Yatma vakti {} dk ertelendi",
+    tGrantedMinutes: "+{} dk verildi",
+    tCodeWorth: "Kod {} = {} dk",
     tChildPageIsNow: "Çocuğun sayfası artık {}.",
   },
 };
@@ -1281,11 +1326,7 @@ function app() {
     // zone would launder their tamper into the trusted state. The parent is the only one who knows
     // which of the two happened, so this asks them rather than guessing.
     async reAnchorClock() {
-      if (!confirm(
-        "Re-anchor screen time and curfew to this PC's current time zone?\n\n" +
-        "Do this only if the computer genuinely moved to another time zone. If the zone changed " +
-        "for any other reason, this accepts that change as correct."
-      )) return;
+      if (!confirm(this.t("tConfirmReAnchor"))) return;
       try {
         const r = await fetch("/api/re-anchor", { method: "POST" });
         if (r.ok) {
@@ -1348,8 +1389,12 @@ function app() {
     // and FIRST in Turkish ("<device> oturumu kapatıldı"). A prefix-plus-variable call site can
     // only ever produce the English order, so the sentence would have been subtly wrong in one
     // language with nothing to catch it.
-    tf(key, value) {
-      return this.t(key).replace("{}", value);
+    //
+    // Several values fill several `{}` in order, so a sentence with two numbers in it ("Code {} =
+    // {} min") is one table entry each language can reorder, rather than three fragments glued
+    // together at the call site.
+    tf(key, ...values) {
+      return values.reduce((text, value) => text.replace("{}", value), this.t(key));
     },
 
     // Switch the dashboard's language and remember it on this device only.
@@ -1631,7 +1676,7 @@ function app() {
       try {
         const r = await this.postJSON("/api/routines", { name, rules: this.rules, schedule: this.routineScheduleToSave() });
         if (r.ok) {
-          this.toast(`Saved routine "${name}"`, "success");
+          this.toast(this.tf("tSavedRoutine", name), "success");
           this.newRoutineName = "";
           this.newRoutineWindow = { start: "", end: "", days: {} };
           this.loadRoutines();
@@ -1651,7 +1696,7 @@ function app() {
       try {
         const r = await fetch(`/api/routines/${encodeURIComponent(name)}/apply`, { method: "POST" });
         if (r.ok) {
-          this.toast(`Applied "${name}"`, "success");
+          this.toast(this.tf("tAppliedRoutine", name), "success");
           this.loadRules();
           this.loadToday();
         } else {
@@ -1666,7 +1711,7 @@ function app() {
       try {
         const r = await fetch(`/api/routines/${encodeURIComponent(name)}/delete`, { method: "POST" });
         if (r.ok) {
-          this.toast(`Deleted "${name}"`, "success");
+          this.toast(this.tf("tDeletedRoutine", name), "success");
           this.loadRoutines();
         } else {
           this.toast(this.t("tCouldNotDeleteRoutine"), "error");
@@ -1742,10 +1787,10 @@ function app() {
     // says so plainly — that is the one revocation a parent would regret doing by accident.
     async revokeSession(row) {
       const who = this.deviceLabel(row.user_agent);
-      const warning = row.current
-        ? "This is the device you are using now. You will be signed out and sent back to the login page."
-        : "That device will need to sign in again, or be re-paired if it is an app.";
-      if (!confirm("Sign out " + who + "?\n\n" + warning)) return;
+      // Two literal `t()` calls rather than one with a ternary key: the key-usage guard reads
+      // keys off the call site, and a computed key hides both from it.
+      const warning = row.current ? this.t("tSignOutCurrentDevice") : this.t("tSignOutOtherDevice");
+      if (!confirm(this.tf("tConfirmSignOut", who) + "\n\n" + warning)) return;
       try {
         const r = await fetch("/api/sessions/" + encodeURIComponent(row.handle) + "/revoke", { method: "POST" });
         if (r.ok) {
@@ -2218,16 +2263,11 @@ function app() {
     // remove-then-reinstall cannot be used to collect twice. A parent troubleshooting the
     // obvious way — take it out, put it back — would otherwise meet silence and no explanation.
     async removeProvider(name) {
-      if (!confirm(
-        `Remove "${name}"?\n\n` +
-        "It stops being able to add time and disappears from this list. You can install it " +
-        "again whenever you like \u2014 but if it has already granted today, reinstalling does " +
-        "not give today's bonus a second time."
-      )) return;
+      if (!confirm(this.tf("tConfirmRemoveIntegration", name))) return;
       try {
         const r = await fetch(`/api/providers/${encodeURIComponent(name)}/delete`, { method: "POST" });
         if (r.ok) {
-          this.toast(`Removed "${name}"`, "success");
+          this.toast(this.tf("tRemovedIntegration", name), "success");
           this.loadProviders();
         } else {
           this.toast(await this.rejection(r, this.t("tCouldNotRemoveIntegration")), "error");
@@ -2567,10 +2607,10 @@ function app() {
       try {
         const r = await fetch(`/api/processes/${p.pid}/kill`, { method: "POST" });
         if (r.ok) {
-          this.toast(`Closed ${p.name}`, "success");
+          this.toast(this.tf("tClosedApp", p.name), "success");
           this.loadProcesses();
         } else {
-          this.toast(`Could not close ${p.name}`, "error");
+          this.toast(this.tf("tCouldNotCloseApp", p.name), "error");
         }
       } catch {
         this.toast(this.t("tKillRequestFailed"), "error");
@@ -3100,11 +3140,7 @@ function app() {
     // over; discarding it would turn a partial restore into a silent one.
     async restorePolicy() {
       if (!this.policyFile) return;
-      if (!confirm(
-        "Restore settings from " + this.policyFile.name + "?\n\n" +
-        "This replaces your curfew, daily limits, app rules and routines. " +
-        "Your password, the port and the trusted clock are not touched."
-      )) return;
+      if (!confirm(this.tf("tConfirmRestoreSettings", this.policyFile.name))) return;
 
       this.restoringPolicy = true;
       this.policyMsg = "";
@@ -3665,7 +3701,7 @@ function app() {
           // label only while the instant is still in the future. Setting it from the response as
           // well was dead on arrival — overwritten moments later — except on the one path where
           // `loadCurfew()` fails, where it left the un-future-checked value on screen.
-          this.toast(`Bedtime pushed back ${mins} min`, "success");
+          this.toast(this.tf("tBedtimePushedBack", mins), "success");
           // Screen time can still stop them tonight even though bedtime no longer will.
           this.noteOtherLimit(j);
           this.loadCurfew();
@@ -3686,7 +3722,7 @@ function app() {
       try {
         const r = await this.postJSON("/api/extra-time", { minutes: mins });
         if (r.ok) {
-          this.toast(`Granted +${mins} min`, "success");
+          this.toast(this.tf("tGrantedMinutes", mins), "success");
           this.noteOtherLimit(await r.json().catch(() => ({})));
           this.loadToday();
           this.loadUsage();
@@ -3725,7 +3761,7 @@ function app() {
         const r = await this.postJSON("/api/time-codes", { minutes: this.newCodeMins });
         if (r.ok) {
           const j = await r.json().catch(() => ({}));
-          this.toast(`Code ${j.code} = ${j.minutes} min`, "success");
+          this.toast(this.tf("tCodeWorth", j.code, j.minutes), "success");
           this.loadCodes();
         } else if (r.status === 400) {
           this.toast(await this.rejection(r, this.t("tCouldNotGenerateACode")), "error");

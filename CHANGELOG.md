@@ -128,6 +128,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   are. Switching the integration off removes the only way to reach the long day and leaves the
   short one in force. Minutes he has already earned today are kept, but tomorrow is the short day
   until you change his daily limit back yourself. Nothing said that before; the card now does.
+- **The dashboard's confirmation dialogs and a dozen of its notices now appear in your language.**
+  *Sign out this device?*, *Remove this integration?*, *Restore settings?*, *Re-anchor the clock?*
+  and the short confirmations after saving a routine, closing an app, granting time or redeeming
+  a code were English whatever language the dashboard was set to — the four dialogs being the
+  destructive actions where you most need to read what you are agreeing to. The guard that keeps
+  dashboard text translated now covers those call shapes too, so they cannot slip back.
 
 
 ## [0.9.0] — 2026-09-11
