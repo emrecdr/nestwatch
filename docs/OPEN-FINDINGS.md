@@ -1907,34 +1907,6 @@ than do it: every capture map is a field serde must consider on each load, they 
 to be told none of them are settings. Worth doing when a nested field is actually added, and
 probably not before.
 
-### O99 · Nothing correlates a request to anything, and `tracing` is already paid for
-
-`tracing`, `tracing-subscriber` and `tracing-appender` are dependencies, and the subscriber is
-initialised with an `EnvFilter`. What is missing is any per-request record: no span, no method, no
-path, no status, no latency, no identifier that ties a log line to the request that produced it.
-
-**Verified 2026-09-08 by reading the router.** The layers on it are `session_layer`,
-`require_same_origin`, `require_lan_peer`, `set_security_headers`, and a `DefaultBodyLimit` on the
-two child routes. There is no tracing layer among them.
-
-**Why this matters here more than it would elsewhere.** This service runs unattended on a family PC
-for months. The audit log is deliberately a *security* record — `audit.rs` argues at length for
-keeping it partitioned and bounded by human action — so it is the wrong instrument for "what was
-this process doing when it went wrong", and it is the only instrument there is. A parent reporting a
-fault has nothing to send.
-
-**The obvious fix is the expensive one.** `tower-http` is **not in the dependency tree at all**
-(checked against `Cargo.lock`), so `TraceLayer` costs a new direct dependency on a project that
-gates its supply chain weekly and counts 396 crates. A `middleware::from_fn` that opens a span
-around the inner call costs no dependency, since `tracing` is already there, and would be about
-fifteen lines beside the four middlewares already registered.
-
-**What has to be decided first, and is why this is filed rather than fixed.** What may be recorded.
-A path like `/api/providers/studygo` names an integration; query strings and the child's page titles
-must never reach a log that is not the audit log. Whoever does this has to choose the fields
-deliberately rather than adopt a default formatter, which is a decision about a family's privacy and
-not a plumbing task.
-
 ### O103 · The in-diff mutants job still dies grey on a large push
 
 `ci.yml`'s `mutants` job tests the mutants a push introduces inside `timeout-minutes: 30`. Measured

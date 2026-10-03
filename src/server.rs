@@ -173,6 +173,10 @@ pub fn build_router(state: AppState) -> Router {
         // …and stamp security headers on every response (outermost, so even the 403 above
         // and 404s carry them).
         .layer(middleware::map_response(security::set_security_headers))
+        // Outermost, so the span is open around every layer above: a peer refused by
+        // `require_lan_peer` or an origin refused by `require_same_origin` is logged with the
+        // request number it belongs to. What the span may record is decided in `request_span`.
+        .layer(middleware::from_fn(crate::request_span::span_each_request))
         .with_state(state)
 }
 

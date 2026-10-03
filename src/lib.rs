@@ -55,6 +55,7 @@ pub mod preflight;
 pub mod probe;
 pub mod refusals;
 pub mod remotesetup;
+pub mod request_span;
 pub mod rules;
 pub mod screentime;
 pub mod security;
