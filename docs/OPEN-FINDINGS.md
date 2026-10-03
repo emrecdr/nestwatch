@@ -1907,33 +1907,6 @@ than do it: every capture map is a field serde must consider on each load, they 
 to be told none of them are settings. Worth doing when a nested field is actually added, and
 probably not before.
 
-### O98 · The config has no version, so a downgrade cannot be warned about — only survived
-
-`O97` covers what a downgrade *loses*. This covers what it cannot *say*.
-
-`api.rs::set_policy` reasoned this exact hazard through for the **export** document and
-answered it with a warning naming both versions. It could do that because the export carries a
-version field. `config.json` has never carried one, so on the file that is actually rewritten on
-every settings change there is nothing to compare and nothing to report. `Config`'s own doc comment
-says so, in the paragraph introducing the capture map.
-
-**Verified 2026-09-08 by reading both.** The export path has a version to compare; `Config` has no
-version field of any kind, and the `#[serde(flatten)]` map added for `O97` is explicitly documented
-as not a place to put anything.
-
-**What this changes and what it does not.** With the capture map in place a downgrade is now
-lossless for top-level keys, so this is no longer about data. It is about silence: an older binary
-run once — after a rollback, off a USB stick, from an old install directory — rewrites the settings
-of a household and says nothing, and the parent has no way to learn that the build they just ran is
-older than the file it just wrote. The export path treats that as worth a warning. The config path
-cannot form the sentence.
-
-**What would close it** is one integer written on save and read on load, compared against the
-running build, warning when the file is from the future. The reason to weigh rather than do: it adds
-a field to a file eleven released versions already read without one, so the first build that writes
-it makes every older build see an unknown key — which the capture map now preserves, but only for
-builds new enough to have it. Worth doing when there is a second reason to touch the file's shape.
-
 ### O99 · Nothing correlates a request to anything, and `tracing` is already paid for
 
 `tracing`, `tracing-subscriber` and `tracing-appender` are dependencies, and the subscriber is

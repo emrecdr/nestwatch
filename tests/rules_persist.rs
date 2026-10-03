@@ -59,6 +59,12 @@ async fn valid_rules_persist_and_update_state() {
     // ...and persisted to disk.
     let saved = std::fs::read_to_string(data_paths().config).unwrap();
     assert!(saved.contains("game.exe"), "rules persisted to config.json");
+    // Every save names the build that wrote the file, so a later, older build can be told apart
+    // from the file it is about to rewrite (`doctor` says so; config.rs `WrittenBy`).
+    assert!(
+        saved.contains(&format!("\"written_by\": \"{}\"", nestwatch::VERSION)),
+        "the saved file must carry this build's version: {saved}"
+    );
 
     // A parent bonus-time grant lands in today's DailyGrant, in memory and on disk.
     let res = app

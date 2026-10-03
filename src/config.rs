@@ -855,6 +855,20 @@ pub struct Config {
     /// deliberately absent — a human pressing the button twice means it twice.
     #[serde(default)]
     pub earned: std::collections::BTreeMap<String, EarnedDay>,
+    /// The build that last wrote this file — `major.minor.patch` — or `None` for a file written
+    /// before the field existed (every release up to 0.9.0).
+    ///
+    /// Set on every save by [`Config::for_disk`] and read by [`Config::written_by_status`], so
+    /// that a build **older** than the file can say so — in `doctor`, and in one line at startup
+    /// — instead of rewriting a household's settings in silence after a rollback or a run off a
+    /// USB stick (was `O98`). The capture map below keeps a newer build's keys through such a
+    /// save, which makes a downgrade lossless; this is what lets it also be *visible*.
+    ///
+    /// Honest about its one limit: a build older than this field cannot update it, so after a save
+    /// by 0.9.0 or earlier the mark still names the newer build that wrote the file before — true
+    /// of the keys it preserved, not of the write. That window closes as those builds leave use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written_by: Option<String>,
     /// Installed integrations that may push earned bonus time. A provider is
     /// *data*, not code: a name, an on/off switch, and the reward its signal
     /// is worth — the "declarative plugin" of `docs/PLUGIN-SYSTEM.md`.
@@ -1524,14 +1538,65 @@ impl Config {
         Ok(cfg)
     }
 
+    /// This config as it is written to disk: the same settings, stamped with the running build.
+    ///
+    /// A copy rather than a mutation, because `save` takes `&self` and the in-memory value should
+    /// keep saying who wrote the file that was *loaded* until the next load — that is the value
+    /// [`Config::written_by_status`] judges.
+    pub fn for_disk(&self) -> Config {
+        Config {
+            written_by: Some(crate::VERSION.to_string()),
+            ..self.clone()
+        }
+    }
+
+    /// Whether the file this config was loaded from is from a newer build than the one running.
+    pub fn written_by_status(&self) -> WrittenBy {
+        classify_written_by(self.written_by.as_deref(), crate::VERSION)
+    }
+
     pub fn save(&self) -> Result<()> {
         let paths = data_paths();
         std::fs::create_dir_all(&paths.dir)
             .with_context(|| format!("could not create {}", paths.dir.display()))?;
-        let json = serde_json::to_string_pretty(self)?;
+        let json = serde_json::to_string_pretty(&self.for_disk())?;
         write_atomic(&paths.config, json.as_bytes())
             .with_context(|| format!("could not write {}", paths.config.display()))?;
         Ok(())
+    }
+}
+
+/// How the file's [`Config::written_by`] compares with the running build — see that field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WrittenBy {
+    /// No mark: written before the field existed.
+    Unversioned,
+    /// Written by this build or an older one — the ordinary state, and nothing to say.
+    ThisOrOlder,
+    /// Written by a newer build: this one is a rollback, and the keys it does not know are kept
+    /// but not applied. Carries the writer's version for the sentence.
+    Newer(String),
+    /// A mark this build cannot order. Kept apart from [`WrittenBy::Newer`] so a corrupt mark is
+    /// never reported as the future.
+    Unreadable(String),
+}
+
+/// The comparison behind [`Config::written_by_status`], with the running version as an argument
+/// so it can be tested against both directions.
+///
+/// The ordering is `install::classify_install`'s — "0.10 is above 0.2" — reused rather
+/// than restated, for the reason `doctor::version_check` gives: one definition, one set of tests.
+pub fn classify_written_by(written_by: Option<&str>, running: &str) -> WrittenBy {
+    use crate::install::{InstallKind, Stamp, classify_install};
+    let Some(written) = written_by else {
+        return WrittenBy::Unversioned;
+    };
+    match classify_install(&Stamp::Version(written.to_string()), running) {
+        InstallKind::Downgrade { from } => WrittenBy::Newer(from),
+        InstallKind::Unknown => WrittenBy::Unreadable(written.to_string()),
+        InstallKind::Fresh | InstallKind::Reinstall | InstallKind::Upgrade { .. } => {
+            WrittenBy::ThisOrOlder
+        }
     }
 }
 
@@ -1888,6 +1953,56 @@ mod tests {
         let json = serde_json::to_string(&provider).unwrap();
         let back: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(back, provider, "lost in {json}");
+    }
+
+    /// What reaches disk names the build that wrote it; what was loaded says nothing it did not
+    /// carry, so a file eleven released versions wrote without the field is not claimed by anyone.
+    #[test]
+    fn the_file_is_stamped_with_the_build_that_writes_it() {
+        let cfg = Config::default();
+        assert!(
+            !serde_json::to_string(&cfg).unwrap().contains("written_by"),
+            "an unstamped config stays unstamped until something writes it"
+        );
+        let disk = serde_json::to_string(&cfg.for_disk()).unwrap();
+        assert!(
+            disk.contains(&format!("\"written_by\":\"{}\"", crate::VERSION)),
+            "the saved form carries this build's version: {disk}"
+        );
+        let legacy: Config = serde_json::from_str(r#"{"port":8443,"password_hash":"x"}"#).unwrap();
+        assert_eq!(legacy.written_by, None);
+        let back: Config = serde_json::from_str(&disk).unwrap();
+        assert_eq!(back.written_by.as_deref(), Some(crate::VERSION));
+    }
+
+    /// The one comparison that matters is "is this file from a build newer than me", and it is
+    /// kept apart from "I cannot read the mark" so a corrupt mark is never reported as the future.
+    #[test]
+    fn a_file_from_the_future_is_told_apart_from_an_older_or_unversioned_one() {
+        assert_eq!(classify_written_by(None, "0.10.0"), WrittenBy::Unversioned);
+        assert_eq!(
+            classify_written_by(Some("0.10.0"), "0.10.0"),
+            WrittenBy::ThisOrOlder
+        );
+        assert_eq!(
+            classify_written_by(Some("0.9.0"), "0.10.0"),
+            WrittenBy::ThisOrOlder,
+            "an older writer is the normal state after an upgrade, until the first save"
+        );
+        assert_eq!(
+            classify_written_by(Some("0.11.0"), "0.10.0"),
+            WrittenBy::Newer("0.11.0".into()),
+            "the file is from the future: this build is a downgrade"
+        );
+        assert_eq!(
+            classify_written_by(Some("0.10.1"), "0.10.0"),
+            WrittenBy::Newer("0.10.1".into()),
+            "a patch release counts, the same ordering the install stamp uses"
+        );
+        assert_eq!(
+            classify_written_by(Some("sixty"), "0.10.0"),
+            WrittenBy::Unreadable("sixty".into())
+        );
     }
 
     /// [`Language::ALL`] really does list every variant.

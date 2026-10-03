@@ -74,6 +74,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   know it. It now prints how many devices stay signed in and how to end them, and
   `install --revoke-sessions` ends them all in one go, the way changing the password from the
   dashboard already did.
+- **`nestwatch doctor` says when the settings file was written by a newer build than the one
+  running.** The settings file now names the build that last wrote it. If you roll back — an old
+  installer, a copy on a USB stick, an old install folder — the older build keeps the newer one's
+  settings rather than losing them, and until now said nothing about it. `doctor` warns, naming
+  both versions, and the service logs the same line when it starts.
 
 ### Changed
 

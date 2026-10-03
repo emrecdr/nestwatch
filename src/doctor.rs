@@ -493,6 +493,30 @@ fn earned_time_check(
     })
 }
 
+/// The settings file's writer against the running build — see `config::WrittenBy`.
+///
+/// Only the two outcomes a parent can act on get a line. A file from a newer build means this is
+/// a rollback: the settings that build added are kept by the capture map and applied by nothing,
+/// which is exactly the silence `O98` filed. An unreadable mark is said as that, never as "newer".
+fn written_by_check(status: crate::config::WrittenBy) -> Option<Check> {
+    use crate::config::WrittenBy;
+    Some(match status {
+        WrittenBy::Unversioned | WrittenBy::ThisOrOlder => return None,
+        WrittenBy::Newer(writer) => warn(
+            format!(
+                "config.json was last written by nestwatch {writer} — this is {}",
+                crate::VERSION
+            ),
+            "This build is older than the file. Settings the newer build added are kept but not\n\
+             applied here. Install that build again, or expect them to do nothing until you do.",
+        ),
+        WrittenBy::Unreadable(mark) => warn(
+            format!("config.json carries an unreadable version mark ({mark})"),
+            "Harmless on its own — the next time a setting is saved, this build rewrites it.",
+        ),
+    })
+}
+
 /// Run every check and print the report. Exits non-zero if anything is outright broken, so it's
 /// usable from a script; warnings alone still exit 0.
 pub fn run() -> Result<()> {
@@ -542,6 +566,14 @@ pub fn run() -> Result<()> {
                 crate::VERSION,
                 config.is_some(),
             )
+        {
+            checks.push(check);
+        }
+        // The file's own writer, beside the install record: the record says what was installed,
+        // this says who last wrote the settings — the two differ after a rollback.
+        if let Some(check) = config
+            .as_ref()
+            .and_then(|c| written_by_check(c.written_by_status()))
         {
             checks.push(check);
         }
@@ -1519,6 +1551,35 @@ mod tests {
         let out = r.render();
         assert!(out.contains("           line one"));
         assert!(out.contains("           line two"));
+    }
+
+    /// A settings file last written by a newer build is the one case worth a line: the parent
+    /// has just run an older build — a rollback, a USB stick, an old install directory — and it
+    /// would otherwise rewrite the household's settings and say nothing (`O98`).
+    #[test]
+    fn a_settings_file_from_a_newer_build_is_warned_about_and_nothing_else_is() {
+        use crate::config::WrittenBy;
+        assert!(written_by_check(WrittenBy::Unversioned).is_none());
+        assert!(written_by_check(WrittenBy::ThisOrOlder).is_none());
+        let newer = written_by_check(WrittenBy::Newer("0.11.0".into())).expect("a warning");
+        assert_eq!(newer.level, Level::Warn);
+        assert!(
+            newer.text.contains("0.11.0") && newer.text.contains(crate::VERSION),
+            "both versions must appear so it is obvious which is which: {}",
+            newer.text
+        );
+        assert!(
+            newer.fix.as_deref().is_some_and(|f| f.contains("kept")),
+            "the fix must say the newer settings are kept, not lost: {:?}",
+            newer.fix
+        );
+        let garbage = written_by_check(WrittenBy::Unreadable("sixty".into())).expect("a warning");
+        assert_eq!(garbage.level, Level::Warn);
+        assert!(
+            garbage.text.contains("unreadable") && !garbage.text.contains("newer"),
+            "an unreadable mark must not be reported as the future: {}",
+            garbage.text
+        );
     }
 
     /// The earned-time check: which households it speaks to, where "stopped" starts, and what it

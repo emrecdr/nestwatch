@@ -366,6 +366,18 @@ fn run_service() -> Result<()> {
 /// Load config, assemble [`state::AppState`], and serve until shutdown.
 fn run_server() -> Result<()> {
     let config = config::Config::load()?;
+    // Said once here as well as by `doctor`: a file from a newer build means this is a rollback,
+    // and the settings that build added are kept but applied by nothing (`config::WrittenBy`).
+    match config.written_by_status() {
+        config::WrittenBy::Newer(writer) => tracing::warn!(
+            "config.json was last written by nestwatch {writer}; this is {VERSION}, so settings \
+             that build added are kept but not applied"
+        ),
+        config::WrittenBy::Unreadable(mark) => tracing::warn!(
+            "config.json carries an unreadable version mark ({mark}); the next save rewrites it"
+        ),
+        config::WrittenBy::Unversioned | config::WrittenBy::ThisOrOlder => {}
+    }
     let state = state::AppState::new(control::interactive_control(), config);
     // Build the runtime explicitly (rather than `#[tokio::main]`) so the sync
     // subcommands — `install`, `uninstall` — never spin one up needlessly.
