@@ -739,25 +739,6 @@ the `nestwatch run` CLI path. Worth doing for hygiene; not a substitute. If done
 `axum_server::Handle` already held in `server.rs`, not the `mpsc` in `service.rs`, which is
 single-receiver and already consumed.
 
-### O43 · The certificate's recorded SANs come from a different probe than the certificate
-
-`install()` calls `cert::reachable_hosts()` and records the result as `cfg.cert_sans`; the SANs
-actually baked into the certificate come from a **separate** `reachable_hosts()` call inside
-`cert::generate`. If the machine's address changes between those two moments, the config
-permanently claims SANs the certificate does not carry.
-
-Why that matters more than a stale field: the next install decides whether to reuse the certificate
-with `covered = cfg.cert_sans == hosts`. That comparison is the only thing standing between a routine
-upgrade and re-issuing the certificate — which invalidates the exception every paired phone and
-laptop accepted, and, as the comment there says, trains the parent to click through trust warnings.
-A wrong `cert_sans` makes that decision on a list that was never true.
-
-**Fix.** Probe once in `install()` and pass the list into `cert::generate`, so what is written to the
-config is by construction what is in the certificate.
-
-**Trigger.** Next change to the certificate path. Pre-existing; found during a cleanup review of the
-uninstall work and recorded rather than fixed, because it is not that change.
-
 ### O54 · Two source-text scanners and a standing exemption, for a property a shared list would make true
 
 `run_helper` reads `--tier` with a hand-rolled `args.iter().position(...)` scan, and its two usage

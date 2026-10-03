@@ -19,26 +19,28 @@ use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, KeyPair};
 use sha2::{Digest, Sha256};
 
 /// Ensure a cert/key pair exists, generating one if absent. Used by the server at startup.
+///
+/// The one caller that probes the machine's addresses itself: there is no install recording a
+/// list here to agree with, only a missing file to replace.
 pub fn ensure_cert(cert_path: &Path, key_path: &Path) -> Result<()> {
     if cert_path.exists() && key_path.exists() {
         return Ok(());
     }
-    generate(cert_path, key_path)?;
+    generate(cert_path, key_path, &reachable_hosts())?;
     Ok(())
 }
 
-/// Generate a fresh cert/key pair (overwriting any existing) and return its SHA-256
-/// fingerprint (uppercase hex, colon-separated). Used at install time.
-pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
-    if let Some(parent) = cert_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
+/// What the certificate will say about itself, from the hosts it is for.
+///
+/// Separate from [`generate`] so the SAN list can be asserted on without parsing a certificate,
+/// and so there is exactly one place it is built. `hosts` is the caller's — `install` records the
+/// same list as `cert_sans`, and the next install decides whether to reuse the certificate by
+/// comparing the two, so what is recorded has to be what was baked in **by construction** rather
+/// than by two probes agreeing (was `O43`: they were two probes, seconds apart).
+fn params_for(hosts: &[String]) -> Result<CertificateParams> {
     // CertificateParams::new maps IP-parseable strings to IP SANs and the rest to DNS SANs.
     let mut sans = vec!["localhost".to_string()];
-    sans.extend(reachable_hosts());
-
-    let key_pair = KeyPair::generate().context("generating key pair")?;
+    sans.extend_from_slice(hosts);
     let mut params = CertificateParams::new(sans).context("building certificate params")?;
     // 825-day cap — the longest Apple will accept for a TLS server cert (see module docs).
     // Both bounds must be set: Apple measures `not_after - not_before`, and rcgen's default
@@ -50,6 +52,19 @@ pub fn generate(cert_path: &Path, key_path: &Path) -> Result<String> {
     params.not_after = not_before + time::Duration::days(VALIDITY_DAYS as i64);
     // Apple also requires the serverAuth EKU on TLS server certs; rcgen omits it by default.
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+    Ok(params)
+}
+
+/// Generate a fresh cert/key pair for `hosts` (overwriting any existing) and return its SHA-256
+/// fingerprint (uppercase hex, colon-separated). Used at install time, with the list `install`
+/// records — see `params_for` for why the list is the caller's.
+pub fn generate(cert_path: &Path, key_path: &Path, hosts: &[String]) -> Result<String> {
+    if let Some(parent) = cert_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let key_pair = KeyPair::generate().context("generating key pair")?;
+    let params = params_for(hosts)?;
 
     let cert = params
         .self_signed(&key_pair)
@@ -338,7 +353,7 @@ mod tests {
         let key = dir.join("key.pem");
 
         // The fingerprint generate() returns must match reading the cert back off disk.
-        let at_install = generate(&cert, &key).unwrap();
+        let at_install = generate(&cert, &key, &[]).unwrap();
         let read_back = read_fingerprint(&cert).unwrap();
         assert_eq!(at_install, read_back);
         assert!(read_back.contains(':') && read_back.len() == 95); // 32 bytes → "AB:..:CD"
@@ -349,5 +364,38 @@ mod tests {
         let cert_pem = std::fs::read_to_string(&cert).unwrap();
         std::fs::write(&combined, format!("{key_pem}\n{cert_pem}")).unwrap();
         assert_eq!(read_fingerprint(&combined).unwrap(), at_install);
+    }
+
+    /// The SANs are exactly the hosts the caller hands over, so `install`'s recorded `cert_sans`
+    /// is by construction what the certificate carries — not a second probe taken seconds later
+    /// that the next upgrade then compares against (was `O43`).
+    #[test]
+    fn the_certificate_carries_exactly_the_hosts_it_was_given() {
+        let hosts = vec!["192.168.7.42".to_string(), "study-pc".to_string()];
+        let params = params_for(&hosts).unwrap();
+        let sans = format!("{:?}", params.subject_alt_names);
+        assert!(
+            sans.contains("192.168.7.42") && sans.contains("study-pc"),
+            "{sans}"
+        );
+        assert!(
+            sans.contains("localhost"),
+            "the loopback name every install carries: {sans}"
+        );
+        assert_eq!(
+            params.subject_alt_names.len(),
+            hosts.len() + 1,
+            "and nothing else: {sans}"
+        );
+        // Nothing probed: this machine's own addresses must not appear in a certificate made for
+        // a list that does not name them.
+        for probed in reachable_hosts() {
+            if !hosts.contains(&probed) && probed != "localhost" {
+                assert!(
+                    !sans.contains(&probed),
+                    "`{probed}` came from a probe, not from the caller: {sans}"
+                );
+            }
+        }
     }
 }

@@ -199,7 +199,8 @@ pub fn install() -> Result<()> {
                 "Your devices will show the trust warning once more — verify the new fingerprint below."
             );
         }
-        let fp = crate::cert::generate(&paths.cert, &paths.key)?;
+        // The same list that is recorded as `cert_sans` just below, so the two cannot disagree.
+        let fp = crate::cert::generate(&paths.cert, &paths.key, &hosts)?;
         // Record what the new cert covers, so the next install can make this same decision.
         let mut cfg = cfg.clone();
         cfg.cert_sans = hosts;
