@@ -70,7 +70,10 @@ Full walkthrough, including what to check afterwards: **[the install guide](http
   screen-time limits, curfew, blocked apps, per-app limits — runs on older builds, and `install`
   reports the mismatch as a caution rather than refusing. Any Windows 10 still receiving updates
   is well past this.
-- Any device with a browser on the same home network, for the parent.
+- Any device with a browser on the same home network, for the parent. The network has to carry
+  **IPv4**: the service listens on IPv4 and admits the private IPv4 ranges (and loopback) only, so
+  an IPv6-only home network cannot reach it. Ordinary dual-stack networks are fine — the QR hands
+  your phone the PC's IPv4 address.
 - Nothing else. No runtime to install, no Node, no Python, no service account.
 
 > "Nestwatch" is the parent-facing project name. The service, folders and files the installer
