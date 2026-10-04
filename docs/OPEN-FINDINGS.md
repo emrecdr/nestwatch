@@ -1777,6 +1777,18 @@ worse than English and would look like a bug in the language setting rather than
 own translations — whichever comes first. Until then this is one English sentence at the moment
 something was already refused, on a dashboard whose furniture is in the right language.
 
+**Sized 2026-10-04, before building it, and left for a session of its own.** The "seven static
+strings" above understate the surface: `api.rs` has 25 refusal sites (`AppError::BadRequest` and
+`NotFound`), 16 of them `format!` messages carrying a bound or a name — "daily limit must be <=
+10080 minutes", "no such routine" — and `Rules::validate`, `Policy::validate`, `Gate::validate` and
+`Probe::validate` add 16 more, 13 of them parameterised. A bare `code` beside the prose would let
+the dashboard translate "daily limit too large" and lose the 10080, which is a step backwards from
+the English the parent reads today. So the fix needs a wire shape first — `{"error", "code",
+"params": {…}}` or codes that name the bound — chosen with the phone app in view (`O86`), then the
+codes, then roughly 40 reviewed strings per language (`O96`'s caution applies). The dashboard half
+is one function, `rejection()`, which already prefers the server's prose and need only prefer a
+known code above it.
+
 ### O95 · The redeem throttle counts per address, and nothing counts across them
 
 `SubmitLimiter` keys on `peer.ip()` and nothing else, and `require_lan_peer` admits every RFC1918
