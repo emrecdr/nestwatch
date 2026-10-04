@@ -53,7 +53,7 @@ jobs:
       # Pinned to a commit because this action downloads and executes binaries, and the tool is
       # version-pinned too, so a cargo-mutants release cannot change what this gate accepts
       # without a commit here. Same pins as `ci.yml`; keep them moving together.
-      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-mutants@27.1.0
       # The baseline runs the WHOLE suite, and `web::tests::every_class_*` read `assets/app.css`,
