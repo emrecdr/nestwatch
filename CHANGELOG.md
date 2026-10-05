@@ -20,6 +20,14 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **More of the dashboard follows the language you choose — and the README no longer claims all
+  of it does.** Nine *Refresh* buttons, the "min" beside every figure, the *Paused* label on the
+  limits card and the bedtime switch's screen-reader label were written into the page in English,
+  beside identical ones that were translated; they now use the translations. The README said a
+  language was "all-or-nothing by construction". That is true of everything your child sees and
+  was not true of the dashboard, which still shows its other buttons, most of its help text and
+  its screen-reader labels in English. It now says so, and a test lists every one of them so the
+  list can only get shorter.
 - **A program on the child's PC could guess the dashboard password without ever being locked
   out.** After five wrong passwords a device is locked out for a minute, and a device was its
   network address — but every address from 127.0.0.1 to 127.255.255.254 leads back to the PC

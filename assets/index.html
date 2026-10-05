@@ -371,7 +371,7 @@
                 <h2 class="card-title text-base" x-text="t('runningApps')"></h2>
                 <button class="btn btn-ghost btn-sm" @click="loadProcesses()" :disabled="loadingProcs">
                   <span x-show="loadingProcs" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <div class="mt-2 max-h-96 overflow-y-auto">
@@ -411,7 +411,7 @@
                 <label class="flex items-center gap-2 cursor-pointer">
                   <span class="text-sm" x-text="curfewStateLabel()"></span>
                   <input type="checkbox" class="toggle toggle-sm toggle-warning"
-                         x-model="curfew.enabled" aria-label="Curfew" />
+                         x-model="curfew.enabled" :aria-label="t('curfew')" />
                 </label>
               </div>
               <p class="text-sm opacity-70" x-text="t('whenThePcIsOn')"></p>
@@ -541,7 +541,7 @@
                 </h2>
                 <button class="btn btn-ghost btn-sm" @click="loadToday()" :disabled="loadingToday">
                   <span x-show="loadingToday" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
 
@@ -650,7 +650,7 @@
                                   :class="'progress-' + limitTone(a.used_mins, a.limit_mins)"
                                   :value="a.used_mins" :max="a.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="a.used_mins"></span>/<span
-                          x-text="a.limit_mins"></span> min</span>
+                          x-text="a.limit_mins"></span> <span x-text="t('min')"></span></span>
                       </div>
                     </template>
                   </div>
@@ -674,7 +674,7 @@
                     <template x-for="a in today.focused" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
-                        <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> <span x-text="t('min')"></span></span>
                       </div>
                     </template>
                   </div>
@@ -696,7 +696,7 @@
                         <template x-if="gamePortal(pg.name)">
                           <span class="badge badge-sm badge-warning" x-text="gamePortal(pg.name)"></span>
                         </template>
-                        <span class="opacity-70"><span x-text="pg.minutes"></span> min</span>
+                        <span class="opacity-70"><span x-text="pg.minutes"></span> <span x-text="t('min')"></span></span>
                       </div>
                     </template>
                   </div>
@@ -717,7 +717,7 @@
                                   :class="'progress-' + limitTone(g.used_mins, g.limit_mins)"
                                   :value="g.used_mins" :max="g.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="g.used_mins"></span>/<span
-                          x-text="g.limit_mins"></span> min</span>
+                          x-text="g.limit_mins"></span> <span x-text="t('min')"></span></span>
                       </div>
                     </template>
                   </div>
@@ -736,7 +736,7 @@
                        configured the enforcer skips every tick, so showing "Enforcing" on a
                        fresh install told the parent the PC was limited when it wasn't. -->
                   <span class="text-sm"
-                        x-text="!rules.enabled ? 'Paused' : (anyRulesSet() ? 'Enforcing' : 'Nothing set up yet')"></span>
+                        x-text="!rules.enabled ? t('paused') : (anyRulesSet() ? 'Enforcing' : 'Nothing set up yet')"></span>
                   <input type="checkbox" class="toggle toggle-sm toggle-primary"
                          :checked="rules.enabled"
                          @change="rules.enabled = $event.target.checked; saveRules()" />
@@ -820,7 +820,7 @@
                     <div class="flex items-center gap-2">
                       <input type="text" maxlength="64" x-model="row.name" placeholder="chrome.exe"
                              aria-label="App filename to limit" class="input input-sm w-64" />
-                      <input type="number" min="0" max="10080" x-model.number="row.mins" placeholder="min"
+                      <input type="number" min="0" max="10080" x-model.number="row.mins" :placeholder="t('min')"
                              aria-label="Daily limit in minutes" class="input input-sm w-24" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
                     </div>
@@ -841,7 +841,7 @@
                       <input type="text" x-model="g.appsText" placeholder="minecraft.exe, roblox.exe"
                              aria-label="Apps in this group, comma separated"
                              class="input input-sm w-64" />
-                      <input type="number" min="0" max="10080" x-model.number="g.limit_mins" placeholder="min"
+                      <input type="number" min="0" max="10080" x-model.number="g.limit_mins" :placeholder="t('min')"
                              aria-label="Shared daily limit in minutes"
                              class="input input-sm w-24" />
                       <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>
@@ -871,7 +871,7 @@
               <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadRoutines()" :disabled="loadingRoutines">
                   <span x-show="loadingRoutines" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <p class="text-sm opacity-70" x-text="t('saveTheCurrentScreenTime')"></p>
@@ -943,7 +943,7 @@
               <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadSessions()" :disabled="loadingSessions">
                   <span x-show="loadingSessions" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <p class="text-sm opacity-70" x-text="t('everyPhoneTabletAndComputer')"></p>
@@ -984,7 +984,7 @@
               <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadProviders()" :disabled="loadingProviders">
                   <span x-show="loadingProviders" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <p class="text-sm opacity-70" x-text="t('appsThatCanAddBonus')"></p>
@@ -1239,7 +1239,7 @@
               <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadCodes()" :disabled="loadingCodes">
                   <span x-show="loadingCodes" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <p class="text-sm opacity-70" x-text="t('generateAOneTimeCode')"></p>
@@ -1295,7 +1295,7 @@
               <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadAudit()" :disabled="loadingAudit">
                   <span x-show="loadingAudit" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <p class="text-sm opacity-70" x-text="t('loginsAndActionsOnThis')"></p>
@@ -1337,7 +1337,7 @@
                      title="Download every day this install still holds, as a JSON file" x-text="t('download')"></a>
                   <button class="btn btn-ghost btn-sm" @click="loadScreentime()" :disabled="loadingScreentime">
                     <span x-show="loadingScreentime" class="loading loading-spinner loading-xs"></span>
-                    Refresh
+                    <span x-text="t('refresh')"></span>
                   </button>
                 </div>
               </div>
@@ -1532,7 +1532,7 @@
                     <template x-for="a in firstSeen.apps" :key="a.name">
                       <li class="flex justify-between text-sm">
                         <span x-text="appLabel(a.name)"></span>
-                        <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> <span x-text="t('min')"></span></span>
                       </li>
                     </template>
                   </ul>
@@ -1628,7 +1628,7 @@
                     <template x-for="a in stRows('apps')" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
-                        <span class="opacity-70"><span x-text="a.minutes"></span> min</span>
+                        <span class="opacity-70"><span x-text="a.minutes"></span> <span x-text="t('min')"></span></span>
                       </div>
                     </template>
                   </div>
@@ -1668,7 +1668,7 @@
                         <template x-if="gamePortal(p.name)">
                           <span class="badge badge-sm badge-warning" x-text="gamePortal(p.name)"></span>
                         </template>
-                        <span class="opacity-70"><span x-text="p.minutes"></span> min</span>
+                        <span class="opacity-70"><span x-text="p.minutes"></span> <span x-text="t('min')"></span></span>
                       </div>
                     </template>
                   </div>
@@ -1704,7 +1704,7 @@
               <div class="flex items-center justify-end">
                 <button class="btn btn-ghost btn-sm" @click="loadUsage()" :disabled="loadingUsage">
                   <span x-show="loadingUsage" class="loading loading-spinner loading-xs"></span>
-                  Refresh
+                  <span x-text="t('refresh')"></span>
                 </button>
               </div>
               <p class="text-sm opacity-70" x-text="t('screenTimeAndEnforcementEvents')"></p>

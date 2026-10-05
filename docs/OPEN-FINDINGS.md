@@ -1849,9 +1849,9 @@ same thing. Either version wants the deliberate answer this entry already asks f
 
 ### O96 · The dashboard translates its labels and not the sentences it builds
 
-Two guards police the dashboard's strings, and between them they cover the markup and two call
-shapes. Neither covers the largest category: text assembled in `app.js` and handed to the markup
-through a property.
+Two guards police the dashboard's strings, and between them they cover the `t()` keys the markup
+names and two call shapes in the script. Neither covers text assembled in `app.js` and handed to the
+markup through a property — nor, as it turned out, text written into the markup itself.
 
 `refusedRows()` was the worked example — four English sentences rendered under a heading that went
 through `t()` — and is now fixed. It was not the only one. `bonusLabel()`, `todayBarLabel()` and
@@ -1884,6 +1884,18 @@ a newly-bound method building English fails, and so does leaving a method listed
 translated. So the list cannot grow silently and cannot rot into a lie, and each entry is one
 work item whenever somebody does have a reviewer for the language. The `glance*` four are the
 place to start — they are the first thing on the page.
+
+**The markup itself, measured 2026-10-05 — and larger than everything above.** This entry said the
+two guards "cover the markup". They cover the keys it names. Text the markup simply *contains*
+passed both: 115 English strings in `index.html` — every Save, Restore and Terminate button, most
+headings in the screen-time report, all of the help text, every `aria-label` and placeholder —
+reached a Dutch or Turkish parent untranslated, and the README called the languages "all-or-nothing
+by construction". Twenty had a translated key already and now use it (nine literal "Refresh" buttons
+sat beside two that went through `t()`; "min" was written out eleven times beside seven `t('min')`).
+The other 95 are pinned exactly by `no English is written into the markup outside the language
+tables`, the same arrangement as the 22 methods above and for the same reason, and the README now
+says the dashboard is not finished. The order of work does not change: a reviewer for the language
+first, then this list and the one above together.
 
 ### O97 · The config keeps unknown settings at the top level only
 

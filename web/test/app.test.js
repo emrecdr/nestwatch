@@ -3177,6 +3177,104 @@ test("no bound method starts building English that no table can translate", () =
   );
 });
 
+// Every English string written straight into the dashboard's markup instead of reached through
+// `t()` — visible text, the labels a screen reader speaks, placeholders, and literals inside a
+// bound expression. Each is shown as its first forty characters, so a copy edit further along a
+// sentence does not fail this.
+//
+// **Neither guard above sees any of these**, and `O96` said they did ("between them they cover the
+// markup"). One scans `app.js` for two call shapes; the other judges methods the markup *calls*.
+// Text the markup simply *contains* passes both, so on 2026-10-05 a Dutch or Turkish dashboard
+// still had 115 English strings in its markup — every Save, Restore and Terminate button, most
+// headings in the screen-time report, all of the help text and every `aria-label`. Twenty of them
+// had a translated key already and now use it: nine "Refresh" buttons beside two that were
+// translated, and "min" written out eleven times beside seven `t('min')`.
+//
+// Pinned exactly, like `BUILDS_ENGLISH`, for the same reason `O96` gives for not translating
+// them in one sweep: the strings in the tables are machine-produced and unreviewed. So the list
+// cannot grow — a new English string in the markup fails here — and cannot rot, because
+// translating one without removing it here fails too.
+const MARKUP_ENGLISH = [
+  "(PID", ")? Unsaved work may be lost.", ", newer than the latest release (", "Active",
+  "App filename to limit", "Apps in this group, comma separated", "At a glance",
+  "Blocked app filename", "By category", "Choose a settings file to restore", "Colour theme",
+  "Connect", "Copy the child's page link", "Create a pairing link", "Create link",
+  "Daily limit in minutes", "Daily screen-time minutes; choose a day", "Dashboard language",
+  "Dashboard password", "Dashboard password", "Download every day this install still ho",
+  "Download your curfew, limits, rules and", "Enforcing",
+  "Enter your dashboard password once more.", "Expand to fill the window (Esc to close)",
+  "First seen", "Games", "Generate code", "Give it times and it runs", "Group name", "Homework",
+  "How many days the report covers", "How often the live view refreshes",
+  "Language for the child's page", "Limits and curfew may not be applied rig",
+  "Live view stopped updating.", "More-time requests", "Most browser time", "Most time in front",
+  "Most-used apps", "Name for this routine", "No daily limit set — tracking only. Set",
+  "No times set — this routine stays manual", "Nothing set up yet", "Pairing QR code", "Remove app",
+  "Remove group", "Remove limit", "Remove window", "Restore", "Routine", "Save", "Save",
+  "Save current as routine", "Scan this with the phone that has the ap",
+  "Screen time and the curfew are anchored", "Screenshot, full size",
+  "Shared daily limit in minutes", "Showing", "Sign in", "Sign in", "Take screenshot", "Terminate",
+  "This PC is running", "This PC never contacts the internet. The", "Times the PC was in use today",
+  "Today's screen time", "Two different measurements.", "Update", "What was refused today",
+  "at any time.", "at least 8 characters", "browser, on the device you are reading t",
+  "check for a newer version", "counts only while the app was the window",
+  "counts time this PC was unlocked with an", "days", "is available — this PC has",
+  "is running now — these are its settings,", "list only names apps that already have a",
+  "lists page titles as the browser showed", "min focused", "min left", "min left", "min used",
+  "min used today", "of", "on the PC.", "on this PC ·", "reports which zone is anchored.",
+  "screen of the monitored PC", "screen of the monitored PC — click to en", "to a phone",
+  "to start enforcing.", "while that window is open — \"no games 16",
+];
+
+// What reads as English but is not copy. The sign-in heading is the product's deliberately bland
+// name on the child's PC, which the `<title>` shares; "Nestwatch" and `nestwatch doctor` are a
+// name and a command; the rest are file names shown as examples of what to type.
+const MARKUP_NOT_COPY = [
+  "🩺 Host Health", "🪺 Nestwatch", "Nestwatch", "nestwatch doctor",
+  "game.exe", "chrome.exe", "minecraft.exe, roblox.exe", "studygo-probe.exe",
+];
+
+test("no English is written into the markup outside the language tables", () => {
+  const html = stripHtml(asset("index.html")).text;
+  const hasWord = (s) => /[A-Za-z]{2,}/.test(s);
+  const found = [];
+  // Text between tags, unless the element replaces it at runtime with `x-text`/`x-html`.
+  for (const [, tag, raw] of html.matchAll(/(<[a-zA-Z][^<>]*>|<\/[a-zA-Z]+>)([^<>]+)(?=<)/g)) {
+    const s = raw.replace(/\s+/g, " ").trim();
+    if (!hasWord(s) || /^<(style|script|title)\b/.test(tag)) continue;
+    if (!tag.startsWith("</") && /\sx-(text|html)=/.test(tag)) continue;
+    found.push(s);
+  }
+  // What a person reads or hears from an attribute.
+  for (const [, value] of html.matchAll(/\s(?:aria-label|title|placeholder|alt)="([^"]*)"/g)) {
+    if (hasWord(value)) found.push(value);
+  }
+  // Literals inside a bound expression; a lone lower-camel word there is a `t()` key, not copy.
+  for (const [, expr] of html.matchAll(/\s(?:x-text|:title|:aria-label|:placeholder)="([^"]*)"/g)) {
+    for (const [, lit] of expr.matchAll(/'([^']*)'/g)) {
+      if (hasWord(lit) && !/^[a-z][A-Za-z0-9]*$/.test(lit)) found.push(lit.trim());
+    }
+  }
+  const english = found
+    .filter((s) => !MARKUP_NOT_COPY.includes(s))
+    .map((s) => s.slice(0, 40).trimEnd())
+    .sort();
+
+  assert.ok(english.length > 50, `found only ${english.length}; the scan is broken, not the markup`);
+  const pinned = [...MARKUP_ENGLISH].sort();
+  const extra = english.filter((s, i, all) => all.indexOf(s) === i)
+    .filter((s) => english.filter((x) => x === s).length > pinned.filter((x) => x === s).length);
+  const gone = pinned.filter((s, i, all) => all.indexOf(s) === i)
+    .filter((s) => pinned.filter((x) => x === s).length > english.filter((x) => x === s).length);
+  assert.deepEqual(
+    [...english],
+    pinned,
+    `the English written into index.html has changed.\n` +
+      `  new English in the markup: ${extra.join(" | ") || "(none)"}\n` +
+      `  pinned but no longer there: ${gone.join(" | ") || "(none)"}\n` +
+      `New copy belongs in the UI tables behind t(). A string translated away must leave this list.`,
+  );
+});
+
 /** Does `name`'s method body contain an English sentence that never reaches a language table? */
 function buildsEnglish(src, name) {
   const body = methodBody(src, name);
