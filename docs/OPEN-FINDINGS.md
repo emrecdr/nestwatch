@@ -1948,6 +1948,17 @@ check-run warnings (both in `control::child_notice_title`, fixed the same day), 
 sharded shape was preferred over a shorter diff: partial coverage that accumulates is worth more
 than complete coverage of a smaller diff. What it must not do is stay grey.
 
+**The weekly run went grey on its first outing too — 2026-10-05, fixed 2026-10-06.** The paragraph
+above said each shard would be a failure rather than a cancellation. Four of the 32 were cancelled,
+killed at the 110-minute limit, and they were the four full of mutants in Windows-only code:
+`doctor.rs`, `install.rs` twice and `session.rs`. cargo-mutants does not evaluate `cfg`, so on a
+Linux runner those mutants are never compiled, every one "survives", and each survivor costs a whole
+test-suite run. A fifth, shard 25, was cancelled after 31 minutes with no reason given and uploaded
+nothing. The six Windows-only modules are now excluded in `.cargo/mutants.toml` (152 mutants, kept
+in step with the code by `tests/mutants_config.rs`), the limit is 240 minutes, and the run fails
+only on a survivor not already in `.cargo/mutants-baseline.txt` (`O109`). Shard 25's loss looked
+like the runner going away rather than anything in the job, and nothing here would prevent a repeat.
+
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 
 Every message the child receives goes through `control::notify`, which on Windows is
@@ -2036,3 +2047,34 @@ log is unaffected and still records every wrong password as it happens.
 
 **Trigger.** The next change to the stand-down path, or the first report of refusals appearing on
 the wrong day.
+
+### O109 · A full sweep leaves 420 mutants alive, recorded in a baseline rather than fixed
+
+**Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
+338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
+uploaded nothing and four shards were killed before finishing (`O103`). The 555 split three ways,
+and the split is the finding:
+
+- **135 in the six modules that only compile on Windows.** Not test gaps at all: nothing on Linux
+compiles them, so nothing can kill them. Now excluded. - **99 in `#[cfg(windows)]` functions inside
+shared files** — `preflight.rs`, `doctor.rs`, `clock.rs`, `install.rs` and a few more. The same
+story one level down, kept in the baseline because excluding their files would hide the tested code
+beside them. - **321 in code the Linux tests run.** By file: `install.rs` 53, `rules.rs` 48,
+`doctor.rs` 32, `lib.rs` 23, `api.rs` 22, `cert.rs` 18, `auth.rs` 17, `pairing.rs` 17, and twenty
+files with ten or fewer.
+
+**What was done instead of fixing all of them at once.** `.cargo/mutants-baseline.txt` lists every
+survivor by file, mutation and function — no line numbers, which move with every edit — and
+`mutants-weekly.yml` now fails only on a survivor that is not on it. Before this, the job could only
+ever be red; a check that is always red reads exactly like one that is never run. Each line is debt
+rather than an exemption: a test gap, an untestable Windows-only line, or a mutant equivalent to the
+original. Killing one deletes its line in the same commit.
+
+**Order of work.** The enforcement and the parent's API first — `rules.rs`, then `api.rs` — because
+a gap there is a limit that may not hold; then `auth.rs`, `pairing.rs` and `cert.rs`. `install.rs`,
+`doctor.rs` and `lib.rs` are console and setup paths, much of which only means anything on Windows
+even where it compiles elsewhere, and come last. The 99 Windows-only functions need a mutation run
+on a Windows runner to mean anything, which is a separate decision about cost.
+
+**Not yet in the baseline:** the survivors among the ~130 untested mutants. The next complete run
+reports them as new; each is then killed or added deliberately.

@@ -14,11 +14,18 @@ name: mutants-weekly
 # cancel the hour-long run this file exists for; a separate workflow has its own concurrency group,
 # and here nothing cancels anything.
 #
-# 2,293 mutants at HEAD (`cargo mutants --list | wc -l`, 2026-10-03). 32 shards come to 61–72
-# mutants each — roughly an hour a shard after the baseline, inside the budget below with room for
-# a few mutants that time out. The repository is public, so the runner minutes are free. A survivor
-# is a FAILED shard, never a cancelled one, which is the grey outcome `O103` warns about; and every
-# shard uploads its `mutants.out`, so a red shard is read from its artifact rather than re-run.
+# 2,179 mutants at HEAD (`cargo mutants --list | wc -l`, 2026-10-06), after `.cargo/mutants.toml`
+# excludes the 152 in modules that only compile on Windows. 32 shards come to about 68 each. A
+# shard's time is set by its survivors, not its size: a caught mutant fails in seconds, a survivor
+# runs the whole suite (about two minutes here) and a hang runs to the timeout. The first run, on
+# 2026-10-05, had four shards killed at the old 110-minute limit — all of them full of Windows-only
+# survivors — so they were cancelled, the grey outcome `O103` warns about. The limit below has room
+# for a survivor-heavy shard even so. The repository is public, so the runner minutes are free.
+#
+# A shard FAILS on a survivor that is not in `.cargo/mutants-baseline.txt`, never on one that is:
+# the known ones are listed there as debt, so a red Monday means something new got through rather
+# than the same three hundred again. Every shard uploads its `mutants.out` either way, so a red
+# shard is read from its artifact rather than re-run.
 #
 # `--shard k/n` is cargo-mutants' own partition of the unshuffled list, so the 32 slices together
 # are the whole list (summed locally: 2,293). Keep `--no-shuffle`, or the slices move between runs.
@@ -35,7 +42,7 @@ permissions:
 jobs:
   mutants-weekly:
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 240
     strategy:
       # One shard's survivor says nothing about another's; let them all report.
       fail-fast: false
@@ -59,8 +66,34 @@ jobs:
       # The baseline runs the WHOLE suite, and `web::tests::every_class_*` read `assets/app.css`,
       # which is generated and gitignored. Without this every mutant is reported unviable.
       - uses: ./.github/actions/frontend-css
+      # Exit 2 means some mutants survived and 3 that some timed out: those are results, judged
+      # against the baseline in the next step. Any other non-zero — 1, a usage error; 4, the tests
+      # already failing before any mutation; 70, an internal error — means nothing was tested, and
+      # the job fails here rather than reporting a clean comparison of nothing.
       - name: Test shard ${{ matrix.shard }} of 32
-        run: cargo mutants --no-shuffle -vV --in-place --shard ${{ matrix.shard }}/32
+        run: |
+          set +e
+          cargo mutants --no-shuffle -vV --in-place --shard ${{ matrix.shard }}/32
+          code=$?
+          case "$code" in 0|2|3) exit 0 ;; *) exit "$code" ;; esac
+      # A mutant's name carries the line and column it is at, which move with every edit above it,
+      # so both sides are compared without them. `comm` on sorted input pairs repeated lines one for
+      # one, which is what lets a mutation that survives twice in one function count as two.
+      - name: Survivors not already in the baseline
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          for f in mutants.out/missed.txt mutants.out/timeout.txt; do
+            if [ -f "$f" ]; then cat "$f"; fi
+          done | sed -E 's/^([^:]+):[0-9]+:[0-9]+: /\1: /' | sort > survivors.txt
+          { grep -v -e '^#' -e '^$' .cargo/mutants-baseline.txt || true; } | sort > known.txt
+          comm -23 survivors.txt known.txt > new.txt
+          if [ -s new.txt ]; then
+            echo "::error::$(wc -l < new.txt) new survivor(s), not in .cargo/mutants-baseline.txt"
+            cat new.txt
+            exit 1
+          fi
+          echo "$(wc -l < survivors.txt) survivor(s) in this shard, all already in the baseline."
       - if: always()
         uses: actions/upload-artifact@v7
         with:

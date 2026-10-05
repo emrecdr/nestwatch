@@ -1,0 +1,437 @@
+# Mutants known to survive, so `mutants-weekly.yml` fails on a NEW survivor rather than every week.
+#
+# One line per survivor: the mutant's name as cargo-mutants prints it, with the line and column
+# removed (`src/x.rs:12:5: replace ...` becomes `src/x.rs: replace ...`). Positions move with every
+# edit above them; the file, the mutation and the function it is in do not. A mutation that survives
+# in two places in one function appears twice, and is compared as a count.
+#
+# Taken from the first full sweep, 2026-10-05 at 260f4d8, minus the Windows-only modules that
+# `mutants.toml` now excludes. That sweep did not finish: shard 25 uploaded nothing and four
+# shards ran out of time, so about 130 mutants were never tested and their survivors are not here
+# yet. The next complete run reports them as new; adding them is a decision, not a formality.
+#
+# Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
+# file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
+# deleting its line here in the same commit. `docs/OPEN-FINDINGS.md` `O109` has the breakdown.
+src/api.rs: replace != with == in delete_routine
+src/api.rs: replace / with % in child_status
+src/api.rs: replace / with * in child_status
+src/api.rs: replace == with != in grant_shadowed_by_curfew
+src/api.rs: replace == with != in save_routine
+src/api.rs: replace > with == in save_routine
+src/api.rs: replace > with == in save_routine
+src/api.rs: replace > with >= in extend_curfew
+src/api.rs: replace > with >= in extra_time
+src/api.rs: replace > with >= in require_minutes
+src/api.rs: replace > with >= in save_routine
+src/api.rs: replace > with >= in save_routine
+src/api.rs: replace grant_shadowed_by_curfew -> Option<String> with None
+src/api.rs: replace grant_shadowed_by_curfew -> Option<String> with Some("xyzzy".into())
+src/api.rs: replace grant_shadowed_by_curfew -> Option<String> with Some(String::new())
+src/api.rs: replace list_routines -> Json<Vec<Value>> with Json::from(vec![Default::default()])
+src/api.rs: replace list_routines -> Json<Vec<Value>> with Json::from(vec![])
+src/api.rs: replace list_time_codes -> Result<Json<Vec<crate::timecode::ActiveCode>>, AppError> with Ok(Json::from(vec![]))
+src/api.rs: replace match guard t > now with true in extend_curfew
+src/api.rs: replace usage -> Result<Json<Vec<Value>>, AppError> with Ok(Json::from(vec![Default::default()]))
+src/api.rs: replace usage -> Result<Json<Vec<Value>>, AppError> with Ok(Json::from(vec![]))
+src/api.rs: replace || with && in save_routine
+src/audit.rs: replace AuditLog::views_on -> u32 with 0
+src/audit.rs: replace AuditLog::views_on -> u32 with 1
+src/auth.rs: replace * with +
+src/auth.rs: replace * with + in describe_session
+src/auth.rs: replace * with + in require_auth
+src/auth.rs: replace * with /
+src/auth.rs: replace * with / in describe_session
+src/auth.rs: replace - with + in PasswordProblem::message
+src/auth.rs: replace - with + in describe_session
+src/auth.rs: replace - with / in PasswordProblem::message
+src/auth.rs: replace - with / in describe_session
+src/auth.rs: replace < with <= in LoginLimiter::check
+src/auth.rs: replace < with <= in prune
+src/auth.rs: replace < with == in prune
+src/auth.rs: replace < with > in prune
+src/auth.rs: replace > with >= in prune
+src/auth.rs: replace >= with < in require_auth
+src/auth.rs: replace match guard Instant::now() < until with true in LoginLimiter::check
+src/auth.rs: replace prune with ()
+src/cert.rs: delete ! in hostname
+src/cert.rs: replace && with || in ensure_cert
+src/cert.rs: replace + with - in params_for
+src/cert.rs: replace - with + in params_for
+src/cert.rs: replace / with % in cert_age_days
+src/cert.rs: replace / with * in cert_age_days
+src/cert.rs: replace cert_age_days -> std::io::Result<u64> with Ok(0)
+src/cert.rs: replace cert_age_days -> std::io::Result<u64> with Ok(1)
+src/cert.rs: replace days_until_expiry -> Option<u64> with None
+src/cert.rs: replace days_until_expiry -> Option<u64> with Some(0)
+src/cert.rs: replace days_until_expiry -> Option<u64> with Some(1)
+src/cert.rs: replace ensure_cert -> Result<()> with Ok(())
+src/cert.rs: replace hostname -> Option<String> with None
+src/cert.rs: replace hostname -> Option<String> with Some("xyzzy".into())
+src/cert.rs: replace primary_lan_ip -> Option<String> with Some("xyzzy".into())
+src/cert.rs: replace reachable_hosts -> Vec<String> with vec!["xyzzy".into()]
+src/cert.rs: replace warn_if_expiring with ()
+src/cert.rs: replace || with && in primary_lan_ip
+src/clock.rs: replace != with == in log_tamper
+src/clock.rs: replace / with % in current_offset_mins
+src/clock.rs: replace / with * in current_offset_mins
+src/clock.rs: replace == with != in current_zone_identity
+src/clock.rs: replace == with != in current_zone_identity
+src/clock.rs: replace > with >= in restore
+src/clock.rs: replace current_offset_mins -> i32 with 0
+src/clock.rs: replace current_zone_identity -> Option<String> with None
+src/clock.rs: replace current_zone_identity -> Option<String> with Some("xyzzy".into())
+src/clock.rs: replace current_zone_identity -> Option<String> with Some("xyzzy".into())
+src/clock.rs: replace current_zone_identity -> Option<String> with Some(String::new())
+src/clock.rs: replace current_zone_identity -> Option<String> with Some(String::new())
+src/clock.rs: replace log_tamper with ()
+src/clock.rs: replace set_anchor_zone with ()
+src/config.rs: replace + with * in <impl Serialize for EarnedDay>::serialize
+src/config.rs: replace + with * in <impl Serialize for EarnedDay>::serialize
+src/config.rs: replace > with == in Policy::validate
+src/config.rs: replace > with == in Policy::validate
+src/config.rs: replace > with >= in Policy::validate
+src/config.rs: replace > with >= in Policy::validate
+src/config.rs: replace || with && in Policy::validate
+src/control/fake.rs: replace * with + in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace * with + in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace * with / in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace * with / in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace / with % in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace / with % in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace / with * in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace / with * in <impl SystemControl for FakeControl>::screenshot
+src/control/fake.rs: replace <impl SystemControl for FakeControl>::abort_shutdown -> Result<(), ControlError> with Ok(())
+src/control/fake.rs: replace <impl SystemControl for FakeControl>::lock_workstation -> Result<(), ControlError> with Ok(())
+src/control/mod.rs: replace > with == in encode_shot
+src/control/mod.rs: replace > with == in encode_shot
+src/control/mod.rs: replace > with >= in encode_shot
+src/control/mod.rs: replace > with >= in encode_shot
+src/control/mod.rs: replace || with && in encode_shot
+src/curfew.rs: delete ! in run_enforcer
+src/curfew.rs: replace + with - in Enforcer::decide
+src/curfew.rs: replace == with != in Enforcer::tick
+src/curfew.rs: replace > with >= in Curfew::undo_extension
+src/curfew.rs: replace > with >= in Curfew::validate
+src/curfew.rs: replace Curfew::is_active_now -> bool with false
+src/curfew.rs: replace default_warn_secs -> u32 with 1
+src/curfew.rs: replace || with && in Days::any
+src/curfew.rs: replace || with && in run_enforcer
+src/doctor.rs: delete ! in network_profiles
+src/doctor.rs: delete ! in platform_checks
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete ! in run
+src/doctor.rs: delete match arm crate::rules::TickMode::Measure in run
+src/doctor.rs: replace && with || in run
+src/doctor.rs: replace && with || in run
+src/doctor.rs: replace && with || in run
+src/doctor.rs: replace && with || in run
+src/doctor.rs: replace && with || in run
+src/doctor.rs: replace <= with > in run
+src/doctor.rs: replace == with != in platform_checks
+src/doctor.rs: replace == with != in run
+src/doctor.rs: replace == with != in run
+src/doctor.rs: replace > with < in run
+src/doctor.rs: replace > with == in run
+src/doctor.rs: replace > with >= in run
+src/doctor.rs: replace all_public -> bool with true
+src/doctor.rs: replace listening -> bool with false
+src/doctor.rs: replace listening -> bool with true
+src/doctor.rs: replace match guard !elevated with false in run
+src/doctor.rs: replace match guard !elevated with true in run
+src/doctor.rs: replace match guard age <= 150 with false in run
+src/doctor.rs: replace match guard age <= 150 with true in run
+src/doctor.rs: replace match guard anchored with false in clock_check
+src/doctor.rs: replace match guard anchored with true in clock_check
+src/doctor.rs: replace match guard anchored with true in clock_check
+src/doctor.rs: replace match guard groups.len() == 32 with false in run
+src/doctor.rs: replace match guard groups.len() == 32 with true in run
+src/doctor.rs: replace match guard out.status.success() with false in platform_checks
+src/doctor.rs: replace match guard out.status.success() with true in platform_checks
+src/doctor.rs: replace match guard paths.config.exists() with false in run
+src/doctor.rs: replace match guard paths.config.exists() with true in run
+src/doctor.rs: replace match guard s.current_state == ServiceState::Running with false in platform_checks
+src/doctor.rs: replace match guard s.current_state == ServiceState::Running with true in platform_checks
+src/doctor.rs: replace network_profiles -> Vec<String> with vec!["xyzzy".into()]
+src/doctor.rs: replace network_profiles -> Vec<String> with vec![String::new()]
+src/doctor.rs: replace network_profiles -> Vec<String> with vec![]
+src/doctor.rs: replace platform_checks with ()
+src/doctor.rs: replace || with && in run
+src/foreground.rs: replace == with != in read_bounded_line
+src/foreground.rs: replace > with >= in Tracker::bank
+src/foreground.rs: replace > with >= in Tracker::bank
+src/foreground.rs: replace > with >= in Tracker::drain
+src/foreground.rs: replace > with >= in bound
+src/helper.rs: replace capture -> Result<Vec<u8>> with Ok(vec![0])
+src/helper.rs: replace capture -> Result<Vec<u8>> with Ok(vec![1])
+src/helper.rs: replace capture -> Result<Vec<u8>> with Ok(vec![])
+src/helper.rs: replace capture_to_file -> Result<()> with Ok(())
+src/helper.rs: replace capture_to_stdout -> Result<()> with Ok(())
+src/helper.rs: replace lock -> Result<()> with Ok(())
+src/helper.rs: replace watch -> Result<()> with Ok(())
+src/idempotency.rs: replace * with +
+src/idempotency.rs: replace * with +
+src/idempotency.rs: replace < with <= in IdempotencyCache::prune
+src/install.rs: delete ! in configure_firewall
+src/install.rs: delete ! in configure_firewall
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in install
+src/install.rs: delete ! in offer_fixes
+src/install.rs: delete ! in run_icacls
+src/install.rs: delete ! in uninstall
+src/install.rs: delete field password_hash from struct Config expression in install
+src/install.rs: delete field port from struct Config expression in install
+src/install.rs: delete field tz_offset_mins from struct Config expression in install
+src/install.rs: delete field tz_zone from struct Config expression in install
+src/install.rs: delete match arm 1053 in describe_service_error
+src/install.rs: delete match arm 1056 in describe_service_error
+src/install.rs: delete match arm 1058 in describe_service_error
+src/install.rs: delete match arm 1060 in describe_service_error
+src/install.rs: delete match arm 1062 in describe_service_error
+src/install.rs: delete match arm 1069 in describe_service_error
+src/install.rs: delete match arm 1072 in describe_service_error
+src/install.rs: delete match arm 1073 in describe_service_error
+src/install.rs: delete match arm 1077 in describe_service_error
+src/install.rs: delete match arm 193 | 216 in describe_service_error
+src/install.rs: delete match arm 2 in describe_service_error
+src/install.rs: delete match arm 5 in describe_service_error
+src/install.rs: replace != with == in is_elevated
+src/install.rs: replace != with == in prompt_for_password
+src/install.rs: replace && with || in install
+src/install.rs: replace && with || in install
+src/install.rs: replace && with || in install
+src/install.rs: replace && with || in install
+src/install.rs: replace && with || in install
+src/install.rs: replace && with || in install
+src/install.rs: replace && with || in is_elevated
+src/install.rs: replace += with *= in start_and_verify
+src/install.rs: replace += with -= in start_and_verify
+src/install.rs: replace < with <= in prompt_for_password
+src/install.rs: replace < with == in prompt_for_password
+src/install.rs: replace < with > in prompt_for_password
+src/install.rs: replace == with != in Leftover::removal
+src/install.rs: replace == with != in install
+src/install.rs: replace == with != in install
+src/install.rs: replace == with != in install
+src/install.rs: replace == with != in install
+src/install.rs: replace == with != in start_and_verify
+src/install.rs: replace == with != in start_and_verify
+src/install.rs: replace == with != in stop_and_wait
+src/install.rs: replace == with != in uninstall
+src/install.rs: replace > with >= in settle_sessions
+src/install.rs: replace >= with < in start_and_verify
+src/install.rs: replace Leftover::removal -> Option<Self> with None
+src/install.rs: replace configure_firewall -> Result<()> with Ok(())
+src/install.rs: replace configure_recovery with ()
+src/install.rs: replace delete_firewall_rule with ()
+src/install.rs: replace deploy -> Result<()> with Ok(())
+src/install.rs: replace deploy -> Result<()> with Ok(())
+src/install.rs: replace describe_service_error -> String with "xyzzy".into()
+src/install.rs: replace describe_service_error -> String with String::new()
+src/install.rs: replace ensure_elevated -> Result<()> with Ok(())
+src/install.rs: replace exit_detail -> String with "xyzzy".into()
+src/install.rs: replace exit_detail -> String with String::new()
+src/install.rs: replace firewall_rule_exists -> bool with false
+src/install.rs: replace firewall_rule_is_subnet_scoped -> bool with false
+src/install.rs: replace firewall_rule_is_subnet_scoped -> bool with true
+src/install.rs: replace harden_acl -> Result<()> with Ok(())
+src/install.rs: replace harden_program_dir -> Result<()> with Ok(())
+src/install.rs: replace install_dir -> std::path::PathBuf with Default::default()
+src/install.rs: replace is_elevated -> bool with false
+src/install.rs: replace is_elevated -> bool with false
+src/install.rs: replace is_elevated -> bool with true
+src/install.rs: replace match guard !config::data_paths().config.exists() with false in install
+src/install.rs: replace match guard !config::data_paths().config.exists() with true in install
+src/install.rs: replace match guard !pw.is_empty() with false in install
+src/install.rs: replace match guard !pw.is_empty() with true in install
+src/install.rs: replace match guard attempt < TRIES with false in prompt_for_password
+src/install.rs: replace match guard attempt < TRIES with true in prompt_for_password
+src/install.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in Leftover::removal
+src/install.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in Leftover::removal
+src/install.rs: replace match guard out.status.success() with false in configure_recovery
+src/install.rs: replace match guard out.status.success() with true in configure_recovery
+src/install.rs: replace match guard s.current_state == ServiceState::Stopped with false in start_and_verify
+src/install.rs: replace match guard s.current_state == ServiceState::Stopped with true in start_and_verify
+src/install.rs: replace match guard status.current_state == ServiceState::Stopped with false in stop_and_wait
+src/install.rs: replace match guard status.current_state == ServiceState::Stopped with true in stop_and_wait
+src/install.rs: replace offer_fixes -> Result<bool> with Ok(false)
+src/install.rs: replace offer_fixes -> Result<bool> with Ok(true)
+src/install.rs: replace prepare_data_dir -> Result<()> with Ok(())
+src/install.rs: replace prepare_data_dir -> Result<()> with Ok(())
+src/install.rs: replace process_image_path -> Option<String> with None
+src/install.rs: replace process_image_path -> Option<String> with Some(String::new())
+src/install.rs: replace prompt_for_password -> Result<String> with Ok("xyzzy".into())
+src/install.rs: replace prompt_for_password -> Result<String> with Ok(String::new())
+src/install.rs: replace remove_service -> Result<()> with Ok(())
+src/install.rs: replace run_icacls -> Result<()> with Ok(())
+src/install.rs: replace show_firewall_rule -> std::io::Result<std::process::Output> with Ok(Default::default())
+src/install.rs: replace stamp_path -> std::path::PathBuf with Default::default()
+src/install.rs: replace stop_and_wait -> Result<()> with Ok(())
+src/install.rs: replace uninstall -> Result<()> with Ok(())
+src/install.rs: replace write_stamp -> Result<()> with Ok(())
+src/install.rs: replace | with & in deploy
+src/install.rs: replace | with ^ in deploy
+src/jsonl.rs: replace * with +
+src/jsonl.rs: replace * with + in last_timestamp
+src/jsonl.rs: replace > with >= in rotate_if_over_size
+src/jsonl.rs: replace JsonlLog::any_line_contains -> bool with true
+src/lib.rs: delete ! in print_pairing
+src/lib.rs: delete match arm Some("--capture") in run_helper
+src/lib.rs: delete match arm Some("--capture-stdout") in run_helper
+src/lib.rs: delete match arm Some("--lock") in run_helper
+src/lib.rs: delete match arm Some("--watch") in run_helper
+src/lib.rs: replace + with * in print_pairing
+src/lib.rs: replace + with * in run_helper
+src/lib.rs: replace + with - in print_pairing
+src/lib.rs: replace + with - in run_helper
+src/lib.rs: replace += with *= in check_flags
+src/lib.rs: replace += with *= in check_flags
+src/lib.rs: replace == with != in init_tracing
+src/lib.rs: replace == with != in print_pairing
+src/lib.rs: replace == with != in print_remote_setup
+src/lib.rs: replace == with != in run_cli
+src/lib.rs: replace == with != in run_helper
+src/lib.rs: replace hostname -> String with "xyzzy".into()
+src/lib.rs: replace hostname -> String with String::new()
+src/lib.rs: replace init_tracing with ()
+src/lib.rs: replace print_fingerprint -> Result<()> with Ok(())
+src/lib.rs: replace print_pairing -> Result<()> with Ok(())
+src/lib.rs: replace print_remote_setup -> Result<()> with Ok(())
+src/lib.rs: replace run_cli -> Result<()> with Ok(())
+src/lib.rs: replace run_server -> Result<()> with Ok(())
+src/lib.rs: replace run_service -> Result<()> with Ok(())
+src/main.rs: replace main -> anyhow::Result<()> with Ok(())
+src/pairing.rs: replace % with + in qr_svg
+src/pairing.rs: replace % with / in qr_svg
+src/pairing.rs: replace * with + in qr_svg
+src/pairing.rs: replace * with / in qr_svg
+src/pairing.rs: replace + with * in mint
+src/pairing.rs: replace + with * in qr_svg
+src/pairing.rs: replace + with * in qr_svg
+src/pairing.rs: replace + with * in qr_svg
+src/pairing.rs: replace + with - in qr_svg
+src/pairing.rs: replace / with % in qr_svg
+src/pairing.rs: replace / with * in qr_svg
+src/pairing.rs: replace <impl std::fmt::Display for AdvertisedHost<'_>>::fmt -> std::fmt::Result with Ok(Default::default())
+src/pairing.rs: replace == with != in qr_svg
+src/pairing.rs: replace clear with ()
+src/pairing.rs: replace now_secs -> u64 with 1
+src/pairing.rs: replace qr_code -> Option<String> with Some("xyzzy".into())
+src/pairing.rs: replace qr_code -> Option<String> with Some(String::new())
+src/preflight.rs: delete ! in apply
+src/preflight.rs: delete ! in check_system_tools
+src/preflight.rs: delete ! in check_system_tools
+src/preflight.rs: delete ! in check_system_tools
+src/preflight.rs: delete ! in running_service_port
+src/preflight.rs: delete field dwOSVersionInfoSize from struct OSVERSIONINFOW expression in os_build
+src/preflight.rs: replace == with != in apply
+src/preflight.rs: replace == with != in check_existing_service
+src/preflight.rs: replace == with != in check_existing_service
+src/preflight.rs: replace == with != in check_port
+src/preflight.rs: replace apply -> Result<String, String> with Ok("xyzzy".into())
+src/preflight.rs: replace apply -> Result<String, String> with Ok("xyzzy".into())
+src/preflight.rs: replace apply -> Result<String, String> with Ok(String::new())
+src/preflight.rs: replace apply -> Result<String, String> with Ok(String::new())
+src/preflight.rs: replace check_existing_service with ()
+src/preflight.rs: replace check_mark_of_the_web with ()
+src/preflight.rs: replace check_network_profile with ()
+src/preflight.rs: replace check_windows_build with ()
+src/preflight.rs: replace gather -> Vec<Finding> with vec![]
+src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::AddrInUse with true in check_port
+src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in apply
+src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in apply
+src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::PermissionDenied with false in check_port
+src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::PermissionDenied with true in check_port
+src/preflight.rs: replace os_build -> u32 with 0
+src/preflight.rs: replace os_build -> u32 with 1
+src/preflight.rs: replace running_service_port -> Option<u16> with None
+src/preflight.rs: replace running_service_port -> Option<u16> with Some(0)
+src/preflight.rs: replace running_service_port -> Option<u16> with Some(0)
+src/preflight.rs: replace running_service_port -> Option<u16> with Some(1)
+src/preflight.rs: replace running_service_port -> Option<u16> with Some(1)
+src/preflight.rs: replace zone_identifier -> String with "xyzzy".into()
+src/preflight.rs: replace zone_identifier -> String with String::new()
+src/preflight.rs: replace | with & in check_existing_service
+src/preflight.rs: replace | with ^ in check_existing_service
+src/probe.rs: replace > with >= in run_once
+src/rules.rs: delete ! in maybe_abort_budget_shutdown
+src/rules.rs: delete ! in run_rules_enforcer
+src/rules.rs: delete field day from struct Self expression in Usage::load_for_today
+src/rules.rs: delete match arm Ok(Ok(state)) in run_rules_enforcer
+src/rules.rs: delete match arm Self::GroupPool{group, ..} in StopReason::group
+src/rules.rs: replace != with == in run_rules_enforcer
+src/rules.rs: replace != with == in run_rules_enforcer
+src/rules.rs: replace && with || in maybe_abort_budget_shutdown
+src/rules.rs: replace && with || in maybe_abort_budget_shutdown
+src/rules.rs: replace * with +
+src/rules.rs: replace * with / in run_rules_enforcer
+src/rules.rs: replace + with - in RulesEnforcer::decide
+src/rules.rs: replace + with - in RulesEnforcer::decide
+src/rules.rs: replace + with - in RulesEnforcer::decide
+src/rules.rs: replace + with - in RulesEnforcer::decide
+src/rules.rs: replace / with % in run_rules_enforcer
+src/rules.rs: replace / with % in today_summary
+src/rules.rs: replace / with * in run_rules_enforcer
+src/rules.rs: replace / with * in today_summary
+src/rules.rs: replace < with <= in Rules::budget_cuts_extension_short
+src/rules.rs: replace < with <= in RulesEnforcer::accounting_day
+src/rules.rs: replace == with != in RulesEnforcer::decide
+src/rules.rs: replace > with < in Rules::validate
+src/rules.rs: replace > with == in Rules::has_any_budget
+src/rules.rs: replace > with == in Rules::validate
+src/rules.rs: replace > with == in Rules::validate
+src/rules.rs: replace > with == in Rules::validate
+src/rules.rs: replace > with == in Rules::validate
+src/rules.rs: replace > with == in Rules::validate
+src/rules.rs: replace > with == in Rules::validate
+src/rules.rs: replace > with >= in Rules::has_any_budget
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in Rules::validate
+src/rules.rs: replace > with >= in run_rules_enforcer
+src/rules.rs: replace StopReason::group -> Option<&str> with None
+src/rules.rs: replace StopReason::group -> Option<&str> with Some("")
+src/rules.rs: replace StopReason::limit_mins -> Option<u32> with None
+src/rules.rs: replace match guard t.now >= dl + t.slack with true in RulesEnforcer::decide
+src/rules.rs: replace match guard t.now >= dl with true in RulesEnforcer::decide
+src/rules.rs: replace || with && in Rules::validate
+src/rules.rs: replace || with && in Rules::validate
+src/rules.rs: replace || with && in Rules::validate
+src/screentime.rs: replace > with == in first_seen_in
+src/screentime.rs: replace > with >= in DayRow::measured
+src/screentime.rs: replace > with >= in first_seen_in
+src/screentime.rs: replace || with && in ParsedRow::detail
+src/server.rs: replace * with +
+src/server.rs: replace serve -> Result<()> with Ok(())
+src/sessionstore.rs: replace > with < in FileSessionStore::revoke_all
+src/sessionstore.rs: replace > with == in FileSessionStore::revoke_all
+src/sessionstore.rs: replace > with >= in <impl SessionStore for FileSessionStore>::load
+src/sessionstore.rs: replace > with >= in FileSessionStore::persist
+src/sessionstore.rs: replace > with >= in FileSessionStore::revoke_all
+src/sessionstore.rs: replace > with >= in FileSessionStore::snapshot
+src/srcscan.rs: replace + with * in in_a_comment_line
+src/srcscan.rs: replace += with *= in statements
+src/srcscan.rs: replace += with -= in statements
+src/srcscan.rs: replace line_of -> usize with 1
+src/srcscan.rs: replace || with && in statements
+src/timereq.rs: replace < with <= in SubmitLimiter::count_and_check
+src/token.rs: replace % with / in random
+src/usage.rs: replace UsageLog::recent_including_rotated -> Vec<Value> with vec![Default::default()]
+src/usage.rs: replace UsageLog::recent_including_rotated -> Vec<Value> with vec![]

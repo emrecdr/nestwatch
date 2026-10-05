@@ -1,0 +1,26 @@
+# cargo-mutants configuration, read by both CI jobs (`ci.yml`'s in-diff `mutants` and
+# `mutants-weekly.yml`) and by any local run.
+#
+# The six modules below are compiled on Windows only — `#[cfg(windows)] mod ...` in `src/lib.rs` and
+# `src/control/mod.rs`. cargo-mutants does not evaluate `cfg`; its book says so plainly: "`cfg(windows)`
+# code will still be mutated on Unix". Every runner that mutates this crate is Linux, so a mutant
+# in these files is never compiled at all: the unchanged binary passes the tests and the mutant is
+# reported MISSED. The first full sweep (2026-10-05, at 260f4d8) found 135 such survivors out of
+# 555, and the four shards that ran out of time were the ones full of them, because every survivor
+# costs a whole test-suite run. Nothing on Linux can ever kill these, so they are excluded rather
+# than recorded as debt.
+#
+# `#[cfg(windows)]` functions inside files that also hold cross-platform code are not listed:
+# excluding the file would hide its tested neighbours too. Their survivors are in
+# `mutants-baseline.txt`, beside the rest.
+#
+# `tests/workflow_pins.rs` keeps this list equal to the Windows-only module declarations, so a new
+# one is excluded the day it appears and one made cross-platform is not left out.
+exclude_globs = [
+  "src/control/service_control.rs",
+  "src/control/windows.rs",
+  "src/service.rs",
+  "src/session.rs",
+  "src/syspath.rs",
+  "src/watcher.rs",
+]
