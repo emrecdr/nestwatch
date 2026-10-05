@@ -80,18 +80,34 @@ where
 ///
 /// `mutate` must leave the config unchanged when it returns `Err`: on that path the guard is
 /// dropped without saving, so a partial change would live in memory and not on disk.
+///
+/// **A change that could not be saved is taken back out of memory**, and the error says so. It
+/// used to stay: the handler answered 500, the change went on being enforced until the next
+/// restart quietly removed it, and — the part that made it a defect rather than a wrinkle — the
+/// parent's retry compared against memory that already held the change, found nothing to do, and
+/// answered 200 without writing a byte. `tests/config_save_failure.rs` reproduces that sequence.
+/// The rule is the one `rules::save_tally_if_changed` states for the tally: what counts as
+/// "unchanged" is what reached disk, not what is in memory.
+///
+/// The rollback is safe because every in-service write comes through here under
+/// `config_save_lock`, so nothing else can have changed the config between the mutation and the
+/// failure. An enforcer may have *read* the change while the save was in flight; it reads the
+/// restored value on its next tick. A handler that consumed something before calling — an
+/// approved request, a redeemed code — loses the grant with the change, and its 500 is then the
+/// truth: nothing was granted.
 pub(crate) async fn try_update_config<F>(state: &AppState, mutate: F) -> Result<(), AppError>
 where
     F: FnOnce(&mut Config) -> Result<(), AppError>,
 {
     let _persist = state.config_save_lock.lock().await;
-    let (before, snapshot) = {
+    let (previous, before, snapshot) = {
         let mut guard = crate::state::recover_write(&state.config);
+        let previous = guard.clone();
         // Serialised before the mutation so the comparison below is of bytes rather than of
         // anybody's promise. See that comparison for why it is not a flag.
         let before = serde_json::to_string(&*guard).ok();
         mutate(&mut guard)?;
-        (before, guard.clone())
+        (previous, before, guard.clone())
     };
     // **A mutation that changed nothing is not written and does not wake anyone.**
     //
@@ -115,9 +131,13 @@ where
     {
         return Ok(());
     }
-    spawn(move || snapshot.save())
-        .await?
-        .map_err(AppError::Internal)?;
+    let saved = spawn(move || snapshot.save())
+        .await
+        .and_then(|result| result.map_err(AppError::Internal));
+    if let Err(e) = saved {
+        *crate::state::recover_write(&state.config) = previous;
+        return Err(e);
+    }
     // After the save, so a woken enforcer reads the same config that reached disk. Every parent
     // action that can invalidate a pending shutdown flows through here, which is why the wake
     // lives at this choke point rather than in the four handlers that need it.

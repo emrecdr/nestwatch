@@ -7,6 +7,20 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Fixed
+
+- **A setting that could not be saved is no longer kept, so saving it again really saves it.**
+  When the PC failed to write `config.json` — a full disk, a file held open by a scanner — the
+  dashboard said the change had failed but went on enforcing it, and pressing Save a second time
+  answered *saved* without writing anything, because the change was already in memory. The next
+  restart then put the old setting back without telling anyone. A failed save now takes the change
+  back out, so what is enforced is what is on disk, and the retry writes it. One consequence is
+  worth knowing: if approving a request or redeeming a code hits a failed save, the request or code
+  is used up and no time is added — and the error says so, where before the minutes appeared and
+  then vanished at the next restart.
+
 ## [0.10.0] — 2026-10-04
 
 ### Added
