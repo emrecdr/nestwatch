@@ -760,3 +760,84 @@ fn child_page_checklist_item(security: &str) -> String {
 fn collapse_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+/// Every module-level `pub fn` in `src/` carries a doc comment of its own, directly above it.
+///
+/// **This is `O69`'s own mitigation, made to run.** Inserting an item between a doc comment and the
+/// item it describes moves the doc onto the newcomer and leaves the owner bare, and nothing in the
+/// build notices: no compiler error, no clippy lint, and the stranded prose reads fine where it
+/// landed. `O69` tried three detectors for the stolen-doc half and found none precise enough to
+/// keep. What it kept was the other half — the owner left undocumented — and the advice to hold the
+/// list of undocumented module-level `pub fn`s at zero, so that anything appearing on it is short
+/// enough to be read. It said the list was "two entries away" from zero. Nothing held it there, and
+/// on 2026-10-05 it was three: `be1c07e` had put `remember_device` between `require_auth` and its
+/// doc, so the middleware guarding every `/api/*` route had shipped for a month undocumented, its
+/// explanation of the sliding expiry opening the doc of a different function.
+///
+/// Only module-level free functions, as `O69` scoped it: methods and nested items are indented and
+/// do not match. Attributes between the doc and the item are allowed; a blank line is not, because
+/// rustdoc would not attach the comment across it either. The production half of each file only,
+/// cut by `srcscan::production_source`, so test helpers are not held to it.
+#[test]
+fn every_module_level_pub_fn_has_its_own_doc_comment() {
+    fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    files.sort();
+    assert!(
+        files.len() > 30,
+        "found {} files under src/; the walk is broken, not the code",
+        files.len()
+    );
+
+    let mut bare = Vec::new();
+    let mut seen = 0;
+    for path in &files {
+        let text = fs::read_to_string(path).unwrap();
+        let lines: Vec<&str> = production_source(&text).lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let Some(rest) = line
+                .strip_prefix("pub fn ")
+                .or_else(|| line.strip_prefix("pub async fn "))
+            else {
+                continue;
+            };
+            seen += 1;
+            let above = lines[..i]
+                .iter()
+                .rev()
+                .find(|l| !l.trim_start().starts_with("#["))
+                .copied()
+                .unwrap_or("");
+            if !above.trim_start().starts_with("///") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                let file = path.strip_prefix(root).unwrap().display();
+                bare.push(format!("{file}:{} {name}", i + 1));
+            }
+        }
+    }
+    assert!(
+        seen > 50,
+        "found only {seen} module-level pub fns; the scan is broken, not the code"
+    );
+    assert!(
+        bare.is_empty(),
+        "these module-level pub fns have no doc comment directly above them. If one was just \
+         inserted, check the item above it: a doc comment may have been moved onto the newcomer \
+         rather than lost (O69).\n  {}",
+        bare.join("\n  ")
+    );
+}

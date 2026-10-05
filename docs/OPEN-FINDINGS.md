@@ -888,7 +888,7 @@ the workaround is a footnote and the proper fix is a lexer.
 
 Inserting an item directly above an existing one silently transfers the doc comment: the new item
 adopts the block, and the item that owned it is left undocumented. Neither `cargo test` nor
-`clippy -D warnings` nor the cross-compile has ever failed on it. It has happened **five times** in
+`clippy -D warnings` nor the cross-compile has ever failed on it. It has happened **six times** in
 this codebase.
 
 All five are fixed. `screentime::totals_across` and two others went in `0eb0bc4`; `api::notify` was
@@ -896,11 +896,12 @@ caused and fixed the same day; `lib::run_cli` went in `1c6fe7a` — that one had
 the root commit `e760aa4`, so the CLI entry point carried no doc in **any** revision of this repo
 until 2026-08-27.
 
-**No live instance is known.** Scanned against `bef3a59` on 2026-08-27: two undocumented
-module-level `pub fn` (`config::data_paths`, `install::install`) and thirty across all visibilities.
-Each of the two was read and neither is a victim — `install` is described in `install.rs`'s own `//!`
-header, and `data_paths` sits below `DataPaths`'s own doc. So this entry is not a live defect; it is
-the absence of anything that would catch the sixth.
+**No live instance was known on 2026-08-27** (one appeared a week later; see below). Scanned against
+`bef3a59` that day: two undocumented module-level `pub fn` (`config::data_paths`,
+`install::install`) and thirty across all visibilities. Each of the two was read and neither is a
+victim — `install` is described in `install.rs`'s own `//!` header, and `data_paths` sits below
+`DataPaths`'s own doc. So this entry is not a live defect; it is the absence of anything that would
+catch the sixth.
 
 **The one time a gate did catch it, it was an accident of formatting.** `api::notify`'s stolen block
 happened to end in a `*` list, which tripped `doc_lazy_continuation`. A block ending in prose splices
@@ -956,6 +957,19 @@ to ignore is its own failure. The nearest useful thing is not a detector: keep t
 module-level `pub fn` list at zero (it is two entries away) so that anything appearing on it is
 short enough to be read, since reading is what found every instance. That is a guard on list length,
 not on the defect.
+
+**The sixth instance, found 2026-10-05, and why that advice now runs as a test.** Nothing held the
+list at two, and by the October audit it was three: `be1c07e` (2026-09-03) had inserted
+`remember_device` between `auth::require_auth` and its doc, so the middleware guarding every
+`/api/*` route shipped for a month undocumented while its explanation of the sliding session expiry
+opened a different function's doc. It was found the way four of the first five were — by a person
+reading — and fixed by moving the block back. The two legitimate entries, `config::data_paths` and
+`install::install`, now carry docs of their own, and
+`doc_claims::every_module_level_pub_fn_has_its_own_doc_comment` asserts the list is empty, so a
+seventh insertion against a module-level `pub fn` fails on the day it lands and names the file and
+line. What remains open is everything that guard cannot see: private and `pub(crate)` functions —
+`screentime::totals_across` and `api::notify` among the earlier victims — methods, and the deletion
+form above, which leaves no absence at all.
 
 ### O70 · The enforcer loops are driven down one path each, never across a scripted day
 

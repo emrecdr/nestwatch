@@ -763,14 +763,6 @@ const SEEN_KEY: &str = "seen";
 /// once every 5 days, not once per request.
 const SLIDING_REFRESH_SECS: i64 = 5 * 86_400;
 
-/// Middleware guarding `/api/*`: 401 unless the session is authenticated.
-///
-/// Also implements the *sliding* part of the "remember this device" expiry. `tower-sessions`
-/// recomputes `expiry_date` only when a session is **saved**, and it only saves when the session
-/// was **modified** — reading is explicitly not activity. So `Expiry::OnInactivity(30 days)`
-/// alone behaves as a hard 30-day cutoff from login, even for someone using the dashboard daily.
-/// Touching a timestamp here marks the session modified, which refreshes both the stored expiry
-/// and the browser cookie. Stepped coarsely so this isn't a write per request.
 /// Record who just signed in, on the session itself.
 ///
 /// Called from both authentication paths, next to the `AUTH_KEY` and `SCOPE_KEY` writes, so a
@@ -1010,6 +1002,14 @@ pub fn usage_for_integration(summary: &Value) -> Value {
     Value::Object(narrowed)
 }
 
+/// Middleware guarding `/api/*`: 401 unless the session is authenticated.
+///
+/// Also implements the *sliding* part of the "remember this device" expiry. `tower-sessions`
+/// recomputes `expiry_date` only when a session is **saved**, and it only saves when the session
+/// was **modified** — reading is explicitly not activity. So `Expiry::OnInactivity(30 days)`
+/// alone behaves as a hard 30-day cutoff from login, even for someone using the dashboard daily.
+/// Touching a timestamp here marks the session modified, which refreshes both the stored expiry
+/// and the browser cookie. Stepped coarsely so this isn't a write per request.
 pub async fn require_auth(
     State(state): State<AppState>,
     session: Session,

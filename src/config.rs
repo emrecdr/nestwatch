@@ -1005,6 +1005,12 @@ pub struct DataPaths {
     pub sessions: PathBuf,
 }
 
+/// Where this install keeps its files, resolved afresh on every call.
+///
+/// The directory is `C:\ProgramData\HostHealth` on Windows — machine-wide rather than per-user,
+/// because `install` runs as the parent and the service as SYSTEM and both must land on the same
+/// files. A debug build honours `NESTWATCH_DATA_DIR` instead, which is how every test redirects it;
+/// a release build ignores the variable, so nothing can point the service at another password hash.
 pub fn data_paths() -> DataPaths {
     let dir = data_dir();
     DataPaths {

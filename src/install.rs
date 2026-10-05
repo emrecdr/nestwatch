@@ -24,6 +24,10 @@ use crate::config::{self, Config, DEFAULT_PORT};
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const FIREWALL_RULE: &str = "HostHealthService";
 
+/// `nestwatch install`: the elevated, interactive setup that turns this binary into the service —
+/// password, certificate, service registration, firewall rule and file permissions, in the order
+/// this module's header explains. Running it again is how an upgrade is installed and how a parent
+/// who has forgotten the password gets back in.
 pub fn install() -> Result<()> {
     println!("== nestwatch v{} :: install ==\n", crate::VERSION);
     // Fail fast (before prompting for a password or creating anything) if we're not elevated:
