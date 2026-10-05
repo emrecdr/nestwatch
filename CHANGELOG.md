@@ -11,6 +11,14 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Added
 
+- **Lowering today's limit below what has already been used now asks first.** Saving such a change
+  puts today over the limit the moment it lands, so the PC locks — or shuts down — after its short
+  grace, without the 15, 5 and 1-minute warnings your child would otherwise get. The limits card
+  now says exactly that before saving ("95 minutes have been used and the new limit is 60…") and
+  lets you cancel. It asks only when the save is what does it: a change that leaves time, a day
+  already over, or a *warn only* setting goes straight through, and so does any save when the PC
+  cannot be asked. A scheduled routine that lowers the limit mid-day still starts without a
+  countdown; that is recorded as `O107`.
 - **Wrong dashboard passwords show on *Refused today*.** Every one was already written to the
   access log, which the dashboard keeps folded away in *Recent access* — so someone working on
   your password looked like a quiet day from the top of the page. The card now has a row for them.

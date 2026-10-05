@@ -84,19 +84,20 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 the downloaded artifacts.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **59 items across §H1–§H10** — the bedtime
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **61 items across §H1–§H11** — the bedtime
 extension and its undo, the enforcer wake, the translated shutdown notices, the ask link, the
 child's page in Dutch, the provider probe and the three sentences it says, the practice gate, the
-message a parent types, the summer mark across a reboot and `install`'s sessions note — and none
-of them has executed on Windows. Re-measured 2026-10-04; it read 53 across §H1–§H9 when this
-release's work began and 45 when `v0.9.0` shipped, and six of the fourteen new items were written
-while cutting this release for features that would otherwise have shipped without any. Worth
+message a parent types, the summer mark across a reboot, `install`'s sessions note and, since the
+release, the PC counting as one device to the lockout (§H11) — and none of them has executed on
+Windows. Re-measured 2026-10-05; it read 59 when `v0.10.0` shipped, it read 53 across §H1–§H9 when
+this release's work began and 45 when `v0.9.0` shipped, and six of the fourteen new items were
+written while cutting this release for features that would otherwise have shipped without any. Worth
 stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
-file**, in any section, so all 230 boxes it carries are still open. The three gates that
-were green when it shipped are the same three that were green when `install` failed on real hardware
-and again when `remove_file` turned out not to be exclusive. That is not an argument for distrusting
-them; it is the reason the section below exists and the reason the checklist is the only method here
-with a track record.
+file**, in any section, so all 232 boxes it carries are still open. The three gates that were green
+when it shipped are the same three that were green when `install` failed on real hardware and again
+when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
+is the reason the section below exists and the reason the checklist is the only method here with a
+track record.
 
 **0.10.0 touches two lines of Windows-only code, both at install time.** Measured 2026-10-04 with
 `git diff v0.9.0..HEAD`: of 3,417 lines added under `src/`, two are inside a `#[cfg(windows)]`
@@ -1605,12 +1606,12 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 59 items that have never executed (measured 2026-10-04; 53 on 2026-09-16, 45 at `v0.9.0`, 38 at `v0.8.0`, and
-32 when this was written), so the gap has a size and a reader can weigh it. A
-feature absent from the checklist has no size. The release-state paragraph could be read as "0.6.0
-is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were written down and
-left unchecked, 0.6.0's were never written down. The two together are the tier-3 surface, and only
-one of them is visible.
+carries 61 items that have never executed (measured 2026-10-05; 59 at `v0.10.0`, 53 on 2026-09-16,
+45 at `v0.9.0`, 38 at `v0.8.0`, and 32 when this was written), so the gap has a size and a reader
+can weigh it. A feature absent from the checklist has no size. The release-state paragraph could be
+read as "0.6.0 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were
+written down and left unchecked, 0.6.0's were never written down. The two together are the tier-3
+surface, and only one of them is visible.
 
 **Not a documentation problem.** The features carry real Windows-side behaviour that nothing here
 has exercised: a schedule that opens and closes against `clock`'s tamper-anchored local time and
@@ -1977,3 +1978,34 @@ a channel whose one property they do not want, and the alternative is documented
 already half-present in this repository. Left open because the registration touches `install`, and
 an install-time step that can fail silently is exactly the class this project spends the most
 effort avoiding.
+
+### O107 · A routine that lowers the limit mid-day reaches the child with no countdown
+
+**Found 2026-10-05, by reading; not reproduced on the PC.** The README promises warnings at 15, 5
+and 1 minutes "so the limit is never a surprise", and the budget path keeps it by counting down as
+the remaining minutes cross each threshold (`decide`, `countdown.observe`). That only works when the
+remaining time *falls through* the thresholds. When it jumps — the limit drops below what has
+already been used — there is no moment at which fifteen minutes were left, and the enforcer goes
+straight to the lock warning and its short grace (`warn_secs`, a minute by default).
+
+Two things make the limit jump. **A parent's save** now asks first: `POST /api/rules/preview`
+reports when saving would newly put today over, and the dashboard names the consequence — the lock
+or the shutdown, after how long, and that no countdown comes first — before sending it. **A
+scheduled routine starting** does not, and cannot be asked about, because nobody presses anything: a
+"Homework, 16:00–18:00" routine with a 60-minute limit, on a day with 75 minutes already used, locks
+the PC at 16:00 with a minute's notice. The curfew solved the same problem for its own windows with
+a lookahead — `Curfew::mins_until_active` probes the next fifteen minutes so the countdown starts
+before the window opens — and the rules enforcer has nothing like it.
+
+**Why it is not fixed alongside the preview.** The fix is in the enforcement path: either the rules
+loop probes `rules_at(now + m)` for the next fifteen minutes and counts down against the routine
+about to start, or a mid-day cut takes effect no sooner than the warning the child would have had —
+the floor `Curfew::undo_extension` already applies to a bedtime brought forward. Both change
+`decide`'s inputs, which is the function the declined-options list keeps out of restructures, and
+the second one also changes what a scheduled routine *means* (it would start fifteen minutes late on
+exactly the days it bites). That is a product decision about routines, not a parameter, so it is
+recorded rather than defaulted.
+
+**Trigger.** The first time a routine with a lower limit is scheduled on the PC, or the
+scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
+comes first.

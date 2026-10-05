@@ -2414,6 +2414,85 @@ test("a wrong password gets its own row, saying what held rather than who tried"
   }
 });
 
+// --- saving rules that put today over the limit ----------------------------------------------
+//
+// Cutting the limit below what has already been used puts today over the moment the save lands,
+// and the enforcer then acts after its short grace — with none of the 15, 5 and 1-minute warnings,
+// because there was never a moment when fifteen minutes were left. `POST /api/rules/preview` says
+// so before the save; these pin what the dashboard does with the answer.
+
+const OVER = { over: true, was_over: false, used_mins: 95, budget_mins: 60, action: "lock", warn_secs: 30 };
+
+test("a save that puts today over the limit is described before it is made", () => {
+  const a = loadApp();
+  const lock = a.rulesConsequence(OVER);
+  assert.match(lock, /95 minutes/);
+  assert.match(lock, /limit is 60/);
+  assert.match(lock, /locks the PC/);
+  assert.match(lock, /30-second warning/);
+  assert.match(lock, /15, 5 or 1-minute warning/, "it says which promise the save breaks");
+  assert.match(a.rulesConsequence({ ...OVER, action: "shutdown" }), /shuts the PC down/);
+
+  // Nothing to ask about: still inside the limit, already over before the change (the save is
+  // not what does it), warn-only (nothing locks), or no answer at all.
+  for (const quiet of [{ ...OVER, over: false }, { ...OVER, was_over: true }, { ...OVER, action: "warn" }, null, undefined]) {
+    assert.equal(a.rulesConsequence(quiet), "", JSON.stringify(quiet));
+  }
+});
+
+/** The component with `fetch` answering the preview with `preview` and recording every URL. */
+function savingRules(preview, answer) {
+  const urls = [];
+  const asked = [];
+  const app = loadApp({
+    fetch: async (url) => {
+      urls.push(url);
+      if (url === "/api/rules/preview") {
+        if (preview instanceof Error) throw preview;
+        return { ok: true, status: 200, json: async () => preview };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    },
+    confirm: (message) => {
+      asked.push(message);
+      return answer;
+    },
+  });
+  app.toast = () => {};
+  app.loadToday = () => {};
+  app.collapseRules = () => {};
+  app.rules = { enabled: true, daily_budget_mins: 60, blocklist: [], app_limits: {}, budget_action: "lock", warn_secs: 30 };
+  return { app, urls, asked };
+}
+
+test("a parent who declines keeps the rules unsaved", async () => {
+  const { app, urls, asked } = savingRules(OVER, false);
+  await app.saveRules();
+  assert.equal(asked.length, 1);
+  assert.equal(urls.join(","), "/api/rules/preview", "declining must not send the save");
+  assert.equal(app.savingRules, false);
+});
+
+test("a parent who confirms saves", async () => {
+  const { app, urls } = savingRules(OVER, true);
+  await app.saveRules();
+  assert.equal(urls.join(","), "/api/rules/preview,/api/rules");
+});
+
+test("a save that changes nothing today is not interrupted", async () => {
+  const { app, urls, asked } = savingRules({ ...OVER, over: false }, false);
+  await app.saveRules();
+  assert.equal(asked.length, 0, "no question when the answer is that nothing happens now");
+  assert.equal(urls.join(","), "/api/rules/preview,/api/rules");
+});
+
+test("a preview that fails never stands between the parent and the save", async () => {
+  const { app, urls, asked } = savingRules(new Error("offline"), false);
+  await app.saveRules();
+  assert.equal(asked.length, 0);
+  assert.equal(urls.join(","), "/api/rules/preview,/api/rules", "the save is the authority, not the preview");
+});
+
 // --- routine schedules -----------------------------------------------------
 //
 // A routine that carries times applies itself while they are open, so these two functions decide

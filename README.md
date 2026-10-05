@@ -89,7 +89,7 @@ one on the real machine with **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.
 |---|---|
 | **Daily budget** | Minutes per day, optionally different per weekday. Counts only *active* use — not idle, locked or logged-out time. Survives reboots, resets at midnight. When spent: lock, shut down, or warn only. |
 | **Curfew** | One or more time windows per weekday, **separate from the budget — granting extra screen time does not move bedtime.** Counts down on the child's screen, then shuts down — and re-issues if the shutdown is cancelled. When you want a later night, **Later bedtime tonight** (+15/+30/+60 on the Curfew card) pushes tonight's window back and then hands it straight back; it survives a reboot and needs no undoing. Because the two limits are independent, **each one tells you when the other will override it**: push bedtime back with the day's screen time already spent and it says the PC will still lock anyway; grant screen time during a window and it says bedtime will still shut it down. Neither reports a silent success it cannot deliver. |
-| **Warnings** | 15, 5 and 1 minutes before both the budget and bedtime, so the limit is never a surprise. A budget shorter than a threshold never announces it; a mid-day restart doesn't replay warnings; granting extra time re-arms them. |
+| **Warnings** | 15, 5 and 1 minutes before both the budget and bedtime, so the limit is never a surprise. A budget shorter than a threshold never announces it; a mid-day restart doesn't replay warnings; granting extra time re-arms them. Lowering today's limit below what has already been used would skip them all, so the dashboard says so before saving and lets you cancel; a scheduled routine that does the same still starts without a countdown (`O107`). |
 | **Screen-time report** | 7, 30 or 90 days as a chart, with a comparison against the period before. Click a column to drill into that day. Most-used lists cover the whole window — by app, by category, by time actually in front, and by browser page — so it answers "how much Roblox this month", not only "what happened last Tuesday". **Known game portals are badged by name** (now.gg, Poki, CrazyGames and the like) wherever page titles are listed; no badge means nothing was recognised, not that nothing was played. Days the service wasn't running show as **not measured**, never as zero, so a stopped enforcer can't look like a quiet week. **New apps are called out** — anything used for the first time, with the number of days of history behind the claim. |
 | **Asking for more** | The child's page shows them their own day — time left, **their last seven days**, and **how many times the screen was captured today** — and they can ask for more; you approve or deny. Showing the child their own usage is deliberate rather than incidental: the current research on parental controls finds that tools built around restriction alone do worse than ones that also let a child see and reason about their own use, and the capture count is the same promise the yellow border makes on the desktop — you can always tell when you are being looked at. It shows totals only, never which apps or pages, because that is the parent's view and not a readout to hand the person being measured. The countdown warnings on their desktop carry the address, so they know where to ask — except during a curfew window, where extra time cannot help and offering it would be a promise the tool can't keep. Single-use offline codes cover times you're away or the network is down. |
 | **Remote control** | Screenshot the desktop (with live refresh at your choice of 2/5/15s), list and kill running apps, lock the screen, shut down with a warned countdown. Live frames are small and cheap; clicking **Expand** fetches a full-resolution one and keeps it full for as long as the big view is open, so a picture you opened to *read* stays readable. Your click always takes priority over a frame already being fetched. **Windows draws a yellow border around the screen while it is being captured** — the child can see when you are looking. |
@@ -417,16 +417,17 @@ tally the enforcer already writes. So this release's risk is, again, not new pla
 that none of what it newly puts on your child's screen has ever been seen on a Windows screen.
 
 **Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for six releases: section H of the
-checklist now carries 59 items across §H1–§H10 — the bedtime extension and its undo, the enforcer
+checklist now carries 61 items across §H1–§H11 — the bedtime extension and its undo, the enforcer
 wake, the translated shutdown notices, the ask link, the child's page in Dutch, the probe and the
 three things it says, the practice gate, the message a parent types, the summer mark across a
-reboot, and `install`'s sessions note — and none has been executed on a Windows machine. No box
-anywhere in that file has ever been ticked in a commit. That is stated here rather than only in the
-changelog, because tier 3 is the tier the sentence above says every serious bug has lived in, and a
-reader deciding whether to install this is entitled to know which tier the newest features sit in.
-Fourteen of those items are new since `v0.9.0`: eight written with the features they cover, and
-six written while cutting this release for features that would otherwise have shipped without
-any — the honest half of a rule working is saying when it nearly did not.
+reboot, `install`'s sessions note, and (added since) the lockout that counts every address on the PC
+as one device — and none has been executed on a Windows machine. No box anywhere in that file has
+ever been ticked in a commit. That is stated here rather than only in the changelog, because tier 3
+is the tier the sentence above says every serious bug has lived in, and a reader deciding whether to
+install this is entitled to know which tier the newest features sit in. Fourteen of those items are
+new since `v0.9.0`: eight written with the features they cover, and six written while cutting this
+release for features that would otherwise have shipped without any — the honest half of a rule
+working is saying when it nearly did not.
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were

@@ -779,11 +779,11 @@ download page and the behaviour below has never executed on the platform it was 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 59 items across §H1–§H10, where it held 53 before this
-release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`. The one
-thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item
-(§H8) instead of being added to the list later or not at all, which is the failure `O87` records
-against 0.6.0 and 0.7.0.
+accumulated rather than turned over: 61 items across §H1–§H11, where it held 53 before `v0.10.0`'s
+work began and 59 when it shipped, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`. The one thing
+that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item (§H8)
+instead of being added to the list later or not at all, which is the failure `O87` records against
+0.6.0 and 0.7.0.
 
 **Fourteen of the 59 are newer than `v0.9.0` and ship in `v0.10.0`.** Eight were written in the
 commits that added their features — the probe scheduler's heartbeat, the settling period before its
@@ -1102,6 +1102,25 @@ write it back. Everything else about the feature is tested off Windows; this is 
       ran would have given.
 - [ ] **Nobody signed in is said, not skipped.** With no devices signed in,
       `install --revoke-sessions` must print *No devices were signed in.*
+
+### H11. The PC is one device to the lockout, whichever address it uses (since 0.10.0)
+
+Every address from 127.0.0.1 to 127.255.255.254 leads back to the PC, and each used to count as a
+separate device, so a program on the PC got five password guesses a minute from every one of them.
+They now count as one. The server half is tested off Windows; what is not is the premise — that a
+standard Windows account can connect from any of those addresses at all. These two prove both.
+
+- [ ] **A second loopback address inherits the lockout.** Signed in to Windows as **him**, in a
+      normal (not elevated) PowerShell, write a wrong password to a file and send it five times
+      from one address, then once from another, all within a minute:
+      `'{"password":"wrong"}' | Out-File -Encoding ascii body.json`, then
+      `curl.exe -k -s -o NUL -w "%{http_code}\n" --interface 127.0.0.7 -H "Content-Type: application/json" -d "@body.json" https://127.0.0.1:<port>/login`
+      five times, and the same once with `--interface 127.0.0.8`. **Expect** `401` five times and
+      then `429`. A `401` on the sixth means the second address got a fresh quota; an error from
+      curl about the interface means Windows refused the address, which is worth recording too.
+- [ ] **The guesses reach the dashboard.** On your phone, *Refused today* now has a row reading
+      *5 wrong passwords refused on the sign-in page — nobody was let in*. The sixth attempt is not
+      in it: a locked-out device is turned away before any password is checked.
 
 ## Troubleshooting
 

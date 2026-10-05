@@ -121,6 +121,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/providers/{name}/pair", post(api::pair_provider))
         .route("/providers/{name}/secret", post(api::set_provider_secret))
         .route("/rules", get(api::get_rules).post(api::set_rules))
+        .route("/rules/preview", post(api::preview_rules))
         .route("/policy", get(api::get_policy).post(api::set_policy))
         .route("/routines", get(api::list_routines).post(api::save_routine))
         .route("/routines/{name}/apply", post(api::apply_routine))

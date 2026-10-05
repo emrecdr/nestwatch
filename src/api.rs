@@ -2040,6 +2040,56 @@ pub async fn set_rules(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// `POST /api/rules/preview` → what saving these rules would do to today, without saving them.
+///
+/// **The question a save cannot answer for itself.** Lowering the limit below what has already
+/// been used puts today over the moment the save lands, and the enforcer then acts after its
+/// grace — with none of the 15, 5 and 1-minute warnings the README promises, because there was
+/// never a moment when fifteen minutes were left. The parent making that change on a phone had no
+/// way to see it coming; the child had no warning at all. So the dashboard asks this first, and
+/// asks the parent to confirm when the answer is that saving will do it.
+///
+/// Answered as the enforcer would answer it, not approximately: the rules compared are each
+/// config's `rules_at` now — the candidate swapped into a copy of the config, so a scheduled
+/// routine in force still decides today, and pausing the everyday rules still switches the
+/// routine off with them — against the same adjustments `usage_today` shows and the tally the
+/// enforcer keeps. `was_over` is the same question for the rules as they stand: when today is
+/// already over, the save is not what does it.
+///
+/// Advisory by construction. It writes nothing, and the dashboard saves anyway if this fails, so
+/// it can never be the reason a parent's change does not land.
+pub async fn preview_rules(
+    State(state): State<AppState>,
+    Json(candidate): Json<crate::rules::Rules>,
+) -> Result<Json<Value>, AppError> {
+    candidate.validate().map_err(AppError::BadRequest)?;
+    let today = crate::config::today();
+    let (now_rules, saved_rules, adjustments) = {
+        let cfg = crate::state::recover_read(&state.config);
+        let at = crate::clock::now();
+        let adjustments = crate::rules::Adjustments::new(
+            cfg.extra.for_day(today),
+            crate::probe::live_gate_cap(&cfg, &state.probe_status, today),
+        );
+        let mut saved = cfg.clone();
+        saved.rules = candidate;
+        (
+            cfg.rules_at(at).clone(),
+            saved.rules_at(at).clone(),
+            adjustments,
+        )
+    };
+    let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
+    Ok(Json(json!({
+        "used_mins": u32::try_from(usage.total_secs / 60).unwrap_or(u32::MAX),
+        "budget_mins": saved_rules.effective_budget_mins(today, adjustments),
+        "over": saved_rules.spent_today(today, adjustments, &usage),
+        "was_over": now_rules.spent_today(today, adjustments, &usage),
+        "action": saved_rules.budget_action,
+        "warn_secs": saved_rules.warn_secs,
+    })))
+}
+
 /// `GET /api/policy` → this install's household settings, as a downloadable file.
 ///
 /// The companion to `GET /api/export`, and the half that was missing. That one takes the *history*

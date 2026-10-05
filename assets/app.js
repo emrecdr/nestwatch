@@ -392,6 +392,8 @@ const UI = {
     tConfirmReAnchor: "Re-anchor screen time and curfew to this PC's current time zone?\n\nDo this only if the computer genuinely moved to another time zone. If the zone changed for any other reason, this accepts that change as correct.",
     tConfirmRemoveIntegration: "Remove \"{}\"?\n\nIt stops being able to add time and disappears from this list. You can install it again whenever you like — but if it has already granted today, reinstalling does not give today's bonus a second time.",
     tRemovedIntegration: "Removed \"{}\"",
+    tConfirmRulesLock: "Today {} minutes have been used and the new limit is {}, so saving puts today over it: it locks the PC after a {}-second warning, and no 15, 5 or 1-minute warning comes first.\n\nSave anyway?",
+    tConfirmRulesShutdown: "Today {} minutes have been used and the new limit is {}, so saving puts today over it: it shuts the PC down after a {}-second warning, and no 15, 5 or 1-minute warning comes first.\n\nSave anyway?",
     tConfirmRestoreSettings: "Restore settings from {}?\n\nThis replaces your curfew, daily limits, app rules and routines. Your password, the port and the trusted clock are not touched.",
     tSavedRoutine: "Saved routine \"{}\"",
     tAppliedRoutine: "Applied \"{}\"",
@@ -673,6 +675,8 @@ const UI = {
     tConfirmReAnchor: "Schermtijd en bedtijd opnieuw verankeren aan de huidige tijdzone van deze pc?\n\nDoe dit alleen als de computer echt naar een andere tijdzone is verhuisd. Is de tijdzone om een andere reden veranderd, dan wordt die verandering hiermee als juist aanvaard.",
     tConfirmRemoveIntegration: "\"{}\" verwijderen?\n\nHet kan dan geen tijd meer toevoegen en verdwijnt uit deze lijst. Je kunt het altijd opnieuw installeren — maar als het vandaag al tijd heeft toegekend, geeft opnieuw installeren de bonus van vandaag niet nog een keer.",
     tRemovedIntegration: "\"{}\" verwijderd",
+    tConfirmRulesLock: "Vandaag zijn er al {} minuten gebruikt en de nieuwe limiet is {}, dus opslaan zet vandaag over de limiet: de pc wordt vergrendeld na een waarschuwing van {} seconden, zonder eerst te waarschuwen bij 15, 5 of 1 minuut.\n\nToch opslaan?",
+    tConfirmRulesShutdown: "Vandaag zijn er al {} minuten gebruikt en de nieuwe limiet is {}, dus opslaan zet vandaag over de limiet: de pc wordt uitgezet na een waarschuwing van {} seconden, zonder eerst te waarschuwen bij 15, 5 of 1 minuut.\n\nToch opslaan?",
     tConfirmRestoreSettings: "Instellingen herstellen uit {}?\n\nDit vervangt je bedtijd, daglimieten, app-regels en routines. Je wachtwoord, de poort en de vertrouwde klok blijven ongewijzigd.",
     tSavedRoutine: "Routine \"{}\" opgeslagen",
     tAppliedRoutine: "\"{}\" toegepast",
@@ -958,6 +962,8 @@ const UI = {
     tConfirmReAnchor: "Ekran süresi ve yatma vakti bu bilgisayarın geçerli saat dilimine yeniden sabitlensin mi?\n\nBunu yalnızca bilgisayar gerçekten başka bir saat dilimine taşındıysa yapın. Saat dilimi başka bir nedenle değiştiyse, bu işlem o değişikliği doğru kabul eder.",
     tConfirmRemoveIntegration: "\"{}\" kaldırılsın mı?\n\nArtık süre ekleyemez ve bu listeden kaybolur. İstediğiniz zaman yeniden kurabilirsiniz — ancak bugün zaten süre vermişse, yeniden kurmak bugünün bonusunu ikinci kez vermez.",
     tRemovedIntegration: "\"{}\" kaldırıldı",
+    tConfirmRulesLock: "Bugün {} dakika kullanıldı ve yeni sınır {} dakika; kaydetmek bugünü sınırın üstüne çıkarır: bilgisayar {} saniyelik bir uyarının ardından kilitlenir ve önce 15, 5 ya da 1 dakika uyarısı gelmez.\n\nYine de kaydedilsin mi?",
+    tConfirmRulesShutdown: "Bugün {} dakika kullanıldı ve yeni sınır {} dakika; kaydetmek bugünü sınırın üstüne çıkarır: bilgisayar {} saniyelik bir uyarının ardından kapanır ve önce 15, 5 ya da 1 dakika uyarısı gelmez.\n\nYine de kaydedilsin mi?",
     tConfirmRestoreSettings: "Ayarlar {} dosyasından geri yüklensin mi?\n\nBu, yatma vaktinizi, günlük sınırları, uygulama kurallarını ve rutinleri değiştirir. Parolanız, bağlantı noktası ve güvenilir saat olduğu gibi kalır.",
     tSavedRoutine: "\"{}\" rutini kaydedildi",
     tAppliedRoutine: "\"{}\" uygulandı",
@@ -1632,6 +1638,8 @@ function app() {
     },
 
     async saveRules() {
+      // Asked before anything moves, so declining leaves the form exactly as the parent left it.
+      if (!(await this.rulesSaveConfirmed())) return;
       this.savingRules = true;
       this.collapseRules();
       try {
@@ -1649,6 +1657,37 @@ function app() {
       } finally {
         this.savingRules = false;
       }
+    },
+
+    // Whether to go ahead with a save, having asked the server what it would do to today.
+    //
+    // Fails open on purpose: a preview that errors or cannot be reached answers "go ahead", because
+    // the save is the authority and a broken question must never be the reason a parent's change
+    // does not land. A 400 is left for the save itself to report, with the server's reason.
+    async rulesSaveConfirmed() {
+      let preview;
+      try {
+        const r = await this.postJSON("/api/rules/preview", this.rules);
+        if (!r.ok) return true;
+        preview = await r.json();
+      } catch {
+        return true;
+      }
+      const consequence = this.rulesConsequence(preview);
+      return !consequence || confirm(consequence);
+    },
+
+    // The sentence to confirm before saving rules, or "" when the save changes nothing the child
+    // would notice right now. Pure, so the decision is testable without a server.
+    //
+    // Only a lock or a shutdown is worth interrupting the parent for — warn-only shows a notice and
+    // takes nothing away — and only when the save is what does it: when today was already over
+    // before the change, the PC is already locked or warned.
+    rulesConsequence(p) {
+      if (!p || !p.over || p.was_over) return "";
+      if (p.action === "lock") return this.tf("tConfirmRulesLock", p.used_mins, p.budget_mins, p.warn_secs);
+      if (p.action === "shutdown") return this.tf("tConfirmRulesShutdown", p.used_mins, p.budget_mins, p.warn_secs);
+      return "";
     },
 
     loadRoutines() {

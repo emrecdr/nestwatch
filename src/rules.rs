@@ -394,6 +394,18 @@ impl Rules {
         let remaining = usage.remaining_mins(self.effective_budget_mins(today, adj))?;
         (remaining < minutes).then_some(remaining)
     }
+
+    /// Whether these rules count today as spent, for `usage`: enforced, limited, and at or past
+    /// the limit — the condition under which `decide` stops counting down and starts acting.
+    ///
+    /// For a question asked *before* a change is made: `api::preview_rules` answers it for the rules
+    /// in force and for the ones a parent is about to save, so the dashboard can say when saving
+    /// will put today over the limit rather than let the lock be the first anyone hears of it.
+    /// `>=` and seconds, like the enforcer, so the two cannot disagree about the boundary.
+    pub fn spent_today(&self, today: NaiveDate, adj: Adjustments, usage: &Usage) -> bool {
+        let budget = self.effective_budget_mins(today, adj);
+        self.enabled && budget > 0 && usage.total_secs >= u64::from(budget) * 60
+    }
 }
 
 /// The running daily tally, persisted to a sidecar so a mid-day reboot doesn't reset the budget.
@@ -2674,6 +2686,71 @@ mod tests {
             ),
             None,
             "Warn records and never acts, so nothing is cut short"
+        );
+    }
+
+    /// Whether these rules count today as spent — the question a parent's save is about to answer
+    /// for the child, asked before it is saved.
+    ///
+    /// Both sides of the boundary, because the enforcer's own test is `>=`: a tally exactly at the
+    /// limit is spent, one second short of it is not. And the three states that are never spent
+    /// whatever the tally, for the reason `a_budget_that_cannot_interrupt_shadows_nothing` gives:
+    /// no limit is not a used-up limit, and paused rules count nothing.
+    #[test]
+    fn a_day_is_spent_from_the_exact_second_the_limit_is_reached() {
+        let day = day();
+        let used = |secs: u64| Usage {
+            day: Some(day),
+            total_secs: secs,
+            ..Default::default()
+        };
+        let rules = Rules {
+            enabled: true,
+            daily_budget_mins: 60,
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+        let none = Adjustments::new(0, None);
+
+        assert!(
+            rules.spent_today(day, none, &used(3_600)),
+            "at the limit is spent"
+        );
+        assert!(
+            !rules.spent_today(day, none, &used(3_599)),
+            "a second short is not"
+        );
+        assert!(
+            !rules.spent_today(day, Adjustments::new(10, None), &used(3_600)),
+            "a grant moves the limit, so the same tally is no longer spent"
+        );
+        assert!(
+            rules.spent_today(day, Adjustments::new(0, Some(30)), &used(1_800)),
+            "a practice gate lowers it, so a smaller tally already is"
+        );
+        assert!(
+            !Rules {
+                daily_budget_mins: 0,
+                ..rules.clone()
+            }
+            .spent_today(day, none, &used(36_000)),
+            "no limit is never spent"
+        );
+        assert!(
+            !Rules {
+                enabled: false,
+                ..rules.clone()
+            }
+            .spent_today(day, none, &used(36_000)),
+            "paused rules count nothing"
+        );
+        assert!(
+            Rules {
+                budget_action: EnforceAction::Warn,
+                ..rules
+            }
+            .spent_today(day, none, &used(3_600)),
+            "a warn-only day is spent too; what follows is the caller's question"
         );
     }
 
