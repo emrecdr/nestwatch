@@ -209,6 +209,7 @@ fn usage_today() {
             // Non-zero for the reason the comment above gives: a new counter defaulted to 0 here
             // would golden the key and never the number.
             time_codes_refused: 4,
+            wrong_passwords: 5,
         },
     };
     golden(

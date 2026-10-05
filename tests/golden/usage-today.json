@@ -36,9 +36,10 @@
     "clock_changes": 2,
     "day_resets": 1,
     "shutdown_cancels": 3,
-    "time_codes_refused": 4
+    "time_codes_refused": 4,
+    "wrong_passwords": 5
   },
-  "refused_total": 10,
+  "refused_total": 15,
   "remaining_mins": 80,
   "used_mins": 55
 }

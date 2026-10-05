@@ -243,15 +243,29 @@ open the door on its own.
   practical failure here is a password too long to recall ending up on a sticky note beside the
   machine the child uses, which is a worse outcome than a short one the parent remembers.
   Recorded rather than quietly chosen, so the trade is visible.
-- The verification is **serialized** (one at a time process-wide), which by itself caps online
-  guessing to a handful per second regardless of anything else.
-- **Per-IP rate limiting** (`src/auth.rs::LoginLimiter`): after repeated wrong passwords, only
-  the *offending* source IP is throttled. A global lockout was deliberately avoided — it would
-  let any device on the LAN lock the parent out (a denial-of-service), which OWASP warns
-  against.
+- The verification is **serialized** (one at a time process-wide), which caps online guessing at
+  one Argon2id verify at a time whatever else happens. **Measured 2026-10-05: 25.6 ms per verify
+  on an Apple M4 Pro**, so about 39 guesses a second — 3.4 million a day — on fast hardware, and
+  fewer on a family PC. That is a ceiling, not a margin: it is what a guesser gets once the
+  throttle below is out of the way.
+- **Per-device rate limiting** (`src/auth.rs::LoginLimiter`, keyed by
+  `src/security.rs::throttle_key`): after five wrong passwords only the *offending* device is
+  locked out, for a minute. A device is its source address, with one exception that carries the
+  weight: **every loopback address is one device, the PC itself.** Until 2026-10-05 each of the
+  sixteen million addresses in 127.0.0.0/8 was its own key, and a program on the PC can connect
+  from any of them — reproduced against `260f4d8`: five wrong passwords locked 127.0.0.1 and
+  127.0.0.2 was answered at once. The person at that PC is the child, so the eight-digit arithmetic
+  above held for everyone except the one attacker it was written against: about 38 years to
+  exhaust 10^8 at five a minute, about 30 days at the ceiling. A global lockout was deliberately
+  avoided — it would let any device on the LAN lock the parent out (a denial-of-service), which
+  OWASP warns against. So was a *delay* spanning addresses, which looks like the gentle version:
+  logins wait their turn on one lock, first come first served, so a delay applied there grows
+  with every request a guesser keeps queued and becomes the parent's lockout by another name
+  (`O95`). Every wrong password is also counted on the dashboard's *Refused today* card, not only
+  written to the audit's attempts log.
 - There is a *second, separate* throttle for the unauthenticated child endpoint
-  (`src/timereq.rs::SubmitLimiter`, 5/min/IP) that counts **every** submission, not just
-  failures — see "The child's request-more-time surface" below.
+  (`src/timereq.rs::SubmitLimiter`, five a minute per device, the same key) that counts **every**
+  submission, not just failures — see "The child's request-more-time surface" below.
 
 ### 4. Session
 - On success the session id is rotated (anti-fixation) and stored in a cookie that is
@@ -555,7 +569,9 @@ code for when you're away). It's safe because:
   attacker at one address: the rate limiter keys on the peer IP alone, and the LAN allowlist admits
   every RFC1918 address. A device on your network whose addressing its owner controls therefore
   collects a fresh 5-per-minute quota for each address it binds, and at the 50-code cap a hundred
-  of them bring eight years down to roughly a month.
+  of them bring eight years down to roughly a month. The PC itself no longer can: since 2026-10-05
+  every loopback address counts as one source (`security::throttle_key`), where before a program
+  on the PC collected a fresh quota from each of 127.0.0.0/8 without touching the network at all.
   <br>**What answers that today is visibility, not a lower rate.** Every refused submission is
   counted and shown on the dashboard's *Refused today* card, so a code being worked on looks
   different from a quiet week — which, until this was added, it did not: a wrong password writes

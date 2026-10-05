@@ -2392,6 +2392,28 @@ test("the rows state what the tool did, never what the child intended", () => {
   assert.match(text, /re-issued/);
 });
 
+// A wrong password was counted on the server before this card could show it; until then the only
+// trace was a red row inside the collapsed access card, so guessing read as a quiet day from the
+// top of the page. Same rules as the other rows: its own key, pluralised, and a statement of what
+// the tool did — the person typing may be a parent on a phone keyboard.
+test("a wrong password gets its own row, saying what held rather than who tried", () => {
+  const a = loadApp();
+  a.today = { refused: { wrong_passwords: 1 }, refused_total: 1 };
+  const one = a.refusedRows();
+  assert.equal(one.length, 1);
+  assert.equal(one[0].key, "password");
+  assert.equal(one[0].count, 1);
+  assert.match(one[0].text, /^wrong password refused/);
+
+  a.today = { refused: { wrong_passwords: 4 }, refused_total: 4 };
+  const many = a.refusedRows()[0].text.toLowerCase();
+  assert.match(many, /^wrong passwords refused/);
+  assert.match(many, /nobody was let in/, "it says what held, so the parent knows nothing got in");
+  for (const accusation of ["tamper", "cheat", "hack", "break-in", "intruder", "suspicious"]) {
+    assert.doesNotMatch(many, new RegExp(accusation), `"${accusation}" claims to know who typed it`);
+  }
+});
+
 // --- routine schedules -----------------------------------------------------
 //
 // A routine that carries times applies itself while they are open, so these two functions decide

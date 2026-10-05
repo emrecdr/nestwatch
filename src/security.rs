@@ -49,6 +49,32 @@ fn is_lan(ip: IpAddr) -> bool {
     }
 }
 
+/// The device a request is counted against, for every throttle in this service.
+///
+/// **Every loopback address is one device: this PC.** All of 127.0.0.0/8 reaches the server —
+/// `is_lan` admits it — and a program on the PC may connect from any address in it, so a throttle
+/// keyed on the raw address hands whoever sits at the PC sixteen million quotas. That person is the
+/// child. Reproduced against `260f4d8`: five wrong passwords locked 127.0.0.1 and 127.0.0.2 was
+/// answered at once. Folding them costs a legitimate caller nothing, because no other machine can
+/// reach this service over loopback.
+///
+/// Everything else is keyed as it arrives, so a phone on the LAN is still not locked out by guessing
+/// somewhere else — the reason the throttles are per device at all (`auth::LoginLimiter`). Two keys
+/// remain that this does not fold: the PC's own LAN address, which is one more quota for the same
+/// machine rather than millions, and a device whose owner controls its addressing and binds several.
+/// `O95` records why a ceiling spanning addresses is a product decision rather than a default.
+///
+/// An IPv4 address arriving mapped into IPv6 is unwrapped first, so two spellings of one address
+/// are one key.
+pub fn throttle_key(ip: IpAddr) -> IpAddr {
+    let ip = ip.to_canonical();
+    if ip.is_loopback() {
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+    } else {
+        ip
+    }
+}
+
 /// Reject requests a browser tells us came from somewhere other than this exact origin.
 ///
 /// **The gap this closes.** `SameSite=Strict` on the session cookie is scoped to the *site*,
@@ -432,6 +458,36 @@ mod tests {
         assert!(
             !is_lan("2606:4700:4700::1111".parse().unwrap()),
             "public v6"
+        );
+    }
+
+    #[test]
+    fn every_loopback_address_is_one_throttle_key_and_nothing_else_is_folded() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        for this_pc in [
+            "127.0.0.1",
+            "127.0.0.2",
+            "127.255.255.254",
+            "::1",
+            "::ffff:127.0.0.9",
+        ] {
+            assert_eq!(
+                throttle_key(ip(this_pc)),
+                ip("127.0.0.1"),
+                "{this_pc} is this PC"
+            );
+        }
+        for elsewhere in ["192.168.1.20", "192.168.1.21", "10.0.0.5", "172.16.4.4"] {
+            assert_eq!(
+                throttle_key(ip(elsewhere)),
+                ip(elsewhere),
+                "{elsewhere} is its own device and keeps its own quota"
+            );
+        }
+        assert_eq!(
+            throttle_key(ip("::ffff:192.168.1.20")),
+            ip("192.168.1.20"),
+            "a mapped address is the address it maps"
         );
     }
 

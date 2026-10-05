@@ -50,11 +50,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use serde::{Deserialize, Serialize};
 
 /// Distinct clock changes refused, day resets refused, shutdown cancellations answered, time
-/// codes refused.
+/// codes refused, wrong passwords refused.
 static CLOCK_CHANGES: AtomicU32 = AtomicU32::new(0);
 static DAY_RESETS: AtomicU32 = AtomicU32::new(0);
 static SHUTDOWN_CANCELS: AtomicU32 = AtomicU32::new(0);
 static TIME_CODES: AtomicU32 = AtomicU32::new(0);
+static WRONG_PASSWORDS: AtomicU32 = AtomicU32::new(0);
 
 /// One day's refusals, as stored and as reported.
 ///
@@ -103,6 +104,22 @@ pub struct Refused {
     /// the clock counter takes and the reason this card can be shown to the child too.
     #[serde(default)]
     pub time_codes_refused: u32,
+    /// Times the dashboard's password was entered wrong and nobody was signed in.
+    ///
+    /// The audit already had these — every one writes `auth_failure` into the attempts log — and
+    /// that is exactly why they were invisible: the dashboard shows that log as rows inside a
+    /// collapsed card, so a password being worked on read as a quiet day from the top of the page.
+    /// A count here is what puts it beside the other things this tool turned down.
+    ///
+    /// Counted per password checked, never per request: a device inside its lockout is refused
+    /// before anything is verified, and counting those would measure how fast it sends rather
+    /// than how many guesses it got. The lockout bounds this at five a minute for the PC itself,
+    /// whichever loopback address it uses (`security::throttle_key`).
+    ///
+    /// Says nothing about who. A parent mistyping on a phone keyboard counts exactly like a child
+    /// at the PC, which is the stance every counter here takes.
+    #[serde(default)]
+    pub wrong_passwords: u32,
 }
 
 impl Refused {
@@ -112,6 +129,7 @@ impl Refused {
             .saturating_add(self.day_resets)
             .saturating_add(self.shutdown_cancels)
             .saturating_add(self.time_codes_refused)
+            .saturating_add(self.wrong_passwords)
     }
 
     /// Whether there is anything at all to show. The dashboard renders nothing when there is not,
@@ -128,6 +146,7 @@ impl Refused {
         self.time_codes_refused = self
             .time_codes_refused
             .saturating_add(other.time_codes_refused);
+        self.wrong_passwords = self.wrong_passwords.saturating_add(other.wrong_passwords);
     }
 }
 
@@ -160,6 +179,11 @@ pub fn time_code_refused() {
     bump(&TIME_CODES);
 }
 
+/// A password was checked and was wrong. Called from [`crate::auth::login`].
+pub fn wrong_password_refused() {
+    bump(&WRONG_PASSWORDS);
+}
+
 /// Take everything counted since the last call, leaving the counters at zero.
 ///
 /// `swap` rather than a read-then-clear: two reads cannot both see the same increment, and nothing
@@ -172,6 +196,7 @@ pub fn drain() -> Refused {
         day_resets: DAY_RESETS.swap(0, Ordering::Relaxed),
         shutdown_cancels: SHUTDOWN_CANCELS.swap(0, Ordering::Relaxed),
         time_codes_refused: TIME_CODES.swap(0, Ordering::Relaxed),
+        wrong_passwords: WRONG_PASSWORDS.swap(0, Ordering::Relaxed),
     }
 }
 
@@ -197,13 +222,17 @@ mod tests {
         day_reset_refused();
         shutdown_cancel_seen();
         time_code_refused();
+        wrong_password_refused();
+        wrong_password_refused();
+        wrong_password_refused();
 
         let first = drain();
         assert_eq!(first.clock_changes, 2);
         assert_eq!(first.day_resets, 1);
         assert_eq!(first.shutdown_cancels, 1);
         assert_eq!(first.time_codes_refused, 1);
-        assert_eq!(first.total(), 5);
+        assert_eq!(first.wrong_passwords, 3);
+        assert_eq!(first.total(), 8);
 
         // The whole point of `swap`: a second reader gets nothing rather than the same counts
         // again, so a tick that runs twice cannot double the day's figure.
@@ -230,6 +259,7 @@ mod tests {
             day_resets: u32::MAX,
             shutdown_cancels: u32::MAX,
             time_codes_refused: u32::MAX,
+            wrong_passwords: u32::MAX,
         };
         assert_eq!(r.total(), u32::MAX, "the summary must not wrap either");
 
@@ -238,8 +268,10 @@ mod tests {
             day_resets: 5,
             shutdown_cancels: 5,
             time_codes_refused: 5,
+            wrong_passwords: 5,
         });
         assert_eq!(r.clock_changes, u32::MAX);
+        assert_eq!(r.wrong_passwords, u32::MAX);
         assert!(r.any());
     }
 
@@ -250,12 +282,14 @@ mod tests {
             day_resets: 2,
             shutdown_cancels: 3,
             time_codes_refused: 4,
+            wrong_passwords: 5,
         };
         r.merge(Refused {
             clock_changes: 10,
             day_resets: 20,
             shutdown_cancels: 30,
             time_codes_refused: 40,
+            wrong_passwords: 50,
         });
         assert_eq!(
             r,
@@ -264,9 +298,10 @@ mod tests {
                 day_resets: 22,
                 shutdown_cancels: 33,
                 time_codes_refused: 44,
+                wrong_passwords: 55,
             }
         );
-        assert_eq!(r.total(), 110);
+        assert_eq!(r.total(), 165);
     }
 
     /// A stored tally written before this field existed must still parse, and must read as a day

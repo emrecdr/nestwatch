@@ -9,7 +9,26 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ## [Unreleased]
 
+### Added
+
+- **Wrong dashboard passwords show on *Refused today*.** Every one was already written to the
+  access log, which the dashboard keeps folded away in *Recent access* — so someone working on
+  your password looked like a quiet day from the top of the page. The card now has a row for them.
+  Like every row there it says what the tool did, not who did it: your own typo on a phone
+  keyboard counts the same, and the card says only that nobody was let in. The phone app shows
+  the card's total but not this row until it catches up.
+
 ### Fixed
+
+- **A program on the child's PC could guess the dashboard password without ever being locked
+  out.** After five wrong passwords a device is locked out for a minute, and a device was its
+  network address — but every address from 127.0.0.1 to 127.255.255.254 leads back to the PC
+  itself, and each one counted as a new device. So the lockout stopped a phone on the Wi-Fi and
+  not the one person sitting at the PC, who could try about 39 passwords a second instead of five
+  a minute. All of those addresses now count as one device, for the password and for the child's
+  own page (asking for time, redeeming a code, checking the time left). Nothing changes for
+  anyone else: a phone or laptop on your network is still never locked out by somebody else's
+  guessing.
 
 - **A setting that could not be saved is no longer kept, so saving it again really saves it.**
   When the PC failed to write `config.json` — a full disk, a file held open by a scanner — the

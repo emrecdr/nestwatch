@@ -1814,6 +1814,25 @@ redeem endpoint is the child's, so a child exhausting a global budget denies mai
 but "your code stopped working and the tool will not say why" is still a product call, and it wants
 a deliberate answer rather than a default. A counter is bounded by construction; a lockout is not.
 
+**Narrowed 2026-10-05: the PC itself is now one address.** The flaw was wider than this entry said,
+and the cheapest half of it is closed. All five throttles — login and pairing (`LoginLimiter`), time
+requests, code redemption and the child's status poll (`SubmitLimiter`) — keyed on the raw peer
+address, and `require_lan_peer` admits every loopback address, so a program on the child's own PC
+collected a fresh quota from each of the sixteen million addresses in 127.0.0.0/8 without any second
+device or any network setting. Reproduced against `260f4d8` for the password: five wrong guesses
+locked 127.0.0.1 and 127.0.0.2 was answered at once. Both limiters now count against
+`security::throttle_key`, which folds all of loopback into one key; a legitimate caller loses
+nothing, since no other machine can arrive that way. Wrong passwords are now counted on *Refused
+today* as well as audited. What this entry describes for a second device on the LAN that binds
+several RFC1918 addresses is unchanged and still a product call.
+
+**A delay spanning addresses was considered for the login and is not the gentle option it looks
+like.** Logins wait on one lock, `login_lock`, which tokio grants first come first served. A delay
+applied inside it grows with every request a guesser keeps queued, so the parent's own sign-in waits
+behind all of them — a lockout by another name, which is the outcome the per-device design exists to
+avoid. Applied outside the lock it is a refusal of whoever arrives during the delay, which is the
+same thing. Either version wants the deliberate answer this entry already asks for.
+
 ### O96 · The dashboard translates its labels and not the sentences it builds
 
 Two guards police the dashboard's strings, and between them they cover the markup and two call

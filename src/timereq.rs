@@ -218,7 +218,11 @@ impl SubmitLimiter {
 
     /// Record a call from `ip` and return `Err(TooManyAttempts)` if it exceeds the window quota.
     /// `now` is injected (callers pass `Instant::now()`) so the window logic is unit-testable.
+    ///
+    /// Counted against [`crate::security::throttle_key`], so every loopback address is the one PC
+    /// it is — applied here, once, for all three child endpoints that hold one of these.
     pub fn count_and_check(&self, ip: IpAddr, now: Instant) -> Result<(), AppError> {
+        let ip = crate::security::throttle_key(ip);
         let mut map = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         // Drop timestamps outside the window, everywhere, so the map stays bounded.
         map.retain(|_, times| {

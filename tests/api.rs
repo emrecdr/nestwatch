@@ -152,6 +152,106 @@ async fn wrong_password_is_rejected() {
     assert!(login(&app, "not-the-password").await.is_none());
 }
 
+/// `router` with every request arriving from `peer`. Routers made from one `router` share its
+/// state, so a lockout one address earns is visible to the next — which is the whole question.
+fn from_peer(router: &Router, peer: [u8; 4]) -> Router {
+    router
+        .clone()
+        .layer(MockConnectInfo(SocketAddr::from((peer, 40000))))
+}
+
+/// The whole loopback range is one device, for the login lockout.
+///
+/// A lockout keyed on the address a caller connects from is a quota the caller can multiply, and on
+/// the PC itself every address in 127.0.0.0/8 reaches this service — `is_lan` admits all of it.
+/// Reproduced against `260f4d8` before the fix: five wrong passwords locked 127.0.0.1 and 127.0.0.2
+/// was answered at once, with the password checked. The person at that PC is the child, and the
+/// margin `SECURITY.md` quotes for an eight-character password is measured behind this lockout.
+///
+/// The right password is what is sent from the second address, so the assertion is about the
+/// lockout and not about the password: a locked device is refused before anything is verified.
+/// And a device on the LAN is still not locked out by somebody else's guessing, which is the reason
+/// the lockout is per device at all.
+#[tokio::test]
+async fn a_lockout_earned_on_loopback_holds_for_every_loopback_address() {
+    let router = build_router(test_state());
+    // Not 127.0.0.1: that address is already its own key, so a lockout recorded unfolded would
+    // still be found and this test could not tell the difference.
+    let first = from_peer(&router, [127, 0, 0, 5]);
+    for _ in 0..nestwatch::auth::LOGIN_MAX_FAILS {
+        assert!(login(&first, "not-the-password").await.is_none());
+    }
+
+    let another = from_peer(&router, [127, 0, 0, 2]);
+    let res = post_json(&another, "/login", None, json!({ "password": PASSWORD })).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "a second loopback address is the same PC, and must inherit the lockout"
+    );
+
+    let phone = from_peer(&router, [192, 168, 1, 20]);
+    assert!(
+        login(&phone, PASSWORD).await.is_some(),
+        "a device elsewhere on the LAN must not be locked out by guessing at the PC"
+    );
+}
+
+/// A correct password from any loopback address clears the count the PC has built up.
+///
+/// The other half of the lockout, and the half a fold applied to two of the three methods would
+/// break silently: four wrong guesses, then the right password from a different loopback address,
+/// must leave the PC with a clean slate — so one more wrong guess and the right password again
+/// sign in rather than tripping the lockout on a count that should have been cleared.
+#[tokio::test]
+async fn a_sign_in_from_any_loopback_address_clears_the_pcs_count() {
+    let router = build_router(test_state());
+    let guessing = from_peer(&router, [127, 0, 0, 5]);
+    for _ in 0..nestwatch::auth::LOGIN_MAX_FAILS - 1 {
+        assert!(login(&guessing, "not-the-password").await.is_none());
+    }
+    assert!(
+        login(&from_peer(&router, [127, 0, 0, 3]), PASSWORD)
+            .await
+            .is_some()
+    );
+
+    assert!(login(&guessing, "not-the-password").await.is_none());
+    assert!(
+        login(&from_peer(&router, [127, 0, 0, 6]), PASSWORD)
+            .await
+            .is_some(),
+        "the earlier sign-in cleared the count, so one wrong guess since cannot have locked the PC"
+    );
+}
+
+/// The same for the child's own endpoints, which share one limiter type and the same flaw.
+///
+/// `/time-request` stands for the three of them (`/status` and `/redeem-code` are the others): the
+/// redeem limit is the whole defence of a six-character code, and the status limit is what stops a
+/// loop on the child's page from tying up the blocking pool the parent's dashboard shares.
+#[tokio::test]
+async fn the_childs_quota_is_one_quota_across_the_loopback_range() {
+    let router = build_router(test_state());
+    let first = from_peer(&router, [127, 0, 0, 4]);
+    for _ in 0..5 {
+        let res = post_json(&first, "/time-request", None, json!({ "minutes": 10 })).await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let another = from_peer(&router, [127, 0, 0, 9]);
+    let res = post_json(&another, "/time-request", None, json!({ "minutes": 10 })).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "a fresh loopback address must not buy a fresh quota"
+    );
+
+    let phone = from_peer(&router, [192, 168, 1, 20]);
+    let res = post_json(&phone, "/time-request", None, json!({ "minutes": 10 })).await;
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn session_endpoint_reflects_auth_state() {
     let app = test_app();
@@ -684,6 +784,33 @@ async fn redeem_code_is_lan_gated_not_auth_gated() {
     assert_eq!(body_json(res).await["ok"], json!(false));
 }
 
+/// Held by every test here that calls `refusals::drain`.
+///
+/// The counters are process globals and a drain *moves* them, so two draining tests running at
+/// once can each take the other's count and fail at random. Tests that only increment need no
+/// lock — their assertions elsewhere are `>= 1` — but two drains must not interleave.
+static DRAINING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// A wrong password reaches *Refused today*, not only the audit table.
+///
+/// `auth_failure` has always been written, into the attempts half of the audit log, which the
+/// dashboard shows as red rows inside a collapsed card. So a password being worked on looked like a
+/// quiet day to a parent reading the page from the top — the same gap a refused time code had until
+/// it was counted, and the same answer: a counter the child's pace cannot turn into a bigger file.
+#[tokio::test]
+async fn a_wrong_password_is_counted() {
+    let _drains = DRAINING.lock().await;
+    let _ = nestwatch::refusals::drain();
+
+    let app = test_app();
+    assert!(login(&app, "not-the-password").await.is_none());
+
+    assert!(
+        nestwatch::refusals::drain().wrong_passwords >= 1,
+        "a refused password must reach the card the parent reads"
+    );
+}
+
 /// A refused code is *counted*, which is the half that did not exist.
 ///
 /// A wrong password writes `auth_failure` to the audit log, so a parent can see their password
@@ -692,6 +819,7 @@ async fn redeem_code_is_lan_gated_not_auth_gated() {
 /// the counter the *Refused today* card reads.
 #[tokio::test]
 async fn a_refused_time_code_is_counted() {
+    let _drains = DRAINING.lock().await;
     // Start from a known floor. `>= 1` and not `== 1` below because these counters are process
     // globals and another test in this binary also drives a refused redemption; an exact count
     // would be a race rather than a fact.

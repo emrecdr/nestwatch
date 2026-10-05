@@ -153,6 +153,8 @@ const UI = {
     refusedShutdownMany: "shutdowns cancelled on the PC — re-issued straight away, without a fresh countdown",
     refusedCodeOne: "time code refused — it was not an active code, so no time was added",
     refusedCodeMany: "time codes refused — they were not active codes, so no time was added",
+    refusedPasswordOne: "wrong password refused on the sign-in page — nobody was let in",
+    refusedPasswordMany: "wrong passwords refused on the sign-in page — nobody was let in",
     screen: "Screen",
     live: "Live",
     expand: "⤢ Expand",
@@ -432,6 +434,8 @@ const UI = {
     refusedShutdownMany: "afsluitingen op de pc geannuleerd — meteen opnieuw gegeven, zonder nieuwe aftelling",
     refusedCodeOne: "tijdcode geweigerd — het was geen actieve code, dus er is geen tijd bijgekomen",
     refusedCodeMany: "tijdcodes geweigerd — het waren geen actieve codes, dus er is geen tijd bijgekomen",
+    refusedPasswordOne: "verkeerd wachtwoord geweigerd op de aanmeldpagina — er is niemand binnengelaten",
+    refusedPasswordMany: "verkeerde wachtwoorden geweigerd op de aanmeldpagina — er is niemand binnengelaten",
     screen: "Scherm",
     live: "Live",
     expand: "⤢ Vergroten",
@@ -715,6 +719,8 @@ const UI = {
     refusedShutdownMany: "bilgisayarda kapatma iptal edildi — yeni bir geri sayım olmadan hemen yeniden verildi",
     refusedCodeOne: "zaman kodu reddedildi — etkin bir kod değildi, bu yüzden süre eklenmedi",
     refusedCodeMany: "zaman kodu reddedildi — etkin bir kod değildi, bu yüzden süre eklenmedi",
+    refusedPasswordOne: "giriş sayfasında yanlış parola reddedildi — kimse içeri alınmadı",
+    refusedPasswordMany: "giriş sayfasında yanlış parola reddedildi — kimse içeri alınmadı",
     screen: "Ekran",
     live: "Canlı",
     expand: "⤢ Büyüt",
@@ -3036,6 +3042,7 @@ function app() {
       push("reset", r.day_resets, this.t("refusedResetOne"), this.t("refusedResetMany"));
       push("shutdown", r.shutdown_cancels, this.t("refusedShutdownOne"), this.t("refusedShutdownMany"));
       push("code", r.time_codes_refused, this.t("refusedCodeOne"), this.t("refusedCodeMany"));
+      push("password", r.wrong_passwords, this.t("refusedPasswordOne"), this.t("refusedPasswordMany"));
       return rows;
     },
     bonusLabel() { return " (incl. +" + this.today.extra_mins + " bonus)"; },

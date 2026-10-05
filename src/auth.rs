@@ -351,7 +351,8 @@ pub fn verify_password(password: &str, phc_hash: &str) -> bool {
 // Brute-force limiter
 // ---------------------------------------------------------------------------
 
-/// Rate-limits login attempts **per source IP**. A global counter would let any device on
+/// Rate-limits login attempts **per device** — its source IP, except that every loopback address
+/// is the one PC it is (`crate::security::throttle_key`). A global counter would let any device on
 /// the LAN lock out the legitimate parent (a denial-of-service the OWASP guidance warns
 /// about), so failures are tracked per client: a device that spams wrong passwords throttles
 /// only itself. The real barrier against guessing is the strong Argon2id password plus the
@@ -388,7 +389,13 @@ impl LoginLimiter {
     }
 
     /// `Ok(())` if `ip` may attempt a login now, `Err` if it is currently locked out.
+    ///
+    /// All three methods key on [`crate::security::throttle_key`] rather than on `ip` itself, so
+    /// every loopback address counts as the one PC it is. Applied here rather than at the call
+    /// sites, so a caller cannot forget it — `login` and `pair` both pass `peer.ip()` as it arrived,
+    /// which is also what they write to the audit.
     pub fn check(&self, ip: IpAddr) -> Result<(), AppError> {
+        let ip = crate::security::throttle_key(ip);
         match self.map().get(&ip).and_then(|a| a.locked_until) {
             Some(until) if Instant::now() < until => Err(AppError::TooManyAttempts),
             _ => Ok(()),
@@ -399,6 +406,7 @@ impl LoginLimiter {
     /// caller can audit that transition exactly once (see [`login`] — auditing every rejected
     /// request instead would let anyone flood the audit log off disk).
     pub fn record_failure(&self, ip: IpAddr) -> bool {
+        let ip = crate::security::throttle_key(ip);
         let now = Instant::now();
         let mut map = self.map();
         prune(&mut map, now);
@@ -413,7 +421,7 @@ impl LoginLimiter {
     }
 
     pub fn record_success(&self, ip: IpAddr) {
-        self.map().remove(&ip);
+        self.map().remove(&crate::security::throttle_key(ip));
     }
 }
 
@@ -506,6 +514,9 @@ pub async fn login(
             "auth_failure",
             json!({ "src_ip": ip, "reason": "bad_password", "locked_out": locked_out }),
         );
+        // Beside the audit line rather than instead of it: the audit keeps who and when, and the
+        // count is what reaches *Refused today*, where a parent reading from the top will see it.
+        crate::refusals::wrong_password_refused();
         Err(AppError::Unauthorized)
     }
 }
