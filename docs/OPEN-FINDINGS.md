@@ -1833,13 +1833,14 @@ a deliberate answer rather than a default. A counter is bounded by construction;
 and the cheapest half of it is closed. All five throttles — login and pairing (`LoginLimiter`), time
 requests, code redemption and the child's status poll (`SubmitLimiter`) — keyed on the raw peer
 address, and `require_lan_peer` admits every loopback address, so a program on the child's own PC
-collected a fresh quota from each of the sixteen million addresses in 127.0.0.0/8 without any second
-device or any network setting. Reproduced against `260f4d8` for the password: five wrong guesses
-locked 127.0.0.1 and 127.0.0.2 was answered at once. Both limiters now count against
-`security::throttle_key`, which folds all of loopback into one key; a legitimate caller loses
-nothing, since no other machine can arrive that way. Wrong passwords are now counted on *Refused
-today* as well as audited. What this entry describes for a second device on the LAN that binds
-several RFC1918 addresses is unchanged and still a product call.
+could collect a fresh quota from each of the sixteen million addresses in 127.0.0.0/8 without any
+second device or any network setting — that Windows lets an ordinary account choose those addresses
+is the one premise not yet confirmed on the PC (§H11). Reproduced against `260f4d8` for the
+password: five wrong guesses locked 127.0.0.1 and 127.0.0.2 was answered at once. Both limiters now
+count against `security::throttle_key`, which folds all of loopback into one key; a legitimate
+caller loses nothing, since no other machine can arrive that way. Wrong passwords are now counted on
+*Refused today* as well as audited. What this entry describes for a second device on the LAN that
+binds several RFC1918 addresses is unchanged and still a product call.
 
 **A delay spanning addresses was considered for the login and is not the gentle option it looks
 like.** Logins wait on one lock, `login_lock`, which tokio grants first come first served. A delay
@@ -2009,3 +2010,29 @@ recorded rather than defaulted.
 **Trigger.** The first time a routine with a lower limit is scheduled on the PC, or the
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
+
+### O108 · While the rules are paused, nothing refused reaches *Refused today*
+
+**Found 2026-10-05, by reading.** Every refusal is counted into a process-global counter where it
+happens, and the rules enforcer moves those counts onto the day's tally once per tick
+(`enforcer.usage.refused.merge(refusals::drain())` in `run_rules_enforcer`). That line sits below
+the stand-down `continue`, so while a parent has paused the rules — the *free evening* toggle —
+nothing is drained. The counts are not lost: they wait in the counters and land on whatever day the
+enforcer next ticks in, which after a weekend's pause is Monday, shown as *today*.
+
+It mattered less before 2026-10-05. Clock changes, day resets and shutdown cancellations are things
+the enforcement loops find for themselves; with the rules paused there is little to find. Wrong
+passwords and refused time codes arrive from outside on their own schedule, and wrong passwords were
+added to the card on that date — so a paused evening is now exactly when someone working on the
+password would be invisible on the card, and then misdated.
+
+**Why it is not a one-line move.** The drain is placed after `decide_after_snapshot` on purpose:
+`accrue` clears the day's refusals when the day turns, and the ending day's rollup row has been
+snapshotted by then. While stood down `decide` does not run, so the tally's day is not advanced
+either; draining above the branch would attach counts to a day that may already be over. The fix
+needs the day turned on paused ticks too, or the counts kept with their own date — either of which
+touches the stand-down path that `standing_down_closes_an_open_session` pins. The audit's attempts
+log is unaffected and still records every wrong password as it happens.
+
+**Trigger.** The next change to the stand-down path, or the first report of refusals appearing on
+the wrong day.

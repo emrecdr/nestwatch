@@ -28,22 +28,25 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
-- **More of the dashboard follows the language you choose — and the README no longer claims all
-  of it does.** Nine *Refresh* buttons, the "min" beside every figure, the *Paused* label on the
-  limits card and the bedtime switch's screen-reader label were written into the page in English,
-  beside identical ones that were translated; they now use the translations. The README said a
-  language was "all-or-nothing by construction". That is true of everything your child sees and
-  was not true of the dashboard, which still shows its other buttons, most of its help text and
-  its screen-reader labels in English. It now says so, and a test lists every one of them so the
-  list can only get shorter.
-- **A program on the child's PC could guess the dashboard password without ever being locked
-  out.** After five wrong passwords a device is locked out for a minute, and a device was its
-  network address — but every address from 127.0.0.1 to 127.255.255.254 leads back to the PC
-  itself, and each one counted as a new device. So the lockout stopped a phone on the Wi-Fi and
-  not the one person sitting at the PC, who could try about 39 passwords a second instead of five
-  a minute. All of those addresses now count as one device, for the password and for the child's
-  own page (asking for time, redeeming a code, checking the time left). Nothing changes for
-  anyone else: a phone or laptop on your network is still never locked out by somebody else's
+- **More of the dashboard follows the language you choose — and the README no longer claims all of
+  it does.** Nine *Refresh* buttons, the "min" after each app's and page's minutes and in the limit
+  fields, the *Paused* label on the limits card and the bedtime switch's screen-reader label were
+  written into the page in English, beside identical ones that were translated; they now use the
+  translations. The README said a language was "all-or-nothing by construction". That is true of
+  everything your child sees and was not true of the dashboard, which still shows its other buttons,
+  most of its help text and its screen-reader labels in English. It now says so, and a test lists
+  every one of them so the list can only get shorter.
+- **The password lockout counted every address the PC can reach itself by as a separate device.**
+  After five wrong passwords a device is locked out for a minute, and a device was its network
+  address — but every address from 127.0.0.1 to 127.255.255.254 leads back to the PC itself, and
+  each one counted as new. So the lockout stopped a phone on the Wi-Fi, but a program on the PC that
+  used a different one of those addresses for each guess would never have been locked out, and could
+  try passwords as fast as the PC checks them — about 39 a second on fast hardware, fewer on a
+  family PC — instead of five a minute. Whether Windows lets an ordinary account choose those
+  addresses is the one part not yet confirmed on a real PC (section H11 of the checklist); the fix
+  costs nothing either way. All of those addresses now count as one device, for the password and for
+  the child's own page (asking for time, redeeming a code, checking the time left). Nothing changes
+  for anyone else: a phone or laptop on your network is still never locked out by somebody else's
   guessing.
 
 - **A setting that could not be saved is no longer kept, so saving it again really saves it.**

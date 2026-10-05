@@ -249,20 +249,21 @@ open the door on its own.
   fewer on a family PC. That is a ceiling, not a margin: it is what a guesser gets once the
   throttle below is out of the way.
 - **Per-device rate limiting** (`src/auth.rs::LoginLimiter`, keyed by
-  `src/security.rs::throttle_key`): after five wrong passwords only the *offending* device is
-  locked out, for a minute. A device is its source address, with one exception that carries the
-  weight: **every loopback address is one device, the PC itself.** Until 2026-10-05 each of the
-  sixteen million addresses in 127.0.0.0/8 was its own key, and a program on the PC can connect
-  from any of them — reproduced against `260f4d8`: five wrong passwords locked 127.0.0.1 and
-  127.0.0.2 was answered at once. The person at that PC is the child, so the eight-digit arithmetic
-  above held for everyone except the one attacker it was written against: about 38 years to
-  exhaust 10^8 at five a minute, about 30 days at the ceiling. A global lockout was deliberately
-  avoided — it would let any device on the LAN lock the parent out (a denial-of-service), which
-  OWASP warns against. So was a *delay* spanning addresses, which looks like the gentle version:
-  logins wait their turn on one lock, first come first served, so a delay applied there grows
-  with every request a guesser keeps queued and becomes the parent's lockout by another name
-  (`O95`). Every wrong password is also counted on the dashboard's *Refused today* card, not only
-  written to the audit's attempts log.
+  `src/security.rs::throttle_key`): after five wrong passwords only the *offending* device is locked
+  out, for a minute. A device is its source address, with one exception that carries the weight:
+  **every loopback address is one device, the PC itself.** Until 2026-10-05 each of the sixteen
+  million addresses in 127.0.0.0/8 was its own key, and as far as anything here shows a program on
+  the PC can connect from any of them — the one premise not yet confirmed on Windows, which §H11 of
+  the checklist does. Reproduced against `260f4d8` on the server side: five wrong passwords locked
+  127.0.0.1 and 127.0.0.2 was answered at once. The person at that PC is the child, so the
+  eight-digit arithmetic above held for everyone except the one attacker it was written against:
+  about 38 years to exhaust 10^8 at five a minute, about 30 days at the ceiling. A global lockout
+  was deliberately avoided — it would let any device on the LAN lock the parent out (a
+  denial-of-service), which OWASP warns against. So was a *delay* spanning addresses, which looks
+  like the gentle version: logins wait their turn on one lock, first come first served, so a delay
+  applied there grows with every request a guesser keeps queued and becomes the parent's lockout by
+  another name (`O95`). Every wrong password is also counted on the dashboard's *Refused today*
+  card, not only written to the audit's attempts log.
 - There is a *second, separate* throttle for the unauthenticated child endpoint
   (`src/timereq.rs::SubmitLimiter`, five a minute per device, the same key) that counts **every**
   submission, not just failures — see "The child's request-more-time surface" below.

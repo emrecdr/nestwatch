@@ -1118,9 +1118,11 @@ standard Windows account can connect from any of those addresses at all. These t
       five times, and the same once with `--interface 127.0.0.8`. **Expect** `401` five times and
       then `429`. A `401` on the sixth means the second address got a fresh quota; an error from
       curl about the interface means Windows refused the address, which is worth recording too.
-- [ ] **The guesses reach the dashboard.** On your phone, *Refused today* now has a row reading
-      *5 wrong passwords refused on the sign-in page — nobody was let in*. The sixth attempt is not
-      in it: a locked-out device is turned away before any password is checked.
+- [ ] **The guesses reach the dashboard.** With the screen-time rules switched on (a paused
+      enforcer moves nothing onto the card until it resumes — `O108`), within half a minute
+      *Refused today* on your phone has a row reading *5 · wrong passwords refused on the sign-in
+      page — nobody was let in*. The sixth attempt is not in it: a locked-out device is turned away
+      before any password is checked.
 
 ## Troubleshooting
 
