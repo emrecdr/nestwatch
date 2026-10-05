@@ -150,10 +150,15 @@ impl Refused {
     }
 }
 
-/// Saturating increment. `fetch_update` rather than `fetch_add` so the count sticks at the ceiling
+/// Saturating increment. `try_update` rather than `fetch_add` so the count sticks at the ceiling
 /// instead of wrapping to zero.
+///
+/// `try_update` is the name Rust 1.99 gives what this used to call, `fetch_update`, and 1.99
+/// deprecates the old one — which the weekly lint run against the newest compiler caught on
+/// 2026-10-05. The new name is not 1.99-only: it builds on the 1.96 this crate pins, checked before
+/// switching, so there is no version on which this line needs an `allow`.
 fn bump(cell: &AtomicU32) {
-    let _ = cell.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+    let _ = cell.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
         Some(n.saturating_add(1))
     });
 }
