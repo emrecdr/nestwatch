@@ -1178,25 +1178,24 @@ async fn time_request_rejected_off_lan() {
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
-/// The largest request a child may make is accepted, and one minute more is not.
+/// A request for nothing is refused, the largest a child may make is accepted, and one minute
+/// more is not.
 ///
-/// Kills `minutes > max` turned into `>=` in `require_minutes`, which three handlers share: the
-/// tests only ever sent zero, so a ceiling one minute too low was invisible.
-#[tokio::test]
-async fn a_request_for_exactly_the_most_a_child_may_ask_is_accepted() {
-    let max = nestwatch::timereq::MAX_REQUEST_MINUTES;
-    let app = test_app();
-    let res = post_time_request(&app, json!({ "minutes": max })).await;
-    assert_eq!(res.status(), StatusCode::OK);
-    let res = post_time_request(&app, json!({ "minutes": max + 1 })).await;
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-}
-
+/// The accepted ceiling kills `minutes > max` turned into `>=` in `require_minutes`, which three
+/// handlers share: the tests only ever sent zero, so a ceiling one minute too low was invisible.
+/// Three requests, under the limiter's five a minute.
 #[tokio::test]
 async fn time_request_validates_minutes() {
+    let max = nestwatch::timereq::MAX_REQUEST_MINUTES;
     let app = test_app();
-    let res = post_time_request(&app, json!({ "minutes": 0 })).await;
-    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    for (minutes, expected) in [
+        (0, StatusCode::BAD_REQUEST),
+        (max, StatusCode::OK),
+        (max + 1, StatusCode::BAD_REQUEST),
+    ] {
+        let res = post_time_request(&app, json!({ "minutes": minutes })).await;
+        assert_eq!(res.status(), expected, "{minutes} minutes");
+    }
 }
 
 #[tokio::test]

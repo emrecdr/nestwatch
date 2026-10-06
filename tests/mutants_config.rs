@@ -8,21 +8,13 @@
 //! made cross-platform but left on it is code whose mutants are silently never tested.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+mod common;
+use common::crate_sources;
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Every module declared `#[cfg(windows)] mod name;` anywhere under `src/`, as the file it loads.
@@ -31,11 +23,8 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 /// written somewhere new is found too. The path follows Rust's own rule: a module declared in
 /// `lib.rs`, `main.rs` or a `mod.rs` lives beside it; one declared in `x.rs` lives in `x/`.
 fn windows_only_modules() -> Vec<String> {
-    let mut files = Vec::new();
-    rust_files(&root().join("src"), &mut files);
     let mut found = Vec::new();
-    for file in files {
-        let text = fs::read_to_string(&file).unwrap();
+    for (file, text) in crate_sources(&["src"]) {
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
             // `mod name;`, with any visibility in front. Split on the keyword rather than matching

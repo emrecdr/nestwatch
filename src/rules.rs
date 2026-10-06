@@ -518,19 +518,15 @@ impl Usage {
         targets: &Targets,
     ) {
         if self.day != Some(today) {
-            self.day = Some(today);
-            self.total_secs = 0;
-            self.per_app_secs.clear();
-            self.per_group_secs.clear();
-            self.page_secs.clear();
-            // Cleared with the rest: the day's focus figures belong to the day that just ended,
-            // and `decide_after_snapshot` has already taken the copy the rollup row is built from.
-            self.foreground_secs.clear();
-            // Same contract, and the ordering matters more here than for the maps: the tick drains
-            // `refusals` into this field *after* `decide_after_snapshot` has run, so a refusal
-            // counted during the rollover tick lands on the new day rather than on the one whose
-            // row has already been built. At most one tick of imprecision, once a day, at midnight.
-            self.refused = crate::refusals::Refused::default();
+            // `read_on`'s empty day, every field at once, so a field added later cannot be carried
+            // into tomorrow by being forgotten here. Two of them rely on when this runs. The day's
+            // focus figures (`foreground_secs`) belong to the day that just ended, and
+            // `decide_after_snapshot` has already taken the copy the rollup row is built from. And
+            // the tick drains `refusals` into `refused` *after* `decide_after_snapshot` has run, so
+            // a refusal counted during the rollover tick lands on the new day rather than on the
+            // one whose row has already been built. At most one tick of imprecision, once a day,
+            // at midnight.
+            *self = std::mem::take(self).read_on(today);
         }
         self.total_secs = self.total_secs.saturating_add(delta_secs);
         for name in running {
@@ -563,9 +559,10 @@ impl Usage {
     }
 
     /// This tally as it reads on `today`: itself when it is today's, otherwise an empty day
-    /// stamped `today`. Split from [`Usage::load_for_today`] so the rule is testable without a
-    /// data directory — the stamp is what the today card shows as its date, and nothing else
-    /// checked it.
+    /// stamped `today`. The one rule for a new day, used both when the tally is loaded
+    /// ([`Usage::load_for_today`]) and when it accrues across midnight (`accrue`), and testable
+    /// without a data directory — the stamp is what the today card shows as its date, and nothing
+    /// else checked it.
     fn read_on(self, today: NaiveDate) -> Self {
         if self.day == Some(today) {
             self
@@ -579,25 +576,24 @@ impl Usage {
 
     /// Minutes used today: seconds over sixty, rounded down, clamped rather than wrapped.
     ///
-    /// The one place this division happens, for the reason [`Usage::remaining_mins`] gives for its
-    /// subtraction — `as u32` on a corrupt tally wraps to a small number. `child_status` and
-    /// `preview_rules` each spelled it out before, and the first had no test at all.
+    /// The one place the tally is narrowed to a `u32`, because that has a sharp edge: `as u32` on
+    /// a corrupt or absurd tally wraps to a small number, which reads as "plenty of budget left"
+    /// — enforcement inverted, silently. Clamp, never truncate. `child_status`, `preview_rules`
+    /// and [`Usage::remaining_mins`] each spelled it out before, and the first had no test at all.
     pub fn used_mins(&self) -> u32 {
         u32::try_from(self.total_secs / 60).unwrap_or(u32::MAX)
     }
 
     /// Minutes left against `budget`, or `None` when no budget applies today.
     ///
-    /// The one place this subtraction happens, because it has a sharp edge: `used_mins` is `u64`
-    /// and `as u32` on a corrupt or absurd tally wraps to a small number, which reads as "plenty
-    /// of budget left" — enforcement inverted, silently. Clamp, never truncate.
+    /// The one place this subtraction happens, over [`Usage::used_mins`] so that a corrupt tally
+    /// clamps to nothing left rather than wrapping round to plenty.
     ///
     /// Deliberately **not** the same arithmetic as the enforcer's countdown, which floors over
     /// *seconds* to understate (see `decide`). This one is for display; a budget of 10 with 61s
     /// used reads 9 here and 8 there, and both are right for what they do.
     pub fn remaining_mins(&self, budget: u32) -> Option<u32> {
-        let used = u32::try_from(self.total_secs / 60).unwrap_or(u32::MAX);
-        (budget > 0).then(|| budget.saturating_sub(used))
+        (budget > 0).then(|| budget.saturating_sub(self.used_mins()))
     }
 
     /// This tally as JSON, for [`save_tally_if_changed`] to compare and persist.
@@ -1478,7 +1474,7 @@ pub async fn run_rules_enforcer(
         // Snapshot the config under the lock, then drop the guard before any await.
         // `port` and the curfew reading come out of the same guard the tick already takes, rather
         // than a second acquisition later — they feed `ask_hint`, which needs both.
-        let (rules, extra, gate_cap, lang, port, curfew_now) = {
+        let (rules, adjustments, lang, port, curfew_now) = {
             let guard = crate::state::recover_read(&config);
             // `rules_at`, not `rules`: a routine whose schedule covers this instant is the policy
             // in force, and this is the tick that enforces it. The trusted clock rather than
@@ -1487,8 +1483,7 @@ pub async fn run_rules_enforcer(
             let at = crate::clock::now();
             (
                 guard.rules_at(at).clone(),
-                guard.extra.for_day(today),
-                gate_ceiling(&guard, today),
+                Adjustments::new(guard.extra.for_day(today), gate_ceiling(&guard, today)),
                 guard.language,
                 guard.port,
                 guard.curfew.is_active_now(),
@@ -1529,7 +1524,7 @@ pub async fn run_rules_enforcer(
                 usage_log.record(
                     "session_stop",
                     serde_json::json!({
-                        "minutes_used": enforcer.usage.total_secs / 60,
+                        "minutes_used": enforcer.usage.used_mins(),
                         "reason": reason,
                     }),
                 );
@@ -1597,7 +1592,7 @@ pub async fn run_rules_enforcer(
                 interval: elapsed,
                 warn: Duration::from_secs(rules.warn_secs as u64),
                 slack: CHECK_INTERVAL,
-                adjustments: Adjustments::new(extra, gate_cap),
+                adjustments,
                 active,
             },
         );
@@ -1627,7 +1622,7 @@ pub async fn run_rules_enforcer(
 
         save_tally_if_changed(&enforcer.usage, &tally_path, &mut last_saved_tally).await;
 
-        let budget = rules.effective_budget_mins(today, Adjustments::new(extra, gate_cap));
+        let budget = rules.effective_budget_mins(today, adjustments);
 
         // Log the previous day's total once, on rollover. Report the budget that was in force at
         // the *end of that day* (carried across ticks), not today's — otherwise the fresh day's
@@ -1645,7 +1640,7 @@ pub async fn run_rules_enforcer(
         }
         prev_budget = Some(budget);
 
-        let used_mins = enforcer.usage.total_secs / 60;
+        let used_mins = enforcer.usage.used_mins();
 
         // Record active-use session boundaries in the usage history (rising/falling edge of
         // `active`). The first observed active tick counts as a session start.
@@ -1822,8 +1817,7 @@ pub async fn run_rules_enforcer(
         // `Rules::spent_today`, the same question `api::preview_rules` asks before a save, so the
         // two cannot disagree about whether today is over: an unlimited day never is, and the
         // boundary is `>=` in seconds, as in `decide`.
-        let over_budget =
-            rules.spent_today(today, Adjustments::new(extra, gate_cap), &enforcer.usage);
+        let over_budget = rules.spent_today(today, adjustments, &enforcer.usage);
         let shutdown_wanted = over_budget && rules.budget_action == EnforceAction::Shutdown;
         prev_shutdown_wanted = maybe_abort_budget_shutdown(
             &control,
@@ -2096,7 +2090,7 @@ fn log_transition(
     event: &str,
     active: bool,
     state: &mut bool,
-    used_mins: u64,
+    used_mins: u32,
     budget: u32,
 ) {
     if active && !*state {
@@ -2617,12 +2611,7 @@ mod tests {
             total_secs: mins * 60,
             ..Default::default()
         };
-        let rules = Rules {
-            enabled: true,
-            daily_budget_mins: 60,
-            budget_action: EnforceAction::Lock,
-            ..Default::default()
-        };
+        let rules = budget(60);
 
         // Nothing left: the extension buys the child no screen time at all.
         assert_eq!(
@@ -2635,6 +2624,12 @@ mod tests {
         assert_eq!(
             rules.budget_cuts_extension_short(day, Adjustments::new(0, None), &spent(50), 30),
             Some(10)
+        );
+        // Exactly enough left is enough. `remaining < minutes` turned into `<=` warned a parent
+        // here that the extension was cut short (`O109`).
+        assert_eq!(
+            rules.budget_cuts_extension_short(day, Adjustments::new(0, None), &spent(30), 30),
+            None
         );
         // Enough left to cover it — nothing to say.
         assert_eq!(
@@ -2828,11 +2823,22 @@ mod tests {
             );
         }
 
-        // A genuine next day, 12h+ later, still works — the guard delays resets, never blocks them.
+        // A genuine next day still works — the guard delays resets, never blocks them — and the gap
+        // is twelve hours to the second. The flips above all fall within ten minutes, which a
+        // one-hour gap refuses just as well, so `12 * 3600` turned into `12 + 3600` survived them,
+        // as did the boundary turned from `<` into `<=` (`O109`). Written out rather than derived
+        // from `MIN_RESET_GAP`, so a mutated constant cannot agree with itself. A refused date
+        // leaves the last reset where it was, so the flips do not move this deadline.
+        let twelve_hours = Duration::from_secs(12 * 3600);
         assert_eq!(
-            e.accounting_day(mon, t0 + Duration::from_secs(13 * 3600)),
+            e.accounting_day(mon, t0 + twelve_hours - Duration::from_secs(1)),
+            tue,
+            "a second short of twelve hours is still refused"
+        );
+        assert_eq!(
+            e.accounting_day(mon, t0 + twelve_hours),
             mon,
-            "a real rollover after 12h must be honoured"
+            "twelve hours on, a real rollover must be honoured"
         );
     }
 
@@ -3811,16 +3817,26 @@ mod tests {
         );
     }
 
-    /// Collect the advance warnings emitted over `ticks` ticks of `rules`.
-    fn countdown_over(e: &mut RulesEnforcer, rules: &Rules, extra: u32, ticks: usize) -> Vec<u32> {
-        let base = Instant::now();
-        (0..ticks)
-            .flat_map(|_| e.decide(rules, &[], tk(base, extra)))
+    /// The advance warnings among `actions`, in order.
+    fn warnings(actions: impl IntoIterator<Item = RuleAction>) -> Vec<u32> {
+        actions
+            .into_iter()
             .filter_map(|a| match a {
                 RuleAction::TimeWarning(m) => Some(m),
                 _ => None,
             })
             .collect()
+    }
+
+    /// Collect the advance warnings emitted over `ticks` ticks of `rules`.
+    fn countdown_over(e: &mut RulesEnforcer, rules: &Rules, extra: u32, ticks: usize) -> Vec<u32> {
+        let base = Instant::now();
+        warnings((0..ticks).flat_map(|_| e.decide(rules, &[], tk(base, extra))))
+    }
+
+    /// `n` distinct process names, `{prefix}0.exe` onwards.
+    fn exe_names(prefix: &str, n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("{prefix}{i}.exe")).collect()
     }
 
     /// The module's standard fixture: a Lock-mode `Rules` with an `mins`-minute daily budget.
@@ -4715,17 +4731,6 @@ mod tests {
         assert_eq!(on.tick_mode(), TickMode::Enforce);
     }
 
-    #[test]
-    fn validate_rejects_huge_warn() {
-        let ok = Rules::default();
-        assert!(ok.validate().is_ok());
-        let bad = Rules {
-            warn_secs: MAX_WARN_SECS + 1,
-            ..Default::default()
-        };
-        assert!(bad.validate().is_err());
-    }
-
     // --- Survivors of the first full mutation sweep (2026-10-05), `docs/OPEN-FINDINGS.md` O109.
     // Each test below names the mutants it was written to kill; each was watched surviving
     // without it and caught with it.
@@ -4738,17 +4743,12 @@ mod tests {
     /// hundred apps, would have been refused with no test saying so.
     #[test]
     fn every_bound_in_validate_admits_exactly_its_maximum() {
-        let names = |prefix: &str| -> Vec<String> {
-            (0..MAX_RULE_ENTRIES)
-                .map(|i| format!("{prefix}{i}.exe"))
-                .collect()
-        };
         let at_max = Rules {
             warn_secs: MAX_WARN_SECS,
             daily_budget_mins: MAX_BUDGET_MINS,
             budget_by_weekday: Some(vec![MAX_BUDGET_MINS; 7]),
-            blocklist: names("blocked"),
-            app_limits: names("limited")
+            blocklist: exe_names("blocked", MAX_RULE_ENTRIES),
+            app_limits: exe_names("limited", MAX_RULE_ENTRIES)
                 .into_iter()
                 .map(|name| (name, MAX_BUDGET_MINS))
                 .collect(),
@@ -4779,11 +4779,6 @@ mod tests {
     #[test]
     fn each_bound_in_validate_refuses_one_past_its_maximum_on_its_own() {
         let over = MAX_BUDGET_MINS + 1;
-        let many = |prefix: &str| -> Vec<String> {
-            (0..=MAX_RULE_ENTRIES)
-                .map(|i| format!("{prefix}{i}.exe"))
-                .collect()
-        };
         let group = |limit_mins: u32| AppGroup {
             name: "games".into(),
             apps: vec!["game.exe".into()],
@@ -4828,14 +4823,17 @@ mod tests {
             (
                 "the blocklist's length",
                 Rules {
-                    blocklist: many("blocked"),
+                    blocklist: exe_names("blocked", MAX_RULE_ENTRIES + 1),
                     ..Rules::default()
                 },
             ),
             (
                 "the app limits' length",
                 Rules {
-                    app_limits: many("limited").into_iter().map(|n| (n, 30)).collect(),
+                    app_limits: exe_names("limited", MAX_RULE_ENTRIES + 1)
+                        .into_iter()
+                        .map(|n| (n, 30))
+                        .collect(),
                     ..Rules::default()
                 },
             ),
@@ -4847,6 +4845,11 @@ mod tests {
                 },
             ),
         ];
+        assert_eq!(
+            Rules::default().validate(),
+            Ok(()),
+            "every case starts from the default, so it must be valid for a refusal to mean anything"
+        );
         for (what, rules) in cases {
             assert!(rules.validate().is_err(), "{what} one past its maximum");
         }
@@ -4866,29 +4869,6 @@ mod tests {
         assert_eq!(
             week(vec![0, 0, 45, 0, 0, 0, 0]).tick_mode(),
             TickMode::Enforce
-        );
-    }
-
-    /// Exactly enough screen time left for an extension is enough.
-    ///
-    /// Kills `remaining < minutes` turned into `<=`, which would warn a parent that a 30-minute
-    /// bedtime extension is cut short when exactly 30 minutes remain.
-    #[test]
-    fn exactly_enough_screen_time_left_does_not_shadow_an_extension() {
-        let rules = Rules {
-            enabled: true,
-            daily_budget_mins: 60,
-            budget_action: EnforceAction::Lock,
-            ..Default::default()
-        };
-        let used = Usage {
-            day: Some(day()),
-            total_secs: 30 * 60,
-            ..Default::default()
-        };
-        assert_eq!(
-            rules.budget_cuts_extension_short(day(), Adjustments::new(0, None), &used, 30),
-            None
         );
     }
 
@@ -4970,37 +4950,6 @@ mod tests {
         assert_eq!(StopReason::Blocked.group(), None);
     }
 
-    /// A second rollover is refused for twelve hours, and honoured from the twelfth hour on.
-    ///
-    /// `a_flipping_clock_cannot_reset_the_days_tally` flips within ten minutes, which a one-hour
-    /// gap refuses just as well — so `12 * 3600` turned into `12 + 3600` survived, as did the
-    /// boundary turned from `<` into `<=`. The times here are written out rather than derived
-    /// from `MIN_RESET_GAP`, so a mutated constant cannot agree with itself.
-    #[test]
-    fn the_reset_gap_is_twelve_hours_to_the_second() {
-        let mut e = RulesEnforcer::new(Usage::default());
-        let mon = NaiveDate::from_ymd_opt(2026, 8, 10).unwrap();
-        let tue = NaiveDate::from_ymd_opt(2026, 8, 11).unwrap();
-        let t0 = Instant::now();
-        let hours = |h: u64| Duration::from_secs(h * 3600);
-
-        e.usage.day = Some(mon);
-        assert_eq!(e.accounting_day(tue, t0), tue, "the first rollover is real");
-        e.usage.day = Some(tue);
-
-        assert_eq!(e.accounting_day(mon, t0 + hours(2)), tue, "two hours on");
-        assert_eq!(
-            e.accounting_day(mon, t0 + hours(12) - Duration::from_secs(1)),
-            tue,
-            "a second short of twelve hours"
-        );
-        assert_eq!(
-            e.accounting_day(mon, t0 + hours(12)),
-            mon,
-            "twelve hours on, the rollover is honoured"
-        );
-    }
-
     /// Nothing locks or powers off before its grace has run — checked a second before each
     /// deadline, which is the tick every existing test skipped.
     ///
@@ -5031,9 +4980,8 @@ mod tests {
         );
 
         let off = Rules {
-            daily_budget_mins: 1,
             budget_action: EnforceAction::Shutdown,
-            ..Default::default()
+            ..budget(1)
         };
         let mut e = RulesEnforcer::new(Usage::default());
         e.decide(&off, &[], tk(base, 0));
@@ -5070,15 +5018,6 @@ mod tests {
         let rules = budget(17);
         let mut e = RulesEnforcer::new(Usage::default());
         let base = Instant::now();
-        let warnings = |actions: Vec<RuleAction>| -> Vec<u32> {
-            actions
-                .into_iter()
-                .filter_map(|a| match a {
-                    RuleAction::TimeWarning(m) => Some(m),
-                    _ => None,
-                })
-                .collect()
-        };
         assert!(warnings(e.decide(&rules, &[], tk(base, 0))).is_empty());
         assert!(warnings(e.decide(&rules, &[], tk(base, 0))).is_empty());
         assert!(warnings(e.decide(&rules, &[], tk_active(base, 0, false))).is_empty());
@@ -5130,36 +5069,35 @@ mod tests {
             }];
             Arc::new(RwLock::new(cfg))
         };
-        let abort = |config: Arc<RwLock<Config>>| {
-            let (control, log) = (control.clone(), &log);
-            async move {
-                maybe_abort_budget_shutdown(
-                    &control,
-                    &config,
-                    log,
-                    true,
-                    false,
-                    serde_json::json!({}),
-                )
-                .await
-            }
-        };
-
-        abort(config_with(true, -2, 2)).await;
-        assert_eq!(
-            fake.aborted_shutdowns(),
-            0,
-            "bedtime is calling for a shutdown, so the budget's falling edge must leave it alone"
-        );
-
-        abort(config_with(true, 2, 3)).await;
-        assert_eq!(
-            fake.aborted_shutdowns(),
-            1,
-            "a curfew switched on but not yet due is not calling for anything"
-        );
-
-        abort(config_with(false, -2, 2)).await;
-        assert_eq!(fake.aborted_shutdowns(), 2, "nor is one switched off");
+        // (curfew switched on, its window in hours from now, aborts the falling edge causes, why)
+        let cases = [
+            (
+                true,
+                (-2, 2),
+                0,
+                "bedtime is calling for a shutdown, so the budget's falling edge must leave it alone",
+            ),
+            (
+                true,
+                (2, 3),
+                1,
+                "a curfew switched on but not yet due is not calling for anything",
+            ),
+            (false, (-2, 2), 1, "nor is one switched off"),
+        ];
+        for (enabled, (from_hours, to_hours), aborts, why) in cases {
+            let config = config_with(enabled, from_hours, to_hours);
+            let before = fake.aborted_shutdowns();
+            maybe_abort_budget_shutdown(
+                &control,
+                &config,
+                &log,
+                true,
+                false,
+                serde_json::json!({}),
+            )
+            .await;
+            assert_eq!(fake.aborted_shutdowns() - before, aborts, "{why}");
+        }
     }
 }

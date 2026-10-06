@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
@@ -77,7 +78,7 @@ pub struct FakeControl {
     /// once it is no longer wanted, and must *not* cancel while the curfew is calling for one, since
     /// both share Windows' one pending-shutdown slot. A log line could not show which happened, so
     /// nothing tested the curfew half of that rule.
-    aborts: std::sync::atomic::AtomicU32,
+    aborts: AtomicU32,
 }
 
 impl FakeControl {
@@ -111,7 +112,7 @@ impl FakeControl {
                 },
             ]),
             shutdowns: Mutex::new(Vec::new()),
-            aborts: std::sync::atomic::AtomicU32::new(0),
+            aborts: AtomicU32::new(0),
             notifications: Mutex::new(Vec::new()),
             session: Mutex::new(Ok(SessionState::Active)),
             notify_result: Mutex::new(Ok(())),
@@ -160,7 +161,7 @@ impl FakeControl {
 
     /// How many times this fake was asked to cancel a pending shutdown.
     pub fn aborted_shutdowns(&self) -> u32 {
-        self.aborts.load(std::sync::atomic::Ordering::Relaxed)
+        self.aborts.load(Ordering::Relaxed)
     }
 
     /// Every notification this fake was asked to show, as `(title, body)`, oldest first.
@@ -268,8 +269,7 @@ impl SystemControl for FakeControl {
 
     fn abort_shutdown(&self) -> Result<(), ControlError> {
         tracing::info!("[fake] abort_shutdown (no-op on this platform)");
-        self.aborts
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.aborts.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 

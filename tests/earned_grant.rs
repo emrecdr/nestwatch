@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use nestwatch::config::{MAX_PROVIDERS, data_paths};
+use nestwatch::idempotency::MAX_KEY_LEN;
 
 mod common;
 use common::{PASSWORD, ScratchDir, app_with, configure_provider, login, state_with, test_config};
@@ -236,7 +237,7 @@ async fn earned_grants_latch_replay_and_validate() {
             );
         }
 
-        let long_key = "k".repeat(129);
+        let long_key = "k".repeat(MAX_KEY_LEN + 1);
         let (status, _) = grant(
             &app,
             &cookie,
@@ -246,11 +247,26 @@ async fn earned_grants_latch_replay_and_validate() {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "over-long idempotency key");
 
-        let cfg = nestwatch::state::recover_read(&config);
         assert_eq!(
-            cfg.extra.for_day(today),
+            nestwatch::state::recover_read(&config).extra.for_day(today),
             0,
             "nothing was granted on any rejected path"
+        );
+
+        // A key of exactly the longest length is accepted. Tried only past the bound, a limit one
+        // too tight was indistinguishable from the right one (`O109`).
+        let max_key = "k".repeat(MAX_KEY_LEN);
+        let (status, _) = grant(
+            &app,
+            &cookie,
+            json!({ "minutes": 10 }),
+            Some(max_key.as_str()),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a key of exactly the maximum length"
         );
     }
 

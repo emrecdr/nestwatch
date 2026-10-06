@@ -14,8 +14,8 @@
 # excluding the file would hide its tested neighbours too. Their survivors are in
 # `mutants-baseline.txt`, beside the rest.
 #
-# `tests/workflow_pins.rs` keeps this list equal to the Windows-only module declarations, so a new
-# one is excluded the day it appears and one made cross-platform is not left out.
+# `tests/mutants_config.rs` keeps this list equal to the Windows-only module declarations, so a
+# new one is excluded the day it appears and one made cross-platform is not left out.
 exclude_globs = [
   "src/control/service_control.rs",
   "src/control/windows.rs",

@@ -2056,12 +2056,13 @@ uploaded nothing and four shards were killed before finishing (`O103`). The 555 
 and the split is the finding:
 
 - **135 in the six modules that only compile on Windows.** Not test gaps at all: nothing on Linux
-compiles them, so nothing can kill them. Now excluded. - **99 in `#[cfg(windows)]` functions inside
-shared files** — `preflight.rs`, `doctor.rs`, `clock.rs`, `install.rs` and a few more. The same
-story one level down, kept in the baseline because excluding their files would hide the tested code
-beside them. - **321 in code the Linux tests run.** By file: `install.rs` 53, `rules.rs` 48,
-`doctor.rs` 32, `lib.rs` 23, `api.rs` 22, `cert.rs` 18, `auth.rs` 17, `pairing.rs` 17, and twenty
-files with ten or fewer.
+  compiles them, so nothing can kill them. Now excluded.
+- **99 in `#[cfg(windows)]` functions inside shared files** — `preflight.rs`, `doctor.rs`,
+  `clock.rs`, `install.rs` and a few more. The same story one level down, kept in the baseline
+  because excluding their files would hide the tested code beside them.
+- **321 in code the Linux tests run.** By file: `install.rs` 53, `rules.rs` 48, `doctor.rs` 32,
+  `lib.rs` 23, `api.rs` 22, `cert.rs` 18, `auth.rs` 17, `pairing.rs` 17, and twenty files with ten
+  or fewer.
 
 **What was done instead of fixing all of them at once.** `.cargo/mutants-baseline.txt` lists every
 survivor by file, mutation and function — no line numbers, which move with every edit — and
@@ -2077,21 +2078,22 @@ means anything on Windows even where it compiles elsewhere, and come last. The 9
 functions need a mutation run on a Windows runner to mean anything, which is a separate decision
 about cost.
 
-**Triaged 2026-10-06: `rules.rs` and `api.rs`, 70 survivors, 63 gone.** Each killing test was
+**Triaged 2026-10-06: `rules.rs` and `api.rs`, 70 survivors, 65 gone.** Each killing test was
 watched failing under its mutant, and the kills were confirmed by cargo-mutants itself on the
-functions involved. Five of the 63 left the list by refactoring rather than by a test: code moved
-into a function that a test now covers (`Usage::read_on`, `chargeable`, `Usage::used_mins`), or a
-duplicate of `Rules::spent_today` replaced by a call to it. Most of the rest were bounds tested only
+functions involved. Seven of the 65 left the list by refactoring rather than by a test: code moved
+into a function that a test now covers (`Usage::read_on`, `chargeable`, `Usage::used_mins` — which
+the enforcer loop's own minute counts now go through too), or a duplicate of `Rules::spent_today`
+replaced by a call to it. Most of the rest were bounds tested only
 far past the limit and never at it (`Rules::validate` alone held sixteen), deadlines checked only
-after they had passed, and endpoints whose answer no test read back. Seven remain, and they are of
+after they had passed, and endpoints whose answer no test read back. Five remain, and they are of
 two kinds. **Equivalent, two:** `t > now` turned into `>=` in `extend_curfew` (it needs a stored
 extension equal to the trusted clock to the nanosecond), and `prev_wanted && !now_wanted` turned
 into `||` in `maybe_abort_budget_shutdown`, which only changes how often the curfew setting is
-*read* — `should_abort_budget_shutdown` decides the same either way. **Real, five, all in
+*read* — `should_abort_budget_shutdown` decides the same either way. **Real, three, all in
 `run_rules_enforcer`'s records and notices:** the Warn-mode notice's rising edge, the rollover row
-written once a day, the session start and end records, and the minutes written into them. Each needs
-the loop driven across several ticks with a real usage log, which `tests/enforcer_session.rs` now
-shows how to do. The baseline holds 359 lines after this.
+written once a day, and the session start and end records. Each needs the loop driven across
+several ticks with a real usage log, which `tests/enforcer_session.rs` now shows how to do. The
+baseline holds 357 lines after this.
 
 **Not yet in the baseline:** the survivors among the ~130 untested mutants. The next complete run
 reports them as new; each is then killed or added deliberately.

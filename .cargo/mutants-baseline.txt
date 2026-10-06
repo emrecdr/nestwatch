@@ -349,8 +349,6 @@ src/rules.rs: delete ! in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace && with || in maybe_abort_budget_shutdown
-src/rules.rs: replace / with % in run_rules_enforcer
-src/rules.rs: replace / with * in run_rules_enforcer
 src/screentime.rs: replace > with == in first_seen_in
 src/screentime.rs: replace > with >= in DayRow::measured
 src/screentime.rs: replace > with >= in first_seen_in

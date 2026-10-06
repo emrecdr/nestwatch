@@ -27,8 +27,11 @@ name: mutants-weekly
 # than the same three hundred again. Every shard uploads its `mutants.out` either way, so a red
 # shard is read from its artifact rather than re-run.
 #
-# `--shard k/n` is cargo-mutants' own partition of the unshuffled list, so the 32 slices together
-# are the whole list (summed locally: 2,293). Keep `--no-shuffle`, or the slices move between runs.
+# `--shard k/n` is cargo-mutants' own partition of the unshuffled list, so the 32 shards together
+# are the whole list. Dealt round-robin rather than in its default consecutive slices, because
+# survivors bunch by file: counted at HEAD against the baseline, slices put 0 to 44 known survivors
+# in a shard and round-robin 8 to 19, and the run ends when its slowest shard does. Keep
+# `--no-shuffle`, or a mutant moves between shards from one week to the next.
 
 on:
   schedule:
@@ -73,19 +76,20 @@ jobs:
       - name: Test shard ${{ matrix.shard }} of 32
         run: |
           set +e
-          cargo mutants --no-shuffle -vV --in-place --shard ${{ matrix.shard }}/32
+          cargo mutants --no-shuffle -vV --in-place --shard ${{ matrix.shard }}/32 --sharding round-robin
           code=$?
           case "$code" in 0|2|3) exit 0 ;; *) exit "$code" ;; esac
       # A mutant's name carries the line and column it is at, which move with every edit above it,
       # so both sides are compared without them. `comm` on sorted input pairs repeated lines one for
       # one, which is what lets a mutation that survives twice in one function count as two.
+      # cargo-mutants writes both lists on every run, empty or not, so a missing one fails here
+      # rather than reading as a shard with nothing new.
       - name: Survivors not already in the baseline
         run: |
           set -euo pipefail
           export LC_ALL=C
-          for f in mutants.out/missed.txt mutants.out/timeout.txt; do
-            if [ -f "$f" ]; then cat "$f"; fi
-          done | sed -E 's/^([^:]+):[0-9]+:[0-9]+: /\1: /' | sort > survivors.txt
+          sed -E 's/^([^:]+):[0-9]+:[0-9]+: /\1: /' mutants.out/missed.txt mutants.out/timeout.txt \
+            | sort > survivors.txt
           { grep -v -e '^#' -e '^$' .cargo/mutants-baseline.txt || true; } | sort > known.txt
           comm -23 survivors.txt known.txt > new.txt
           if [ -s new.txt ]; then

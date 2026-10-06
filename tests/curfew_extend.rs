@@ -222,11 +222,10 @@ async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
     // could be replaced with `true`, and every phase above still passed, because every extension
     // they stacked onto was still running. Last night's has not: stacked onto, it would put
     // tonight's "+30" two hours in the past, and bedtime would arrive on time.
-    let two_hours_ago = nestwatch::clock::now() - chrono::Duration::hours(2);
+    let now = nestwatch::clock::now();
     nestwatch::state::recover_write(&config_handle)
         .curfew
-        .extra_until = Some(two_hours_ago);
-    let now = nestwatch::clock::now();
+        .extra_until = Some(now - chrono::Duration::hours(2));
     let (status, _) = post(&app, "/api/curfew/extend", &cookie, json!({"minutes": 30})).await;
     assert_eq!(status, StatusCode::OK);
     let granted = stored().expect("recorded");
