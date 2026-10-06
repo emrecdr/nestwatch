@@ -13,28 +13,7 @@
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
 # deleting its line here in the same commit. `docs/OPEN-FINDINGS.md` `O109` has the breakdown.
-src/api.rs: replace != with == in delete_routine
-src/api.rs: replace / with % in child_status
-src/api.rs: replace / with * in child_status
-src/api.rs: replace == with != in grant_shadowed_by_curfew
-src/api.rs: replace == with != in save_routine
-src/api.rs: replace > with == in save_routine
-src/api.rs: replace > with == in save_routine
 src/api.rs: replace > with >= in extend_curfew
-src/api.rs: replace > with >= in extra_time
-src/api.rs: replace > with >= in require_minutes
-src/api.rs: replace > with >= in save_routine
-src/api.rs: replace > with >= in save_routine
-src/api.rs: replace grant_shadowed_by_curfew -> Option<String> with None
-src/api.rs: replace grant_shadowed_by_curfew -> Option<String> with Some("xyzzy".into())
-src/api.rs: replace grant_shadowed_by_curfew -> Option<String> with Some(String::new())
-src/api.rs: replace list_routines -> Json<Vec<Value>> with Json::from(vec![Default::default()])
-src/api.rs: replace list_routines -> Json<Vec<Value>> with Json::from(vec![])
-src/api.rs: replace list_time_codes -> Result<Json<Vec<crate::timecode::ActiveCode>>, AppError> with Ok(Json::from(vec![]))
-src/api.rs: replace match guard t > now with true in extend_curfew
-src/api.rs: replace usage -> Result<Json<Vec<Value>>, AppError> with Ok(Json::from(vec![Default::default()]))
-src/api.rs: replace usage -> Result<Json<Vec<Value>>, AppError> with Ok(Json::from(vec![]))
-src/api.rs: replace || with && in save_routine
 src/audit.rs: replace AuditLog::views_on -> u32 with 0
 src/audit.rs: replace AuditLog::views_on -> u32 with 1
 src/auth.rs: replace * with +
@@ -366,54 +345,12 @@ src/preflight.rs: replace zone_identifier -> String with String::new()
 src/preflight.rs: replace | with & in check_existing_service
 src/preflight.rs: replace | with ^ in check_existing_service
 src/probe.rs: replace > with >= in run_once
-src/rules.rs: delete ! in maybe_abort_budget_shutdown
 src/rules.rs: delete ! in run_rules_enforcer
-src/rules.rs: delete field day from struct Self expression in Usage::load_for_today
-src/rules.rs: delete match arm Ok(Ok(state)) in run_rules_enforcer
-src/rules.rs: delete match arm Self::GroupPool{group, ..} in StopReason::group
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace && with || in maybe_abort_budget_shutdown
-src/rules.rs: replace && with || in maybe_abort_budget_shutdown
-src/rules.rs: replace * with +
-src/rules.rs: replace * with / in run_rules_enforcer
-src/rules.rs: replace + with - in RulesEnforcer::decide
-src/rules.rs: replace + with - in RulesEnforcer::decide
-src/rules.rs: replace + with - in RulesEnforcer::decide
-src/rules.rs: replace + with - in RulesEnforcer::decide
 src/rules.rs: replace / with % in run_rules_enforcer
-src/rules.rs: replace / with % in today_summary
 src/rules.rs: replace / with * in run_rules_enforcer
-src/rules.rs: replace / with * in today_summary
-src/rules.rs: replace < with <= in Rules::budget_cuts_extension_short
-src/rules.rs: replace < with <= in RulesEnforcer::accounting_day
-src/rules.rs: replace == with != in RulesEnforcer::decide
-src/rules.rs: replace > with < in Rules::validate
-src/rules.rs: replace > with == in Rules::has_any_budget
-src/rules.rs: replace > with == in Rules::validate
-src/rules.rs: replace > with == in Rules::validate
-src/rules.rs: replace > with == in Rules::validate
-src/rules.rs: replace > with == in Rules::validate
-src/rules.rs: replace > with == in Rules::validate
-src/rules.rs: replace > with == in Rules::validate
-src/rules.rs: replace > with >= in Rules::has_any_budget
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in Rules::validate
-src/rules.rs: replace > with >= in run_rules_enforcer
-src/rules.rs: replace StopReason::group -> Option<&str> with None
-src/rules.rs: replace StopReason::group -> Option<&str> with Some("")
-src/rules.rs: replace StopReason::limit_mins -> Option<u32> with None
-src/rules.rs: replace match guard t.now >= dl + t.slack with true in RulesEnforcer::decide
-src/rules.rs: replace match guard t.now >= dl with true in RulesEnforcer::decide
-src/rules.rs: replace || with && in Rules::validate
-src/rules.rs: replace || with && in Rules::validate
-src/rules.rs: replace || with && in Rules::validate
 src/screentime.rs: replace > with == in first_seen_in
 src/screentime.rs: replace > with >= in DayRow::measured
 src/screentime.rs: replace > with >= in first_seen_in

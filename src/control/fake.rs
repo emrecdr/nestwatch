@@ -71,6 +71,13 @@ pub struct FakeControl {
     /// Every `(exe, input)` this fake was asked to probe with, in order — so a test can assert
     /// the caller's half of the contract: which file, with which secret.
     probe_calls: Mutex<Vec<(PathBuf, Vec<u8>)>>,
+    /// How many times a pending shutdown was cancelled.
+    ///
+    /// Counted for the reason `shutdowns` is recorded: the rules enforcer cancels a budget shutdown
+    /// once it is no longer wanted, and must *not* cancel while the curfew is calling for one, since
+    /// both share Windows' one pending-shutdown slot. A log line could not show which happened, so
+    /// nothing tested the curfew half of that rule.
+    aborts: std::sync::atomic::AtomicU32,
 }
 
 impl FakeControl {
@@ -104,6 +111,7 @@ impl FakeControl {
                 },
             ]),
             shutdowns: Mutex::new(Vec::new()),
+            aborts: std::sync::atomic::AtomicU32::new(0),
             notifications: Mutex::new(Vec::new()),
             session: Mutex::new(Ok(SessionState::Active)),
             notify_result: Mutex::new(Ok(())),
@@ -148,6 +156,11 @@ impl FakeControl {
             .lock()
             .expect("fake shutdown log poisoned")
             .clone()
+    }
+
+    /// How many times this fake was asked to cancel a pending shutdown.
+    pub fn aborted_shutdowns(&self) -> u32 {
+        self.aborts.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Every notification this fake was asked to show, as `(title, body)`, oldest first.
@@ -255,6 +268,8 @@ impl SystemControl for FakeControl {
 
     fn abort_shutdown(&self) -> Result<(), ControlError> {
         tracing::info!("[fake] abort_shutdown (no-op on this platform)");
+        self.aborts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 

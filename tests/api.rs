@@ -706,6 +706,71 @@ async fn extra_time_requires_auth_and_validates_range() {
     }
 }
 
+/// `GET /api/usage` answers with what the usage log holds, newest first.
+///
+/// A survivor of the first full mutation sweep (`docs/OPEN-FINDINGS.md` O109): the handler could
+/// return an empty list, or a list of one empty value, and every test passed, because every test
+/// ran with the log disabled and nothing read the endpoint back.
+#[tokio::test]
+async fn the_usage_history_endpoint_answers_with_what_was_recorded() {
+    let dir = ScratchDir::new("api-usage-history");
+    let usage = std::sync::Arc::new(nestwatch::usage::UsageLog::new(dir.join("usage.jsonl")));
+    usage.record("session_start", json!({}));
+    usage.record(
+        "extra_time_granted",
+        json!({ "minutes": 30, "source": "parent" }),
+    );
+    let mut state = test_state();
+    state.usage = usage;
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let res = get(&app, "/api/usage", Some(&cookie)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let events = body_json(res).await;
+    let names: Vec<&str> = events
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|e| e["event"].as_str())
+        .collect();
+    assert_eq!(names, vec!["extra_time_granted", "session_start"]);
+    assert_eq!(events[0]["minutes"], 30);
+}
+
+/// An issued time code is listed until it is redeemed.
+///
+/// The same survivor shape as the usage history above: `list_time_codes` could answer with an
+/// empty list, and nothing noticed, because the shared test state disables the code store — the
+/// existing test issues a code and never reads the list back.
+#[tokio::test]
+async fn an_issued_time_code_is_listed() {
+    let dir = ScratchDir::new("api-time-codes");
+    let mut state = test_state();
+    state.time_codes = std::sync::Arc::new(nestwatch::timecode::TimeCodes::new(
+        dir.join("time_codes.jsonl"),
+    ));
+    let app = app_with(state);
+    let cookie = login(&app, PASSWORD).await.unwrap();
+
+    let res = post_json(
+        &app,
+        "/api/time-codes",
+        Some(&cookie),
+        json!({ "minutes": 45 }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let code = body_json(res).await["code"].as_str().unwrap().to_string();
+
+    let res = get(&app, "/api/time-codes", Some(&cookie)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let listed = body_json(res).await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(1));
+    assert_eq!(listed[0]["code"], code.as_str());
+    assert_eq!(listed[0]["minutes"], 45);
+}
+
 #[tokio::test]
 async fn time_codes_parent_endpoints_require_auth_and_issue() {
     let app = test_app();
@@ -1111,6 +1176,20 @@ async fn time_request_rejected_off_lan() {
         .layer(MockConnectInfo(SocketAddr::from(([203, 0, 113, 7], 5555))));
     let res = post_time_request(&app, json!({ "minutes": 30 })).await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+/// The largest request a child may make is accepted, and one minute more is not.
+///
+/// Kills `minutes > max` turned into `>=` in `require_minutes`, which three handlers share: the
+/// tests only ever sent zero, so a ceiling one minute too low was invisible.
+#[tokio::test]
+async fn a_request_for_exactly_the_most_a_child_may_ask_is_accepted() {
+    let max = nestwatch::timereq::MAX_REQUEST_MINUTES;
+    let app = test_app();
+    let res = post_time_request(&app, json!({ "minutes": max })).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = post_time_request(&app, json!({ "minutes": max + 1 })).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

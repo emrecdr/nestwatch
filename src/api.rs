@@ -1979,7 +1979,7 @@ pub async fn child_status(
     // Clamped, via the shared helper — `as u32` here used to wrap a corrupt tally to a small
     // number, telling the child they had plenty of time left.
     let remaining = usage.remaining_mins(budget).unwrap_or(0);
-    let used = u32::try_from(usage.total_secs / 60).unwrap_or(u32::MAX);
+    let used = usage.used_mins();
     Ok(Json(json!({
         // `false` when enforcement is paused or no budget applies today — the page then says
         // "no limit today" rather than showing a meaningless 0.
@@ -2081,7 +2081,7 @@ pub async fn preview_rules(
     };
     let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
     Ok(Json(json!({
-        "used_mins": u32::try_from(usage.total_secs / 60).unwrap_or(u32::MAX),
+        "used_mins": usage.used_mins(),
         "budget_mins": saved_rules.effective_budget_mins(today, adjustments),
         "over": saved_rules.spent_today(today, adjustments, &usage),
         "was_over": now_rules.spent_today(today, adjustments, &usage),

@@ -559,15 +559,31 @@ impl Usage {
     /// stamped with `today` — so the dashboard never shows yesterday's numbers before the first
     /// tick of the new day has run.
     pub fn load_for_today(today: NaiveDate) -> Self {
-        let stored = Self::load_or_default(&usage_state_path());
-        if stored.day == Some(today) {
-            stored
+        Self::load_or_default(&usage_state_path()).read_on(today)
+    }
+
+    /// This tally as it reads on `today`: itself when it is today's, otherwise an empty day
+    /// stamped `today`. Split from [`Usage::load_for_today`] so the rule is testable without a
+    /// data directory — the stamp is what the today card shows as its date, and nothing else
+    /// checked it.
+    fn read_on(self, today: NaiveDate) -> Self {
+        if self.day == Some(today) {
+            self
         } else {
             Self {
                 day: Some(today),
                 ..Default::default()
             }
         }
+    }
+
+    /// Minutes used today: seconds over sixty, rounded down, clamped rather than wrapped.
+    ///
+    /// The one place this division happens, for the reason [`Usage::remaining_mins`] gives for its
+    /// subtraction — `as u32` on a corrupt tally wraps to a small number. `child_status` and
+    /// `preview_rules` each spelled it out before, and the first had no test at all.
+    pub fn used_mins(&self) -> u32 {
+        u32::try_from(self.total_secs / 60).unwrap_or(u32::MAX)
     }
 
     /// Minutes left against `budget`, or `None` when no budget applies today.
@@ -1439,7 +1455,7 @@ pub async fn run_rules_enforcer(
         // laptops, where the monotonic clock keeps running through S0ix. The clamp means one long
         // gap costs at most one extra tick.
         let now = Instant::now();
-        let elapsed = now.duration_since(last_tick).min(CHECK_INTERVAL * 2);
+        let elapsed = chargeable(now.duration_since(last_tick));
         last_tick = now;
 
         // Empty the watcher's buffer **every** tick, including ticks that return early below.
@@ -1803,9 +1819,11 @@ pub async fn run_rules_enforcer(
         // parent grants more time, lifting the child back under budget. The trigger is the budget
         // itself (`shutdown_wanted`), not the countdown deadline: merely locking the screen or
         // stepping away while still over budget must NOT rescue an in-flight shutdown.
-        // `budget` (computed above for the rollup) is 0 on an unlimited day, so this also gates
-        // out base-0 days without re-deriving anything.
-        let over_budget = budget > 0 && enforcer.usage.total_secs >= budget as u64 * 60;
+        // `Rules::spent_today`, the same question `api::preview_rules` asks before a save, so the
+        // two cannot disagree about whether today is over: an unlimited day never is, and the
+        // boundary is `>=` in seconds, as in `decide`.
+        let over_budget =
+            rules.spent_today(today, Adjustments::new(extra, gate_cap), &enforcer.usage);
         let shutdown_wanted = over_budget && rules.budget_action == EnforceAction::Shutdown;
         prev_shutdown_wanted = maybe_abort_budget_shutdown(
             &control,
@@ -1879,6 +1897,13 @@ async fn save_mark_if_changed(
         Ok(Err(e)) => tracing::warn!(error = %e, "clock mark save failed"),
         Err(e) => tracing::error!(error = %e, "clock mark save task panicked"),
     }
+}
+
+/// The screen time a tick charges for `since_last_tick` of wall time: all of it, up to two
+/// intervals. The reasoning is at the call in `run_rules_enforcer`; it is a function so the bound
+/// can be tested without waiting out a real stall, which is why the bound had no test before.
+fn chargeable(since_last_tick: Duration) -> Duration {
+    since_last_tick.min(CHECK_INTERVAL * 2)
 }
 
 /// Whether the rules enforcer should cancel a pending OS shutdown *it* previously scheduled.
@@ -2751,6 +2776,25 @@ mod tests {
             }
             .spent_today(day, none, &used(3_600)),
             "a warn-only day is spent too; what follows is the caller's question"
+        );
+    }
+
+    /// Minutes used are seconds over sixty, rounded down, and clamped rather than wrapped.
+    ///
+    /// Kills `/ 60` turned into `% 60` or `* 60` in `child_status`, which is now this function:
+    /// the child's page and the save preview both show the number, and 1,810 seconds is chosen so
+    /// the three readings disagree (30, 10, 108,600).
+    #[test]
+    fn minutes_used_round_down_and_never_wrap() {
+        let used = |total_secs: u64| Usage {
+            total_secs,
+            ..Default::default()
+        };
+        assert_eq!(used(1_810).used_mins(), 30);
+        assert_eq!(
+            used(u64::MAX).used_mins(),
+            u32::MAX,
+            "clamped, never a small wrapped number"
         );
     }
 
@@ -4680,5 +4724,442 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.validate().is_err());
+    }
+
+    // --- Survivors of the first full mutation sweep (2026-10-05), `docs/OPEN-FINDINGS.md` O109.
+    // Each test below names the mutants it was written to kill; each was watched surviving
+    // without it and caught with it.
+
+    /// Every bound in `validate` admits exactly its maximum, all at once.
+    ///
+    /// Sixteen of `rules.rs`'s survivors were `>` turned into `>=` or `==` here: the tests only
+    /// ever tried values far past a limit, so a bound one too tight was indistinguishable from the
+    /// right one. A parent setting a seven-day week's worth of minutes, or a list of exactly two
+    /// hundred apps, would have been refused with no test saying so.
+    #[test]
+    fn every_bound_in_validate_admits_exactly_its_maximum() {
+        let names = |prefix: &str| -> Vec<String> {
+            (0..MAX_RULE_ENTRIES)
+                .map(|i| format!("{prefix}{i}.exe"))
+                .collect()
+        };
+        let at_max = Rules {
+            warn_secs: MAX_WARN_SECS,
+            daily_budget_mins: MAX_BUDGET_MINS,
+            budget_by_weekday: Some(vec![MAX_BUDGET_MINS; 7]),
+            blocklist: names("blocked"),
+            app_limits: names("limited")
+                .into_iter()
+                .map(|name| (name, MAX_BUDGET_MINS))
+                .collect(),
+            app_groups: (0..MAX_RULE_ENTRIES)
+                .map(|i| AppGroup {
+                    name: format!("group{i}"),
+                    apps: vec![format!("member{i}.exe")],
+                    limit_mins: MAX_BUDGET_MINS,
+                })
+                .collect(),
+            ..Rules::default()
+        };
+        assert_eq!(at_max.validate(), Ok(()));
+
+        // And an ordinary week, which a bound turned into `<` refused outright.
+        let week = Rules {
+            budget_by_weekday: Some(vec![60, 60, 60, 60, 90, 120, 120]),
+            ..Rules::default()
+        };
+        assert_eq!(week.validate(), Ok(()));
+    }
+
+    /// Each bound refuses one past its maximum on its own, with everything else valid.
+    ///
+    /// On its own is the point: the list and per-limit checks are `||` chains, and three survivors
+    /// were `||` turned into `&&` — which still refuses when *every* list is too long and lets any
+    /// single one through.
+    #[test]
+    fn each_bound_in_validate_refuses_one_past_its_maximum_on_its_own() {
+        let over = MAX_BUDGET_MINS + 1;
+        let many = |prefix: &str| -> Vec<String> {
+            (0..=MAX_RULE_ENTRIES)
+                .map(|i| format!("{prefix}{i}.exe"))
+                .collect()
+        };
+        let group = |limit_mins: u32| AppGroup {
+            name: "games".into(),
+            apps: vec!["game.exe".into()],
+            limit_mins,
+        };
+        let cases: Vec<(&str, Rules)> = vec![
+            (
+                "warning seconds",
+                Rules {
+                    warn_secs: MAX_WARN_SECS + 1,
+                    ..Rules::default()
+                },
+            ),
+            (
+                "the daily limit",
+                Rules {
+                    daily_budget_mins: over,
+                    ..Rules::default()
+                },
+            ),
+            (
+                "one weekday's limit",
+                Rules {
+                    budget_by_weekday: Some(vec![60, 60, 60, over, 60, 60, 60]),
+                    ..Rules::default()
+                },
+            ),
+            (
+                "one app's limit",
+                Rules {
+                    app_limits: [("game.exe".to_string(), over)].into(),
+                    ..Rules::default()
+                },
+            ),
+            (
+                "one group's limit",
+                Rules {
+                    app_groups: vec![group(over)],
+                    ..Rules::default()
+                },
+            ),
+            (
+                "the blocklist's length",
+                Rules {
+                    blocklist: many("blocked"),
+                    ..Rules::default()
+                },
+            ),
+            (
+                "the app limits' length",
+                Rules {
+                    app_limits: many("limited").into_iter().map(|n| (n, 30)).collect(),
+                    ..Rules::default()
+                },
+            ),
+            (
+                "the groups' length",
+                Rules {
+                    app_groups: (0..=MAX_RULE_ENTRIES).map(|_| group(30)).collect(),
+                    ..Rules::default()
+                },
+            ),
+        ];
+        for (what, rules) in cases {
+            assert!(rules.validate().is_err(), "{what} one past its maximum");
+        }
+    }
+
+    /// A week of zero-minute days has no budget; one day with minutes has one.
+    ///
+    /// Kills `m > 0` turned into `>=` or `==` in `has_any_budget`: both read a week of zeros as a
+    /// budget, which flips a household that set nothing into enforcing mode.
+    #[test]
+    fn a_week_of_zero_minute_days_is_no_budget_at_all() {
+        let week = |days: Vec<u32>| Rules {
+            budget_by_weekday: Some(days),
+            ..Rules::default()
+        };
+        assert_eq!(week(vec![0; 7]).tick_mode(), TickMode::Measure);
+        assert_eq!(
+            week(vec![0, 0, 45, 0, 0, 0, 0]).tick_mode(),
+            TickMode::Enforce
+        );
+    }
+
+    /// Exactly enough screen time left for an extension is enough.
+    ///
+    /// Kills `remaining < minutes` turned into `<=`, which would warn a parent that a 30-minute
+    /// bedtime extension is cut short when exactly 30 minutes remain.
+    #[test]
+    fn exactly_enough_screen_time_left_does_not_shadow_an_extension() {
+        let rules = Rules {
+            enabled: true,
+            daily_budget_mins: 60,
+            budget_action: EnforceAction::Lock,
+            ..Default::default()
+        };
+        let used = Usage {
+            day: Some(day()),
+            total_secs: 30 * 60,
+            ..Default::default()
+        };
+        assert_eq!(
+            rules.budget_cuts_extension_short(day(), Adjustments::new(0, None), &used, 30),
+            None
+        );
+    }
+
+    /// Yesterday's stored tally reads as an empty day stamped today.
+    ///
+    /// Kills deleting `day: Some(today)` in what is now `Usage::read_on`: the today card would then
+    /// carry no date on the morning after, before the enforcer's first tick of the day.
+    #[test]
+    fn yesterdays_tally_reads_as_an_empty_day_stamped_today() {
+        let yesterday = Usage {
+            day: Some(day().pred_opt().unwrap()),
+            total_secs: 5_000,
+            ..Default::default()
+        };
+        let read = yesterday.read_on(day());
+        assert_eq!(read.day, Some(day()));
+        assert_eq!(read.total_secs, 0);
+
+        let todays = Usage {
+            day: Some(day()),
+            total_secs: 900,
+            ..Default::default()
+        };
+        assert_eq!(
+            todays.read_on(day()).total_secs,
+            900,
+            "today's own tally stands"
+        );
+    }
+
+    /// A group's minutes on the today card are its seconds over sixty, rounded down.
+    ///
+    /// Kills `/ 60` turned into `% 60` or `* 60`. 1,810 seconds is chosen so the three disagree:
+    /// 30, 10 and 108,600.
+    #[test]
+    fn the_today_card_shows_a_groups_used_minutes() {
+        let rules = Rules {
+            app_groups: vec![AppGroup {
+                name: "games".into(),
+                apps: vec!["game.exe".into()],
+                limit_mins: 60,
+            }],
+            ..Rules::default()
+        };
+        let usage = Usage {
+            day: Some(day()),
+            per_group_secs: [("games".to_string(), 1_810)].into(),
+            ..Default::default()
+        };
+        let summary = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(summary["groups"][0]["used_mins"], 30);
+    }
+
+    /// A stop reason carries its limit and its group only where it has them.
+    ///
+    /// Kills the accessor mutants: both feed the `app_stopped` record, and nothing read them back.
+    #[test]
+    fn a_stop_reason_names_its_limit_and_group_only_where_it_has_them() {
+        let pool = StopReason::GroupPool {
+            group: "games".into(),
+            limit_mins: 45,
+        };
+        assert_eq!(pool.limit_mins(), Some(45));
+        assert_eq!(pool.group(), Some("games"));
+
+        let app = StopReason::AppLimit { limit_mins: 30 };
+        assert_eq!(app.limit_mins(), Some(30));
+        assert_eq!(app.group(), None);
+
+        assert_eq!(StopReason::Blocked.limit_mins(), None);
+        assert_eq!(StopReason::Blocked.group(), None);
+    }
+
+    /// A second rollover is refused for twelve hours, and honoured from the twelfth hour on.
+    ///
+    /// `a_flipping_clock_cannot_reset_the_days_tally` flips within ten minutes, which a one-hour
+    /// gap refuses just as well — so `12 * 3600` turned into `12 + 3600` survived, as did the
+    /// boundary turned from `<` into `<=`. The times here are written out rather than derived
+    /// from `MIN_RESET_GAP`, so a mutated constant cannot agree with itself.
+    #[test]
+    fn the_reset_gap_is_twelve_hours_to_the_second() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let mon = NaiveDate::from_ymd_opt(2026, 8, 10).unwrap();
+        let tue = NaiveDate::from_ymd_opt(2026, 8, 11).unwrap();
+        let t0 = Instant::now();
+        let hours = |h: u64| Duration::from_secs(h * 3600);
+
+        e.usage.day = Some(mon);
+        assert_eq!(e.accounting_day(tue, t0), tue, "the first rollover is real");
+        e.usage.day = Some(tue);
+
+        assert_eq!(e.accounting_day(mon, t0 + hours(2)), tue, "two hours on");
+        assert_eq!(
+            e.accounting_day(mon, t0 + hours(12) - Duration::from_secs(1)),
+            tue,
+            "a second short of twelve hours"
+        );
+        assert_eq!(
+            e.accounting_day(mon, t0 + hours(12)),
+            mon,
+            "twelve hours on, the rollover is honoured"
+        );
+    }
+
+    /// Nothing locks or powers off before its grace has run — checked a second before each
+    /// deadline, which is the tick every existing test skipped.
+    ///
+    /// `budget_lock_arms_then_locks_after_warn` and `budget_shutdown_issues_then_reissues` only
+    /// look after a deadline has passed, so a deadline set in the past (`t.now - t.warn`) or a
+    /// guard that always fires both passed them. Six survivors: the lock deadline and its guard,
+    /// the shutdown deadline, its slack and its guard, and the re-issued deadline.
+    #[test]
+    fn nothing_locks_or_powers_off_before_its_grace_has_run() {
+        let second = Duration::from_secs(1);
+        let base = Instant::now();
+
+        let lock = budget(1);
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(&lock, &[], tk(base, 0));
+        assert_eq!(
+            e.decide(&lock, &[], tk(base, 0)),
+            vec![RuleAction::LockWarning]
+        );
+        assert_eq!(
+            e.decide(&lock, &[], tk(base + WARN - second, 0)),
+            vec![],
+            "a second before the grace ends"
+        );
+        assert_eq!(
+            e.decide(&lock, &[], tk(base + WARN, 0)),
+            vec![RuleAction::LockScreen]
+        );
+
+        let off = Rules {
+            daily_budget_mins: 1,
+            budget_action: EnforceAction::Shutdown,
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(&off, &[], tk(base, 0));
+        assert_eq!(e.decide(&off, &[], tk(base, 0)), vec![RuleAction::Shutdown]);
+        assert_eq!(
+            e.decide(&off, &[], tk(base + WARN + SLACK - second, 0)),
+            vec![],
+            "a second before the countdown and its slack have run"
+        );
+        let reissued = base + WARN + SLACK;
+        assert_eq!(
+            e.decide(&off, &[], tk(reissued, 0)),
+            vec![RuleAction::ShutdownNow]
+        );
+        assert_eq!(
+            e.decide(&off, &[], tk(reissued + second, 0)),
+            vec![],
+            "a re-issued shutdown waits its own countdown and slack again"
+        );
+        assert_eq!(
+            e.decide(&off, &[], tk(reissued + WARN + SLACK, 0)),
+            vec![RuleAction::ShutdownNow]
+        );
+    }
+
+    /// Stepping away just above a warning does not cost the warning.
+    ///
+    /// Kills `budget_mins == 0` turned into `!=` on the inactive branch: that resets the countdown
+    /// on every tick away, so the first tick back primes it silently and a threshold crossed on
+    /// that tick is never announced. Seventeen minutes: two active ticks leave sixteen, a tick away
+    /// accrues nothing, and the next active tick crosses fifteen.
+    #[test]
+    fn stepping_away_just_above_a_warning_does_not_cost_the_warning() {
+        let rules = budget(17);
+        let mut e = RulesEnforcer::new(Usage::default());
+        let base = Instant::now();
+        let warnings = |actions: Vec<RuleAction>| -> Vec<u32> {
+            actions
+                .into_iter()
+                .filter_map(|a| match a {
+                    RuleAction::TimeWarning(m) => Some(m),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(warnings(e.decide(&rules, &[], tk(base, 0))).is_empty());
+        assert!(warnings(e.decide(&rules, &[], tk(base, 0))).is_empty());
+        assert!(warnings(e.decide(&rules, &[], tk_active(base, 0, false))).is_empty());
+        assert_eq!(warnings(e.decide(&rules, &[], tk(base, 0))), vec![15]);
+    }
+
+    /// A tick charges the time that passed, up to two intervals.
+    ///
+    /// Kills `CHECK_INTERVAL * 2` turned into `/ 2`, which charged at most fifteen seconds of a
+    /// slow tick — under-counting after any stall. Testable only now that the bound is a function:
+    /// in the loop it took a real stall of over fifteen seconds to see.
+    #[test]
+    fn a_tick_charges_what_passed_up_to_two_intervals() {
+        assert_eq!(
+            chargeable(Duration::from_secs(45)),
+            Duration::from_secs(45),
+            "a slow tick is charged in full"
+        );
+        assert_eq!(
+            chargeable(Duration::from_secs(600)),
+            Duration::from_secs(60),
+            "a ten-minute stall costs two intervals, not ten minutes"
+        );
+    }
+
+    /// The rules enforcer cancels its own shutdown on the falling edge — unless the curfew is
+    /// calling for one, whose shutdown shares Windows' single pending slot.
+    ///
+    /// Kills deleting the `!` in `maybe_abort_budget_shutdown`'s falling-edge check, which stopped
+    /// it reading the curfew at all on a real falling edge and so cancelled bedtime's shutdown
+    /// too; and `enabled && is_active_now()` turned into `||`, which treated a curfew that is
+    /// switched on but not yet due as calling. The remaining survivor there, `&&` turned into
+    /// `||` in the same check, only reads the curfew on ticks where the result cannot change, and
+    /// stays in the baseline as equivalent.
+    #[tokio::test]
+    async fn a_budget_shutdown_is_cancelled_unless_the_curfew_wants_one() {
+        let fake = Arc::new(crate::control::FakeControl::new());
+        let control: Arc<dyn SystemControl> = fake.clone();
+        let log = crate::usage::UsageLog::disabled();
+        let now = crate::clock::now();
+        let hm = |t: chrono::DateTime<chrono::FixedOffset>| t.format("%H:%M").to_string();
+        let config_with = |enabled: bool, from_hours: i64, to_hours: i64| {
+            let mut cfg = Config::default();
+            cfg.curfew.enabled = enabled;
+            cfg.curfew.windows = vec![crate::curfew::Window {
+                start: hm(now + chrono::Duration::hours(from_hours)),
+                end: hm(now + chrono::Duration::hours(to_hours)),
+                days: Default::default(),
+            }];
+            Arc::new(RwLock::new(cfg))
+        };
+        let abort = |config: Arc<RwLock<Config>>| {
+            let (control, log) = (control.clone(), &log);
+            async move {
+                maybe_abort_budget_shutdown(
+                    &control,
+                    &config,
+                    log,
+                    true,
+                    false,
+                    serde_json::json!({}),
+                )
+                .await
+            }
+        };
+
+        abort(config_with(true, -2, 2)).await;
+        assert_eq!(
+            fake.aborted_shutdowns(),
+            0,
+            "bedtime is calling for a shutdown, so the budget's falling edge must leave it alone"
+        );
+
+        abort(config_with(true, 2, 3)).await;
+        assert_eq!(
+            fake.aborted_shutdowns(),
+            1,
+            "a curfew switched on but not yet due is not calling for anything"
+        );
+
+        abort(config_with(false, -2, 2)).await;
+        assert_eq!(fake.aborted_shutdowns(), 2, "nor is one switched off");
     }
 }

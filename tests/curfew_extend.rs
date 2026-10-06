@@ -215,4 +215,24 @@ async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
         note.contains("Add bonus time today"),
         "and point at the control that fixes it, by the name it has on the page: {note}"
     );
+
+    // ---- Phase 6: an extension that has run out is not a base to add to ----------------------
+    // A survivor of the first full mutation sweep (`docs/OPEN-FINDINGS.md` O109): the guard that
+    // stacks a press onto the running extension only while that extension is still in the future
+    // could be replaced with `true`, and every phase above still passed, because every extension
+    // they stacked onto was still running. Last night's has not: stacked onto, it would put
+    // tonight's "+30" two hours in the past, and bedtime would arrive on time.
+    let two_hours_ago = nestwatch::clock::now() - chrono::Duration::hours(2);
+    nestwatch::state::recover_write(&config_handle)
+        .curfew
+        .extra_until = Some(two_hours_ago);
+    let now = nestwatch::clock::now();
+    let (status, _) = post(&app, "/api/curfew/extend", &cookie, json!({"minutes": 30})).await;
+    assert_eq!(status, StatusCode::OK);
+    let granted = stored().expect("recorded");
+    let ahead = (granted - now).num_seconds();
+    assert!(
+        (29 * 60..=30 * 60).contains(&ahead),
+        "a press after the last extension ran out counts from now: got {ahead}s from now"
+    );
 }
