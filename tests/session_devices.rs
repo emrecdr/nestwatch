@@ -119,6 +119,19 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
         let rows = rows.as_array().unwrap().clone();
         assert_eq!(rows.len(), 3, "every signed-in device appears: {rows:#?}");
 
+        // Three devices, three handles. The handle is all the card has to name a session by, so two
+        // alike would make "sign out this one" sign out whichever the store lists first — and the
+        // store is a `HashMap`, so the revocations below would still pass whenever its order happened
+        // to agree. A survivor of the weekly mutation run (`docs/OPEN-FINDINGS.md` O109).
+        let mut handles: Vec<&str> = rows.iter().map(|r| r["handle"].as_str().unwrap()).collect();
+        handles.sort_unstable();
+        handles.dedup();
+        assert_eq!(
+            handles.len(),
+            3,
+            "every device needs a handle of its own: {rows:#?}"
+        );
+
         let current: Vec<&Value> = rows
             .iter()
             .filter(|r| r["current"] == json!(true))

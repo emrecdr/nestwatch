@@ -1158,6 +1158,30 @@ mod tests {
         assert_eq!(r.days[0].apps[0].name, "game.exe");
     }
 
+    /// The same pair the other way round, which is the order production reads them in:
+    /// `history_rows` puts `screentime.jsonl` first, so the richer row is the incumbent and the
+    /// plain legacy one arrives second.
+    ///
+    /// A survivor of the weekly mutation run (`docs/OPEN-FINDINGS.md` O109): every merge test sent
+    /// the plainer row first, so a guard that let the later row always win passed all of them,
+    /// while discarding the per-app detail on exactly the days an upgraded install has twice.
+    #[test]
+    fn the_richer_row_is_kept_when_the_plainer_one_arrives_second() {
+        let rich = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "budget": 180, "apps": {"game.exe": 45}
+        });
+        let plain = row("2026-08-16", 90, 180);
+        let r = build_report(&[rich, plain], d("2026-08-17"), 1);
+
+        assert_eq!(r.total_mins, 90, "a duplicated day must be counted once");
+        assert_eq!(
+            r.days[0].apps.len(),
+            1,
+            "the plain row arriving second must not displace the one with per-app detail"
+        );
+    }
+
     /// The same day arrives from both logs, and only one of the two carries focus data.
     ///
     /// `rollup_row` writes an identical row to `usage.jsonl` and `screentime.jsonl`, so on an
@@ -1290,6 +1314,33 @@ mod tests {
             r.app_totals.len(),
             1,
             "and it brings its own narrower app data with it"
+        );
+    }
+
+    /// Within one generation the tie is broken by the number of entries, counted across all four
+    /// lists rather than some of them.
+    ///
+    /// Asserted on `detail` itself, with a different count in each list so the total can only be
+    /// one number. A survivor of the weekly mutation run (`docs/OPEN-FINDINGS.md` O109): any of
+    /// the three `+` could become `-`, and the last two `*`, and every merge test still passed,
+    /// because none of them compared two rows of one generation whose difference was in the count.
+    /// The counts fall from list to list, so a subtraction gives a wrong total rather than an
+    /// overflow panic that only a build with overflow checks would turn into a failure.
+    #[test]
+    fn the_entry_count_that_breaks_a_tie_counts_every_list() {
+        let (_, parsed) = parse_row(&serde_json::json!({
+            "date": "2026-08-21", "minutes_used": 90,
+            "apps": { "a.exe": 40, "b.exe": 30, "c.exe": 20, "d.exe": 10 },
+            "focused": { "a.exe": 25, "b.exe": 15, "c.exe": 5 },
+            "pages": { "Roblox": 20, "Wikipedia": 5 },
+            "groups": { "Games": 60 },
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parsed.detail(),
+            (true, true, 10),
+            "four apps, three focused, two pages and one group are ten entries"
         );
     }
 
@@ -1437,6 +1488,10 @@ mod tests {
         assert_eq!(
             r.change_pct, None,
             "an absent comparison must not render as 'no change'"
+        );
+        assert_eq!(
+            r.prev_total_mins, None,
+            "a previous window with no measured day has no total, not a total of zero"
         );
     }
 

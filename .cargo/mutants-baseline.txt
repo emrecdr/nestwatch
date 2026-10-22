@@ -7,8 +7,10 @@
 #
 # Taken from the first full sweep, 2026-10-05 at 260f4d8, minus the Windows-only modules that
 # `mutants.toml` now excludes. That sweep did not finish: shard 25 uploaded nothing and four
-# shards ran out of time, so about 130 mutants were never tested and their survivors are not here
-# yet. The next complete run reports them as new; adding them is a decision, not a formality.
+# shards ran out of time, so about 130 mutants were never tested. The run of 2026-10-22 at
+# 555286a tested them, all but shard 15 of 32: its 39 survivors in `#[cfg(windows)]` functions
+# were added here, and its 8 in code the Linux tests run were killed instead. Adding a line is a
+# decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -96,6 +98,7 @@ src/curfew.rs: replace Curfew::is_active_now -> bool with false
 src/curfew.rs: replace default_warn_secs -> u32 with 1
 src/curfew.rs: replace || with && in Days::any
 src/curfew.rs: replace || with && in run_enforcer
+src/doctor.rs: delete ! in all_public
 src/doctor.rs: delete ! in network_profiles
 src/doctor.rs: delete ! in platform_checks
 src/doctor.rs: delete ! in run
@@ -106,18 +109,21 @@ src/doctor.rs: delete ! in run
 src/doctor.rs: delete ! in run
 src/doctor.rs: delete ! in run
 src/doctor.rs: delete match arm crate::rules::TickMode::Measure in run
+src/doctor.rs: replace && with || in all_public
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace <= with > in run
+src/doctor.rs: replace == with != in all_public
 src/doctor.rs: replace == with != in platform_checks
 src/doctor.rs: replace == with != in run
 src/doctor.rs: replace == with != in run
 src/doctor.rs: replace > with < in run
 src/doctor.rs: replace > with == in run
 src/doctor.rs: replace > with >= in run
+src/doctor.rs: replace all_public -> bool with false
 src/doctor.rs: replace all_public -> bool with true
 src/doctor.rs: replace listening -> bool with false
 src/doctor.rs: replace listening -> bool with true
@@ -140,6 +146,7 @@ src/doctor.rs: replace network_profiles -> Vec<String> with vec!["xyzzy".into()]
 src/doctor.rs: replace network_profiles -> Vec<String> with vec![String::new()]
 src/doctor.rs: replace network_profiles -> Vec<String> with vec![]
 src/doctor.rs: replace platform_checks with ()
+src/doctor.rs: replace platform_network_checks with ()
 src/doctor.rs: replace || with && in run
 src/foreground.rs: replace == with != in read_bounded_line
 src/foreground.rs: replace > with >= in Tracker::bank
@@ -168,8 +175,10 @@ src/install.rs: delete ! in install
 src/install.rs: delete ! in install
 src/install.rs: delete ! in install
 src/install.rs: delete ! in offer_fixes
+src/install.rs: delete ! in remove_service
 src/install.rs: delete ! in run_icacls
 src/install.rs: delete ! in uninstall
+src/install.rs: delete field dwSize from struct PROCESSENTRY32W expression in processes_named
 src/install.rs: delete field password_hash from struct Config expression in install
 src/install.rs: delete field port from struct Config expression in install
 src/install.rs: delete field tz_offset_mins from struct Config expression in install
@@ -186,6 +195,7 @@ src/install.rs: delete match arm 1077 in describe_service_error
 src/install.rs: delete match arm 193 | 216 in describe_service_error
 src/install.rs: delete match arm 2 in describe_service_error
 src/install.rs: delete match arm 5 in describe_service_error
+src/install.rs: replace != with == in deploy
 src/install.rs: replace != with == in is_elevated
 src/install.rs: replace != with == in prompt_for_password
 src/install.rs: replace && with || in install
@@ -195,6 +205,10 @@ src/install.rs: replace && with || in install
 src/install.rs: replace && with || in install
 src/install.rs: replace && with || in install
 src/install.rs: replace && with || in is_elevated
+src/install.rs: replace && with || in remove_service
+src/install.rs: replace && with || in terminate_and_wait
+src/install.rs: replace * with + in start_and_verify
+src/install.rs: replace * with / in start_and_verify
 src/install.rs: replace += with *= in start_and_verify
 src/install.rs: replace += with -= in start_and_verify
 src/install.rs: replace < with <= in prompt_for_password
@@ -208,8 +222,14 @@ src/install.rs: replace == with != in install
 src/install.rs: replace == with != in start_and_verify
 src/install.rs: replace == with != in start_and_verify
 src/install.rs: replace == with != in stop_and_wait
+src/install.rs: replace == with != in terminate_and_wait
 src/install.rs: replace == with != in uninstall
+src/install.rs: replace > with < in service_still_registered
+src/install.rs: replace > with < in terminate_resident_helpers
+src/install.rs: replace > with == in service_still_registered
+src/install.rs: replace > with >= in service_still_registered
 src/install.rs: replace > with >= in settle_sessions
+src/install.rs: replace > with >= in terminate_resident_helpers
 src/install.rs: replace >= with < in start_and_verify
 src/install.rs: replace Leftover::removal -> Option<Self> with None
 src/install.rs: replace configure_firewall -> Result<()> with Ok(())
@@ -223,6 +243,7 @@ src/install.rs: replace ensure_elevated -> Result<()> with Ok(())
 src/install.rs: replace exit_detail -> String with "xyzzy".into()
 src/install.rs: replace exit_detail -> String with String::new()
 src/install.rs: replace firewall_rule_exists -> bool with false
+src/install.rs: replace firewall_rule_exists -> bool with true
 src/install.rs: replace firewall_rule_is_subnet_scoped -> bool with false
 src/install.rs: replace firewall_rule_is_subnet_scoped -> bool with true
 src/install.rs: replace harden_acl -> Result<()> with Ok(())
@@ -241,6 +262,8 @@ src/install.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound wit
 src/install.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in Leftover::removal
 src/install.rs: replace match guard out.status.success() with false in configure_recovery
 src/install.rs: replace match guard out.status.success() with true in configure_recovery
+src/install.rs: replace match guard s.current_state == ServiceState::Running with false in start_and_verify
+src/install.rs: replace match guard s.current_state == ServiceState::Running with true in start_and_verify
 src/install.rs: replace match guard s.current_state == ServiceState::Stopped with false in start_and_verify
 src/install.rs: replace match guard s.current_state == ServiceState::Stopped with true in start_and_verify
 src/install.rs: replace match guard status.current_state == ServiceState::Stopped with false in stop_and_wait
@@ -250,18 +273,36 @@ src/install.rs: replace offer_fixes -> Result<bool> with Ok(true)
 src/install.rs: replace prepare_data_dir -> Result<()> with Ok(())
 src/install.rs: replace prepare_data_dir -> Result<()> with Ok(())
 src/install.rs: replace process_image_path -> Option<String> with None
+src/install.rs: replace process_image_path -> Option<String> with Some("xyzzy".into())
 src/install.rs: replace process_image_path -> Option<String> with Some(String::new())
+src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(0, "xyzzy".into())]
+src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(0, String::new())]
+src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(1, "xyzzy".into())]
+src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(1, String::new())]
+src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![]
 src/install.rs: replace prompt_for_password -> Result<String> with Ok("xyzzy".into())
 src/install.rs: replace prompt_for_password -> Result<String> with Ok(String::new())
 src/install.rs: replace remove_service -> Result<()> with Ok(())
 src/install.rs: replace run_icacls -> Result<()> with Ok(())
+src/install.rs: replace service_still_registered -> bool with false
+src/install.rs: replace service_still_registered -> bool with true
 src/install.rs: replace show_firewall_rule -> std::io::Result<std::process::Output> with Ok(Default::default())
 src/install.rs: replace stamp_path -> std::path::PathBuf with Default::default()
+src/install.rs: replace start_and_verify -> Result<()> with Ok(())
 src/install.rs: replace stop_and_wait -> Result<()> with Ok(())
+src/install.rs: replace terminate_and_wait -> bool with false
+src/install.rs: replace terminate_and_wait -> bool with true
+src/install.rs: replace terminate_resident_helpers with ()
 src/install.rs: replace uninstall -> Result<()> with Ok(())
 src/install.rs: replace write_stamp -> Result<()> with Ok(())
 src/install.rs: replace | with & in deploy
+src/install.rs: replace | with & in remove_service
+src/install.rs: replace | with & in remove_service
+src/install.rs: replace | with & in terminate_and_wait
 src/install.rs: replace | with ^ in deploy
+src/install.rs: replace | with ^ in remove_service
+src/install.rs: replace | with ^ in remove_service
+src/install.rs: replace | with ^ in terminate_and_wait
 src/jsonl.rs: replace * with +
 src/jsonl.rs: replace * with + in last_timestamp
 src/jsonl.rs: replace > with >= in rotate_if_over_size

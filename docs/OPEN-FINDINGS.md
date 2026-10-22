@@ -1963,6 +1963,9 @@ nothing. The six Windows-only modules are now excluded in `.cargo/mutants.toml` 
 in step with the code by `tests/mutants_config.rs`), the limit is 240 minutes, and the run fails
 only on a survivor not already in `.cargo/mutants-baseline.txt` (`O109`). Shard 25's loss looked
 like the runner going away rather than anything in the job, and nothing here would prevent a repeat.
+**It repeated on 2026-10-22:** shard 15 was cancelled mid-run with "The runner has received a
+shutdown signal", and its mutants went untested. Re-running that one job recovers the shard; nothing
+in the workflow does it unasked.
 
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 
@@ -2100,5 +2103,9 @@ written once a day, and the session start and end records. Each needs the loop d
 several ticks with a real usage log, which `tests/enforcer_session.rs` now shows how to do. The
 baseline holds 357 lines after this.
 
-**Not yet in the baseline:** the survivors among the ~130 untested mutants. The next complete run
-reports them as new; each is then killed or added deliberately.
+**The untested remainder, run 2026-10-22 at `555286a`.** The weekly run reached the ~130 mutants
+the first sweep never tested and found 47 survivors not in the baseline. The 39 in `#[cfg(windows)]`
+functions (`install.rs` 34, `doctor.rs` 5) are now in it, which holds 396 lines after this; the 8 in
+code the Linux tests run (`session_handle`, `ParsedRow::detail`, `build_report`) were killed instead.
+**Still untested: shard 15 of 32**, cancelled when GitHub took its runner away (`O103`). Its
+survivors arrive as new on its next run; each is then killed or added deliberately.
