@@ -74,7 +74,7 @@ entry was last looked at *together*.
 
 ## Release state
 
-**`v0.10.0`, published 2026-10-04.** Everything below is open against a release that is on the
+**`v0.11.0`, published 2026-10-22.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -87,17 +87,27 @@ What it was **not** verified by: running on the machine it is for. Section H of
 [WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **61 items across §H1–§H11** — the bedtime
 extension and its undo, the enforcer wake, the translated shutdown notices, the ask link, the
 child's page in Dutch, the provider probe and the three sentences it says, the practice gate, the
-message a parent types, the summer mark across a reboot, `install`'s sessions note and, since the
-release, the PC counting as one device to the lockout (§H11) — and none of them has executed on
-Windows. Re-measured 2026-10-05; it read 59 when `v0.10.0` shipped, it read 53 across §H1–§H9 when
-this release's work began and 45 when `v0.9.0` shipped, and six of the fourteen new items were
-written while cutting this release for features that would otherwise have shipped without any. Worth
-stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
+message a parent types, the summer mark across a reboot, `install`'s sessions note and the PC
+counting as one device to the lockout (§H11) — and none of them has executed on Windows.
+Re-measured 2026-10-22; it read 59 when `v0.10.0` shipped and 45 when `v0.9.0` did. The two items
+new since `v0.10.0` are §H11's, written in the commit that made the fix. This release's headline
+feature, words on app groups, came with seven items of its own in §D2b, outside section H because
+they extend §D2's app rules. Worth stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
 file**, in any section, so all 239 boxes it carries are still open. The three gates that were green
 when it shipped are the same three that were green when `install` failed on real hardware and again
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
 is the reason the section below exists and the reason the checklist is the only method here with a
 track record.
+
+**0.11.0 adds Windows-only code to the running service, the first since 0.8.0's probe launch.**
+Measured 2026-10-22 with `git diff v0.10.0..HEAD`: of 2,953 lines added under `src/`, 132 are in
+modules that compile only on Windows, and none is in a `#[cfg(windows)]` block of a shared file.
+`session.rs` gained `console_user_processes` (+94): one `WTSEnumerateProcessesExW` snapshot whose
+owner SIDs are compared with the signed-in console user's token. Both Windows controls answer
+`SystemControl::child_processes` with it (+6 each), and `watcher.rs` (+26) now sends the page in
+front as a visit that names its browser, so the service knows what to close. The snapshot is taken
+on every enforcer tick where a group has words, and it decides what a word may count or close: the
+safety half of the feature. §D2b names what to run first.
 
 **0.10.0 touches two lines of Windows-only code, both at install time.** Measured 2026-10-04 with
 `git diff v0.9.0..HEAD`: of 3,417 lines added under `src/`, two are inside a `#[cfg(windows)]`
@@ -118,21 +128,20 @@ did: two new things now appear on the child's screen on a call whose real return
 decides, and `notify_child` treats that return value as load-bearing — a notice the OS refused is
 deliberately *not* recorded as said.
 
-**0.8.0's entry, kept because its probe launch is still the newest Windows-only code in the running
-service** (0.10.0's two lines run at install time). It was
+**0.8.0's entry, kept because its probe launch is still unrun.** It was
 the first release since `v0.5.1` to add any: the probe runs the check program *as the child*, which
 on Windows means launching it into the interactive session the way the screenshot helper already
 does. Measured 2026-09-09 with `git diff v0.7.0..HEAD`: the `#[cfg(windows)]` module `session.rs`
 gained 129 lines, and both Windows implementations of `SystemControl::run_probe` were new —
-`control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.10.0 unchanged
-and still unrun, so §H8 remains the section to run second.
+`control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.11.0 unchanged
+and still unrun (§H8).
 
 **And neither 0.6.0's nor 0.7.0's headline features are in the checklist at all** — which is worse
 than being in it unrun, because an unrun item is at least counted. Tracked as `O87`.
 
 **Re-measured 2026-09-09, and the keyword test this entry leaned on twice now needs reading with
 care.** Three of its eight terms match at last — `integration` (1), `provider` (2), `StudyGo` (1) —
-but every one of those matches is inside **§H8, which covers the probe shipping in this release**,
+but every one of those matches is inside **§H8, which covers the probe that shipped in `v0.8.0`**,
 not any 0.6.0 or 0.7.0 feature. The five terms that actually track the gap are unmoved at **zero**:
 `earned`, `idempot`, `revoke`, `signed-in`, `masquerad`. Nothing exercises the absolute session cap,
 and the sole Routines item (§E2) still exercises the *manual* save-and-apply path that predates both
@@ -1611,7 +1620,7 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 61 items that have never executed (measured 2026-10-05; 59 at `v0.10.0`, 53 on 2026-09-16,
+carries 61 items that have never executed (measured 2026-10-22, at `v0.11.0`; 59 at `v0.10.0`, 53 on 2026-09-16,
 45 at `v0.9.0`, 38 at `v0.8.0`, and 32 when this was written), so the gap has a size and a reader
 can weigh it. A feature absent from the checklist has no size. The release-state paragraph could be
 read as "0.6.0 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were

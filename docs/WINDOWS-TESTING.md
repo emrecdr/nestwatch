@@ -793,24 +793,30 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in 0.5.0 through 0.10.0, and since — none of it has run on Windows
+## H. New in 0.5.0 through 0.11.0, and since — none of it has run on Windows
 
-**Six releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
-2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, and `v0.10.0` on 2026-10-04.
-That is a deliberate decision rather
+**Seven releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
+2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, `v0.10.0` on 2026-10-04 and
+`v0.11.0` on 2026-10-22. That is a deliberate decision rather
 than an oversight, and it is recorded in each release commit as well as here: the binary is on the
 download page and the behaviour below has never executed on the platform it was written for.
 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 61 items across §H1–§H11, where it held 53 before `v0.10.0`'s
-work began and 59 when it shipped, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`. The one thing
+accumulated rather than turned over: 61 items across §H1–§H11, where it held 59 at `v0.10.0`, 53
+before that release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`. The one thing
 that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item (§H8)
 instead of being added to the list later or not at all, which is the failure `O87` records against
 0.6.0 and 0.7.0.
 
-**Fourteen of the 59 are newer than `v0.9.0` and ship in `v0.10.0`.** Eight were written in the
+**Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's, written in the commit that
+made the fix they cover, which is the rule `O87` exists to enforce. The release's headline feature,
+words on app groups, arrived with its items too, as §D2b, outside this section because it extends
+§D2's app rules. Its owner rule is the newest Windows-only code in the download, and the item to run
+first.
+
+**Fourteen of the 59 at `v0.10.0` were newer than `v0.9.0`.** Eight were written in the
 commits that added their features — the probe scheduler's heartbeat, the settling period before its
 first check, and the practice gate — which is the rule `O87` exists to enforce and the thing 0.6.0
 and 0.7.0 did not do. Six were written while cutting 0.10.0, for features that would otherwise have
@@ -1128,7 +1134,7 @@ write it back. Everything else about the feature is tested off Windows; this is 
 - [ ] **Nobody signed in is said, not skipped.** With no devices signed in,
       `install --revoke-sessions` must print *No devices were signed in.*
 
-### H11. The PC is one device to the lockout, whichever address it uses (since 0.10.0)
+### H11. The PC is one device to the lockout, whichever address it uses (new in 0.11.0)
 
 Every address from 127.0.0.1 to 127.255.255.254 leads back to the PC, and each used to count as a
 separate device, so a program on the PC got five password guesses a minute from every one of them.

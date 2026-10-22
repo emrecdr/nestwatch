@@ -396,38 +396,36 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.10.0` (2026-10-04) is the newest published release — the
-practice gate now belongs to the integration rather than to your daily limit, so switching it off
-hands his day back; the app on your device can lift it, and he is told the moment it opens; the
-trusted clock keeps the summer across a reboot; a later bedtime can be taken back; `install` says
-how many devices stay signed in; `doctor` warns when an older build is about to rewrite a newer
-file; and the dashboard speaks your language in every dialog. The release before it, `v0.9.0`, gave
-the check a voice; `v0.8.0` is the one that lets this PC ask an integration what your child has
+**Where the current release stands.** `v0.11.0` (2026-10-22) is the newest published release — an
+app group can take words, so one limit covers a game in its app and in the browser; lowering
+today's limit below what has been used asks first; wrong passwords show on *Refused today*; the PC
+counts as one device to the password lockout, whichever of its own addresses it uses; a setting
+that could not be saved is no longer kept; and more of the dashboard follows your language. The
+release before it, `v0.10.0`, gave the practice gate to the integration rather than to your daily
+limit; `v0.8.0` is the one that lets this PC ask an integration what your child has
 done — the second of the two exceptions named at the top of this file, under **Check from this
 PC** on the Integrations card, and nothing here changes it.
 
-**This one touches two lines of Windows-only code, and both run at install time.** Measured with
-`git diff v0.9.0..HEAD` rather than asserted: of the 3,417 lines added under `src/`, two sit inside
-a `#[cfg(windows)]` block — the hook that signs devices out while the service is stopped, for
-`install --revoke-sessions` — and `session.rs`, `control/windows.rs` and
-`control/service_control.rs` are untouched. Everything else that is new drives Windows paths that
-already existed: three more sentences reach your child through `WTSSendMessageW`, the same call the
-countdown warnings have always used, and the trusted clock's summer mark is written beside the
-tally the enforcer already writes. So this release's risk is, again, not new platform code. It is
-that none of what it newly puts on your child's screen has ever been seen on a Windows screen.
+**This one adds Windows-only code to the running service, the first since `v0.8.0`.** Measured
+with `git diff v0.10.0..HEAD` rather than asserted: of the 2,953 lines added under `src/`, 132 sit
+in modules that compile only on Windows, and all of them serve words on app groups. The largest
+part is the owner check: one `WTSEnumerateProcessesExW` snapshot, with each process's owner
+compared against the signed-in account, so that a word can only count or close what your child
+could close himself in Task Manager. The rest hands that check to the enforcer and tells it which
+browser has the matching page in front. That check is the safety half of the feature, and it has
+never run on a Windows PC; §D2b of the checklist is where to start.
 
-**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for six releases: section H of the
+**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for seven releases: section H of the
 checklist now carries 61 items across §H1–§H11 — the bedtime extension and its undo, the enforcer
 wake, the translated shutdown notices, the ask link, the child's page in Dutch, the probe and the
 three things it says, the practice gate, the message a parent types, the summer mark across a
-reboot, `install`'s sessions note, and (added since) the lockout that counts every address on the PC
-as one device — and none has been executed on a Windows machine. No box anywhere in that file has
+reboot, `install`'s sessions note, and the lockout that counts every address on the PC as one
+device — and none has been executed on a Windows machine. No box anywhere in that file has
 ever been ticked in a commit. That is stated here rather than only in the changelog, because tier 3
 is the tier the sentence above says every serious bug has lived in, and a reader deciding whether to
-install this is entitled to know which tier the newest features sit in. Fourteen of those items are
-new since `v0.9.0`: eight written with the features they cover, and six written while cutting this
-release for features that would otherwise have shipped without any — the honest half of a rule
-working is saying when it nearly did not.
+install this is entitled to know which tier the newest features sit in. Two of those items are new
+since `v0.10.0`, §H11's, written with the fix they cover; words on app groups arrived with seven of
+its own in §D2b, the owner check among them.
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were
