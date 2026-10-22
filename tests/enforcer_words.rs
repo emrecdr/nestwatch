@@ -45,6 +45,7 @@ fn running(fake: &FakeControl) -> BTreeSet<u32> {
 
 #[tokio::test]
 async fn a_spent_pool_closes_the_childs_matching_program_and_browser() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("enforcer-words");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };

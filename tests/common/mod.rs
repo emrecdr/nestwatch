@@ -345,6 +345,36 @@ pub fn idle_waker() -> nestwatch::heartbeat::Wake {
     rx
 }
 
+/// How much of the local day a test that reads `today()` once needs left when it starts. The
+/// longest of them runs about 17 s on a Windows runner; two minutes is seven times that.
+pub const DAY_LEFT_NEEDED: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How long to wait at `now` until at least `needed` of the local day is left, or `None` when it
+/// already is. The wait ends one second past midnight, so the new day has begun when it is over.
+pub fn wait_for_room(
+    now: chrono::DateTime<chrono::FixedOffset>,
+    needed: std::time::Duration,
+) -> Option<std::time::Duration> {
+    let midnight = now
+        .date_naive()
+        .succ_opt()?
+        .and_time(chrono::NaiveTime::MIN);
+    let left = (midnight - now.naive_local()).to_std().ok()?;
+    (left < needed).then(|| left + std::time::Duration::from_secs(1))
+}
+
+/// Wait out the end of the local day when less than [`DAY_LEFT_NEEDED`] of it is left.
+///
+/// A test that reads `today()` once and then drives code that reads it again per request fails
+/// when it straddles midnight: the server has moved on to a day the test never seeded. One did, on
+/// a Windows runner at 00:00:00 UTC (`earned_grants_latch_replay_and_validate`, 2026-10-19). Call
+/// this first, before the test reads the date.
+pub fn clear_of_midnight() {
+    while let Some(wait) = wait_for_room(nestwatch::clock::now(), DAY_LEFT_NEEDED) {
+        std::thread::sleep(wait);
+    }
+}
+
 /// Write the day's screen-time tally that the enforcer and the probe's settling period read.
 ///
 /// Serialized from a real [`nestwatch::rules::Usage`] rather than hand-written JSON, because

@@ -52,6 +52,7 @@ async fn read_back(app: &axum::Router, cookie: &str) -> Value {
 
 #[tokio::test]
 async fn a_pairing_can_only_do_what_it_was_minted_for() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("pairscope");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };

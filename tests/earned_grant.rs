@@ -94,6 +94,7 @@ async fn fresh_app() -> (
 
 #[tokio::test]
 async fn earned_grants_latch_replay_and_validate() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("earned");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };

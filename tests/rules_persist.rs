@@ -14,6 +14,7 @@ use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
 
 #[tokio::test]
 async fn valid_rules_persist_and_update_state() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("rules");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };

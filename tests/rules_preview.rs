@@ -70,6 +70,7 @@ async fn rules_preview() {
 }
 
 async fn a_preview_says_when_saving_would_put_today_over_and_changes_nothing() {
+    common::clear_of_midnight();
     let mut config = test_config();
     config.rules = rules(120);
     let state = state_with(config);
@@ -178,6 +179,7 @@ async fn a_preview_says_when_saving_would_put_today_over_and_changes_nothing() {
 /// The window is built around the trusted clock's own "now", two hours either side, so it is in
 /// force whenever this runs; a window that crosses midnight is one the schedule already supports.
 async fn a_routine_in_force_keeps_a_change_to_the_everyday_rules_from_reaching_today() {
+    common::clear_of_midnight();
     let now = nestwatch::clock::now();
     let hm = |t: chrono::DateTime<chrono::FixedOffset>| t.format("%H:%M").to_string();
     let mut config = test_config();

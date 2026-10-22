@@ -62,6 +62,7 @@ async fn post(
 
 #[tokio::test]
 async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("curfew-extend");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };

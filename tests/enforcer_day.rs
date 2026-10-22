@@ -52,6 +52,7 @@ fn events(log: &std::path::Path, event: &str) -> Vec<serde_json::Value> {
 
 #[tokio::test]
 async fn an_afternoon_warns_three_times_in_order_shuts_down_once_and_re_arms_after_a_grant() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("enforcer-day");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
@@ -227,5 +228,47 @@ async fn an_afternoon_warns_three_times_in_order_shuts_down_once_and_re_arms_aft
         fake.shutdowns().len(),
         1,
         "and the shutdown that was called off is not re-issued by the warnings"
+    );
+}
+
+/// `common::clear_of_midnight`'s arithmetic. The tests above read `today()` once and then drive a
+/// loop that reads it on every tick, so one that starts in the last seconds of a day fails.
+#[test]
+fn a_test_waits_out_the_end_of_the_day_only_when_too_little_of_it_is_left() {
+    use common::{DAY_LEFT_NEEDED, wait_for_room};
+    use std::time::Duration;
+    let at = |s: &str| chrono::DateTime::parse_from_rfc3339(s).expect("a valid timestamp");
+
+    assert_eq!(
+        wait_for_room(at("2026-10-19T12:00:00+00:00"), DAY_LEFT_NEEDED),
+        None
+    );
+    // Exactly two minutes left is enough; one second less is not.
+    assert_eq!(
+        wait_for_room(at("2026-10-19T23:58:00+00:00"), DAY_LEFT_NEEDED),
+        None
+    );
+    assert_eq!(
+        wait_for_room(at("2026-10-19T23:58:01+00:00"), DAY_LEFT_NEEDED),
+        Some(Duration::from_secs(120)),
+        "119 s to midnight, plus the second past it"
+    );
+    assert_eq!(
+        wait_for_room(at("2026-10-19T23:59:30+00:00"), DAY_LEFT_NEEDED),
+        Some(Duration::from_secs(31))
+    );
+    // Midnight is the clock's own, not UTC's.
+    assert_eq!(
+        wait_for_room(at("2026-10-19T23:59:00+02:00"), DAY_LEFT_NEEDED),
+        Some(Duration::from_secs(61))
+    );
+    assert_eq!(
+        wait_for_room(at("2026-10-19T21:59:00+00:00"), DAY_LEFT_NEEDED),
+        None
+    );
+    // A fraction of a second still counts: the wait ends past midnight, never at it.
+    assert_eq!(
+        wait_for_room(at("2026-10-19T23:59:59.250+00:00"), DAY_LEFT_NEEDED),
+        Some(Duration::from_millis(1750))
     );
 }

@@ -53,6 +53,7 @@ fn budget_logged(log: &std::path::Path, event: &str) -> Option<u64> {
 
 #[tokio::test]
 async fn a_gate_holds_the_child_in_the_loop_that_enforces_and_lets_go_when_it_cannot_check() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("enforcer-gate");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };

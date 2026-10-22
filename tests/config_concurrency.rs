@@ -27,6 +27,7 @@ use common::{PASSWORD, ScratchDir, app_with, login, state_with, test_config};
 /// mismatch between the two, which is precisely the bug: memory right, disk stale.
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn concurrent_config_writes_all_reach_disk() {
+    common::clear_of_midnight();
     let tmp = ScratchDir::new("conc");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
