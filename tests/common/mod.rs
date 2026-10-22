@@ -357,16 +357,40 @@ pub fn idle_waker() -> nestwatch::heartbeat::Wake {
 /// `enforcer_shutdown` and `curfew_extend`, the hazard above explained in three wordings, and
 /// nothing keeping the three in step.
 pub fn seed_tally(day: chrono::NaiveDate, total_secs: u64) {
-    let usage = nestwatch::rules::Usage {
+    seed_usage(&nestwatch::rules::Usage {
         day: Some(day),
         total_secs,
         ..Default::default()
-    };
+    });
+}
+
+/// [`seed_tally`] for a test that needs more of the day than its total — a group's pool, say.
+pub fn seed_usage(usage: &nestwatch::rules::Usage) {
     std::fs::write(
         nestwatch::config::data_paths().dir.join("usage_state.json"),
-        serde_json::to_string(&usage).expect("usage serializes"),
+        serde_json::to_string(usage).expect("usage serializes"),
     )
     .expect("seeding the tally");
+}
+
+/// `FakeControl::new`'s fixed process list, by ID, for tests that script whose processes are whose.
+pub const FAKE_CHROME: u32 = 1002;
+pub const FAKE_MINECRAFT: u32 = 1003;
+pub const FAKE_DISCORD: u32 = 1004;
+pub const FAKE_NOTEPAD: u32 = 1005;
+
+/// Configure `exe` as a check program on the Integrations card: a provider with a probe. It runs
+/// as the child, and no app-group word may close it.
+pub fn with_check_program(cfg: &mut Config, exe: &str) {
+    cfg.providers.insert(
+        "homework".into(),
+        serde_json::from_value(json!({
+            "enabled": true,
+            "minutes": 10,
+            "probe": { "exe": exe, "every_mins": 15 },
+        }))
+        .expect("a provider with a probe"),
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -308,6 +308,14 @@ Three properties of that deserve stating, because they are what keep it honest:
 It is a label on data already collected, not a measurement, and it is emphatically not the domain
 capture declined above.
 
+**Visits, for words on app groups.** A third `Tracker` keys the same foreground page by *visit* —
+`exe\ntitle\naddress`, built by `words::visit_key` from the title `browser_page` already stripped —
+and the sample carries it as `web`. It exists for [WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md): the
+service matches each visit against group words for one tick, charging the group and naming the
+browser to close once its pool is spent, then drops it. It is never folded into the stored day. The
+address is empty until reading it passes that document's Phase 0, so today a visit matches on its
+title. It is bounded exactly like `pages`, by the same functions.
+
 ---
 
 ## Deliberately not done
@@ -319,6 +327,13 @@ running time sounds fairer, and it weakens enforcement: an idle-farming game or 
 running in the background would stop consuming its limit entirely. `SECURITY.md` already names
 background accrual as intentional. Changing which number locks a child's PC is a separate decision
 from measuring a better one, and it is not made here.
+
+One narrow exception has since been made, and it does not touch that argument: a page in front
+whose title matches a word on an app group **adds** time to that group's pool, and once the pool is
+spent the child's own processes of the browser that showed it are closed. It never replaces running
+time — a program left running still charges its group — never subtracts, and never reaches per-app
+limits, the daily budget, the lock or a shutdown. The reasoning and its tests are in
+[WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md).
 
 **No DNS/domain tracking, and no registry writes.** Covered above. The mechanism is understood and
 documented; the decision was to keep this feature free of browser reconfiguration.

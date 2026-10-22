@@ -835,6 +835,17 @@ mod tests {
             ),
             (
                 "index.html",
+                "x-model=\"g.wordsText\"",
+                Open(
+                    "a comma-separated list like the apps beside it: the server bounds what it \
+                     parses into, at most MAX_RULE_ENTRIES words each refused past MAX_RULE_NAME \
+                     characters by words::normalise, and a cap on the joined form would cut a \
+                     word in half",
+                ),
+                "a group's words",
+            ),
+            (
+                "index.html",
                 "autocomplete=\"username\"",
                 Open(
                     "readonly, and present only so a password manager files the entry under a user",

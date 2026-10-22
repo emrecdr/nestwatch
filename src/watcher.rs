@@ -181,6 +181,9 @@ fn worker(rx: &Receiver<()>) {
     // happened to say — and because the second is unbounded where the first is not.
     let mut apps = Tracker::new();
     let mut pages = Tracker::capped(crate::foreground::MAX_PAGES);
+    // A third, for app-group words: the same page as a visit that also names the browser, so the
+    // service knows what to close. Capped like the titles, because its keys are the titles.
+    let mut web = Tracker::capped(crate::foreground::MAX_PAGES);
     let started = Instant::now();
     let mut last_emit = Duration::ZERO;
 
@@ -226,15 +229,18 @@ fn worker(rx: &Receiver<()>) {
                 crate::foreground::idle_state(now_ms, seen.idle_ms, IDLE_AFTER.as_millis() as u64);
             apps.set_idle(away, since);
             pages.set_idle(away, since);
+            web.set_idle(away, since);
 
             apps.focus(seen.app.as_deref(), now_ms);
             pages.focus(seen.page.as_deref(), now_ms);
+            web.focus(seen.visit.as_deref(), now_ms);
         }
 
         if elapsed.saturating_sub(last_emit) >= EMIT {
             emit(&crate::foreground::Sample {
                 apps: apps.drain(now_ms),
                 pages: pages.drain(now_ms),
+                web: web.drain(now_ms),
             });
             last_emit = elapsed;
         }
@@ -274,6 +280,12 @@ struct Seen {
     app: Option<String>,
     /// The page title, when the focused window is a recognised browser. `None` otherwise.
     page: Option<String>,
+    /// The same page as a visit for app-group words — browser, title, address — keyed by
+    /// [`crate::words::visit_key`]. `None` exactly when `page` is.
+    ///
+    /// The address is empty until reading it has passed its measurement on a real machine
+    /// (`docs/WORDS-IN-GROUPS.md`, Phase 0), so today a visit matches on its title alone.
+    visit: Option<String>,
     /// Milliseconds since the last keyboard or mouse input in this session.
     idle_ms: u64,
 }
@@ -321,6 +333,7 @@ fn observe(resolver: &mut Resolver) -> Seen {
         return Seen {
             app: None,
             page: None,
+            visit: None,
             idle_ms,
         };
     }
@@ -344,8 +357,19 @@ fn observe(resolver: &mut Resolver) -> Seen {
             let title = window_title(hwnd)?;
             crate::foreground::browser_page(exe, &title).map(str::to_string)
         });
+    // Built from the page title `browser_page` already stripped, never the raw window title: the
+    // browser's own suffix would otherwise let the word `chrome` or `google` match every page.
+    let visit = app
+        .as_deref()
+        .zip(page.as_deref())
+        .map(|(exe, page)| crate::words::visit_key(exe, page, ""));
 
-    Seen { app, page, idle_ms }
+    Seen {
+        app,
+        page,
+        visit,
+        idle_ms,
+    }
 }
 
 /// The executable name behind `hwnd`, keyed through [`crate::rules::norm`] so it matches the

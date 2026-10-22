@@ -353,6 +353,31 @@ wait until tomorrow.
       normal evening. Every performance figure in the design document is extrapolated from other
       people's programs; this is the first real one, and nothing should be published until it exists.
 
+## D2b. Words on app groups (never run on any machine)
+
+New code like §D2, and it leans on §D2: the page half needs the watcher running. The design is
+[WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md). Use harmless words here — `notepad`, not anything that
+could match a part of Windows.
+
+- [ ] **The preview lists what a word matches.** With Notepad open on his PC, type `notepad` into a
+      group's words field on the dashboard. Under it: *Running now with these words in the name:
+      notepad.exe*.
+- [ ] **A matching program closes once the pool is spent.** Group `Test`, word `notepad`, limit
+      1 minute. Open Notepad as him. Within about two minutes it closes, and the notice names the
+      **group**: *Test has used its 1 minutes for today, so notepad.exe was closed.*
+- [ ] **Only his own programs.** Same group. Start a second Notepad from your administrator console
+      (so it runs under your account) and one as him. His closes; yours stays open. This is the
+      owner rule (`SystemControl::child_processes`), and it is the safety half of the feature.
+- [ ] **A matching page closes its browser.** Word `roblox`. Put a page titled Roblox in front in
+      Edge, with Chrome open behind it on something else. Once the pool is spent, Edge closes within
+      about a minute — every Edge window — and Chrome stays open.
+- [ ] **A restored tab closes again.** Reopen Edge so it restores the Roblox tab in front. It
+      closes again at the next check.
+- [ ] **Web minutes are shown.** With only the page (no Roblox app) running, the Today card's group
+      row shows *· N min on the web*.
+- [ ] **The address bar.** Not yet: reading it waits on Phase 0 of the design document, which has
+      its own measurement steps.
+
 ## D3. What the dashboard now shows (verified in a browser, never on this machine)
 
 These reached the screen this release. All were driven in a real browser against a seeded instance,

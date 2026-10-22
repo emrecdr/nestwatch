@@ -93,7 +93,7 @@ Windows. Re-measured 2026-10-05; it read 59 when `v0.10.0` shipped, it read 53 a
 this release's work began and 45 when `v0.9.0` shipped, and six of the fourteen new items were
 written while cutting this release for features that would otherwise have shipped without any. Worth
 stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
-file**, in any section, so all 232 boxes it carries are still open. The three gates that were green
+file**, in any section, so all 239 boxes it carries are still open. The three gates that were green
 when it shipped are the same three that were green when `install` failed on real hardware and again
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
 is the reason the section below exists and the reason the checklist is the only method here with a
@@ -491,6 +491,11 @@ If Chrome escalates past `kNativeAPIs`, drop it and keep page titles.
 
 **Trigger.** Only after §D2 — measuring a second thing on a subsystem that has never run once is the
 wrong order.
+
+**The prototype is now specified.** [WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md) Phase 0 is that
+measurement, with go/no-go checks per browser, and records the parent-facing decision this entry
+asks for: the full address, matched in memory and never stored. Update this entry with what it
+measures.
 
 ### O22 · Page attribution is sampled at 5 s, so short tab visits round away
 
@@ -1039,10 +1044,10 @@ added so the tests cannot go stale when a third language lands.
 
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
-`assets/app.js` is **3,786 lines** registering a single `Alpine.data("app", app)` with 163
-methods, consumed by one `x-data="app"` root across 1,941 lines of markup. By comparison `src/`
-is 43 modules with a stated responsibility each. *(Re-measured 2026-09-11; it read 3,407 / ~154 /
-1,796 on 2026-09-07, and 163 is a count rather than an estimate this time.)*
+`assets/app.js` is **4,146 lines** registering a single `Alpine.data("app", app)` with 171
+methods, consumed by one `x-data="app"` root across 2,017 lines of markup. By comparison `src/lib.rs`
+declares 41 modules with a stated responsibility each. *(Re-measured 2026-10-21; it read 3,786 / 163 /
+1,941 on 2026-09-11. 171 counts the top-level methods of `app()`, multi-line signatures included.)*
 
 **Most of the latest jump is a string table, not logic, and that distinction matters here.** The
 dashboard's own translation landed 189 keys × three languages as a `const UI` literal at the top of
@@ -1054,7 +1059,7 @@ harder to hold in your head, which is the thing the entry is actually about. If 
 **The premise most reviews attach to this is false, and it was false when they wrote it.** The
 argument arrives as "a component this size cannot be tested without a browser, so split it to
 make it testable". `web/test/harness.js` has evaluated `app.js` in a `vm` context since
-`4434447`, and `web/test/app.test.js` is **2,975 lines** exercising its pure methods. Reachability
+`4434447`, and `web/test/app.test.js` is **3,508 lines** exercising its pure methods. Reachability
 was never the problem and splitting would not improve it. Anyone re-raising this should check the
 harness before repeating the testability argument.
 

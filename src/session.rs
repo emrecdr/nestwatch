@@ -13,22 +13,27 @@
 //! Requires `SE_TCB_NAME` (SYSTEM has it). All `unsafe` FFI; compile/link-checked via the
 //! Windows target and must be runtime-verified on an actual Windows machine.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::windows::io::FromRawHandle;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{
-    CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation, WAIT_TIMEOUT,
+    CloseHandle, ERROR_NO_TOKEN, HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation,
+    WAIT_TIMEOUT,
 };
 use windows::Win32::Security::{
-    DuplicateTokenEx, SECURITY_ATTRIBUTES, SecurityImpersonation, TOKEN_ALL_ACCESS, TokenPrimary,
+    DuplicateTokenEx, EqualSid, GetTokenInformation, SECURITY_ATTRIBUTES, SecurityImpersonation,
+    TOKEN_ALL_ACCESS, TOKEN_USER, TokenPrimary, TokenUser,
 };
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::RemoteDesktop::{
-    WTS_CURRENT_SERVER_HANDLE, WTS_SESSIONSTATE_LOCK, WTSFreeMemory, WTSGetActiveConsoleSessionId,
+    WTS_CURRENT_SERVER_HANDLE, WTS_PROCESS_INFO_EXW, WTS_SESSIONSTATE_LOCK,
+    WTSEnumerateProcessesExW, WTSFreeMemory, WTSFreeMemoryExW, WTSGetActiveConsoleSessionId,
     WTSINFOEXW, WTSQuerySessionInformationW, WTSQueryUserToken, WTSSendMessageW, WTSSessionInfoEx,
+    WTSTypeProcessInfoLevel1,
 };
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetExitCodeProcess,
@@ -102,6 +107,92 @@ unsafe fn active_session_token() -> Result<HANDLE, String> {
         let _ = CloseHandle(user_token);
         dup.map_err(|e| format!("DuplicateTokenEx: {e}"))?;
         Ok(primary)
+    }
+}
+
+/// `WTS_ANY_SESSION` from `wtsapi32.h`, `((DWORD)-2)`: enumerate the processes of every session.
+/// The `windows` crate does not export it.
+const WTS_ANY_SESSION: u32 = 0xFFFF_FFFE;
+
+/// Every process running under the signed-in console user's account — the child's own, which is
+/// all an app-group word may reach (`docs/WORDS-IN-GROUPS.md`) — ID to name, from one snapshot.
+///
+/// One `WTSEnumerateProcessesExW` call at level 1, which returns every process's owner SID without
+/// opening each process, compared with `EqualSid` against the console user's SID. Opening each
+/// process instead is the per-process handle walk `running_processes` was rewritten to avoid. The
+/// call needs Administrators to see other sessions, which the SYSTEM service is; a development
+/// `run` from an ordinary console fails at `WTSQueryUserToken` instead, and words then match no
+/// program — the same fail-closed answer as any other error.
+///
+/// Nobody signed in at the console is an empty map, not an error: there is no child whose
+/// processes a word could reach. A process whose owner is not reported is not the child's.
+pub fn console_user_processes() -> Result<BTreeMap<u32, String>, ControlError> {
+    // SAFETY: Win32 token and WTS FFI. The token is closed before its SID is used, and the SID it
+    // yields points into `buf`, which outlives every comparison against it. The process array is
+    // read only between a successful enumeration and `WTSFreeMemoryExW`, and only when non-null.
+    unsafe {
+        let session_id = WTSGetActiveConsoleSessionId();
+        if session_id == u32::MAX {
+            return Ok(BTreeMap::new());
+        }
+        let mut token = HANDLE::default();
+        if let Err(e) = WTSQueryUserToken(session_id, &mut token) {
+            if e.code() == ERROR_NO_TOKEN.to_hresult() {
+                return Ok(BTreeMap::new());
+            }
+            return Err(ControlError::Op(format!("WTSQueryUserToken: {e}")));
+        }
+
+        // The sizing call fails by design, reporting the length it needs. `TOKEN_USER` holds a
+        // pointer, so the buffer is `u64`s rather than bytes to keep it aligned for the cast below.
+        let mut len = 0u32;
+        let _ = GetTokenInformation(token, TokenUser, None, 0, &mut len);
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        let user = GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buf.as_mut_ptr().cast()),
+            len,
+            &mut len,
+        );
+        let _ = CloseHandle(token);
+        user.map_err(|e| ControlError::Op(format!("GetTokenInformation: {e}")))?;
+        let sid = (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid;
+
+        let mut level = 1u32;
+        let mut info = PWSTR::null();
+        let mut count = 0u32;
+        WTSEnumerateProcessesExW(
+            Some(WTS_CURRENT_SERVER_HANDLE),
+            &mut level,
+            WTS_ANY_SESSION,
+            &mut info,
+            &mut count,
+        )
+        .map_err(|e| ControlError::Op(format!("WTSEnumerateProcessesExW: {e}")))?;
+        if info.is_null() {
+            return Ok(BTreeMap::new());
+        }
+        let entries = std::slice::from_raw_parts(
+            info.0.cast::<WTS_PROCESS_INFO_EXW>().cast_const(),
+            count as usize,
+        );
+        // The name is copied out of the array before it is freed.
+        let processes = entries
+            .iter()
+            .filter(|p| !p.pUserSid.is_invalid() && EqualSid(p.pUserSid, sid).is_ok())
+            // A null name is read as empty rather than dereferenced; an empty name matches no word.
+            .map(|p| {
+                let name = if p.pProcessName.is_null() {
+                    String::new()
+                } else {
+                    p.pProcessName.to_string().unwrap_or_default()
+                };
+                (p.ProcessId, name)
+            })
+            .collect();
+        let _ = WTSFreeMemoryExW(WTSTypeProcessInfoLevel1, info.0.cast_const().cast(), count);
+        Ok(processes)
     }
 }
 

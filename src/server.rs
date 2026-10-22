@@ -34,6 +34,7 @@
 //!     POST /api/providers/{name}/pair   (mints a pairing link; re-asks for the password)
 //!     POST /api/providers/{name}/secret (deposits the credential the provider's probe runs with)
 //!     GET  POST /api/rules
+//!     POST /api/rules/words-preview (the child's programs a group's words would match)
 //!     GET  POST /api/policy   (household settings: download / restore)
 //!     GET  POST /api/routines
 //!     POST /api/routines/{name}/apply  POST /api/routines/{name}/delete
@@ -122,6 +123,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/providers/{name}/secret", post(api::set_provider_secret))
         .route("/rules", get(api::get_rules).post(api::set_rules))
         .route("/rules/preview", post(api::preview_rules))
+        .route("/rules/words-preview", post(api::preview_words))
         .route("/policy", get(api::get_policy).post(api::set_policy))
         .route("/routines", get(api::list_routines).post(api::save_routine))
         .route("/routines/{name}/apply", post(api::apply_routine))

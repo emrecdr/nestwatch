@@ -37,7 +37,7 @@ use serde_json::{Value, json};
 
 use nestwatch::auth::{LOGIN_LOCKOUT, LOGIN_MAX_FAILS};
 use nestwatch::refusals::Refused;
-use nestwatch::rules::{Rules, Usage, today_summary};
+use nestwatch::rules::{AppGroup, Rules, Usage, today_summary};
 use nestwatch::timecode::{ActiveCode, CODE_LEN, MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
 use nestwatch::timereq::PendingRequest;
 
@@ -190,13 +190,22 @@ fn usage_today() {
     let rules = Rules {
         daily_budget_mins: 120,
         app_limits: BTreeMap::from([("minecraft".into(), 60)]),
+        // A group with words, so the file carries `web_mins` with a number in it: the part of the
+        // pool charged because of a matching page (docs/WORDS-IN-GROUPS.md).
+        app_groups: vec![AppGroup {
+            name: "Roblox".into(),
+            apps: Vec::new(),
+            words: vec!["roblox".into()],
+            limit_mins: 60,
+        }],
         ..Rules::default()
     };
     let usage = Usage {
         day: Some(day),
         total_secs: 3_300,
         per_app_secs: BTreeMap::from([("minecraft".into(), 2_400)]),
-        per_group_secs: BTreeMap::new(),
+        per_group_secs: BTreeMap::from([("Roblox".into(), 1_500)]),
+        per_group_web_secs: BTreeMap::from([("Roblox".into(), 600)]),
         foreground_secs: BTreeMap::from([("minecraft".into(), 2_400), ("chrome".into(), 900)]),
         page_secs: BTreeMap::from([("Poki - Free Online Games".into(), 780)]),
         // A day that refused things, on purpose. The quiet fixture below covers the zeros; if
@@ -239,6 +248,7 @@ fn usage_today() {
         total_secs: 600,
         per_app_secs: BTreeMap::new(),
         per_group_secs: BTreeMap::new(),
+        per_group_web_secs: BTreeMap::new(),
         foreground_secs: BTreeMap::new(),
         page_secs: BTreeMap::new(),
         // Nothing refused, which is what almost every real day looks like.

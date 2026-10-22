@@ -202,6 +202,11 @@ const UI = {
     addLimit: "+ Add limit",
     appGroupsSharedDailyPool: "App groups (shared daily pool)",
     addGroup: "+ Add group",
+    alsoCountContaining: "Also count programs and pages containing",
+    groupWordsHint: "Separate words with commas. A program whose name contains one of these words, or a browser page whose title does, shares the group's time. Only the page in front counts, and only programs running under the signed-in Windows account are counted or closed — never Windows' own.",
+    runningNowWithWords: "Running now with these words in the name: {}",
+    nothingRunningMatches: "Nothing running now has these words in its name.",
+    minOnTheWeb: "min on the web",
     routines: "Routines",
     saveTheCurrentScreenTime: "Save the current screen-time settings above as a named preset, then switch with one click (e.g. Homework, Weekend). Applying a routine replaces the live settings.",
     byItself: "by itself",
@@ -485,6 +490,11 @@ const UI = {
     addLimit: "+ Limiet toevoegen",
     appGroupsSharedDailyPool: "Appgroepen (gedeelde dagpot)",
     addGroup: "+ Groep toevoegen",
+    alsoCountContaining: "Tel ook programma's en pagina's mee met",
+    groupWordsHint: "Scheid woorden met komma's. Een programma waarvan de naam een van deze woorden bevat, of een browserpagina waarvan de titel dat doet, deelt de tijd van de groep. Alleen de pagina die voorop staat telt, en alleen programma's onder het aangemelde Windows-account worden meegeteld of gesloten — nooit die van Windows zelf.",
+    runningNowWithWords: "Nu actief met deze woorden in de naam: {}",
+    nothingRunningMatches: "Er draait nu niets met deze woorden in de naam.",
+    minOnTheWeb: "min op het web",
     routines: "Routines",
     saveTheCurrentScreenTime: "Bewaar de huidige schermtijdinstellingen hierboven als een preset met een naam en wissel met één klik (bijv. Huiswerk, Weekend). Een routine toepassen vervangt de actieve instellingen.",
     byItself: "vanzelf",
@@ -772,6 +782,11 @@ const UI = {
     addLimit: "+ Sınır ekle",
     appGroupsSharedDailyPool: "Uygulama grupları (ortak günlük havuz)",
     addGroup: "+ Grup ekle",
+    alsoCountContaining: "Şunları içeren programları ve sayfaları da say",
+    groupWordsHint: "Kelimeleri virgülle ayırın. Adında bu kelimelerden biri geçen bir program ya da başlığında geçen bir tarayıcı sayfası grubun süresini paylaşır. Yalnızca öndeki sayfa sayılır ve yalnızca oturum açmış Windows hesabıyla çalışan programlar sayılır veya kapatılır — Windows'un kendi programları asla.",
+    runningNowWithWords: "Şu anda adında bu kelimeler geçenler: {}",
+    nothingRunningMatches: "Şu anda adında bu kelimeler geçen bir program çalışmıyor.",
+    minOnTheWeb: "dk web'de",
     routines: "Rutinler",
     saveTheCurrentScreenTime: "Yukarıdaki mevcut ekran süresi ayarlarını adlandırılmış bir hazır ayar olarak kaydedin, sonra tek tıkla geçin (örn. Ödev, Hafta sonu). Bir rutini uygulamak canlı ayarların yerine geçer.",
     byItself: "kendiliğinden",
@@ -1558,7 +1573,12 @@ function app() {
             .map(([name, mins]) => ({ name, mins }));
           // Expand groups into editable rows (apps shown as a comma-separated string).
           this.groupRows = this.rules.app_groups.map((g) => ({
-            name: g.name, appsText: (g.apps || []).join(", "), limit_mins: g.limit_mins,
+            name: g.name,
+            appsText: (g.apps || []).join(", "),
+            wordsText: (g.words || []).join(", "),
+            limit_mins: g.limit_mins,
+            // The server's last answer for this row's words; see `previewWords`.
+            preview: null,
           }));
           // Drop any stashed per-day array so a later per-day toggle reflects THESE rules,
           // not a stale array from before (e.g. after applying a routine).
@@ -1599,9 +1619,53 @@ function app() {
         (r) => (r.name || "").trim() && Number(r.mins) > 0,
       );
       const groups = (this.groupRows || []).some(
-        (g) => (g.appsText || "").trim() && Number(g.limit_mins) > 0,
+        (g) =>
+          ((g.appsText || "").trim() || this.groupWordList(g.wordsText).length) &&
+          Number(g.limit_mins) > 0,
       );
       return budget || blocked || limits || groups;
+    },
+
+    // A group's words as typed, one per comma. Commas only — unlike the apps field, a space does not
+    // split, so `Roblox Studio` stays one entry the server refuses rather than becoming `roblox` and
+    // a much broader `studio`. Normalising and refusing are the server's: this keeps no copy of them.
+    groupWordList(text) {
+      return String(text || "").split(",").map((w) => w.trim()).filter(Boolean);
+    },
+
+    // Ask the server which of the child's running programs a group's words would match, for the
+    // line under the field. It answers with the enforcer's own rule on the real owner snapshot,
+    // sparing the same Windows, Nestwatch and check programs, so the line cannot promise more or
+    // less than the rule does. The answer is kept with the words it was for, so a line never
+    // describes words that have since changed — and a field focused again with the same words is
+    // not asked again, since each answer is a walk of every process on the child's PC.
+    async previewWords(group) {
+      const words = this.groupWordList(group.wordsText);
+      if (!words.length) {
+        group.preview = null;
+        return;
+      }
+      const known = group.preview;
+      if (known && known.for === group.wordsText && Array.isArray(known.programs)) return;
+      const asked = group.wordsText;
+      try {
+        const r = await this.postJSON("/api/rules/words-preview", { words });
+        const body = r.ok ? await r.json() : null;
+        group.preview = { for: asked, programs: body ? body.programs : null };
+      } catch {
+        group.preview = { for: asked, programs: null };
+      }
+    },
+
+    // The line under a group's words. Empty unless the server answered for exactly these words:
+    // no answer, a failed one, or `null` — the server could not tell whose programs are whose —
+    // must not read as "nothing matches", which is the answer a parent would act on.
+    wordPreviewText(group) {
+      const p = group.preview;
+      if (!p || p.for !== group.wordsText || !Array.isArray(p.programs)) return "";
+      return p.programs.length
+        ? this.tf("runningNowWithWords", p.programs.join(", "))
+        : this.t("nothingRunningMatches");
     },
 
     // Absolute URL of the child's page, so it can be copied and sent verbatim.
@@ -1627,14 +1691,17 @@ function app() {
         if (name) this.rules.app_limits[name] = row.mins || 0;
       }
       this.rules.blocklist = this.rules.blocklist.map((b) => b.trim()).filter(Boolean);
-      // Split each group's apps text on commas/whitespace; drop empty groups.
+      // Split each group's apps on commas/whitespace and its words on commas only (see
+      // `groupWordList`); drop groups with neither. Words are sent as typed: the server refuses an
+      // unusable one with a message naming it, which tells the parent more than dropping it here.
       this.rules.app_groups = this.groupRows
         .map((g) => ({
           name: (g.name || "").trim(),
           apps: (g.appsText || "").split(/[,\s]+/).map((a) => a.trim()).filter(Boolean),
+          words: this.groupWordList(g.wordsText),
           limit_mins: g.limit_mins || 0,
         }))
-        .filter((g) => g.name && g.apps.length);
+        .filter((g) => g.name && (g.apps.length || g.words.length));
     },
 
     async saveRules() {
@@ -2413,17 +2480,8 @@ function app() {
       this.syncTitle();
     },
 
-    async loadProcesses() {
-      this.loadingProcs = true;
-      try {
-        const r = await fetch("/api/processes");
-        if (r.status === 401) { this.authed = false; return; }
-        this.processes = await r.json();
-      } catch {
-        this.toast(this.t("tFailedLoadProcesses"), "error");
-      } finally {
-        this.loadingProcs = false;
-      }
+    loadProcesses() {
+      return this.loadList("/api/processes", "processes", "loadingProcs", this.t("tFailedLoadProcesses"));
     },
 
     // Fetch one frame.

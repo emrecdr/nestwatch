@@ -59,8 +59,9 @@ fn sample() -> impl Strategy<Value = Sample> {
     (
         prop::collection::btree_map(app_name(), secs(), 0..12),
         prop::collection::btree_map(app_name(), secs(), 0..60),
+        prop::collection::btree_map(app_name(), secs(), 0..60),
     )
-        .prop_map(|(apps, pages)| Sample { apps, pages })
+        .prop_map(|(apps, pages, web)| Sample { apps, pages, web })
 }
 
 fn total(map: &BTreeMap<String, u64>) -> u128 {
@@ -93,7 +94,12 @@ proptest! {
             "pages summed to {} against {elapsed}s elapsed: {:?}",
             total(&out.pages), out.pages
         );
-        for (name, v) in out.apps.iter().chain(out.pages.iter()) {
+        prop_assert!(
+            total(&out.web) <= cap,
+            "visits summed to {} against {elapsed}s elapsed: {:?}",
+            total(&out.web), out.web
+        );
+        for (name, v) in out.apps.iter().chain(out.pages.iter()).chain(out.web.iter()) {
             prop_assert!(
                 u128::from(*v) <= cap,
                 "{name:?} alone claimed {v}s of a {elapsed}s interval"
@@ -109,7 +115,7 @@ proptest! {
     #[test]
     fn clamp_keeps_no_zero_entries(s in sample(), elapsed in 0u64..600) {
         let out = clamp(s, elapsed);
-        for (name, v) in out.apps.iter().chain(out.pages.iter()) {
+        for (name, v) in out.apps.iter().chain(out.pages.iter()).chain(out.web.iter()) {
             prop_assert!(*v > 0, "{name:?} survived with 0s");
         }
     }
@@ -121,7 +127,10 @@ proptest! {
     #[test]
     fn a_zero_length_interval_yields_nothing(s in sample()) {
         let out = clamp(s, 0);
-        prop_assert!(out.apps.is_empty() && out.pages.is_empty(), "{out:?}");
+        prop_assert!(
+            out.apps.is_empty() && out.pages.is_empty() && out.web.is_empty(),
+            "{out:?}"
+        );
     }
 
     /// The page cap holds however many titles are claimed.
@@ -134,11 +143,25 @@ proptest! {
         pages in prop::collection::btree_map(app_name(), 1u64..50, 0..(MAX_PAGES * 3)),
         elapsed in 1u64..600,
     ) {
-        let out = clamp(Sample { apps: BTreeMap::new(), pages }, elapsed);
+        let out = clamp(Sample { apps: BTreeMap::new(), pages, web: BTreeMap::new() }, elapsed);
         prop_assert!(
             out.pages.len() <= MAX_PAGES,
             "{} page titles survived a cap of {MAX_PAGES}",
             out.pages.len()
+        );
+    }
+
+    /// The same cap on page visits, which carry the same child-chosen strings plus an address.
+    #[test]
+    fn the_visit_cap_holds_however_many_visits_are_claimed(
+        web in prop::collection::btree_map(app_name(), 1u64..50, 0..(MAX_PAGES * 3)),
+        elapsed in 1u64..600,
+    ) {
+        let out = clamp(Sample { web, ..Sample::default() }, elapsed);
+        prop_assert!(
+            out.web.len() <= MAX_PAGES,
+            "{} visits survived a cap of {MAX_PAGES}",
+            out.web.len()
         );
     }
 
@@ -234,8 +257,8 @@ proptest! {
 /// cap how many keys there may be, `clamp` caps what the seconds may say. Nothing capped how *long*
 /// a key may be. The 512-unit limit that exists lives in `watcher::window_title`'s buffer — inside
 /// the helper, which runs as the child, so it binds an honest watcher and nothing else. On the
-/// service side the only remaining ceiling was `MAX_LINE`, and its own doc records that one MiB
-/// leaves "about six times over" above the honest worst case of 170,170 bytes. That headroom is
+/// service side the only remaining ceiling was `MAX_LINE`, and its doc then recorded that one MiB
+/// left "about six times over" above the honest worst case, then 170,170 bytes. That headroom is
 /// exactly the room a forged writer has.
 ///
 /// # Why it matters more than it looks
@@ -274,6 +297,7 @@ fn a_forged_report_cannot_fill_the_history_log_with_enormous_keys() {
     let wire = serde_json::to_string(&Sample {
         apps: apps.clone(),
         pages: pages.clone(),
+        web: BTreeMap::new(),
     })
     .expect("a sample serializes");
     assert!(
@@ -283,7 +307,14 @@ fn a_forged_report_cannot_fill_the_history_log_with_enormous_keys() {
         wire.len()
     );
 
-    let bounded = clamp(Sample { apps, pages }, TICK);
+    let bounded = clamp(
+        Sample {
+            apps,
+            pages,
+            web: BTreeMap::new(),
+        },
+        TICK,
+    );
     let persisted = serde_json::to_string(&bounded).expect("a sample serializes");
 
     // A generous ceiling rather than a tight one: the point is that a single tick cannot approach

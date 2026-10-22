@@ -80,9 +80,15 @@ fn default_true() -> bool {
 pub struct AppGroup {
     /// Display/label name, also the key the running tally is stored under.
     pub name: String,
-    /// Member process names (case-insensitive), e.g. `["minecraft.exe", "roblox.exe"]`.
+    /// Member process names (case-insensitive), e.g. `["Minecraft.exe", "RobloxPlayerBeta.exe"]`.
     #[serde(default)]
     pub apps: Vec<String>,
+    /// Words that widen the group: a program under the child's account whose name contains one,
+    /// or a browser page in front whose title or address does, shares the pool. As typed, so the
+    /// dashboard shows them back unchanged; [`crate::words::usable`] is what is matched. See
+    /// `docs/WORDS-IN-GROUPS.md`.
+    #[serde(default)]
+    pub words: Vec<String>,
     /// Shared daily budget for the whole group, in minutes (`0` = no limit).
     #[serde(default)]
     pub limit_mins: u32,
@@ -98,7 +104,11 @@ impl AppGroup {
         // `any(non-blank)`, not `!is_empty()`. A group holding only blank rows has members in the
         // `Vec` sense and none in the sense that matters, and the difference was a live kill: the
         // blank normalises to the empty string, which matches any process whose name trims away.
-        self.limit_mins > 0 && self.apps.iter().any(|a| !a.trim().is_empty())
+        // Words get the same treatment through `is_usable`, the rule `usable` keeps — so a group of
+        // only unusable words has no pool, rather than one that matches everything.
+        self.limit_mins > 0
+            && (self.apps.iter().any(|a| !a.trim().is_empty())
+                || self.words.iter().any(|w| crate::words::is_usable(w)))
     }
 }
 
@@ -250,6 +260,16 @@ impl Rules {
         self.has_any_budget() || !Targets::from_rules(self).is_empty()
     }
 
+    /// Whether any group that can enforce has a usable word — the condition under which the tick
+    /// asks [`crate::control::SystemControl::child_processes`] who owns each process. Through `Targets`,
+    /// so it cannot disagree with what `decide` matches.
+    pub fn has_words(&self) -> bool {
+        Targets::from_rules(self)
+            .groups
+            .iter()
+            .any(|g| !g.words.is_empty())
+    }
+
     /// What this tick should do about these rules.
     ///
     /// Pure, and beside [`has_targets`](Self::has_targets) rather than inline in the loop, for the
@@ -319,6 +339,11 @@ impl Rules {
             return Err(format!(
                 "an app or group name must be at most {MAX_RULE_NAME} characters"
             ));
+        }
+        // Words, refused with the rule they broke. `Targets` drops the same ones, through
+        // `words::usable`, for a config that skipped this.
+        for group in &self.app_groups {
+            crate::words::check(&group.words)?;
         }
         Ok(())
     }
@@ -420,6 +445,12 @@ pub struct Usage {
     /// Per-group seconds today (only for groups with a limit), keyed by group name.
     #[serde(default)]
     pub per_group_secs: BTreeMap<String, u64>,
+    /// The part of `per_group_secs` charged **because of a page**: the checks where a matching page
+    /// was in front and no matching program was running. So a group's program time and web time
+    /// add up to its total. Keyed by group name, which comes from the config rather than the child,
+    /// so the map is bounded by [`MAX_RULE_ENTRIES`].
+    #[serde(default)]
+    pub per_group_web_secs: BTreeMap<String, u64>,
     /// Per-app seconds **with focus** today, for every app seen — not just limited ones.
     ///
     /// Report-only, and deliberately so: it is fed by a watcher running as the child, which makes
@@ -458,9 +489,21 @@ pub(crate) struct Targets {
     /// Per-app limits (minutes), keyed by normalized process name (zero-limit and blank-named
     /// apps dropped).
     app_limits: BTreeMap<String, u32>,
-    /// App groups with a shared pool: (name, normalized member set, limit minutes). Only groups
-    /// with a positive limit and at least one member that could name a process are included.
-    groups: Vec<(String, BTreeSet<String>, u32)>,
+    /// App groups with a shared pool. Only groups that pass [`AppGroup::has_pool`] are included.
+    groups: Vec<GroupTarget>,
+}
+
+/// One app group as the tick matches it.
+pub(crate) struct GroupTarget {
+    name: String,
+    /// Listed apps, normalized (blank rows dropped). Matched machine-wide, as they always were.
+    members: BTreeSet<String>,
+    /// [`crate::words::usable`] words: blank and refused ones already dropped.
+    words: Vec<String>,
+    limit_mins: u32,
+    /// What `words` matched this tick — set by `decide` before anything reads it, and nothing
+    /// matched until then. Kept on the group itself so the two cannot fall out of step.
+    matched: crate::words::GroupMatch,
 }
 
 /// Normalize process names and drop the ones that cannot name a process.
@@ -490,7 +533,13 @@ impl Targets {
             .app_groups
             .iter()
             .filter(|g| g.has_pool())
-            .map(|g| (g.name.clone(), matchable(&g.apps), g.limit_mins))
+            .map(|g| GroupTarget {
+                name: g.name.clone(),
+                members: matchable(&g.apps),
+                words: crate::words::usable(&g.words),
+                limit_mins: g.limit_mins,
+                matched: Default::default(),
+            })
             .collect();
         Self {
             blocked,
@@ -510,6 +559,11 @@ impl Usage {
     /// Add `delta_secs` to the total, to each tracked app running, and to each group with a
     /// member running — resetting first if the local day changed. `running` and all `targets`
     /// keys are already normalized. Pure.
+    ///
+    /// Each group's `matched` is what its words matched this tick. A matching program counts as a
+    /// running member. With no member running, a group is charged its matched page seconds instead,
+    /// never more than `delta_secs` — so a program and a page in the same tick charge once, and an
+    /// inactive tick, where `delta_secs` is zero, charges nothing for either.
     pub(crate) fn accrue(
         &mut self,
         today: NaiveDate,
@@ -535,10 +589,20 @@ impl Usage {
                 *slot = slot.saturating_add(delta_secs);
             }
         }
-        for (gname, members, _limit) in &targets.groups {
-            if running.iter().any(|r| members.contains(r)) {
-                let slot = self.per_group_secs.entry(gname.clone()).or_insert(0);
+        for group in &targets.groups {
+            if running.iter().any(|r| group.members.contains(r))
+                || !group.matched.programs.is_empty()
+            {
+                let slot = self.per_group_secs.entry(group.name.clone()).or_insert(0);
                 *slot = slot.saturating_add(delta_secs);
+                continue;
+            }
+            let web = group.matched.page_secs.min(delta_secs);
+            if web > 0 {
+                for tally in [&mut self.per_group_secs, &mut self.per_group_web_secs] {
+                    let slot = tally.entry(group.name.clone()).or_insert(0);
+                    *slot = slot.saturating_add(web);
+                }
             }
         }
     }
@@ -657,7 +721,13 @@ pub fn today_summary(
         .filter(|g| g.has_pool())
         .map(|g| {
             let used = usage.per_group_secs.get(&g.name).copied().unwrap_or(0) / 60;
-            serde_json::json!({ "name": g.name, "used_mins": used, "limit_mins": g.limit_mins })
+            let web = usage.per_group_web_secs.get(&g.name).copied().unwrap_or(0) / 60;
+            serde_json::json!({
+                "name": g.name,
+                "used_mins": used,
+                "web_mins": web,
+                "limit_mins": g.limit_mins,
+            })
         })
         .collect();
     serde_json::json!({
@@ -776,6 +846,16 @@ pub struct Tick {
     /// enforces — so a PC left on overnight doesn't burn the day's budget, and a budget lock
     /// isn't re-issued every tick while the screen is already locked.
     pub active: bool,
+    /// The helper's page visits for this tick, keyed by [`crate::words::visit_key`], already
+    /// bounded by [`crate::foreground::clamp`]. Read only to match group words; never stored.
+    pub web: BTreeMap<String, u64>,
+    /// Every process running under the signed-in user's account, ID to name, from one snapshot —
+    /// or `None` when unknown, which matches no program by a word and closes no browser for a page.
+    /// Asked only when a group has words.
+    pub child_processes: Option<BTreeMap<u32, String>>,
+    /// The check programs configured on the Integrations card, normalised. They run under the
+    /// child's account too, and no word may close one mid-check.
+    pub check_programs: BTreeSet<String>,
 }
 
 /// An action the enforcer decided on for this tick.
@@ -1083,7 +1163,7 @@ impl RulesEnforcer {
     pub fn decide(&mut self, rules: &Rules, procs: &[RunningProcess], t: Tick) -> Vec<RuleAction> {
         let mut actions = Vec::new();
 
-        let targets = Targets::from_rules(rules);
+        let mut targets = Targets::from_rules(rules);
         let running: BTreeSet<String> = procs.iter().map(|p| norm(&p.name)).collect();
 
         // Only charge screen time while the machine is actively in use. A locked screen or a
@@ -1098,26 +1178,44 @@ impl RulesEnforcer {
         if self.usage.day != Some(t.today) {
             self.announced.clear();
         }
+        // What each group's words matched this tick: programs under the child's account, and the
+        // pages the helper reported. Before `accrue`, which charges for both.
+        let matches = crate::words::match_groups(
+            targets.groups.iter().map(|g| g.words.as_slice()),
+            &t.web,
+            t.child_processes.as_ref(),
+            &t.check_programs,
+        );
+        for (group, matched) in targets.groups.iter_mut().zip(matches) {
+            group.matched = matched;
+        }
         self.usage.accrue(t.today, delta, &running, &targets);
 
-        // Members of any group whose shared pool is spent → killed on sight.
+        // Groups whose shared pool is spent, in configuration order. Their members are killed on
+        // sight below.
         //
-        // Maps member → the group that spent, rather than a bare set, because the child's notice
-        // has to name *which* pool ran out: the limit is not on the app they were using, so
+        // Kept as the group, rather than flattened to a set of member names, because the child's
+        // notice has to name *which* pool ran out: the limit is not on the app they were using, so
         // "Minecraft was closed" would send a parent looking for a Minecraft limit that does not
-        // exist. `or_insert` keeps the FIRST spent group in configuration order when an app
-        // belongs to several, which is arbitrary but stable — a `HashMap` here would let the same
-        // machine give two different explanations for the same kill on two different days.
-        let mut group_over: BTreeMap<String, (String, u32)> = BTreeMap::new();
-        for (name, members, limit) in &targets.groups {
-            if self.usage.per_group_secs.get(name).copied().unwrap_or(0) >= *limit as u64 * 60 {
-                for m in members {
-                    group_over
-                        .entry(m.clone())
-                        .or_insert_with(|| (name.clone(), *limit));
-                }
-            }
-        }
+        // exist. Searching in configuration order keeps the FIRST spent group when an app belongs
+        // to several, which is arbitrary but stable — the same machine must not give two different
+        // explanations for the same kill on two different days.
+        let spent: Vec<&GroupTarget> = targets
+            .groups
+            .iter()
+            .filter(|g| {
+                self.usage.per_group_secs.get(&g.name).copied().unwrap_or(0)
+                    >= g.limit_mins as u64 * 60
+            })
+            .collect();
+        // Whether `pid` is, in the owner snapshot, one of the child's processes called `name`. A
+        // word reaches only the child's own processes, so an unknown owner closes nothing by one.
+        let childs = |pid: u32, name: &str| {
+            t.child_processes
+                .as_ref()
+                .and_then(|c| c.get(&pid))
+                .is_some_and(|own| norm(own) == name)
+        };
 
         // Blocklist (kill on sight) + per-app over-limit + over-pool group members → kill.
         // From `Targets`, not from `rules`, so the blocklist passes the same filter the limits and
@@ -1153,7 +1251,17 @@ impl RulesEnforcer {
                 );
                 continue;
             }
-            if let Some((group, limit)) = group_over.get(&n) {
+            // A member of a spent group: listed by name (machine-wide, as always), one of the
+            // child's programs matching a word, or one of the child's processes of a browser that
+            // showed a matching page this tick. Both word cases require the owner snapshot to call
+            // this ID by the same name as the process list does: they are two reads, an ID can be
+            // reused between them, and a forged visit names a browser.
+            let member = |g: &GroupTarget| {
+                g.members.contains(&n)
+                    || ((g.matched.programs.contains(&p.pid) || g.matched.browsers.contains(&n))
+                        && childs(p.pid, &n))
+            };
+            if let Some(group) = spent.iter().find(|g| member(g)) {
                 actions.push(RuleAction::Kill(p.pid));
                 announce_once(
                     &mut self.announced,
@@ -1161,8 +1269,8 @@ impl RulesEnforcer {
                     &n,
                     p,
                     StopReason::GroupPool {
-                        group: group.clone(),
-                        limit_mins: *limit,
+                        group: group.name.clone(),
+                        limit_mins: group.limit_mins,
                     },
                 );
             }
@@ -1241,6 +1349,38 @@ impl RulesEnforcer {
         }
 
         actions
+    }
+}
+
+/// The check programs configured on the Integrations card, normalised. They run under the child's
+/// account, and no app-group word may close one mid-check. One definition, read by the enforcer
+/// every tick and by the dashboard's words preview, so the two cannot disagree about which they are.
+pub fn check_programs(config: &crate::config::Config) -> BTreeSet<String> {
+    config
+        .providers
+        .values()
+        .filter_map(|p| p.probe.as_ref())
+        .map(|probe| norm(&probe.exe))
+        .collect()
+}
+
+/// The tick's owner snapshot from a `child_processes` answer, and the failure to log if there is
+/// one. Any failure is `None` — words then match no program and close no browser — and is logged
+/// when it starts rather than every tick it lasts. `failing` carries that from tick to tick.
+fn owner_snapshot(
+    answer: Result<BTreeMap<u32, String>, String>,
+    failing: &mut bool,
+) -> (Option<BTreeMap<u32, String>>, Option<String>) {
+    match answer {
+        Ok(snapshot) => {
+            *failing = false;
+            (Some(snapshot), None)
+        }
+        Err(e) => {
+            let log = (!*failing).then_some(e);
+            *failing = true;
+            (None, log)
+        }
     }
 }
 
@@ -1441,6 +1581,8 @@ pub async fn run_rules_enforcer(
     // And the last clock mark that did — see `save_mark_if_changed`.
     let mark_path = crate::clock::mark_path();
     let mut last_saved_mark: Option<crate::clock::Mark> = None;
+    // Whether the last `child_processes` lookup failed, so a lasting failure is logged once.
+    let mut owner_lookup_failing = false;
 
     loop {
         crate::heartbeat::tick(&mut ticker, crate::heartbeat::Enforcer::Rules, &mut wake).await;
@@ -1474,7 +1616,7 @@ pub async fn run_rules_enforcer(
         // Snapshot the config under the lock, then drop the guard before any await.
         // `port` and the curfew reading come out of the same guard the tick already takes, rather
         // than a second acquisition later — they feed `ask_hint`, which needs both.
-        let (rules, adjustments, lang, port, curfew_now) = {
+        let (rules, adjustments, lang, port, curfew_now, check_programs) = {
             let guard = crate::state::recover_read(&config);
             // `rules_at`, not `rules`: a routine whose schedule covers this instant is the policy
             // in force, and this is the tick that enforces it. The trusted clock rather than
@@ -1487,6 +1629,7 @@ pub async fn run_rules_enforcer(
                 guard.language,
                 guard.port,
                 guard.curfew.is_active_now(),
+                check_programs(&guard),
             )
         };
         let hint = ask_hint(port, lang, curfew_now);
@@ -1583,6 +1726,37 @@ pub async fn run_rules_enforcer(
             }
         };
 
+        // The helper's report, bounded now rather than only inside `record_foreground`, because
+        // `decide` reads its page visits to match group words and must see seconds already capped
+        // at the time that passed. The visits are then taken out of it: `record_foreground` is
+        // where helper data is folded into the stored day, and a visit's address is never stored,
+        // so it never reaches that function at all.
+        let mut reported = reported.map(|s| crate::foreground::clamp(s, elapsed.as_secs()));
+        let web = reported
+            .as_mut()
+            .map(|s| std::mem::take(&mut s.web))
+            .unwrap_or_default();
+        // Who owns each process, asked only when a group has words. A failure is `None`, which
+        // matches no program by a word and closes no browser for a page; it is logged once when it
+        // starts rather than every thirty seconds while it lasts.
+        let child_processes = if rules.has_words() {
+            let control = control.clone();
+            let answer = tokio::task::spawn_blocking(move || control.child_processes())
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r.map_err(|e| e.to_string()));
+            let (snapshot, failure) = owner_snapshot(answer, &mut owner_lookup_failing);
+            if let Some(e) = failure {
+                tracing::warn!(
+                    "cannot tell which processes are the child's ({e}); app-group words will \
+                     match no program and close no browser until this clears"
+                );
+            }
+            snapshot
+        } else {
+            None
+        };
+
         let (prev, actions) = enforcer.decide_after_snapshot(
             &rules,
             &procs,
@@ -1594,6 +1768,9 @@ pub async fn run_rules_enforcer(
                 slack: CHECK_INTERVAL,
                 adjustments,
                 active,
+                web,
+                child_processes,
+                check_programs,
             },
         );
         // Move what was refused since the last tick onto today's tally.
@@ -2184,6 +2361,9 @@ mod tests {
             slack: SLACK,
             adjustments: Adjustments::new(extra, None),
             active,
+            web: BTreeMap::new(),
+            child_processes: None,
+            check_programs: BTreeSet::new(),
         }
     }
 
@@ -2232,6 +2412,7 @@ mod tests {
             app_groups: vec![AppGroup {
                 name: name.to_string(),
                 apps: vec![app.to_string()],
+                words: Vec::new(),
                 limit_mins: 30,
             }],
             ..Rules::default()
@@ -3262,6 +3443,7 @@ mod tests {
             app_groups: vec![AppGroup {
                 name: "Games".into(),
                 apps: vec!["roblox.exe".into()],
+                words: Vec::new(),
                 limit_mins: 0,
             }],
             ..Default::default()
@@ -3544,6 +3726,7 @@ mod tests {
             app_groups: vec![AppGroup {
                 name: "Games".into(),
                 apps: vec!["Minecraft.exe".into(), "roblox.exe".into()],
+                words: Vec::new(),
                 limit_mins: 1,
             }],
             ..Default::default()
@@ -3588,6 +3771,7 @@ mod tests {
             app_groups: vec![AppGroup {
                 name: "Games".into(),
                 apps: vec!["a.exe".into(), "b.exe".into()],
+                words: Vec::new(),
                 limit_mins: 1,
             }],
             ..Default::default()
@@ -3611,6 +3795,613 @@ mod tests {
         );
     }
 
+    // ---- Words on a group (docs/WORDS-IN-GROUPS.md) ----
+
+    /// A group with words, the shape `docs/WORDS-IN-GROUPS.md` is written around.
+    fn worded(apps: &[&str], words: &[&str], limit_mins: u32) -> AppGroup {
+        AppGroup {
+            name: "Roblox".into(),
+            apps: apps.iter().map(|a| (*a).to_string()).collect(),
+            words: words.iter().map(|w| (*w).to_string()).collect(),
+            limit_mins,
+        }
+    }
+
+    fn with_group(group: AppGroup) -> Rules {
+        Rules {
+            app_groups: vec![group],
+            ..Default::default()
+        }
+    }
+
+    /// A tick carrying the helper's page visits and the owner snapshot of the child's processes.
+    fn tk_web(
+        now: Instant,
+        web: &[(&str, u64)],
+        child: Option<BTreeMap<u32, String>>,
+        active: bool,
+    ) -> Tick {
+        Tick {
+            web: web.iter().map(|(k, s)| ((*k).to_string(), *s)).collect(),
+            child_processes: child,
+            ..tk_active(now, 0, active)
+        }
+    }
+
+    /// The owner snapshot in which the processes in `procs` with these IDs are the child's.
+    fn owned(procs: &[RunningProcess], pids: &[u32]) -> Option<BTreeMap<u32, String>> {
+        Some(
+            procs
+                .iter()
+                .filter(|p| pids.contains(&p.pid))
+                .map(|p| (p.pid, p.name.clone()))
+                .collect(),
+        )
+    }
+
+    fn pool(limit_mins: u32) -> StopReason {
+        StopReason::GroupPool {
+            group: "Roblox".into(),
+            limit_mins,
+        }
+    }
+
+    /// An enforcer whose Roblox pool already holds `secs`.
+    fn spent_so_far(secs: u64) -> RulesEnforcer {
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.usage.day = Some(day());
+        e.usage.per_group_secs.insert("Roblox".into(), secs);
+        e
+    }
+
+    const EDGE_ROBLOX: &str = "msedge.exe\nRoblox\nroblox.com/games";
+
+    /// Whether the tick has to ask who owns each process. Only a group that can enforce, and has a
+    /// usable word, needs it — the lookup is a call out to Windows every thirty seconds.
+    #[test]
+    fn only_a_pool_with_a_usable_word_needs_process_owners() {
+        assert!(with_group(worded(&[], &["roblox"], 60)).has_words());
+        assert!(!with_group(worded(&["a.exe"], &[], 60)).has_words());
+        assert!(!with_group(worded(&["a.exe"], &["ab", " "], 60)).has_words());
+        assert!(
+            !with_group(worded(&[], &["roblox"], 0)).has_words(),
+            "a group with no limit enforces nothing, so its words need no lookup"
+        );
+        assert!(!Rules::default().has_words());
+    }
+
+    /// A lasting owner-lookup failure is logged when it starts, not every thirty seconds — and
+    /// again if it clears and comes back. Every failure gives no snapshot, and every success its own.
+    #[test]
+    fn an_owner_lookup_failure_gives_no_snapshot_and_is_logged_when_it_starts() {
+        let ok = || Ok(BTreeMap::from([(7, "game.exe".to_string())]));
+        let err = || Err("denied".to_string());
+        let mut failing = false;
+        let seen: Vec<(bool, Option<String>)> = [ok(), err(), err(), ok(), err()]
+            .into_iter()
+            .map(|answer| {
+                let (snapshot, log) = owner_snapshot(answer, &mut failing);
+                (snapshot.is_some(), log)
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (true, None),
+                (false, Some("denied".to_string())),
+                (false, None),
+                (true, None),
+                (false, Some("denied".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_group_with_only_words_is_enforced() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        assert!(rules.has_targets());
+        assert_eq!(rules.tick_mode(), TickMode::Enforce);
+    }
+
+    /// The hand-edited config `Targets` exists to survive: words that `validate` would refuse
+    /// reach `decide` all the same, and must not give a group a pool.
+    #[test]
+    fn a_group_whose_only_words_are_unusable_enforces_nothing() {
+        let rules = with_group(worded(&[], &["ab", "   ", "rob lox"], 60));
+        assert!(!rules.has_targets());
+    }
+
+    #[test]
+    fn a_matching_page_charges_the_pool_its_seconds() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &rules,
+            &[],
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 12)], None, true),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&12));
+        assert_eq!(e.usage.per_group_web_secs.get("Roblox"), Some(&12));
+    }
+
+    #[test]
+    fn a_page_that_does_not_match_charges_nothing() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        let visit = "msedge.exe\nHomework\ndocs.example.com";
+        e.decide(
+            &rules,
+            &[],
+            tk_web(Instant::now(), &[(visit, 30)], None, true),
+        );
+        assert_eq!(
+            e.usage.per_group_secs.get("Roblox").copied().unwrap_or(0),
+            0
+        );
+        assert!(e.usage.per_group_web_secs.is_empty());
+    }
+
+    #[test]
+    fn a_matching_program_and_page_in_the_same_check_charge_once() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "RobloxPlayerBeta.exe")];
+        e.decide(
+            &rules,
+            &procs,
+            tk_web(
+                Instant::now(),
+                &[(EDGE_ROBLOX, 30)],
+                owned(&procs, &[10]),
+                true,
+            ),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&30));
+        assert!(
+            e.usage.per_group_web_secs.is_empty(),
+            "a check a program already paid for is not web time"
+        );
+    }
+
+    #[test]
+    fn a_listed_app_and_a_page_in_the_same_check_charge_once() {
+        let rules = with_group(worded(&["RobloxPlayerBeta.exe"], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "RobloxPlayerBeta.exe")];
+        e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 30)], None, true),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&30));
+    }
+
+    #[test]
+    fn a_matching_program_charges_the_pool_without_any_page() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "RobloxPlayerBeta.exe")];
+        e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[10]), true),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&30));
+    }
+
+    #[test]
+    fn a_matching_program_under_another_account_charges_nothing() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        let procs = [proc(10, "RobloxPlayerBeta.exe")];
+        e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[]), true),
+        );
+        assert_eq!(
+            e.usage.per_group_secs.get("Roblox").copied().unwrap_or(0),
+            0
+        );
+    }
+
+    #[test]
+    fn an_inactive_check_charges_nothing_for_a_page() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &rules,
+            &[],
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 30)], None, false),
+        );
+        assert_eq!(
+            e.usage.per_group_secs.get("Roblox").copied().unwrap_or(0),
+            0
+        );
+        assert!(e.usage.per_group_web_secs.is_empty());
+    }
+
+    #[test]
+    fn a_page_claim_longer_than_the_check_charges_only_the_check() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &rules,
+            &[],
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 5_000)], None, true),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&TICK.as_secs()));
+    }
+
+    /// Both sides of the limit in one test: one second short closes nothing, the second that
+    /// reaches it closes the browser that showed the page — and only that browser.
+    #[test]
+    fn a_spent_pool_closes_the_browser_that_showed_a_match() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = spent_so_far(3_590);
+        let procs = [proc(20, "msedge.exe"), proc(21, "chrome.exe")];
+        let now = Instant::now();
+
+        let under = e.decide(
+            &rules,
+            &procs,
+            tk_web(now, &[(EDGE_ROBLOX, 9)], owned(&procs, &[20, 21]), true),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&3_599));
+        assert!(
+            under.is_empty(),
+            "closed at 3,599 of 3,600 seconds: {under:?}"
+        );
+
+        let at = e.decide(
+            &rules,
+            &procs,
+            tk_web(now, &[(EDGE_ROBLOX, 1)], owned(&procs, &[20, 21]), true),
+        );
+        assert_eq!(
+            at,
+            vec![RuleAction::Kill(20), stopped("msedge.exe", pool(60))]
+        );
+    }
+
+    #[test]
+    fn a_browser_is_closed_only_in_a_check_where_it_showed_a_match() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = spent_so_far(3_600);
+        let procs = [proc(20, "msedge.exe")];
+        let visit = "msedge.exe\nHomework\ndocs.example.com";
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[(visit, 30)], owned(&procs, &[20]), true),
+        );
+        assert!(a.is_empty(), "{a:?}");
+    }
+
+    #[test]
+    fn only_the_childs_processes_of_a_matched_browser_are_closed() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = spent_so_far(3_600);
+        // 30 is the same browser under another account: a parent signed in alongside.
+        let procs = [proc(20, "msedge.exe"), proc(30, "msedge.exe")];
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(
+                Instant::now(),
+                &[(EDGE_ROBLOX, 30)],
+                owned(&procs, &[20]),
+                true,
+            ),
+        );
+        assert_eq!(
+            a,
+            vec![RuleAction::Kill(20), stopped("msedge.exe", pool(60))]
+        );
+    }
+
+    #[test]
+    fn a_spent_pool_closes_the_childs_matching_programs() {
+        let rules = with_group(worded(&[], &["roblox", "host"], 60));
+        let mut e = spent_so_far(3_600);
+        let procs = [
+            proc(10, "RobloxPlayerBeta.exe"),
+            proc(11, "RobloxPlayerBeta.exe"),
+            proc(12, "GhostHunter.exe"),
+            proc(13, "host-health.exe"),
+            proc(14, "notepad.exe"),
+        ];
+        // 11 and 12 run under other accounts; 13 is Nestwatch's own helper, under the child's.
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[10, 13, 14]), true),
+        );
+        assert_eq!(
+            a,
+            vec![
+                RuleAction::Kill(10),
+                stopped("RobloxPlayerBeta.exe", pool(60))
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unknown_owner_closes_no_program_and_no_browser() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = spent_so_far(3_600);
+        let procs = [proc(10, "RobloxPlayerBeta.exe"), proc(20, "msedge.exe")];
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 30)], None, true),
+        );
+        assert!(a.is_empty(), "{a:?}");
+    }
+
+    #[test]
+    fn an_unknown_owner_still_counts_the_page() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &rules,
+            &[],
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 20)], None, true),
+        );
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&20));
+    }
+
+    #[test]
+    fn a_forged_visit_naming_a_non_browser_neither_counts_nor_closes() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = spent_so_far(3_000);
+        let procs = [proc(5, "explorer.exe")];
+        let forged = "explorer.exe\nRoblox\nroblox.com";
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[(forged, 30)], owned(&procs, &[5]), true),
+        );
+        assert!(a.is_empty(), "{a:?}");
+        assert_eq!(e.usage.per_group_secs.get("Roblox"), Some(&3_000));
+    }
+
+    #[test]
+    fn a_process_matching_several_ways_is_closed_once() {
+        // Listed by name, matched by the word `edge`, and the browser that showed the page.
+        let rules = with_group(worded(&["msedge.exe"], &["edge", "roblox"], 60));
+        let mut e = spent_so_far(3_600);
+        let procs = [proc(20, "msedge.exe")];
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(
+                Instant::now(),
+                &[(EDGE_ROBLOX, 30)],
+                owned(&procs, &[20]),
+                true,
+            ),
+        );
+        assert_eq!(
+            a,
+            vec![RuleAction::Kill(20), stopped("msedge.exe", pool(60))]
+        );
+    }
+
+    /// Two groups may share a name — nothing refuses it — and they then share a tally, as they
+    /// always have. What each group's *words* matched must still stay with that group: here only
+    /// the first is spent, so Roblox closes and Minecraft, matched by the second, does not.
+    #[test]
+    fn groups_sharing_a_name_keep_their_own_matches() {
+        let rules = Rules {
+            app_groups: vec![
+                worded(&[], &["roblox"], 60),
+                worded(&[], &["minecraft"], 120),
+            ],
+            ..Default::default()
+        };
+        let mut e = spent_so_far(3_600);
+        let procs = [proc(10, "RobloxPlayerBeta.exe"), proc(11, "Minecraft.exe")];
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[10, 11]), true),
+        );
+        assert_eq!(
+            a,
+            vec![
+                RuleAction::Kill(10),
+                stopped("RobloxPlayerBeta.exe", pool(60))
+            ]
+        );
+    }
+
+    /// The process list and the owner snapshot are two reads. If an ID is reused between them, the
+    /// snapshot can call it Roblox while the list still calls it something else — and closing it
+    /// would close, and announce, a process no word matched. Both must agree on the name.
+    #[test]
+    fn a_reused_id_is_not_closed_under_another_name() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = spent_so_far(3_600);
+        let procs = [proc(500, "svchost.exe")];
+        let snapshot = BTreeMap::from([(500, "RobloxPlayerBeta.exe".to_string())]);
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], Some(snapshot), true),
+        );
+        assert!(a.is_empty(), "{a:?}");
+    }
+
+    /// The new boundary beside `foreground_time_cannot_trigger_a_per_app_limit`: page time reaches
+    /// a group pool that has words, and nothing else.
+    #[test]
+    fn page_time_reaches_only_a_group_pool_with_words() {
+        let rules = Rules {
+            app_limits: [("msedge.exe".to_string(), 1)].into(),
+            app_groups: vec![AppGroup {
+                name: "Browsers".into(),
+                apps: vec!["firefox.exe".into()],
+                words: Vec::new(),
+                limit_mins: 1,
+            }],
+            ..Default::default()
+        };
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &rules,
+            &[],
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 30)], None, true),
+        );
+        assert!(
+            e.usage.per_app_secs.is_empty(),
+            "{:?}",
+            e.usage.per_app_secs
+        );
+        assert_eq!(
+            e.usage.per_group_secs.get("Browsers").copied().unwrap_or(0),
+            0
+        );
+    }
+
+    #[test]
+    fn the_today_card_shows_a_word_only_group_and_its_web_minutes() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut usage = Usage {
+            day: Some(day()),
+            ..Default::default()
+        };
+        usage.per_group_secs.insert("Roblox".into(), 45 * 60);
+        usage.per_group_web_secs.insert("Roblox".into(), 20 * 60);
+        let s = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &usage,
+            Some(1),
+            None,
+            None,
+        );
+        assert_eq!(s["groups"][0]["name"], "Roblox");
+        assert_eq!(s["groups"][0]["used_mins"], 45);
+        assert_eq!(s["groups"][0]["web_mins"], 20);
+    }
+
+    /// The address in a visit is matched and dropped: it reaches neither the stored day, nor the
+    /// Today card, nor the history row written at rollover. `record_foreground` is the one place
+    /// helper data is folded into the day, so a change that folded `web` in would fail here.
+    #[test]
+    fn a_visits_address_never_reaches_the_stored_day() {
+        let rules = with_group(worded(&[], &["roblox"], 60));
+        let mut e = RulesEnforcer::new(Usage::default());
+        let secret = "roblox.com/users/123/private-profile";
+        let key = format!("msedge.exe\nRoblox\n{secret}");
+        let now = Instant::now();
+        e.decide(&rules, &[], tk_web(now, &[(&key, 30)], None, true));
+        e.record_foreground(
+            crate::foreground::Sample {
+                pages: [("Roblox".to_string(), 30)].into(),
+                web: [(key.clone(), 30)].into(),
+                ..Default::default()
+            },
+            TICK,
+        );
+        assert_eq!(
+            e.usage.per_group_secs.get("Roblox"),
+            Some(&30),
+            "the visit did count"
+        );
+
+        let stored = serde_json::to_string(&e.usage).expect("the tally serialises");
+        assert!(
+            !stored.contains(secret),
+            "address in the stored day: {stored}"
+        );
+        let card = today_summary(
+            &rules,
+            day(),
+            Adjustments::new(0, None),
+            &e.usage,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            !card.to_string().contains(secret),
+            "address on the Today card: {card}"
+        );
+
+        let tomorrow = day().succ_opt().unwrap();
+        let (prev, _) = e.decide_after_snapshot(
+            &rules,
+            &[],
+            Tick {
+                today: tomorrow,
+                ..tk_active(now + MIN_RESET_GAP * 2, 0, true)
+            },
+        );
+        let row = rollup_row(&prev, day(), None);
+        assert!(
+            !row.to_string().contains(secret),
+            "address in the history row: {row}"
+        );
+    }
+
+    #[test]
+    fn validate_refuses_an_unusable_word_and_names_it() {
+        for word in ["ab", "rob lox", "rob%lox"] {
+            let err = with_group(worded(&[], &[word], 60))
+                .validate()
+                .expect_err(word);
+            assert!(err.contains(word), "{err}");
+        }
+    }
+
+    /// A word is stored as typed, so padding must not slip an unbounded string past the length
+    /// bound that `normalise` applies only to the word it keeps.
+    #[test]
+    fn validate_bounds_a_words_raw_length_not_only_the_word_kept() {
+        let padded = format!("{}abc", " ".repeat(10_000));
+        let err = with_group(worded(&[], &[&padded], 60))
+            .validate()
+            .expect_err("ten thousand spaces and a word");
+        assert!(err.contains("too long"), "{err}");
+        // A `%` at each end is not part of the word, so the longest word may still have both.
+        let at = format!("%{}%", "x".repeat(MAX_RULE_NAME));
+        assert_eq!(with_group(worded(&[], &[&at], 60)).validate(), Ok(()));
+        let over = format!("%{}%", "x".repeat(MAX_RULE_NAME + 1));
+        assert!(with_group(worded(&[], &[&over], 60)).validate().is_err());
+        let padded_at = format!("{}{}", " ".repeat(2), "x".repeat(MAX_RULE_NAME));
+        assert_eq!(
+            with_group(worded(&[], &[&padded_at], 60)).validate(),
+            Ok(())
+        );
+        let padded_over = format!("{}{}", " ".repeat(3), "x".repeat(MAX_RULE_NAME));
+        assert!(
+            with_group(worded(&[], &[&padded_over], 60))
+                .validate()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_accepts_usable_and_blank_words() {
+        assert_eq!(
+            with_group(worded(&[], &["%roblox%", "", "now.gg"], 60)).validate(),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_bounds_how_many_words_a_group_has() {
+        let at: Vec<String> = (0..MAX_RULE_ENTRIES).map(|i| format!("word{i}")).collect();
+        let mut group = worded(&[], &[], 60);
+        group.words = at.clone();
+        assert_eq!(with_group(group.clone()).validate(), Ok(()));
+        group.words.push("oneword".into());
+        assert!(with_group(group).validate().is_err());
+    }
+
     /// Everything `has_targets` calls "nothing configured" must also be unable to act.
     ///
     /// The class, not an instance of it. `has_targets` discounts five different shapes, and each
@@ -3628,6 +4419,7 @@ mod tests {
         let group = |apps: Vec<&str>, limit: u32| AppGroup {
             name: "Games".into(),
             apps: apps.into_iter().map(String::from).collect(),
+            words: Vec::new(),
             limit_mins: limit,
         };
         let shapes: Vec<(&str, Rules)> = vec![
@@ -4504,6 +5296,7 @@ mod tests {
             total_secs: 47 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            per_group_web_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
@@ -4540,6 +5333,7 @@ mod tests {
             total_secs: 90 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            per_group_web_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
@@ -4568,6 +5362,7 @@ mod tests {
             total_secs: 10 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            per_group_web_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
@@ -4597,6 +5392,7 @@ mod tests {
             total_secs: 30 * 60,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            per_group_web_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
@@ -4629,6 +5425,7 @@ mod tests {
             total_secs: 0,
             per_app_secs: Default::default(),
             per_group_secs: Default::default(),
+            per_group_web_secs: Default::default(),
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
@@ -4756,6 +5553,7 @@ mod tests {
                 .map(|i| AppGroup {
                     name: format!("group{i}"),
                     apps: vec![format!("member{i}.exe")],
+                    words: Vec::new(),
                     limit_mins: MAX_BUDGET_MINS,
                 })
                 .collect(),
@@ -4782,6 +5580,7 @@ mod tests {
         let group = |limit_mins: u32| AppGroup {
             name: "games".into(),
             apps: vec!["game.exe".into()],
+            words: Vec::new(),
             limit_mins,
         };
         let cases: Vec<(&str, Rules)> = vec![
@@ -4909,6 +5708,7 @@ mod tests {
             app_groups: vec![AppGroup {
                 name: "games".into(),
                 apps: vec!["game.exe".into()],
+                words: Vec::new(),
                 limit_mins: 60,
             }],
             ..Rules::default()

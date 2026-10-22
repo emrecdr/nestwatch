@@ -718,6 +718,10 @@
                                   :value="g.used_mins" :max="g.limit_mins"></progress>
                         <span class="whitespace-nowrap opacity-70"><span x-text="g.used_mins"></span>/<span
                           x-text="g.limit_mins"></span> <span x-text="t('min')"></span></span>
+                        <template x-if="g.web_mins > 0">
+                          <span class="whitespace-nowrap opacity-70">· <span x-text="g.web_mins"></span>
+                            <span x-text="t('minOnTheWeb')"></span></span>
+                        </template>
                       </div>
                     </template>
                   </div>
@@ -835,20 +839,30 @@
                 <span class="text-sm" x-text="t('appGroupsSharedDailyPool')"></span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(g, i) in groupRows" :key="i">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <input type="text" maxlength="64" x-model="g.name" placeholder="Games"
-                             aria-label="Group name" class="input input-sm w-32" />
-                      <input type="text" x-model="g.appsText" placeholder="minecraft.exe, roblox.exe"
-                             aria-label="Apps in this group, comma separated"
-                             class="input input-sm w-64" />
-                      <input type="number" min="0" max="10080" x-model.number="g.limit_mins" :placeholder="t('min')"
-                             aria-label="Shared daily limit in minutes"
-                             class="input input-sm w-24" />
-                      <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>
+                    <div class="flex flex-col gap-1">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <input type="text" maxlength="64" x-model="g.name" placeholder="Games"
+                               aria-label="Group name" class="input input-sm w-32" />
+                        <input type="text" x-model="g.appsText" placeholder="Minecraft.exe, RobloxPlayerBeta.exe"
+                               aria-label="Apps in this group, comma separated"
+                               class="input input-sm w-64" />
+                        <input type="number" min="0" max="10080" x-model.number="g.limit_mins" :placeholder="t('min')"
+                               aria-label="Shared daily limit in minutes"
+                               class="input input-sm w-24" />
+                        <button class="btn btn-ghost btn-xs" aria-label="Remove group" @click="groupRows.splice(i, 1)">✕</button>
+                      </div>
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-xs opacity-70" x-text="t('alsoCountContaining')"></span>
+                        <input type="text" x-model="g.wordsText" placeholder="roblox"
+                               :aria-label="t('alsoCountContaining')" @focus="previewWords(g)" @change="previewWords(g)"
+                               class="input input-sm w-64" />
+                      </div>
+                      <p class="text-xs opacity-60" x-text="wordPreviewText(g)"></p>
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit"
-                          @click="groupRows.push({ name: '', appsText: '', limit_mins: 90 })" x-text="t('addGroup')"></button>
+                          @click="groupRows.push({ name: '', appsText: '', wordsText: '', limit_mins: 90, preview: null })" x-text="t('addGroup')"></button>
+                  <p class="text-xs opacity-60 mt-1" x-text="t('groupWordsHint')"></p>
                 </div>
               </div>
 

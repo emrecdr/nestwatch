@@ -686,10 +686,12 @@ document name.
 `"Roblox - Google Chrome"` — for the intervals when a browser was in front. This is more personal
 than a process name and less than a browsing history:
 
-- **It is a title, never a URL and never a domain.** Nothing resolves, logs, or infers the address.
-  Getting domains would mean writing browser policy into `HKLM` to disable each browser's own DNS
-  resolver; that was considered and declined, because reconfiguring a child's browser belongs in
-  front of a parent as a decision rather than inside an installer as a detail.
+- **It is stored as a title, never a URL and never a domain.** Nothing resolves, logs, or infers
+  the address. Getting domains would mean writing browser policy into `HKLM` to disable each
+  browser's own DNS resolver; that was considered and declined, because reconfiguring a child's
+  browser belongs in front of a parent as a decision rather than inside an installer as a detail.
+  Words on an app group (below) plan to *read* the address bar for matching, after a measurement on
+  the device; until then the address is not read at all, and even then it is never stored.
 - **It is capped at 40 titles per report** (`foreground::MAX_PAGES`), heaviest first, and capped
   again everywhere the figures come to rest. The cap exists because titles are the
   highest-cardinality thing here and arrive from a process running as the child — without it, a
@@ -708,7 +710,7 @@ than a process name and less than a browsing history:
   - **`foreground::MAX_LINE` (1 MiB)** bounds a single line read from the watcher pipe. A writer
     that never sends a newline would otherwise take the SYSTEM service's memory with it, and that
     service is what enforces the rules. Sized from the largest line an *honest* watcher can
-    produce (170,170 bytes, measured and pinned by a test), because a limit set too low discards
+    produce (292,658 bytes, measured and pinned by a test), because a limit set too low discards
     real samples as if forged.
 
   In each case the heaviest entries survive, so a flood costs the flood: an app with real hours
@@ -718,13 +720,28 @@ than a process name and less than a browsing history:
   [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md), and it has not been checked on a real browser.
   Worth knowing either way before assuming Incognito is unobserved — and worth telling your child,
   since this project is overt monitoring, not surveillance.
-- **It is reported, never enforced.** No limit, lock or shutdown is ever decided by a page title.
-  The watcher runs inside the child's session, so anything he can influence must not decide
-  whether his machine locks.
+- **It is reported, and enforced only through words a parent puts on an app group.** No per-app
+  limit, daily budget, lock or shutdown is ever decided by a page title. The one exception is
+  narrow and deliberate: a page whose title contains one of a group's words **adds** time to that
+  group's pool, and once the pool is spent the child's own processes of the browser showing it are
+  closed. The watcher runs inside the child's session, so a forged report can only spend his own
+  time and close a browser he could close himself. See
+  [WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md).
 
-`tests/privacy.rs` pins the shape of what is emitted: process names and page titles keyed to
-second counts, and nothing else. A new field fails it, so the paragraph above cannot drift from
-the code without somebody noticing.
+**Page visits are matched, never kept.** The sample's third map, `web`, holds seconds per
+foreground browser *visit*: the browser's executable, the page title and the address, keyed
+`exe\ntitle\naddress`. The address is empty today and stays empty until reading it passes its
+measurement. The service holds the map for one tick, matches it against group words, and drops it.
+It is never written to `usage_state.json`, the rollup, the audit log or a tracing log, and no API
+serves it. It is bounded exactly like `pages`: 40 entries, seconds capped at the tick, keys capped
+in length.
+
+`tests/privacy.rs` pins the shape of what is emitted: process names, page titles and page visits
+keyed to second counts, and nothing else. A new field fails it, so the paragraphs above cannot drift
+from the code without somebody noticing. That a visit's address never reaches the stored day,
+the Today card or the history row is pinned beside the code that would have to change for it to:
+`rules.rs`'s `a_visits_address_never_reaches_the_stored_day`, and `tests/enforcer_words.rs` after a
+real loop tick.
 
 **Messages you send him are recorded, and they are the one thing here that is yours rather than
 his.** `POST /api/message` writes an audit line carrying the text you sent and whether the machine
@@ -1038,6 +1055,25 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   (AppLocker/WDAC by publisher or hash, or Microsoft Family Safety) actually closes it. Treat app
   rules as habit-shaping, and rely on the **daily budget and curfew** — which are not name-based —
   for limits that must hold. The README says the same thing to the parent.
+- **Words on an app group reach only the signed-in user's processes** — the child's, as this tool
+  assumes of whoever is at the console; a parent who signs in on that PC is the signed-in user for
+  as long as that session is active. A word matches far more than an
+  exact name: the service runs as SYSTEM and sees every process, so `win` would match
+  `wininit.exe` and `winlogon.exe`, whose termination stops Windows. A word therefore matches only
+  processes running under the signed-in user's account (`SystemControl::child_processes`, one
+  `WTSEnumerateProcessesExW` call), never Nestwatch's own `host-health.exe`, and matches the name
+  without `.exe`. That keeps a word away from anything whose closing stops Windows, but not from
+  the few Windows programs that run under the user's own account (`sihost.exe`, `taskhostw.exe`,
+  per-user `svchost.exe`). A built-in list of about thirty (`words::WINDOWS_PROGRAMS`) is skipped
+  by name, as are the check programs configured on the Integrations card; anything the list misses
+  is reached by a broad word, and the dashboard lists it under the field before anything is closed.
+  The list under the field comes from `POST /api/rules/words-preview`, which runs that same rule
+  on the same owner snapshot for a signed-in parent and changes nothing — it names programs, as
+  the process panel already does. If the owner lookup fails, words match no program and close no
+  browser. Words are
+  evadable the same ways names are, plus two of their own: a mirror site whose address and title
+  lack the word, and a browser outside the four the watcher knows. See
+  [WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md).
 - **Screen-time figures are per-machine, not per-account.** The tally follows whoever is at the
   console, so a parent signing in to do their own work adds to the child's totals. This is
   conservative for enforcement — it cannot be dodged by switching users — and misleading for the
@@ -1045,7 +1081,8 @@ enforcer's state: locking the screen (`Win+L`) no longer earns a fresh grace per
   username is already read and discarded) but changes the `SystemControl` trait; tracked as O6.
 - **Enforcement still counts an app while it is *running*, not while it is focused.** Focused
   minutes are now *measured* and reported alongside the running figure (see below), but nothing
-  is enforced on them, and that is deliberate rather than unfinished: the watcher runs inside the
+  is enforced on them — beyond page time *adding* to a group pool that has words — and that is
+  deliberate rather than unfinished: the watcher runs inside the
   child's own session, so a figure he can influence must never decide whether his PC locks. So an
   app left open in the background still consumes its per-app limit and its group's pool, which
   makes per-app limits impractical for anything that auto-starts. A usability limit rather than a

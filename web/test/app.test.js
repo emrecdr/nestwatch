@@ -450,6 +450,123 @@ test("anyRulesSet notices each kind of rule on its own", () => {
   assert.equal(set({ groupRows: [{ appsText: "a.exe", limit_mins: 30 }] }), true, "group limit");
 });
 
+test("anyRulesSet counts a group with only words", () => {
+  const set = (row) => withState({ ...NO_RULES, groupRows: [row] }).anyRulesSet();
+  assert.equal(set({ appsText: "", wordsText: "roblox", limit_mins: 60 }), true, "a word-only group");
+  assert.equal(set({ appsText: "", wordsText: " , ", limit_mins: 60 }), false, "only blank entries");
+  assert.equal(set({ appsText: "", wordsText: "roblox", limit_mins: 0 }), false, "no limit");
+});
+
+// --- Words on a group (docs/WORDS-IN-GROUPS.md) ------------------------------------------------
+//
+// The dashboard keeps no copy of the word rules: what a word matches is asked of the server, which
+// answers with the enforcer's own rule on the real owner snapshot (`POST /api/rules/words-preview`).
+// What is left here is splitting the field and showing the answer.
+
+test("groupWordList separates words by commas only, so a phrase is not split into broader words", () => {
+  const app = loadApp();
+  assert.deepEqual([...app.groupWordList("%Roblox%, Roblox Studio ,now.gg, ,")], ["%Roblox%", "Roblox Studio", "now.gg"]);
+  assert.deepEqual([...app.groupWordList("")], []);
+  assert.deepEqual([...app.groupWordList(undefined)], []);
+});
+
+/** An app whose `fetch` answers the preview with `answer`, recording what it was asked. */
+function previewApp(answer) {
+  const asked = [];
+  const app = loadApp({
+    fetch: async (url, init) => {
+      asked.push({ url, body: JSON.parse(init.body) });
+      if (answer instanceof Error) throw answer;
+      return { ok: answer.ok ?? true, json: async () => answer.body };
+    },
+  });
+  app.lang = "en";
+  return { app, asked };
+}
+
+test("previewWords asks the server and shows what it answered", async () => {
+  const { app, asked } = previewApp({ body: { programs: ["RobloxPlayerBeta.exe"] } });
+  const row = { wordsText: "%roblox%, now.gg" };
+  await app.previewWords(row);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].url, "/api/rules/words-preview");
+  assert.deepEqual(asked[0].body, { words: ["%roblox%", "now.gg"] });
+  assert.equal(app.wordPreviewText(row), "Running now with these words in the name: RobloxPlayerBeta.exe");
+});
+
+test("an empty answer says nothing matches, but only for the words it was asked about", async () => {
+  const { app } = previewApp({ body: { programs: [] } });
+  const row = { wordsText: "zzz" };
+  await app.previewWords(row);
+  assert.equal(app.wordPreviewText(row), "Nothing running now has these words in its name.");
+  row.wordsText = "zzz, host";
+  assert.equal(app.wordPreviewText(row), "", "an answer about other words must not be shown");
+});
+
+// The preview is the safeguard against a word that is too broad, so an answer that never arrived —
+// a failed request, an owner lookup the server could not make — must not read as "nothing matches".
+test("an unknown answer shows no line at all", async () => {
+  for (const answer of [
+    { body: { programs: null } },
+    { ok: false, body: { error: "boom" } },
+    new Error("offline"),
+  ]) {
+    const { app } = previewApp(answer);
+    const row = { wordsText: "roblox" };
+    await app.previewWords(row);
+    assert.equal(app.wordPreviewText(row), "", JSON.stringify(answer));
+  }
+});
+
+test("previewWords does not ask again for words it already has an answer for", async () => {
+  const { app, asked } = previewApp({ body: { programs: ["RobloxPlayerBeta.exe"] } });
+  const row = { wordsText: "roblox" };
+  await app.previewWords(row);
+  await app.previewWords(row);
+  assert.equal(asked.length, 1, "focusing the field again re-asked for the same words");
+  row.wordsText = "roblox, now.gg";
+  await app.previewWords(row);
+  assert.equal(asked.length, 2, "changed words must be asked about");
+});
+
+test("previewWords asks nothing for a field with no words", async () => {
+  const { app, asked } = previewApp({ body: { programs: [] } });
+  const row = { wordsText: " , " };
+  await app.previewWords(row);
+  assert.equal(asked.length, 0);
+  assert.equal(app.wordPreviewText(row), "");
+});
+
+test("collapseRules keeps a group that has only words, and sends its words", () => {
+  const app = withState({
+    rules: { blocklist: [] },
+    appLimitRows: [],
+    groupRows: [
+      { name: "Roblox", appsText: "", wordsText: "%roblox%, now.gg", limit_mins: 60 },
+      { name: "Games", appsText: "Minecraft.exe", wordsText: "", limit_mins: 30 },
+      { name: "Empty", appsText: " ", wordsText: " , ", limit_mins: 30 },
+    ],
+  });
+  app.collapseRules();
+  assert.deepEqual(JSON.parse(JSON.stringify(app.rules.app_groups)), [
+    { name: "Roblox", apps: [], words: ["%roblox%", "now.gg"], limit_mins: 60 },
+    { name: "Games", apps: ["Minecraft.exe"], words: [], limit_mins: 30 },
+  ]);
+});
+
+test("loadRules shows a group's words back as typed", async () => {
+  const app = loadApp({
+    fetch: okJson({
+      blocklist: [],
+      app_limits: {},
+      app_groups: [{ name: "Roblox", apps: [], words: ["%roblox%", "now.gg"], limit_mins: 60 }],
+    }),
+  });
+  await app.loadRules();
+  assert.equal(app.groupRows[0].wordsText, "%roblox%, now.gg");
+  assert.equal(app.groupRows[0].appsText, "");
+});
+
 // --- fmtBytes --------------------------------------------------------------
 
 test("fmtBytes scales units and shows a dash for nothing", () => {
@@ -3306,10 +3423,11 @@ const MARKUP_ENGLISH = [
 
 // What reads as English but is not copy. The sign-in heading is the product's deliberately bland
 // name on the child's PC, which the `<title>` shares; "Nestwatch" and `nestwatch doctor` are a
-// name and a command; the rest are file names shown as examples of what to type.
+// name and a command; the rest are file names, and one group word, shown as examples of what to
+// type.
 const MARKUP_NOT_COPY = [
   "🩺 Host Health", "🪺 Nestwatch", "Nestwatch", "nestwatch doctor",
-  "game.exe", "chrome.exe", "minecraft.exe, roblox.exe", "studygo-probe.exe",
+  "game.exe", "chrome.exe", "Minecraft.exe, RobloxPlayerBeta.exe", "roblox", "studygo-probe.exe",
 ];
 
 test("no English is written into the markup outside the language tables", () => {

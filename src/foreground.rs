@@ -42,6 +42,15 @@ pub struct Sample {
     /// is keyed on process names — mixing them would let a page title collide with an app rule.
     #[serde(default)]
     pub pages: BTreeMap<String, u64>,
+    /// Seconds per **foreground browser visit**, keyed `exe\ntitle\naddress` by
+    /// [`crate::words::visit_key`]. Matched against app-group words for one tick and then dropped:
+    /// it is never folded into the stored day, because the address is browsing history and the
+    /// design keeps none (`docs/WORDS-IN-GROUPS.md`).
+    ///
+    /// Separate from `pages` because it carries the browser — the service has to know which program
+    /// to close — and, once read, the address. Bounded exactly like `pages`.
+    #[serde(default)]
+    pub web: BTreeMap<String, u64>,
 }
 
 /// Largest number of distinct page titles kept from one report.
@@ -70,13 +79,15 @@ pub const MAX_APPS: usize = 200;
 /// could cause rather than prevent: set it below that and real samples are discarded as if forged,
 /// and the symptom is a child who appears to have used nothing.
 ///
-/// That worst case is **170,170 bytes** — [`MAX_PAGES`] titles at the 512 UTF-16 units
-/// `window_title` reads, plus the apps a 30-second emit can drain, every character worst-casing to
-/// a six-byte `\uXXXX` escape. Measured, not estimated: `the_read_limit_clears_the_largest_honest_line`
-/// builds that sample and asserts it fits, so raising `MAX_PAGES` or either watcher buffer without
-/// raising this fails there rather than on a child's PC. One MiB leaves about six times over.
+/// That worst case is **292,658 bytes** — [`MAX_PAGES`] titles at the 512 UTF-16 units
+/// `window_title` reads, as many page visits at [`crate::words::VISIT_KEY_CHARS`], plus the apps a
+/// 30-second emit can drain, every character worst-casing to a six-byte `\uXXXX` escape. Measured,
+/// not estimated: `the_read_limit_clears_the_largest_honest_line` builds that sample and asserts it
+/// fits, so raising `MAX_PAGES`, the visit key or either watcher buffer without raising this fails
+/// there rather than on a child's PC. One MiB leaves about three and a half times over. (It was
+/// 170,170 bytes before page visits were added for app-group words.)
 ///
-/// 64 KiB would be the natural round number and is under the real figure by a factor of three.
+/// 64 KiB would be the natural round number and is under the real figure by more than four times.
 pub const MAX_LINE: u64 = 1024 * 1024;
 
 /// Longest key kept from a report, in characters.
@@ -89,7 +100,7 @@ pub const MAX_LINE: u64 = 1024 * 1024;
 /// `MAX_APPS` cap how many keys there may be, [`clamp`] caps what the seconds may say — and none of
 /// them caps how *long* a key may be. The 512-unit limit that already existed lives inside the
 /// watcher, which runs as the child, so it binds an honest helper and nothing else. On this side
-/// the only remaining ceiling was [`MAX_LINE`], whose own doc records that one MiB leaves "about
+/// the only remaining ceiling was [`MAX_LINE`], whose doc then recorded that one MiB left "about
 /// six times over" above the honest worst case. That headroom is the room a forged writer had.
 ///
 /// Measured before this was written, with the real functions: a forged line inside the wire limit
@@ -194,6 +205,7 @@ pub fn clamp(sample: Sample, elapsed_secs: u64) -> Sample {
     let sample = Sample {
         apps: truncate_keys(sample.apps),
         pages: truncate_keys(sample.pages),
+        web: truncate_keys(sample.web),
     };
     let mut pages = bound(sample.pages, elapsed_secs);
     // Cap after bounding, so what survives is the heaviest *real* time rather than the heaviest
@@ -201,10 +213,16 @@ pub fn clamp(sample: Sample, elapsed_secs: u64) -> Sample {
     // entries in one — not because executables are a safe keyspace. They are not, and the count
     // bound that matters is [`accrue_capped`], applied wherever a map *accumulates*. See `MAX_APPS`.
     retain_top(&mut pages, MAX_PAGES);
+    // Visits are page titles with the browser and address attached: the same child-chosen
+    // keyspace, so the same two bounds. The seconds bound is also what keeps a group's matched page
+    // time inside the tick — every subset of a map that sums to at most `elapsed_secs` does too.
+    let mut web = bound(sample.web, elapsed_secs);
+    retain_top(&mut web, MAX_PAGES);
 
     Sample {
         apps: bound(sample.apps, elapsed_secs),
         pages,
+        web,
     }
 }
 
@@ -550,8 +568,9 @@ impl Tracker {
     /// Take everything banked so far as whole seconds, keeping sub-second remainders for next time.
     /// The currently-focused key keeps its focus — a drain is a reporting boundary, not a reset.
     ///
-    /// Returns a bare map rather than a [`Sample`] because the watcher runs **two** of these: one
-    /// keyed by executable and one by browser page title. The state machine is the same for both.
+    /// Returns a bare map rather than a [`Sample`] because the watcher runs **three** of these: one
+    /// keyed by executable, one by browser page title, and one by page visit for app-group words.
+    /// The state machine is the same for all of them.
     pub fn drain(&mut self, now_ms: u64) -> BTreeMap<String, u64> {
         self.bank(now_ms);
 
@@ -621,8 +640,11 @@ impl Feed {
         // drains, thirty seconds apart; everything arriving in between lands here first, at whatever
         // rate the watcher writes and with whatever names it chooses. Bounding only the stored day
         // would leave the buffer in front of it, inside the service, with no ceiling at all.
-        accrue_capped(&mut pending.apps, sample.apps, MAX_APPS);
-        accrue_capped(&mut pending.pages, sample.pages, MAX_PAGES);
+        // Keys cut here as well as in `clamp`: the count caps alone would still let forty keys of a
+        // megabyte each wait in this service's memory until the next drain.
+        accrue_capped(&mut pending.apps, truncate_keys(sample.apps), MAX_APPS);
+        accrue_capped(&mut pending.pages, truncate_keys(sample.pages), MAX_PAGES);
+        accrue_capped(&mut pending.web, truncate_keys(sample.web), MAX_PAGES);
     }
 
     /// Take everything reported since the last drain, or `None` if no watcher has reported at all.
@@ -719,6 +741,7 @@ mod tests {
     #[test]
     fn two_extreme_claims_cannot_outrun_the_interval_between_them() {
         let sample = Sample {
+            web: BTreeMap::new(),
             apps: BTreeMap::new(),
             pages: BTreeMap::from([
                 ("a.exe".to_string(), u64::MAX),
@@ -808,6 +831,7 @@ mod tests {
 
     fn sample(pairs: &[(&str, u64)]) -> Sample {
         Sample {
+            web: BTreeMap::new(),
             apps: pairs.iter().map(|(k, v)| ((*k).to_string(), *v)).collect(),
             pages: BTreeMap::new(),
         }
@@ -852,6 +876,7 @@ mod tests {
     fn a_forged_total_across_many_apps_is_clamped_to_the_tick() {
         let forged: Vec<(String, u64)> = (0..20).map(|i| (format!("app{i}.exe"), 30)).collect();
         let s = Sample {
+            web: BTreeMap::new(),
             apps: forged.into_iter().collect(),
             pages: BTreeMap::new(),
         };
@@ -1185,6 +1210,7 @@ mod tests {
         let flood: BTreeMap<String, u64> = (0..500).map(|i| (format!("page {i}"), 1)).collect();
         let got = clamp(
             Sample {
+                web: BTreeMap::new(),
                 apps: BTreeMap::new(),
                 pages: flood,
             },
@@ -1216,6 +1242,7 @@ mod tests {
     fn page_time_is_bounded_by_the_tick_like_app_time() {
         let got = clamp(
             Sample {
+                web: BTreeMap::new(),
                 apps: BTreeMap::new(),
                 pages: [("Roblox".to_string(), 9_000)].into(),
             },
@@ -1336,6 +1363,7 @@ mod tests {
         let feed = Feed::new();
         for i in 0..10_000u64 {
             feed.submit(Sample {
+                web: BTreeMap::new(),
                 apps: BTreeMap::new(),
                 pages: [(format!("page {i}"), 1)].into(),
             });
@@ -1346,6 +1374,126 @@ mod tests {
             drained.pages.len() <= MAX_PAGES,
             "feed accumulated {} page keys, cap is {MAX_PAGES}",
             drained.pages.len()
+        );
+    }
+
+    // ---- Page visits, for group words (docs/WORDS-IN-GROUPS.md) ----
+
+    fn visits(entries: &[(&str, u64)]) -> Sample {
+        Sample {
+            web: entries
+                .iter()
+                .map(|(k, s)| ((*k).to_string(), *s))
+                .collect(),
+            ..Sample::default()
+        }
+    }
+
+    #[test]
+    fn a_line_with_visits_parses() {
+        let got = parse_sample(r#"{"apps":{},"web":{"msedge.exe\nRoblox\nroblox.com":30}}"#)
+            .expect("a line with visits must parse");
+        assert_eq!(got.web.get("msedge.exe\nRoblox\nroblox.com"), Some(&30));
+    }
+
+    #[test]
+    fn a_line_without_visits_still_parses() {
+        let got = parse_sample(r#"{"apps":{"roblox.exe":30},"pages":{}}"#).expect("must parse");
+        assert!(got.web.is_empty());
+    }
+
+    #[test]
+    fn visits_claiming_more_than_the_tick_are_clamped_to_it() {
+        let got = clamp(
+            visits(&[("msedge.exe\nRoblox\n", 30), ("chrome.exe\nRoblox\n", 30)]),
+            30,
+        );
+        let total: u64 = got.web.values().sum();
+        assert!(total <= 30, "visits sum to {total} in a 30-second tick");
+        assert!(total > 0, "an honest-sized claim was discarded entirely");
+    }
+
+    #[test]
+    fn clamp_keeps_at_most_max_pages_visits_and_the_heaviest() {
+        let mut entries: Vec<(String, u64)> = (0..100)
+            .map(|i| (format!("msedge.exe\npage {i}\n"), 1))
+            .collect();
+        entries.push(("msedge.exe\nRoblox\n".into(), 500));
+        let s = Sample {
+            web: entries.into_iter().collect(),
+            ..Sample::default()
+        };
+        let got = clamp(s, 10_000);
+        assert!(got.web.len() <= MAX_PAGES, "kept {} visits", got.web.len());
+        assert_eq!(got.web.get("msedge.exe\nRoblox\n"), Some(&500));
+    }
+
+    #[test]
+    fn clamp_cuts_an_over_long_visit_key() {
+        let long = format!("msedge.exe\nRoblox\n{}", "a".repeat(5_000));
+        let got = clamp(visits(&[(&long, 10)]), 30);
+        let key = got
+            .web
+            .keys()
+            .next()
+            .expect("the visit survives, shortened");
+        assert_eq!(key.chars().count(), MAX_KEY_CHARS);
+    }
+
+    #[test]
+    fn a_flooded_feed_caps_visits_too() {
+        let feed = Feed::new();
+        for i in 0..10_000u64 {
+            feed.submit(visits(&[(&format!("msedge.exe\npage {i}\n"), 1)]));
+        }
+        let drained = feed.drain().expect("reports were submitted");
+        assert!(
+            drained.web.len() <= MAX_PAGES,
+            "feed accumulated {} visits, cap is {MAX_PAGES}",
+            drained.web.len()
+        );
+    }
+
+    /// What waits in the feed between drains is as bounded as what a drain hands on: forty keys
+    /// of a megabyte each would otherwise sit in the SYSTEM service's memory for up to thirty
+    /// seconds, chosen by a process running as the child.
+    #[test]
+    fn the_feed_holds_no_key_longer_than_the_services_cut() {
+        let feed = Feed::new();
+        for i in 0..MAX_PAGES {
+            let long = format!("{i}{}", "k".repeat(50_000));
+            feed.submit(Sample {
+                apps: [(long.clone(), 1)].into(),
+                pages: [(long.clone(), 1)].into(),
+                web: [(long, 1)].into(),
+            });
+        }
+        let held = feed.drain().expect("reports were submitted");
+        for key in held
+            .apps
+            .keys()
+            .chain(held.pages.keys())
+            .chain(held.web.keys())
+        {
+            assert!(
+                key.chars().count() <= MAX_KEY_CHARS,
+                "the feed held a {}-character key",
+                key.chars().count()
+            );
+        }
+    }
+
+    #[test]
+    fn the_feed_adds_up_visits_between_drains() {
+        let feed = Feed::new();
+        feed.submit(visits(&[("msedge.exe\nRoblox\n", 10)]));
+        feed.submit(visits(&[("msedge.exe\nRoblox\n", 20)]));
+        assert_eq!(
+            feed.drain()
+                .expect("reported")
+                .web
+                .get("msedge.exe\nRoblox\n"),
+            Some(&30)
         );
     }
 
@@ -1407,11 +1555,16 @@ mod tests {
         // app entries. Titles and process names are bounded by watcher.rs's fixed buffers.
         let worst_title = "\u{1}".repeat(512);
         let worst_exe = "\u{1}".repeat(260);
+        // A visit key is built by `words::visit_key`, which caps the whole key.
+        let worst_visit = "\u{1}".repeat(crate::words::VISIT_KEY_CHARS - 3);
 
         let sample = Sample {
             apps: (0..30).map(|i| (format!("{worst_exe}{i}"), 1u64)).collect(),
             pages: (0..MAX_PAGES)
                 .map(|i| (format!("{worst_title}{i}"), 1u64))
+                .collect(),
+            web: (0..MAX_PAGES)
+                .map(|i| (format!("{worst_visit}{i:03}"), 1u64))
                 .collect(),
         };
 

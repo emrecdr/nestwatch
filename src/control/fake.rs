@@ -8,6 +8,7 @@
 //! file it is given unless a test scripted an answer. That is the dev path for a provider probe,
 //! and it only ever runs a file a parent configured.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -79,6 +80,11 @@ pub struct FakeControl {
     /// both share Windows' one pending-shutdown slot. A log line could not show which happened, so
     /// nothing tested the curfew half of that rule.
     aborts: AtomicU32,
+    /// Which listed processes [`SystemControl::child_processes`] reports as the child's, or `None`
+    /// for "every listed process is the child's" — the one-user world a dev server and every test written before words existed
+    /// assume. Scriptable because the owner rule is the safety half of app-group words: a test has
+    /// to be able to put a matching process outside the child's account, and make the lookup fail.
+    child_pids: Mutex<Option<Result<BTreeSet<u32>, String>>>,
 }
 
 impl FakeControl {
@@ -118,7 +124,14 @@ impl FakeControl {
             notify_result: Mutex::new(Ok(())),
             probe_script: Mutex::new(None),
             probe_calls: Mutex::new(Vec::new()),
+            child_pids: Mutex::new(None),
         }
+    }
+
+    /// Script every later [`SystemControl::child_processes`] answer: the listed processes with
+    /// these IDs, by their listed names, or the error.
+    pub fn script_child_pids(&self, answer: Result<BTreeSet<u32>, String>) {
+        *self.child_pids.lock().unwrap() = Some(answer);
     }
 
     /// Make every later [`SystemControl::notify_user`] fail with `error`, as an OS that has no
@@ -232,6 +245,25 @@ impl SystemControl for FakeControl {
                 pid: p.pid,
                 name: p.name.clone(),
             })
+            .collect())
+    }
+
+    /// Names from the same list `running_processes` projects, so the two views cannot disagree.
+    fn child_processes(&self) -> Result<BTreeMap<u32, String>, ControlError> {
+        let scripted = self.child_pids.lock().unwrap().clone();
+        if let Some(Err(e)) = &scripted {
+            return Err(ControlError::Op(e.clone()));
+        }
+        Ok(self
+            .processes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| match &scripted {
+                Some(Ok(pids)) => pids.contains(&p.pid),
+                _ => true,
+            })
+            .map(|p| (p.pid, p.name.clone()))
             .collect())
     }
 

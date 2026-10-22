@@ -6,9 +6,10 @@
 //! widen by accident while somebody adds a feature.
 //!
 //! This does **not** assert "no titles". Recording page titles is a deliberate, documented trade
-//! (see `FOREGROUND-TRACKING.md`). It asserts the *shape* of the promise: two maps of names to
-//! second counts, nothing richer, and no third kind of thing appearing without the document that
-//! describes it changing too.
+//! (see `FOREGROUND-TRACKING.md`). It asserts the *shape* of the promise: three maps of names to
+//! second counts, nothing richer, and no fourth kind of thing appearing without the document that
+//! describes it changing too. The third, `web`, carries page visits for app-group words and is
+//! never stored; `rules.rs` pins that half (`a_visits_address_never_reaches_the_stored_day`).
 //!
 //! Deliberately an integration test rather than a unit test inside `foreground.rs`: it asserts a
 //! documented promise about the module's public surface, not an internal behaviour, and it should
@@ -16,7 +17,7 @@
 
 use nestwatch::foreground::Sample;
 
-/// The emitted sample carries exactly the two maps `SECURITY.md` describes.
+/// The emitted sample carries exactly the three maps `SECURITY.md` describes.
 ///
 /// Serialising a populated `Sample` and inspecting the JSON is the honest check: the serialised
 /// form is what crosses the pipe from the watcher and lands in the rollup, so a field added to the
@@ -26,6 +27,7 @@ fn a_foreground_sample_carries_only_what_the_security_doc_describes() {
     let mut sample = Sample::default();
     sample.apps.insert("roblox.exe".into(), 120);
     sample.pages.insert("Roblox".into(), 45);
+    sample.web.insert("msedge.exe\nRoblox\n".into(), 45);
 
     let json = serde_json::to_value(&sample).expect("Sample must serialise");
     let object = json.as_object().expect("Sample serialises to an object");
@@ -34,16 +36,17 @@ fn a_foreground_sample_carries_only_what_the_security_doc_describes() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        vec!["apps", "pages"],
-        "a foreground sample must carry only `apps` and `pages`. docs/SECURITY.md tells the \
+        vec!["apps", "pages", "web"],
+        "a foreground sample must carry only `apps`, `pages` and `web`. docs/SECURITY.md tells the \
          parent exactly what is recorded about their child, and this is the structure that \
          carries it. If a field was added deliberately, update that section in the same commit — \
          do not just widen this list.",
     );
 
-    // Both are name -> seconds. Anything richer is a place for a URL, a path, or a timestamp
-    // trail to hide, none of which the document admits to.
-    for field in ["apps", "pages"] {
+    // All three are name -> seconds. Anything richer is a place for a path or a timestamp trail to
+    // hide, none of which the document admits to. (A visit's key carries an address once reading it
+    // is enabled; SECURITY.md says so, and that the service drops it after one tick.)
+    for field in ["apps", "pages", "web"] {
         let map = object[field]
             .as_object()
             .unwrap_or_else(|| panic!("`{field}` must be an object"));

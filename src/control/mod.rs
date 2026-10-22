@@ -10,6 +10,7 @@
 //! them via `tokio::task::spawn_blocking` so the async runtime is never stalled, and the
 //! trait stays `dyn`-compatible without needing `async-trait`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -197,6 +198,19 @@ pub trait SystemControl: Send + Sync + 'static {
     ///
     /// Ordering is unspecified: the enforcer folds the result into a set.
     fn running_processes(&self) -> Result<Vec<RunningProcess>, ControlError>;
+
+    /// Every process running under the signed-in console user's account — the child's own — ID to
+    /// name, from **one** snapshot.
+    ///
+    /// A word on an app group matches far more than an exact name does, and the service sees every
+    /// process on the machine, so a word may reach only what the child could close himself
+    /// (`docs/WORDS-IN-GROUPS.md`). The name comes from the same snapshot as the owner, so "this ID
+    /// is the child's" and "this ID is called Roblox" describe one process even if an ID is reused
+    /// after [`running_processes`](Self::running_processes) ran. Asked only on ticks where a group
+    /// has words. Nobody signed in is an empty map; an `Err` is treated the same way, so a failed
+    /// lookup matches no program by a word and closes no browser for a page — failing toward
+    /// closing nothing, never everything.
+    fn child_processes(&self) -> Result<BTreeMap<u32, String>, ControlError>;
 
     /// Terminate the process with the given PID.
     fn kill_process(&self, pid: u32) -> Result<(), ControlError>;

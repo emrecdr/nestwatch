@@ -4,6 +4,8 @@
 //! for screen capture, `sysinfo` for process enumeration/termination, and shells out to
 //! `shutdown.exe` for power-off (dependency-free, no `unsafe`, no `windows` crate).
 
+use std::collections::BTreeMap;
+
 use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
 pub struct WindowsControl;
@@ -201,6 +203,10 @@ impl SystemControl for WindowsControl {
             .output()
             .map_err(|e| ControlError::Op(e.to_string()))?;
         Ok(())
+    }
+
+    fn child_processes(&self) -> Result<BTreeMap<u32, String>, ControlError> {
+        crate::session::console_user_processes()
     }
 
     fn session_state(&self) -> Result<SessionState, ControlError> {

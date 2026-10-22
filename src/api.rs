@@ -2090,6 +2090,36 @@ pub async fn preview_rules(
     })))
 }
 
+/// Body of `POST /api/rules/words-preview`: one group's words, as typed.
+#[derive(Deserialize)]
+pub struct WordsPreview {
+    words: Vec<String>,
+}
+
+/// `POST /api/rules/words-preview` → which of the child's running programs these words would match.
+///
+/// What the dashboard shows under a group's words, so that a word broad enough to reach something
+/// unexpected is visible **before** it closes anything (`docs/WORDS-IN-GROUPS.md`). Answered by the
+/// enforcer's own rule — `words::preview` over `SystemControl::child_processes`, sparing the same
+/// check programs — so it cannot list a program the rule would leave alone.
+///
+/// `programs` is `null` when the owner lookup fails: unknown, not "nothing matches", which is the
+/// answer a parent would act on. Checked exactly as a save checks a group's words
+/// (`words::check`), and it writes nothing.
+pub async fn preview_words(
+    State(state): State<AppState>,
+    Json(body): Json<WordsPreview>,
+) -> Result<Json<Value>, AppError> {
+    crate::words::check(&body.words).map_err(AppError::BadRequest)?;
+    let spared = crate::rules::check_programs(&crate::state::recover_read(&state.config));
+    let control = state.control.clone();
+    let snapshot = spawn(move || control.child_processes()).await?;
+    let programs = snapshot
+        .ok()
+        .map(|child| crate::words::preview(&body.words, &child, &spared));
+    Ok(Json(json!({ "programs": programs })))
+}
+
 /// `GET /api/policy` → this install's household settings, as a downloadable file.
 ///
 /// The companion to `GET /api/export`, and the half that was missing. That one takes the *history*

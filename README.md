@@ -94,7 +94,7 @@ one on the real machine with **[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.
 | **Asking for more** | The child's page shows them their own day — time left, **their last seven days**, and **how many times the screen was captured today** — and they can ask for more; you approve or deny. Showing the child their own usage is deliberate rather than incidental: the current research on parental controls finds that tools built around restriction alone do worse than ones that also let a child see and reason about their own use, and the capture count is the same promise the yellow border makes on the desktop — you can always tell when you are being looked at. It shows totals only, never which apps or pages, because that is the parent's view and not a readout to hand the person being measured. The countdown warnings on their desktop carry the address, so they know where to ask — except during a curfew window, where extra time cannot help and offering it would be a promise the tool can't keep. Single-use offline codes cover times you're away or the network is down. |
 | **Remote control** | Screenshot the desktop (with live refresh at your choice of 2/5/15s), list and kill running apps, lock the screen, shut down with a warned countdown. Live frames are small and cheap; clicking **Expand** fetches a full-resolution one and keeps it full for as long as the big view is open, so a picture you opened to *read* stays readable. Your click always takes priority over a frame already being fetched. **Windows draws a yellow border around the screen while it is being captured** — the child can see when you are looking. |
 | **Say something to him** | A box under the live view puts *your* words on his screen — "dinner in ten minutes" — and tells you whether it was shown or whether nobody is signed in at that PC. It arrives under a heading that names you rather than the system, so he can tell a person from a countdown. It is a nudge, not a note: it sits over whatever he is doing and clears itself after about half a minute. There is no reply — if you want a conversation, this is a poor substitute for one. |
-| **App rules** | Blocklist, per-app daily limits, and groups sharing one pool. Habit-shaping, not a wall — see [Not included](#not-included). |
+| **App rules** | Blocklist, per-app daily limits, and groups sharing one pool. A group can also take **words**: with `roblox`, any program with Roblox in its name and any browser page titled with it draw from the same hour, and both are closed once it is spent — only programs running under the signed-in Windows account (your child's, unless you sign in on that PC yourself), and never Windows' or Nestwatch's own ([`docs/WORDS-IN-GROUPS.md`](docs/WORDS-IN-GROUPS.md)). Habit-shaping, not a wall — see [Not included](#not-included). |
 | **Modes** | Pause the whole rules enforcer with one toggle for a free evening (curfew still applies). Save the current setup as a named routine and reapply with a click. |
 | **Routines that run themselves** | A routine can carry a **schedule** — "16:00 to 18:00, Mon–Fri" — and applies itself while that window is open, then hands back to your normal settings when it closes. This is how you say *"games are blocked during homework hour, but the PC stays on"*, which the curfew cannot express: bedtime's only move is to power the machine off. **Nothing is overwritten.** A schedule chooses which settings are in force at each moment rather than writing over your defaults, so your normal rules are still there when the window ends, editing them mid-window is not silently reverted, and there is no timer quietly rewriting your config. **Pause still beats everything** — an install you paused stays paused, even inside a scheduled window — and where two schedules overlap, the one higher in the list wins. Routines you already have keep working exactly as before: no schedule means manual-only, which is what every existing routine loads as. |
 | **Integrations** | Apps that earn screen time, which you install and switch off from the dashboard. A paired app reports what your child did — **whether that earns anything, and how much, is decided here, on this PC, per integration** — so a report claiming 999 minutes grants exactly what you configured. An integration you switch off cannot grant at all, in one toggle, without unpairing anything. **Pair the right QR and a lost phone costs you very little.** `nestwatch pair --integration studygo` mints a credential that may add earned time *as that integration* and read today's total back — it cannot change what it earns, grant as you, watch your child's screen, or reach anything else here. The plain `nestwatch pair` QR is the one that signs a *person* in, and that one does hand a device everything you have, so keep it for people. Either way, a device you no longer control is signed out from its own row in **Signed-in devices**; you no longer have to change your password and re-pair the whole house. By default it is data you toggle, never code this machine runs or a server it reaches out to. The one exception is yours to switch on: name a check program under *Check from this PC* and this PC runs it as your child on a schedule, with the session your device forwarded, and judges what it reports by the same rules. **He is told what the check found** — or what the app on your device reported, the same way — on his own screen and in the household's language: once a day when he is short, naming the nearest rung and what clearing it is worth, *every* time practice buys him time, and the moment his practice lifts a gate. The asymmetry is deliberate — announcing every grant is what stops this being a thing that only ever says *not yet*, and rationing the shortfall notice to one a day is what stops a fifteen-minute timer becoming a nag. See [`docs/PLUGIN-SYSTEM.md`](docs/PLUGIN-SYSTEM.md). |
@@ -460,23 +460,41 @@ weighed and declined — so neither has to be rediscovered.
   [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md) `O6`.
 - **Web/content filtering** — not built, and not planned in the blocking sense. There is code to
   break browser time out by **page title** — what a tab was called — but see the warning below
-  before relying on it. It blocks nothing, records no addresses, and builds no browsing history;
-  getting the actual domains would mean changing your children's browser DNS settings, and
+  before relying on it. It records no addresses and builds no browsing history; getting the actual
+  domains would mean changing your children's browser DNS settings, and
   **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** records why that was declined.
+  The one thing it can do beyond reporting is serve **words on an app group**: a page in front whose
+  title contains the word counts against the group's time, and once that is spent the browser
+  showing it is closed — the whole browser, every tab. A site whose title lacks the word, or a
+  browser other than Edge, Chrome, Firefox and Brave, is not caught; your browser's own site
+  blocklist is the tool for named sites. Matching the address bar too is designed and waits on a
+  measurement on your PC ([`docs/WORDS-IN-GROUPS.md`](docs/WORDS-IN-GROUPS.md), Phase 0).
 - **Foreground-app-aware *limits*** (e.g. "earn time in a learning app") — limits count an app while
   it is **running**, on purpose: a game left idling in the background would otherwise stop consuming
   its limit. Focused time is measured *for the report only* and never decides when the PC locks —
   the helper that measures it runs as your child, so its figures are your child's to influence.
-  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** records the reasoning.
+  **[docs/FOREGROUND-TRACKING.md](docs/FOREGROUND-TRACKING.md)** records the reasoning. The one
+  exception is a word on an app group: a matching page in front *adds* to that group's time, which
+  can only spend your child's own time faster.
+  <br>**A word reaches only the signed-in account's programs** — your child's, unless you sign in on
+  that PC yourself, in which case it acts on yours, as screen time counts your use. A word matches
+  far more than an exact name, so `win` would otherwise reach Windows processes whose closing stops
+  the PC; it never reaches those, nor Nestwatch's own. That account also runs a few programs of
+  Windows' own (`sihost.exe`, `svchost.exe`): a built-in list keeps words away from those, along
+  with the check programs on the Integrations card, but the list cannot be complete — so use the
+  name of the game, and check what the dashboard lists under the field, which it asks of the
+  service itself, before you save. Separate words with commas: a space is part of a word, and
+  Nestwatch refuses it. Renaming a program file escapes a word just as it escapes a listed name.
 - ⚠️ **Focused-time and page-title measurement has never run on a real machine.** It is written, it
   compiles, and its arithmetic is tested — but the half that talks to Windows has not executed once,
   here or anywhere. **Until you have worked through §D2 of
   [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md), treat those two columns as unproven.**
   This is called out here rather than left to the design notes because the failure is quiet: if the
   watcher does not run on your PC, the focused and browser columns are simply empty — which looks
-  exactly like a child who used no browser, rather than like a feature that did not start. Nothing
-  else is affected. Screen-time totals, curfew, and every limit work as they always have; this part
-  only measures.
+  exactly like a child who used no browser, rather than like a feature that did not start. Words on
+  an app group lean on it too: without the watcher, pages count for nothing, while programs whose
+  names match still do. Nothing else is affected: screen-time totals, curfew, and every other limit
+  work as they always have.
 - **Notifications while you're away from home** — not possible here, and structurally rather than
   for want of work: a notification that reaches you outside the house needs a server outside the
   house, which is the one thing this design refuses. The dashboard is a web page and on a phone it

@@ -73,6 +73,7 @@ pub mod timereq;
 pub mod token;
 pub mod usage;
 pub mod web;
+pub mod words;
 
 #[cfg(windows)]
 pub mod service;

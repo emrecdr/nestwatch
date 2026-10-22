@@ -4,6 +4,8 @@
 //! to [`WindowsControl`]. Screen capture does NOT work from Session 0 (no desktop), so it
 //! is delegated to a helper launched into the interactive user session (see `crate::session`).
 
+use std::collections::BTreeMap;
+
 use super::windows::WindowsControl;
 use super::{ControlError, ProcessInfo, RunningProcess, SessionState, ShotTier, SystemControl};
 
@@ -51,6 +53,10 @@ impl SystemControl for ServiceControl {
 
     fn abort_shutdown(&self) -> Result<(), ControlError> {
         self.inner.abort_shutdown()
+    }
+
+    fn child_processes(&self) -> Result<BTreeMap<u32, String>, ControlError> {
+        self.inner.child_processes()
     }
 
     fn session_state(&self) -> Result<SessionState, ControlError> {
