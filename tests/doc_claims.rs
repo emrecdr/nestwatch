@@ -277,6 +277,14 @@ fn the_windows_checklist_is_the_size_its_citations_claim() {
             "docs/OPEN-FINDINGS.md does not say `{claim}`, which is what the checklist measures now."
         );
     }
+
+    // The first number a parent reads in the checklist is its own size, in "Short on time?". It
+    // said 199 for a release after the file had reached 239, because nothing held it.
+    let opening = format!("The full list is {boxes} items");
+    assert!(
+        checklist.contains(&opening),
+        "docs/WINDOWS-TESTING.md's opening does not say `{opening}`, which is what it holds now."
+    );
 }
 
 /// `O71` cites the size of the dashboard component. Those numbers must not understate it badly.
@@ -840,4 +848,54 @@ fn every_module_level_pub_fn_has_its_own_doc_comment() {
          rather than lost (O69).\n  {}",
         bare.join("\n  ")
     );
+}
+
+/// No text a parent reads may promise that a word on an app group never reaches Windows' own
+/// programs, because the code does not keep that promise.
+///
+/// The service spares a built-in list of about thirty Windows programs that run under the child's
+/// account, and `words.rs` says outright that the list is not complete. Windows' own Notepad is not
+/// on it, and the checklist's first words item (§D2b) closes Notepad by a word on purpose. The
+/// first draft of the 0.11.0 release notes, the README's App rules row and the dashboard's hint
+/// under the words field, in all three languages, promised "never Windows' own" all the same; a
+/// review caught it before the tag. A false safety claim is the one kind the changelog corrects in
+/// place once released, so this one is held here instead of being left to the next reader.
+#[test]
+fn nothing_promises_that_a_word_never_reaches_windows_own_programs() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // The code first: a word reaches a Windows program that is not on the list, and spares one
+    // that is. If the second half ever stops holding, the list is gone, and the prose needs more
+    // than a softer adjective.
+    let child: BTreeMap<u32, String> = [(1, "notepad.exe"), (2, "svchost.exe")]
+        .into_iter()
+        .map(|(pid, name)| (pid, name.to_string()))
+        .collect();
+    let reached = nestwatch::words::preview(
+        &["notepad".to_string(), "host".to_string()],
+        &child,
+        &BTreeSet::new(),
+    );
+    assert_eq!(
+        reached,
+        vec!["notepad.exe".to_string()],
+        "a word must reach Notepad and the built-in list must spare svchost.exe; this test's \
+         reading of the code is out of date"
+    );
+
+    // Then the prose: none of the places that made the promise makes it again, in any language.
+    for (file, promise) in [
+        ("README.md", "never Windows' or Nestwatch's own"),
+        ("CHANGELOG.md", "never Windows' own"),
+        ("assets/app.js", "never Windows' own"),
+        ("assets/app.js", "nooit die van Windows zelf"),
+        ("assets/app.js", "Windows'un kendi programları asla"),
+    ] {
+        assert!(
+            !repo(file).contains(promise),
+            "{file} says \"{promise}\", but a word reaches any Windows program that runs under the \
+             child's account and is not on the built-in list (Notepad, for one). Say what the list \
+             does, and that it is not complete."
+        );
+    }
 }

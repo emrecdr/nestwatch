@@ -1561,10 +1561,10 @@ mod tests {
         use crate::config::WrittenBy;
         assert!(written_by_check(WrittenBy::Unversioned).is_none());
         assert!(written_by_check(WrittenBy::ThisOrOlder).is_none());
-        let newer = written_by_check(WrittenBy::Newer("0.11.0".into())).expect("a warning");
+        let newer = written_by_check(WrittenBy::Newer("999.0.0".into())).expect("a warning");
         assert_eq!(newer.level, Level::Warn);
         assert!(
-            newer.text.contains("0.11.0") && newer.text.contains(crate::VERSION),
+            newer.text.contains("999.0.0") && newer.text.contains(crate::VERSION),
             "both versions must appear so it is obvious which is which: {}",
             newer.text
         );

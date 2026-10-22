@@ -13,16 +13,18 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 - **An app group can take words, so one limit covers a game in its app and in the browser.** Each
   group on the limits card has a new field, *Also count programs and pages containing*. With
-  `roblox` in it, any program with Roblox in its name and any browser page whose title contains it
-  draw from the group's daily pool, and once the pool is spent those programs are closed, and so is
-  the browser showing the page: Roblox for an hour a day across the app and the browser, without
-  knowing every program Roblox installs. Only programs running under the signed-in Windows account
-  count or close (your child's, unless you sign in on that PC yourself), and never Windows' own or
-  Nestwatch's. While you edit the words, a line under them lists which running programs they would
-  match, so a word broad enough to catch something unexpected shows up before it closes anything.
-  The Today card shows the browser's share as "min on the web". Pages match on their title only: the
-  page's address is not read yet, and will not be stored once it is. Closing by owner has not yet
-  been seen working on a real Windows PC (section D2b of the checklist).
+  `roblox` in it, any program with Roblox in its name, and any page whose title contains it while it
+  is in front in Chrome, Edge, Firefox or Brave, draw from the group's daily pool. Once the pool is
+  spent those programs are closed, and so is the browser showing the page: Roblox for an hour a day
+  across the app and the browser, without knowing every program Roblox installs. Only programs
+  running under the signed-in Windows account count or close (your child's, unless you sign in on
+  that PC yourself), never Nestwatch's own, and a built-in list keeps words away from about thirty
+  Windows programs that run under that account. That list is not complete, and a word can still
+  reach others, such as Notepad: when you click into the words and again when you leave the field,
+  a line under them lists which running programs they would match, before anything is closed. The
+  Today card shows the browser's share as "min on the web". Pages match on their title only: the
+  page's address is not read yet, and will not be stored once it is. None of this has run on a real
+  Windows PC yet (section D2b of the checklist).
 - **Lowering today's limit below what has already been used now asks first.** Saving such a change
   puts today over the limit the moment it lands, so the PC locks — or shuts down — after its short
   grace, without the 15, 5 and 1-minute warnings your child would otherwise get. The limits card

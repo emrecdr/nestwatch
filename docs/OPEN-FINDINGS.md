@@ -67,8 +67,8 @@ would confirm or kill them.
 
 Last **full** audit against the tree: **2026-08-31**. Entries that did not survive it were removed or
 rewritten rather than annotated, per the rules above. Individual entries have been re-measured since
-and carry their own later dates — `O87` and the release state above were both re-measured on
-2026-09-10, and `O100` was deleted on 2026-09-09 once the markup it described had been converted. So
+and carry their own later dates — `O87` and the release state below were both re-measured on
+2026-10-22, and `O100` was deleted on 2026-09-09 once the markup it described had been converted. So
 read the date on an entry before the date on this line: this one bounds only how long ago every
 entry was last looked at *together*.
 
@@ -90,9 +90,10 @@ child's page in Dutch, the provider probe and the three sentences it says, the p
 message a parent types, the summer mark across a reboot, `install`'s sessions note and the PC
 counting as one device to the lockout (§H11) — and none of them has executed on Windows.
 Re-measured 2026-10-22; it read 59 when `v0.10.0` shipped and 45 when `v0.9.0` did. The two items
-new since `v0.10.0` are §H11's, written in the commit that made the fix. This release's headline
-feature, words on app groups, came with seven items of its own in §D2b, outside section H because
-they extend §D2's app rules. Worth stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
+new since `v0.10.0` are §H11's, and they arrived in the commit after the fix they cover rather than
+with it — `O87`'s failure, caught 24 minutes later. This release's headline feature, words on app
+groups, came with seven items of its own in §D2b, outside section H because its page half needs
+§D2's watcher. Worth stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
 file**, in any section, so all 239 boxes it carries are still open. The three gates that were green
 when it shipped are the same three that were green when `install` failed on real hardware and again
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
@@ -157,15 +158,18 @@ refused, so every device had to be paired again — and that upgrade path has it
 Windows. Nothing here says the code is wrong; it says the gates that were green when `install` failed
 on real hardware are the same three that are green now.
 
-The enforcer wake is still the one to run first. Its entire value is a timing property — an abort
-arriving in well under a second where it previously took up to 30 — measured once, on macOS, where
-`shutdown` is a no-op. On Windows it is a real `shutdown.exe` with a real pending timer, and whether
-the abort beats a 60-second countdown there is unknown.
+§D2b is the one to run first on a PC where any group has words. Its owner check is the newest
+Windows-only code in the download and the only part of it that decides what a word may close, and
+nothing off Windows can exercise it.
 
-§H8 is the one to run second, because it is the only item in the file covering code that is new to
-this tier. The probe's Windows path shares `CreateProcessAsUserW` with the screenshot helper, which
-has itself never run here either, so a failure there would take both features down and neither has
-a green run to distinguish them.
+The enforcer wake comes next, and first where no group has words. Its entire value is a timing
+property — an abort arriving in well under a second where it previously took up to 30 — measured
+once, on macOS, where `shutdown` is a no-op. On Windows it is a real `shutdown.exe` with a real
+pending timer, and whether the abort beats a 60-second countdown there is unknown.
+
+§H8 after that. The probe's Windows path shares `CreateProcessAsUserW` with the screenshot helper,
+which has itself never run here either, so a failure there would take both features down and
+neither has a green run to distinguish them.
 
 ---
 
@@ -2114,7 +2118,10 @@ baseline holds 357 lines after this.
 
 **The untested remainder, run 2026-10-22 at `555286a`.** The weekly run reached the ~130 mutants
 the first sweep never tested and found 47 survivors not in the baseline. The 39 in `#[cfg(windows)]`
-functions (`install.rs` 34, `doctor.rs` 5) are now in it, which holds 396 lines after this; the 8 in
-code the Linux tests run (`session_handle`, `ParsedRow::detail`, `build_report`) were killed instead.
-**Still untested: shard 15 of 32**, cancelled when GitHub took its runner away (`O103`). Its
-survivors arrive as new on its next run; each is then killed or added deliberately.
+functions (`install.rs` 34, `doctor.rs` 5) are now in it; the 8 in code the Linux tests run
+(`session_handle`, `ParsedRow::detail`, `build_report`) were killed instead. Shard 15 lost its
+runner after 59 of its 71 mutants (`O103`), and the other 12 were run locally with the full suite:
+one more `#[cfg(windows)]` survivor, now in the baseline too (397 lines), and one mutant in
+`window_ending_yesterday` that made the suite hang rather than fail, which a bound on the window now
+turns into a failure. Replaying every shard's own check against this baseline leaves only those 8,
+which the tests now kill, so the next weekly run is the first expected to pass in full.

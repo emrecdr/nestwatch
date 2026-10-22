@@ -8,9 +8,10 @@
 # Taken from the first full sweep, 2026-10-05 at 260f4d8, minus the Windows-only modules that
 # `mutants.toml` now excludes. That sweep did not finish: shard 25 uploaded nothing and four
 # shards ran out of time, so about 130 mutants were never tested. The run of 2026-10-22 at
-# 555286a tested them, all but shard 15 of 32: its 39 survivors in `#[cfg(windows)]` functions
-# were added here, and its 8 in code the Linux tests run were killed instead. Adding a line is a
-# decision, not a formality.
+# 555286a tested them; shard 15 lost its runner after 59 of its 71, and the other 12 were run
+# locally the same day. Its 40 survivors in `#[cfg(windows)]` functions were added here; its 8 in
+# code the Linux tests run were killed instead, and one that hung the suite is now bounded.
+# Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -227,6 +228,7 @@ src/install.rs: replace == with != in uninstall
 src/install.rs: replace > with < in service_still_registered
 src/install.rs: replace > with < in terminate_resident_helpers
 src/install.rs: replace > with == in service_still_registered
+src/install.rs: replace > with == in terminate_resident_helpers
 src/install.rs: replace > with >= in service_still_registered
 src/install.rs: replace > with >= in settle_sessions
 src/install.rs: replace > with >= in terminate_resident_helpers

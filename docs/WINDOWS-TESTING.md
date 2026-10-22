@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 199 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 239 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -48,11 +48,14 @@ Each links to its full entry below.
 
 Everything below is worth doing eventually. Nothing below is worth doing before these.
 
-**One addition since this list was written.** Foreground tracking (§D2) is new code that has never
-executed anywhere — not on this machine, not on any machine. It is not in the nine above because
-nothing depends on it: it measures and reports, it never enforces, so if all of it is broken the
-locks and limits behave exactly as they do today. That is also why it is safe to leave until after
-the nine. But it is the largest untested surface in the build, so when you do reach it, expect
+**Two additions since this list was written.** Foreground tracking (§D2) is new code that has never
+executed anywhere — not on this machine, not on any machine. On its own it measures and reports, so
+if all of it is broken the locks and limits behave exactly as they do without it, which is why it
+is not in the nine above. **Words on app groups (§D2b) changed that** for any group that has words:
+a page the watcher reports adds to the group's pool and can close the browser, and the owner check
+decides which programs a word may close. If a group of yours has words, run §D2b before the nine;
+it is the newest Windows-only code in the build and the one that closes things. If none does, §D2
+can wait until after them. Either way it is the largest untested surface in the build, so expect
 failures rather than being surprised by them.
 
 ---
@@ -795,9 +798,9 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ## H. New in 0.5.0 through 0.11.0, and since — none of it has run on Windows
 
-**Seven releases have now shipped with every item in this section still unchecked** — `v0.5.0` on
-2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, `v0.10.0` on 2026-10-04 and
-`v0.11.0` on 2026-10-22. That is a deliberate decision rather
+**Eight releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
+`v0.5.1` on 2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, `v0.10.0` on
+2026-10-04 and `v0.11.0` on 2026-10-22. That is a deliberate decision rather
 than an oversight, and it is recorded in each release commit as well as here: the binary is on the
 download page and the behaviour below has never executed on the platform it was written for.
 
@@ -810,11 +813,11 @@ that improved at `v0.8.0` is that its headline feature arrived *with* its checkl
 instead of being added to the list later or not at all, which is the failure `O87` records against
 0.6.0 and 0.7.0.
 
-**Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's, written in the commit that
-made the fix they cover, which is the rule `O87` exists to enforce. The release's headline feature,
-words on app groups, arrived with its items too, as §D2b, outside this section because it extends
-§D2's app rules. Its owner rule is the newest Windows-only code in the download, and the item to run
-first.
+**Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's. They arrived in the commit
+after the fix they cover rather than with it, which is the failure `O87` records, caught 24 minutes
+later rather than at the release. The release's headline feature, words on app groups, arrived
+with its items, as §D2b, outside this section because its page half needs §D2's watcher. Its owner
+rule is the newest Windows-only code in the download, and the item to run first.
 
 **Fourteen of the 59 at `v0.10.0` were newer than `v0.9.0`.** Eight were written in the
 commits that added their features — the probe scheduler's heartbeat, the settling period before its

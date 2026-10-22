@@ -568,9 +568,16 @@ fn window_ending_yesterday(today: NaiveDate, days: u32) -> impl Iterator<Item = 
     let start = end.map(|e| e - chrono::Duration::days(i64::from(days) - 1));
     // `successors` rather than a loop: it stops at the end date, and `succ_opt` returning `None`
     // (the maximum representable date) ends it rather than wrapping.
+    //
+    // `take` holds the window to the days asked for even if the end test above were ever wrong.
+    // Turned into `>`, that test let a one-day window run on toward the last date chrono can
+    // represent, millions of days, and the test suite hung instead of failing (the weekly mutation
+    // run, `docs/OPEN-FINDINGS.md` O109). Both callers clamp `days` to at least 1, so for every
+    // real input this changes nothing.
     std::iter::successors(start, move |cur| {
         cur.succ_opt().filter(|next| Some(*next) <= end)
     })
+    .take(days as usize)
 }
 
 /// Every rollup row available, from both the dedicated store and the legacy usage log.
