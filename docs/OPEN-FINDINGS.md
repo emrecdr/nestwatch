@@ -65,28 +65,28 @@ solid, and each says which it is: some are read directly off the tree and are fa
 exists; others rest on a primary source plus a mechanism, and name the one on-device observation that
 would confirm or kill them.
 
-Last **full** audit against the tree: **2026-08-31**. Entries that did not survive it were removed or
-rewritten rather than annotated, per the rules above. Individual entries have been re-measured since
-and carry their own later dates — `O87` and the release state below were both re-measured on
-2026-10-22, and `O100` was deleted on 2026-09-09 once the markup it described had been converted. So
-read the date on an entry before the date on this line: this one bounds only how long ago every
-entry was last looked at *together*.
+Last **full** audit against the tree: **2026-08-31**. Entries that did not survive it were removed
+or rewritten rather than annotated, per the rules above. Individual entries have been re-measured
+since and carry their own later dates — `O87` was re-measured on 2026-10-22 and the release state
+below on 2026-10-23, and `O100` was deleted on 2026-09-09 once the markup it described had been
+converted. So read the date on an entry before the date on this line: this one bounds only how long
+ago every entry was last looked at *together*.
 
 ## Release state
 
-**`v0.11.0`, published 2026-10-22.** Everything below is open against a release that is on the
+**`v0.11.1`, published 2026-10-23.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
 What that release was verified by: unit and integration tests, `cargo test --all-targets --locked`
 and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compilation to
-`x86_64-pc-windows-gnu`, and a published SBOM plus binary attestation that were both checked against
-the downloaded artifacts.
+`x86_64-pc-windows-gnu`, `cargo deny` against the advisory database, and a published SBOM plus
+binary attestation.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) holds **61 items across §H1–§H11**, this release's words on
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) holds **61 items across §H1–§H11**, 0.11.0's words on
 app groups brought seven more in §D2b, and none of them has executed on Windows (re-measured
-2026-10-22). Which features they cover and what each release added is told once, in that section's
+2026-10-23). Which features they cover and what each release added is told once, in that section's
 preamble, rather than repeated here. Worth stating exactly: **no commit in this repository's history
 has ever recorded a ticked item in that file**, in any section, so all 239 boxes it carries are
 still open. The three gates that were green
@@ -95,8 +95,15 @@ when `remove_file` turned out not to be exclusive. That is not an argument for d
 is the reason the section below exists and the reason the checklist is the only method here with a
 track record.
 
+**0.11.1 changes no code under `src/`.** Measured 2026-10-23 with `git diff v0.11.0..HEAD`: the
+release moves `ctutils` from 0.4.2 to 0.4.5 for RUSTSEC-2026-0385, and `chacha20`, a test-only
+dependency, off a withdrawn version. The one path in this build that reaches `ctutils` is `argon2`'s
+password check, through `phc`'s constant-time comparison of the two hashes; in 0.4.2 that
+comparison already went through `cmov`'s assembly rather than the helpers the advisory names.
+Everything below about 0.11.0 holds for 0.11.1 unchanged.
+
 **0.11.0 adds Windows-only code to the running service, the first since 0.8.0's probe launch.**
-Measured 2026-10-22 with `git diff v0.10.0..HEAD`: of 2,953 lines added under `src/`, 132 are in
+Measured with `git diff v0.10.0..v0.11.0`: of 2,962 lines added under `src/`, 132 are in
 modules that compile only on Windows, and none is in a `#[cfg(windows)]` block of a shared file.
 `session.rs` gained `console_user_processes` (+94): one `WTSEnumerateProcessesExW` snapshot whose
 owner SIDs are compared with the signed-in console user's token. Both Windows controls answer
@@ -129,7 +136,7 @@ the first release since `v0.5.1` to add any: the probe runs the check program *a
 on Windows means launching it into the interactive session the way the screenshot helper already
 does. Measured 2026-09-09 with `git diff v0.7.0..HEAD`: the `#[cfg(windows)]` module `session.rs`
 gained 129 lines, and both Windows implementations of `SystemControl::run_probe` were new —
-`control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.11.0 unchanged
+`control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.11.1 unchanged
 and still unrun (§H8).
 
 **And neither 0.6.0's nor 0.7.0's headline features are in the checklist at all** — which is worse

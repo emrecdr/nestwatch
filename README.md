@@ -396,19 +396,22 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.11.0` (2026-10-22) is the newest published release — an
-app group can take words, so one limit covers a game in its app and in the browser; lowering
-today's limit below what has been used asks first; wrong passwords show on *Refused today*; the PC
-counts as one device to the password lockout, whichever of its own addresses it uses; a setting
-that could not be saved is no longer kept; and more of the dashboard follows your language. The
-release before it, `v0.10.0`, gave the practice gate to the integration rather than to your daily
-limit; `v0.8.0` is the one that lets this PC ask an integration what your child has
-done — the second of the two exceptions named at the top of this file, under **Check from this
-PC** on the Integrations card, and nothing here changes it.
+**Where the current release stands.** `v0.11.1` (2026-10-23) is the newest published release. It
+changes no code of Nestwatch's own: it moves `ctutils`, the library `argon2` uses to compare
+password hashes in constant time, past a published advisory (RUSTSEC-2026-0385). Everything else is
+`v0.11.0`'s — an app group can take words, so one limit covers a game in its app and in the
+browser; lowering today's limit below what has been used asks first; wrong passwords show on
+*Refused today*; the PC counts as one device to the password lockout, whichever of its own
+addresses it uses; a setting that could not be saved is no longer kept; and more of the dashboard
+follows your language. The release before that, `v0.10.0`, gave the practice gate to the
+integration rather than to your daily limit; `v0.8.0` is the one that lets this PC ask an
+integration what your child has done — the second of the two exceptions named at the top of this
+file, under **Check from this PC** on the Integrations card, and nothing here changes it.
 
-**This one adds Windows-only code to the running service, the first since `v0.8.0`.** Measured
-with `git diff v0.10.0..HEAD` rather than asserted: of the 2,953 lines added under `src/`, 132 sit
-in modules that compile only on Windows, and all of them serve words on app groups. The largest
+**`v0.11.0` added Windows-only code to the running service, the first since `v0.8.0`, and
+`v0.11.1` adds none.** Measured with `git diff v0.10.0..v0.11.0` rather than asserted: of the 2,962
+lines added under `src/`, 132 sit in modules that compile only on Windows, and all of them serve
+words on app groups; `git diff v0.11.0..v0.11.1` touches nothing under `src/`. The largest
 part is the owner check: one `WTSEnumerateProcessesExW` snapshot, with each process's owner
 compared against the signed-in account, so that a word can only count or close what your child
 could close himself in Task Manager. The rest hands that check to the enforcer and tells it which

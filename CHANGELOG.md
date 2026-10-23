@@ -7,6 +7,31 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [0.11.1] — 2026-10-23
+
+### Security
+
+- **The library behind password checking is updated for a published advisory.** `argon2` compares
+  the hash of a password you type with the stored one through `ctutils`, a library whose job is to
+  make that comparison take the same time whatever the bytes are. RUSTSEC-2026-0385, published
+  2026-10-23, reports that before `ctutils` 0.4.4 some of its helpers could compile to a branch on
+  common processors, which is exactly what such code must not contain, and that its 128-bit
+  comparisons branched on 32-bit systems. This release moves to 0.4.5. As far as the source shows,
+  0.11.0 was not exposed: the comparison `argon2` makes goes through a different, assembly-backed
+  path that the advisory does not name, and `nestwatch.exe` is 64-bit. It is a release anyway,
+  because that is a judgement made by reading code rather than by measuring the binary, and the
+  advisory is public. No code of Nestwatch's own changes; nothing about how it behaves does either.
+- `chacha20`, used only by the test suite and not part of `nestwatch.exe`, moves off a version its
+  authors withdrew (0.10.1 → 0.10.2).
+
+### Internal
+
+- **The weekly mutation run is judged as a whole, not shard by shard.** Each of its 32 shards
+  compared only its own surviving mutants with the list of known ones, so a mutation that survived
+  once in each of several shards passed every one of them. The first run to pass in full held two
+  such survivors. A final job now adds the shards up, fails the run on a survivor the list does not
+  hold or on a shard that did not finish, and the list was corrected to match the run exactly.
+
 ## [0.11.0] — 2026-10-22
 
 ### Added

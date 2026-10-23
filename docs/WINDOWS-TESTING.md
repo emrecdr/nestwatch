@@ -798,9 +798,10 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ## H. New in 0.5.0 through 0.11.0, and since — none of it has run on Windows
 
-**Eight releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
+**Nine releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
 `v0.5.1` on 2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, `v0.10.0` on
-2026-10-04 and `v0.11.0` on 2026-10-22. That is a deliberate decision rather
+2026-10-04, `v0.11.0` on 2026-10-22 and `v0.11.1` on 2026-10-23, which changed a dependency and no
+code of its own, so added nothing here. That is a deliberate decision rather
 than an oversight, and it is recorded in each release commit as well as here: the binary is on the
 download page and the behaviour below has never executed on the platform it was written for.
 
