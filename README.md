@@ -415,17 +415,14 @@ could close himself in Task Manager. The rest hands that check to the enforcer a
 browser has the matching page in front. That check is the safety half of the feature, and it has
 never run on a Windows PC; §D2b of the checklist is where to start.
 
-**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for eight releases: section H of the
-checklist now carries 61 items across §H1–§H11 — the bedtime extension and its undo, the enforcer
-wake, the translated shutdown notices, the ask link, the child's page in Dutch, the probe and the
-three things it says, the practice gate, the message a parent types, the summer mark across a
-reboot, `install`'s sessions note, and the lockout that counts every address on the PC as one
-device — and none has been executed on a Windows machine. No box anywhere in that file has
-ever been ticked in a commit. That is stated here rather than only in the changelog, because tier 3
-is the tier the sentence above says every serious bug has lived in, and a reader deciding whether to
-install this is entitled to know which tier the newest features sit in. Two of those items are new
-since `v0.10.0`, §H11's, written the commit after the fix they cover rather than with it; words on
-app groups arrived with seven of its own in §D2b, the owner check among them.
+**Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for every release from `v0.5.0` on:
+section H of the checklist carries 61 items across §H1–§H11, words on app groups brought seven more
+in §D2b, the owner check among them, and none has been executed on a Windows machine. No box
+anywhere in that file has ever been ticked in a commit. That is stated here rather than only in the
+changelog, because tier 3 is the tier the sentence above says every serious bug has lived in, and a
+reader deciding whether to install this is entitled to know which tier the newest features sit in.
+Which features those items cover, and what each release added, is told in section H of
+[`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
 
 Design problems that are known, judged real, and deliberately not scheduled are written down in
 [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md), along with the things reviews suggested that were

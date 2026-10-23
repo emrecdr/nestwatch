@@ -816,8 +816,8 @@ instead of being added to the list later or not at all, which is the failure `O8
 **Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's. They arrived in the commit
 after the fix they cover rather than with it, which is the failure `O87` records, caught 24 minutes
 later rather than at the release. The release's headline feature, words on app groups, arrived
-with its items, as §D2b, outside this section because its page half needs §D2's watcher. Its owner
-rule is the newest Windows-only code in the download, and the item to run first.
+with its items, seven more in §D2b, outside this section because its page half needs §D2's watcher.
+Its owner rule is the newest Windows-only code in the download, and the item to run first.
 
 **Fourteen of the 59 at `v0.10.0` were newer than `v0.9.0`.** Eight were written in the
 commits that added their features — the probe scheduler's heartbeat, the settling period before its

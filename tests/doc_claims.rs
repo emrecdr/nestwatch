@@ -213,19 +213,15 @@ fn the_findings_release_state_names_this_version() {
 /// grep, so there is no honest reason for the three to disagree, and no band inside which drift is
 /// tolerable.
 ///
+/// §D2b is held the same way. It sits outside section H, so the range above never counts it, and
+/// "seven items of its own in §D2b" stood unguarded in two of the three files. The history behind
+/// these numbers is told once, in section H's preamble; the other two files carry only the counts.
+///
 /// When this fires: re-count and edit the citations. It is a prompt to re-measure, not a budget.
 #[test]
 fn the_windows_checklist_is_the_size_its_citations_claim() {
     let checklist = repo("docs/WINDOWS-TESTING.md");
-
-    let start = checklist
-        .find("\n## H. ")
-        .expect("docs/WINDOWS-TESTING.md has no `## H.` section");
-    let end = checklist[start + 1..]
-        .find("\n## ")
-        .map(|i| start + 1 + i)
-        .unwrap_or(checklist.len());
-    let section_h = &checklist[start..end];
+    let section_h = checklist_section(&checklist, "H.");
 
     let items = section_h.matches("- [ ]").count();
     let boxes = checklist.matches("- [ ]").count();
@@ -285,6 +281,47 @@ fn the_windows_checklist_is_the_size_its_citations_claim() {
         checklist.contains(&opening),
         "docs/WINDOWS-TESTING.md's opening does not say `{opening}`, which is what it holds now."
     );
+
+    // Small counts are written out in words in all three files, and the phrase is matched across
+    // line breaks so that rewrapping a paragraph cannot break it.
+    const WORDS: [&str; 13] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve",
+    ];
+    let d2b = checklist_section(&checklist, "D2b.")
+        .matches("- [ ]")
+        .count();
+    assert!(
+        d2b > 0,
+        "counted no items in §D2b; the scan is broken, not the checklist"
+    );
+    let spelled = WORDS
+        .get(d2b)
+        .map_or_else(|| d2b.to_string(), |w| w.to_string());
+    let claim = format!("{spelled} more in §D2b");
+    for file in [
+        "README.md",
+        "docs/OPEN-FINDINGS.md",
+        "docs/WINDOWS-TESTING.md",
+    ] {
+        assert!(
+            collapse_whitespace(&repo(file)).contains(&claim),
+            "{file} does not say `{claim}`. §D2b holds {d2b} items right now; every file that \
+             cites the checklist's size has to say the same number."
+        );
+    }
+}
+
+/// The `## <heading>` section of a markdown file, up to the next `## ` heading or the end.
+fn checklist_section<'a>(doc: &'a str, heading: &str) -> &'a str {
+    let start = doc
+        .find(&format!("\n## {heading} "))
+        .unwrap_or_else(|| panic!("no `## {heading}` section"));
+    let end = doc[start + 1..]
+        .find("\n## ")
+        .map(|i| start + 1 + i)
+        .unwrap_or(doc.len());
+    &doc[start..end]
 }
 
 /// `O71` cites the size of the dashboard component. Those numbers must not understate it badly.

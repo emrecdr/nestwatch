@@ -84,17 +84,12 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 the downloaded artifacts.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) now holds **61 items across §H1–§H11** — the bedtime
-extension and its undo, the enforcer wake, the translated shutdown notices, the ask link, the
-child's page in Dutch, the provider probe and the three sentences it says, the practice gate, the
-message a parent types, the summer mark across a reboot, `install`'s sessions note and the PC
-counting as one device to the lockout (§H11) — and none of them has executed on Windows.
-Re-measured 2026-10-22; it read 59 when `v0.10.0` shipped and 45 when `v0.9.0` did. The two items
-new since `v0.10.0` are §H11's, and they arrived in the commit after the fix they cover rather than
-with it — `O87`'s failure, caught 24 minutes later. This release's headline feature, words on app
-groups, came with seven items of its own in §D2b, outside section H because its page half needs
-§D2's watcher. Worth stating exactly: **no commit in this repository's history has ever recorded a ticked item in that
-file**, in any section, so all 239 boxes it carries are still open. The three gates that were green
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) holds **61 items across §H1–§H11**, this release's words on
+app groups brought seven more in §D2b, and none of them has executed on Windows (re-measured
+2026-10-22). Which features they cover and what each release added is told once, in that section's
+preamble, rather than repeated here. Worth stating exactly: **no commit in this repository's history
+has ever recorded a ticked item in that file**, in any section, so all 239 boxes it carries are
+still open. The three gates that were green
 when it shipped are the same three that were green when `install` failed on real hardware and again
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
 is the reason the section below exists and the reason the checklist is the only method here with a
@@ -1624,12 +1619,12 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 61 items that have never executed (measured 2026-10-22, at `v0.11.0`; 59 at `v0.10.0`, 53 on 2026-09-16,
-45 at `v0.9.0`, 38 at `v0.8.0`, and 32 when this was written), so the gap has a size and a reader
-can weigh it. A feature absent from the checklist has no size. The release-state paragraph could be
-read as "0.6.0 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features were
-written down and left unchecked, 0.6.0's were never written down. The two together are the tier-3
-surface, and only one of them is visible.
+carries 61 items that have never executed (measured 2026-10-22, at `v0.11.0`; 32 when this was
+written, and the checklist's section-H preamble has the steps between), so the gap has a size and a
+reader can weigh it. A feature absent from the checklist has no size. The release-state paragraph
+could be read as "0.6.0 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features
+were written down and left unchecked, 0.6.0's were never written down. The two together are the
+tier-3 surface, and only one of them is visible.
 
 **Not a documentation problem.** The features carry real Windows-side behaviour that nothing here
 has exercised: a schedule that opens and closes against `clock`'s tamper-anchored local time and
