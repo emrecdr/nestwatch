@@ -11,6 +11,10 @@
 # 555286a tested them; shard 15 lost its runner after 59 of its 71, and the other 12 were run
 # locally the same day. Its 40 survivors in `#[cfg(windows)]` functions were added here; its 8 in
 # code the Linux tests run were killed instead, and one that hung the suite is now bounded.
+# The run of 2026-10-22 at ce4a51f, the first to pass in full, was then counted across all its
+# shards: two survivors this list was short of were added (a shard sees only its own, so a name
+# surviving once in each of five shards had passed against four lines), and three lines nothing
+# survived were deleted. This list now matches that run's 396 survivors exactly.
 # Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
@@ -83,7 +87,6 @@ src/control/fake.rs: replace / with % in <impl SystemControl for FakeControl>::s
 src/control/fake.rs: replace / with % in <impl SystemControl for FakeControl>::screenshot
 src/control/fake.rs: replace / with * in <impl SystemControl for FakeControl>::screenshot
 src/control/fake.rs: replace / with * in <impl SystemControl for FakeControl>::screenshot
-src/control/fake.rs: replace <impl SystemControl for FakeControl>::abort_shutdown -> Result<(), ControlError> with Ok(())
 src/control/fake.rs: replace <impl SystemControl for FakeControl>::lock_workstation -> Result<(), ControlError> with Ok(())
 src/control/mod.rs: replace > with == in encode_shot
 src/control/mod.rs: replace > with == in encode_shot
@@ -95,7 +98,6 @@ src/curfew.rs: replace + with - in Enforcer::decide
 src/curfew.rs: replace == with != in Enforcer::tick
 src/curfew.rs: replace > with >= in Curfew::undo_extension
 src/curfew.rs: replace > with >= in Curfew::validate
-src/curfew.rs: replace Curfew::is_active_now -> bool with false
 src/curfew.rs: replace default_warn_secs -> u32 with 1
 src/curfew.rs: replace || with && in Days::any
 src/curfew.rs: replace || with && in run_enforcer
@@ -111,7 +113,6 @@ src/doctor.rs: delete ! in run
 src/doctor.rs: delete ! in run
 src/doctor.rs: delete match arm crate::rules::TickMode::Measure in run
 src/doctor.rs: replace && with || in all_public
-src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
@@ -220,6 +221,7 @@ src/install.rs: replace == with != in install
 src/install.rs: replace == with != in install
 src/install.rs: replace == with != in install
 src/install.rs: replace == with != in install
+src/install.rs: replace == with != in install
 src/install.rs: replace == with != in start_and_verify
 src/install.rs: replace == with != in start_and_verify
 src/install.rs: replace == with != in stop_and_wait
@@ -284,6 +286,7 @@ src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(1, Stri
 src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![]
 src/install.rs: replace prompt_for_password -> Result<String> with Ok("xyzzy".into())
 src/install.rs: replace prompt_for_password -> Result<String> with Ok(String::new())
+src/install.rs: replace remove_service -> Result<()> with Ok(())
 src/install.rs: replace remove_service -> Result<()> with Ok(())
 src/install.rs: replace run_icacls -> Result<()> with Ok(())
 src/install.rs: replace service_still_registered -> bool with false

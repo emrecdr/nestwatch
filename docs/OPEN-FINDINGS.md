@@ -1978,7 +1978,8 @@ only on a survivor not already in `.cargo/mutants-baseline.txt` (`O109`). Shard 
 like the runner going away rather than anything in the job, and nothing here would prevent a repeat.
 **It repeated on 2026-10-22:** shard 15 was cancelled mid-run with "The runner has received a
 shutdown signal", and its mutants went untested. Re-running that one job recovers the shard; nothing
-in the workflow does it unasked.
+in the workflow does it unasked. A lost shard does at least read as a failure now: the `whole-run`
+job fails the run when any shard's results do not account for all its mutants.
 
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 
@@ -2069,7 +2070,7 @@ log is unaffected and still records every wrong password as it happens.
 **Trigger.** The next change to the stand-down path, or the first report of refusals appearing on
 the wrong day.
 
-### O109 · A full sweep leaves 420 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 396 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2123,5 +2124,21 @@ functions (`install.rs` 34, `doctor.rs` 5) are now in it; the 8 in code the Linu
 runner after 59 of its 71 mutants (`O103`), and the other 12 were run locally with the full suite:
 one more `#[cfg(windows)]` survivor, now in the baseline too (397 lines), and one mutant in
 `window_ending_yesterday` that made the suite hang rather than fail, which a bound on the window now
-turns into a failure. Replaying every shard's own check against this baseline leaves only those 8,
-which the tests now kill, so the next weekly run is the first expected to pass in full.
+turns into a failure. Replaying every shard's own check against this baseline left only those 8,
+which the tests now kill.
+
+**The first full pass, 2026-10-22 at `ce4a51f`, and what the shards could not see.** All 32 shards
+passed, each having tested every mutant it planned: 2,271, of which 394 survived and 2 timed out.
+Counted over the whole run instead of shard by shard, it held two survivors more than the baseline:
+`replace == with != in install` five times against four lines, and `remove_service -> Ok(())` twice
+against one (the `#[cfg(windows)]` body, and the non-Windows stub, which already returns `Ok(())`).
+Neither was a new gap, since `install` checks for elevation before anything a Linux test can reach.
+They passed because a shard compares only its own survivors with the whole baseline, so a name
+that survives once in each of five shards passes all five against four lines. Three lines had
+nothing surviving under them: `FakeControl::abort_shutdown -> Ok(())` and `Curfew::is_active_now ->
+false`, both now caught, and one of the five `&& → ||` lines in `doctor::run`, where four survive.
+The baseline now matches that run's 396 survivors line for line, and a `whole-run` job adds the 32
+shards up. It fails on a survivor the baseline does not hold and on a shard without finished
+results, and warns on a line nothing survived. Before it went in, it was replayed against that
+run's artifacts: it failed with exactly those two on the old baseline, warned on exactly those
+three, and passed on the new one.

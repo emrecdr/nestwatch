@@ -25,7 +25,9 @@ name: mutants-weekly
 # A shard FAILS on a survivor that is not in `.cargo/mutants-baseline.txt`, never on one that is:
 # the known ones are listed there as debt, so a red Monday means something new got through rather
 # than the same three hundred again. Every shard uploads its `mutants.out` either way, so a red
-# shard is read from its artifact rather than re-run.
+# shard is read from its artifact rather than re-run. A shard sees only its own survivors, so the
+# `whole-run` job then adds all 32 up: one survivor more than the baseline holds, or a shard that
+# left no finished results, fails the run there.
 #
 # `--shard k/n` is cargo-mutants' own partition of the unshuffled list, so the 32 shards together
 # are the whole list. Dealt round-robin rather than in its default consecutive slices, because
@@ -83,7 +85,8 @@ jobs:
       # so both sides are compared without them. `comm` on sorted input pairs repeated lines one for
       # one, which is what lets a mutation that survives twice in one function count as two.
       # cargo-mutants writes both lists on every run, empty or not, so a missing one fails here
-      # rather than reading as a shard with nothing new.
+      # rather than reading as a shard with nothing new. This catches a name the baseline lacks,
+      # not one more of a name it holds: that needs every shard's count, which `whole-run` has.
       - name: Survivors not already in the baseline
         run: |
           set -euo pipefail
@@ -104,3 +107,56 @@ jobs:
           name: mutants-weekly-${{ matrix.shard }}
           path: mutants.out
           if-no-files-found: ignore
+
+  # Each shard compares its own survivors with the whole baseline, and the baseline names a mutant
+  # without its line, so several can share one name. A name that survives once in each of five
+  # shards then passes all five against a baseline listing it four times. The run of 2026-10-22 at
+  # ce4a51f went green holding two survivors more than the baseline did. This adds the 32 up.
+  whole-run:
+    needs: mutants-weekly
+    # After failed shards too, so a red run still gets the whole count. Not after a cancelled run,
+    # which has no whole to count.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # v8 while `upload-artifact` is on v7, as in `release.yml`. Each artifact lands in its own
+      # `shards/mutants-weekly-<k>/`.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: mutants-weekly-*
+          path: shards
+      # Three verdicts. A shard whose `outcomes.json` does not account for all its mutants lost its
+      # runner or ran out of time (`O103`), and fails the run, which used to go grey. A survivor the
+      # baseline does not hold fails it, counted over all 32. A baseline line that nothing survived
+      # only warns: killing a mutant means deleting its line, but a timeout can come and go from
+      # one week to the next, and is not worth a red run. The 32 is the matrix above.
+      - name: The whole run against the baseline
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          missing=""
+          for k in $(seq 0 31); do
+            jq -e '.end_time and .missed + .caught + .timeout + .unviable == .total_mutants' \
+              "shards/mutants-weekly-$k/outcomes.json" > /dev/null 2>&1 || missing="$missing $k"
+          done
+          { cat shards/*/missed.txt shards/*/timeout.txt 2>/dev/null || true; } \
+            | sed -E 's/^([^:]+):[0-9]+:[0-9]+: /\1: /' | sort > survivors.txt
+          { grep -v -e '^#' -e '^$' .cargo/mutants-baseline.txt || true; } | sort > known.txt
+          comm -23 survivors.txt known.txt > new.txt
+          comm -13 survivors.txt known.txt > stale.txt
+          if [ -n "$missing" ]; then
+            echo "::error::shard(s)$missing left no finished results; their mutants went untested"
+          fi
+          if [ -s new.txt ]; then
+            echo "::error::$(wc -l < new.txt) survivor(s) more than the baseline holds"
+            cat new.txt
+          fi
+          # Only meaningful when every shard reported: a missing one makes its lines look stale.
+          if [ -z "$missing" ] && [ -s stale.txt ]; then
+            echo "::warning::$(wc -l < stale.txt) baseline line(s) nothing survived; delete them"
+            cat stale.txt
+          fi
+          if [ -n "$missing" ] || [ -s new.txt ]; then exit 1; fi
+          echo "$(wc -l < survivors.txt) survivor(s) across the 32 shards, all in the baseline."
