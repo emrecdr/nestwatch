@@ -13,8 +13,10 @@
 # code the Linux tests run were killed instead, and one that hung the suite is now bounded.
 # The run of 2026-10-22 at ce4a51f, the first to pass in full, was then counted across all its
 # shards: two survivors this list was short of were added (a shard sees only its own, so a name
-# surviving once in each of five shards had passed against four lines), and three lines nothing
-# survived were deleted. This list now matches that run's 396 survivors exactly.
+# surviving once in each of five shards had passed against four lines), and two lines nothing
+# survived were deleted. A third deletion was wrong: a rerun of the same source on 2026-10-23
+# showed that mutant had been "caught" by a flaky test, as were four others, and it is back. Both
+# flaky tests are fixed. This list is now each name's highest count across those two runs, 397.
 # Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
@@ -113,6 +115,7 @@ src/doctor.rs: delete ! in run
 src/doctor.rs: delete ! in run
 src/doctor.rs: delete match arm crate::rules::TickMode::Measure in run
 src/doctor.rs: replace && with || in all_public
+src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run
 src/doctor.rs: replace && with || in run

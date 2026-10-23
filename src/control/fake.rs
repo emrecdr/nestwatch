@@ -512,9 +512,9 @@ mod tests {
         let path = dir.join("echo-back");
         std::fs::write(&path, "#!/bin/sh\ncat\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let out = FakeControl::new()
-            .run_probe(&path, b"hello".to_vec())
-            .unwrap();
+        let fake = FakeControl::new();
+        let out =
+            crate::testutil::retry_while_busy(|| fake.run_probe(&path, b"hello".to_vec())).unwrap();
         assert_eq!(out, b"hello");
     }
 

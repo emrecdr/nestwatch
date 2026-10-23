@@ -2072,7 +2072,7 @@ log is unaffected and still records every wrong password as it happens.
 **Trigger.** The next change to the stand-down path, or the first report of refusals appearing on
 the wrong day.
 
-### O109 · A full sweep leaves 396 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 397 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2139,8 +2139,23 @@ They passed because a shard compares only its own survivors with the whole basel
 that survives once in each of five shards passes all five against four lines. Three lines had
 nothing surviving under them: `FakeControl::abort_shutdown -> Ok(())` and `Curfew::is_active_now ->
 false`, both now caught, and one of the five `&& → ||` lines in `doctor::run`, where four survive.
-The baseline now matches that run's 396 survivors line for line, and a `whole-run` job adds the 32
+The baseline was set to that run's 396 survivors line for line, and a `whole-run` job adds the 32
 shards up. It fails on a survivor the baseline does not hold and on a shard without finished
 results, and warns on a line nothing survived. Before it went in, it was replayed against that
 run's artifacts: it failed with exactly those two on the old baseline, warned on exactly those
 three, and passed on the new one.
+
+**Its first run on GitHub, 2026-10-23 at `cc3c9fc`, found flaky tests rather than new gaps.** The
+source was identical to `ce4a51f`, yet five mutants changed outcome, each in the same shard both
+times, and every "caught" among them came from a test unrelated to the mutated code failing at
+random. Two causes. `tests/password_change.rs` holds two tests that each point the process-wide
+`NESTWATCH_DATA_DIR` at their own directory and run in parallel, so they shared one, and the
+first to finish could delete it between `Config::save` creating it and writing into it: a 500,
+about once in two thousand runs. Both halves were shown in a throwaway clone, the sharing with a
+forced start order and the failed save with the directory removed underneath it; a lock now makes
+the two tests take turns. The probe tests in `control` write a script and run it, and on Linux a
+sibling test's fork can hold the script open for writing long enough for `exec` to fail with
+`Text file busy` (rust-lang/rust#114554). macOS does not enforce that, so it was not reproduced
+here; those tests now retry on exactly that error, through a helper with tests of its own. The
+third deletion above was one of the five, a catch by the password test, and its line is back: the
+baseline is each name's highest count across the two runs, 397.

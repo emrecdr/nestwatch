@@ -713,6 +713,8 @@ mod tests {
         assert!(err.to_string().contains("not-here"), "got {err}");
     }
 
+    /// An executable shell script. Run it through `crate::testutil::retry_while_busy`, as every
+    /// test here does: on Linux a sibling test's fork can leave it briefly "busy".
     #[cfg(unix)]
     fn script(dir: &crate::testutil::ScratchDir, name: &str, body: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -728,7 +730,10 @@ mod tests {
     fn a_probe_reads_its_input_on_stdin_and_is_read_back_from_stdout() {
         let dir = crate::testutil::ScratchDir::new("probe-cat");
         let path = script(&dir, "echo-back", "cat");
-        let out = run_local_probe(&path, b"the secret", PROBE_TIMEOUT, MAX_PROBE_OUTPUT).unwrap();
+        let out = crate::testutil::retry_while_busy(|| {
+            run_local_probe(&path, b"the secret", PROBE_TIMEOUT, MAX_PROBE_OUTPUT)
+        })
+        .unwrap();
         assert_eq!(out, b"the secret");
     }
 
@@ -738,7 +743,9 @@ mod tests {
     fn a_probe_that_writes_past_the_bound_is_refused_not_buffered() {
         let dir = crate::testutil::ScratchDir::new("probe-flood");
         let path = script(&dir, "flood", "head -c 20000 /dev/zero");
-        let err = run_local_probe(&path, b"", PROBE_TIMEOUT, 4096).unwrap_err();
+        let err =
+            crate::testutil::retry_while_busy(|| run_local_probe(&path, b"", PROBE_TIMEOUT, 4096))
+                .unwrap_err();
         assert!(err.to_string().contains("4096"), "got {err}");
     }
 
@@ -749,7 +756,9 @@ mod tests {
     fn a_probe_that_writes_exactly_the_bound_is_read_in_full() {
         let dir = crate::testutil::ScratchDir::new("probe-exact");
         let path = script(&dir, "exact", "head -c 4096 /dev/zero");
-        let out = run_local_probe(&path, b"", PROBE_TIMEOUT, 4096).unwrap();
+        let out =
+            crate::testutil::retry_while_busy(|| run_local_probe(&path, b"", PROBE_TIMEOUT, 4096))
+                .unwrap();
         assert_eq!(out.len(), 4096);
     }
 
@@ -760,12 +769,14 @@ mod tests {
         let dir = crate::testutil::ScratchDir::new("probe-hang");
         let path = script(&dir, "hang", "sleep 30");
         let started = std::time::Instant::now();
-        let err = run_local_probe(
-            &path,
-            b"",
-            std::time::Duration::from_millis(300),
-            MAX_PROBE_OUTPUT,
-        )
+        let err = crate::testutil::retry_while_busy(|| {
+            run_local_probe(
+                &path,
+                b"",
+                std::time::Duration::from_millis(300),
+                MAX_PROBE_OUTPUT,
+            )
+        })
         .unwrap_err();
         assert!(
             started.elapsed() < std::time::Duration::from_secs(5),
@@ -794,12 +805,14 @@ mod tests {
             "answer-hang",
             "echo '{\"questions\":9,\"minutes\":9}'\nexec 1>&-\nsleep 30",
         );
-        let err = run_local_probe(
-            &path,
-            b"",
-            std::time::Duration::from_millis(300),
-            MAX_PROBE_OUTPUT,
-        )
+        let err = crate::testutil::retry_while_busy(|| {
+            run_local_probe(
+                &path,
+                b"",
+                std::time::Duration::from_millis(300),
+                MAX_PROBE_OUTPUT,
+            )
+        })
         .unwrap_err();
         assert!(err.to_string().contains("did not finish"), "got {err}");
     }
@@ -814,7 +827,10 @@ mod tests {
             "fail",
             "echo '{\"questions\":9,\"minutes\":9}'; exit 3",
         );
-        let err = run_local_probe(&path, b"", PROBE_TIMEOUT, MAX_PROBE_OUTPUT).unwrap_err();
+        let err = crate::testutil::retry_while_busy(|| {
+            run_local_probe(&path, b"", PROBE_TIMEOUT, MAX_PROBE_OUTPUT)
+        })
+        .unwrap_err();
         assert!(err.to_string().contains("exit"), "got {err}");
     }
 

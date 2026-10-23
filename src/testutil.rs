@@ -1,9 +1,10 @@
 //! Test-only helpers for the library's own unit tests.
 //!
-//! Two unrelated things live here, for one shared reason: both must be reachable from every
+//! Unrelated things live here, for one shared reason: each must be reachable from every
 //! `#[cfg(test)]` module in the crate and from nothing else. [`ScratchDir`], used by nine modules,
-//! and [`assert_all_lists_every_variant`], shared by `Language::ALL` in `config.rs` and
-//! `ShotTier::ALL` in `control/mod.rs`.
+//! [`assert_all_lists_every_variant`], shared by `Language::ALL` in `config.rs` and
+//! `ShotTier::ALL` in `control/mod.rs`, and [`retry_while_busy`], for the tests in `control` that
+//! write a script and then run it.
 //!
 //! **`ScratchDir` is a deliberate twin of the one in `tests/common/mod.rs`, not an oversight.** The
 //! two cannot be one: `tests/common/mod.rs` is compiled into each integration-test binary, and
@@ -160,9 +161,77 @@ pub(crate) fn assert_each_language_differs<T: Ord + std::fmt::Debug>(said: &[T])
     );
 }
 
+/// Run `attempt` again while it fails with "Text file busy", for about a second at most.
+///
+/// Linux refuses to execute a file that any process holds open for writing (`ETXTBSY`). A test
+/// that writes a script closes its own handle before running it, but if another test thread starts
+/// a process while that handle is open, the child inherits a copy and keeps it until it reaches
+/// `exec` (rust-lang/rust#114554). For that moment the script is busy through no fault of the code
+/// under test. The weekly mutation run caught two probe tests failing this way on unmutated code,
+/// and each time an unrelated mutant was counted as killed. The window is one fork long, so a short
+/// retry closes it. Any other result, success or failure, comes back from the first attempt that
+/// produces it. macOS never reports the error, so there it always does.
+pub(crate) fn retry_while_busy<T, E: std::fmt::Display>(
+    mut attempt: impl FnMut() -> Result<T, E>,
+) -> Result<T, E> {
+    for _ in 0..BUSY_RETRIES {
+        match attempt() {
+            Err(e) if e.to_string().contains("Text file busy") => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
+    attempt()
+}
+
+/// How many busy answers [`retry_while_busy`] waits out before handing the last one back.
+const BUSY_RETRIES: usize = 50;
+
 #[cfg(test)]
 mod tests {
-    use super::ScratchDir;
+    use super::{BUSY_RETRIES, ScratchDir, retry_while_busy};
+
+    /// A busy answer is waited out, and the first real answer is what comes back.
+    #[test]
+    fn a_busy_script_is_tried_again_until_it_answers() {
+        let mut calls = 0;
+        let got = retry_while_busy(|| {
+            calls += 1;
+            if calls < 3 {
+                Err("could not start probe /tmp/x: Text file busy (os error 26)")
+            } else {
+                Ok("answer")
+            }
+        });
+        assert_eq!(got, Ok("answer"));
+        assert_eq!(calls, 3);
+    }
+
+    /// Any other failure is the test's to see, on the first attempt: retrying it would hide the
+    /// very errors the probe tests exist to check.
+    #[test]
+    fn any_other_failure_comes_back_at_once() {
+        let mut calls = 0;
+        let got: Result<(), _> = retry_while_busy(|| {
+            calls += 1;
+            Err("probe exited with status 3")
+        });
+        assert_eq!(got, Err("probe exited with status 3"));
+        assert_eq!(calls, 1);
+    }
+
+    /// A file that stays busy is reported busy after the last retry, not waited on for ever.
+    #[test]
+    fn a_script_that_stays_busy_is_given_up_on() {
+        let mut calls = 0;
+        let got: Result<(), _> = retry_while_busy(|| {
+            calls += 1;
+            Err("Text file busy (os error 26)")
+        });
+        assert_eq!(got, Err("Text file busy (os error 26)"));
+        assert_eq!(calls, BUSY_RETRIES + 1);
+    }
 
     /// The directory exists while the guard is held and is gone once its scope closes.
     ///

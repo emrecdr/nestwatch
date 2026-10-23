@@ -8,13 +8,24 @@ use serde_json::json;
 mod common;
 use common::{PASSWORD, ScratchDir, app_with, get, login, post_json, state_with, test_config};
 
-/// Point the data dir at a scratch path for this binary. Safe here and nowhere else: this is a
-/// dedicated test binary, so the process-global override can't race another test.
-fn scratch_data_dir(name: &str) -> ScratchDir {
+/// Held by each test here for its whole run, because both point the process-wide
+/// `NESTWATCH_DATA_DIR` at their own directory and `cargo test` runs them on parallel threads.
+///
+/// Its own binary keeps other binaries out, not the second test in this one. Without the lock the
+/// test that set the variable last decided the directory for both, and the other's cleanup could
+/// delete it between `Config::save` creating it and writing into it: a 500 from `/api/password`,
+/// about once in two thousand runs, which the weekly mutation run caught on unmutated code in both
+/// tests. An async lock, because it is held across the requests each test makes.
+static DATA_DIR: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Point the data dir at a scratch path, holding [`DATA_DIR`] until the test ends.
+async fn scratch_data_dir(name: &str) -> (tokio::sync::MutexGuard<'static, ()>, ScratchDir) {
+    let turn = DATA_DIR.lock().await;
     let tmp = ScratchDir::new(&format!("pw-{name}"));
-    // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
+    // SAFETY: `turn` keeps the other test in this binary from reading or setting the variable
+    // until this one ends, and no other binary shares this process.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
-    tmp
+    (turn, tmp)
 }
 
 async fn change_password(app: &Router, cookie: &str, new: &str) -> StatusCode {
@@ -30,7 +41,7 @@ async fn change_password(app: &Router, cookie: &str, new: &str) -> StatusCode {
 
 #[tokio::test]
 async fn password_change_end_to_end() {
-    let _tmp = scratch_data_dir("e2e");
+    let (_turn, _tmp) = scratch_data_dir("e2e").await;
     let app = app_with(state_with(test_config()));
 
     let cookie = login(&app, PASSWORD).await.unwrap();
@@ -51,7 +62,7 @@ async fn password_change_end_to_end() {
 /// Previously the implicit remedy was a service restart, which the persistent store removed.
 #[tokio::test]
 async fn changing_the_password_revokes_other_sessions() {
-    let _tmp = scratch_data_dir("revoke");
+    let (_turn, _tmp) = scratch_data_dir("revoke").await;
     let app = app_with(state_with(test_config()));
 
     let phone = login(&app, PASSWORD).await.expect("first device signs in");
