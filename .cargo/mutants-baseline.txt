@@ -18,7 +18,8 @@
 # showed that mutant had been "caught" by a flaky test, as were four others, and it is back. Both
 # flaky tests are fixed. That made it each name's highest count across those two runs, 397, which
 # the next full run (2026-10-23, da665c1) matched line for line. 15 of the 17 lines in `auth.rs`
-# were killed on 2026-10-24, leaving 382. Adding a line is a decision, not a formality.
+# were killed on 2026-10-24, and all 17 in `pairing.rs` the same day, leaving 365. Adding a line is
+# a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -327,23 +328,6 @@ src/lib.rs: replace run_cli -> Result<()> with Ok(())
 src/lib.rs: replace run_server -> Result<()> with Ok(())
 src/lib.rs: replace run_service -> Result<()> with Ok(())
 src/main.rs: replace main -> anyhow::Result<()> with Ok(())
-src/pairing.rs: replace % with + in qr_svg
-src/pairing.rs: replace % with / in qr_svg
-src/pairing.rs: replace * with + in qr_svg
-src/pairing.rs: replace * with / in qr_svg
-src/pairing.rs: replace + with * in mint
-src/pairing.rs: replace + with * in qr_svg
-src/pairing.rs: replace + with * in qr_svg
-src/pairing.rs: replace + with * in qr_svg
-src/pairing.rs: replace + with - in qr_svg
-src/pairing.rs: replace / with % in qr_svg
-src/pairing.rs: replace / with * in qr_svg
-src/pairing.rs: replace <impl std::fmt::Display for AdvertisedHost<'_>>::fmt -> std::fmt::Result with Ok(Default::default())
-src/pairing.rs: replace == with != in qr_svg
-src/pairing.rs: replace clear with ()
-src/pairing.rs: replace now_secs -> u64 with 1
-src/pairing.rs: replace qr_code -> Option<String> with Some("xyzzy".into())
-src/pairing.rs: replace qr_code -> Option<String> with Some(String::new())
 src/preflight.rs: delete ! in apply
 src/preflight.rs: delete ! in check_system_tools
 src/preflight.rs: delete ! in check_system_tools

@@ -492,6 +492,152 @@ mod tests {
         );
     }
 
+    /// The dark modules of `url`'s QR, as `(x, y)` with a quiet zone of four modules around them.
+    ///
+    /// Read from the `qrcode` library's own matrix, which is the oracle here: the code under test
+    /// only draws it, so its drawing is checked against the library rather than against itself.
+    /// The four modules are written out, the width the QR specification requires.
+    fn dark_modules(url: &str) -> (usize, std::collections::BTreeSet<(usize, usize)>) {
+        let code = qrcode::QrCode::new(url).expect("encodable");
+        let width = code.width();
+        let dark = code
+            .to_colors()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, c)| *c == qrcode::Color::Dark)
+            .map(|(i, _)| (i % width + 4, i / width + 4))
+            .collect();
+        (width, dark)
+    }
+
+    /// The dashboard's QR draws exactly the code's dark modules, inside a four-module quiet zone.
+    ///
+    /// Only "is there a QR" was checked before, so the square arithmetic, the quiet zone and even
+    /// which modules count as dark could all be changed with the suite green (`O109`) — producing
+    /// a picture that looks like a QR on the card and scans for nobody.
+    #[test]
+    fn the_svg_qr_draws_the_codes_dark_modules_and_nothing_else() {
+        let url = pair_url("192.168.1.42", 8443, "EG629F4DQDDHS44V", Some(FP));
+        let svg = qr_svg(&url).expect("a pairing URL encodes");
+        let (width, expected) = dark_modules(&url);
+
+        let side = width + 8;
+        assert!(
+            svg.contains(&format!("viewBox=\"0 0 {side} {side}\"")),
+            "the picture is not the code plus its quiet zone: {svg}"
+        );
+        assert!(svg.contains(&format!(
+            "<rect width=\"{side}\" height=\"{side}\" fill=\"#ffffff\"/>"
+        )));
+
+        let path = svg
+            .split("<path d=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("one path");
+        let drawn: std::collections::BTreeSet<(usize, usize)> = path
+            .split('M')
+            .filter(|square| !square.is_empty())
+            .map(|square| {
+                let corner = square.strip_suffix("h1v1h-1z").expect("a 1x1 square");
+                let (x, y) = corner.split_once(' ').expect("x and y");
+                (x.parse().expect("x"), y.parse().expect("y"))
+            })
+            .collect();
+        assert_eq!(
+            drawn, expected,
+            "the squares drawn are not the code's dark modules"
+        );
+    }
+
+    /// The console QR is the same code, drawn for a dark terminal: two module rows per line, dark
+    /// modules left unlit so they read as dark on a dark background, light ones lit.
+    ///
+    /// The only check before was that it fits in 80 columns, which an empty string does too
+    /// (`O109`). Reading the half-blocks back into modules checks the inversion the renderer is
+    /// configured for, since a QR drawn the other way round is the unscannable one.
+    #[test]
+    fn the_console_qr_is_the_same_code_drawn_for_a_dark_terminal() {
+        let url = pair_url("192.168.1.42", 8443, "EG629F4DQDDHS44V", None);
+        let qr = qr_code(&url).expect("a pairing URL encodes");
+        let (width, expected) = dark_modules(&url);
+        let side = width + 8;
+
+        let lines: Vec<Vec<char>> = qr.lines().map(|l| l.chars().collect()).collect();
+        assert_eq!(lines.len(), side.div_ceil(2), "two module rows per line");
+        let mut unlit = std::collections::BTreeSet::new();
+        for (row, line) in lines.iter().enumerate() {
+            assert_eq!(line.len(), side, "line {row} is not one column per module");
+            for (x, glyph) in line.iter().enumerate() {
+                let (top_lit, bottom_lit) = match glyph {
+                    '█' => (true, true),
+                    '▀' => (true, false),
+                    '▄' => (false, true),
+                    ' ' => (false, false),
+                    other => panic!("not a half-block: {other:?}"),
+                };
+                for (y, lit) in [(row * 2, top_lit), (row * 2 + 1, bottom_lit)] {
+                    if y < side && !lit {
+                        unlit.insert((x, y));
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            unlit, expected,
+            "the unlit modules are not the code's dark ones"
+        );
+    }
+
+    /// A minted token lives fifteen minutes from now.
+    ///
+    /// Read against the system clock directly, not `now_secs`, so that a `now_secs` returning a
+    /// constant cannot agree with itself — which is how `now + TTL` turned into a product, a
+    /// token that never expires, passed with the suite green (`O109`).
+    #[test]
+    fn a_minted_token_expires_fifteen_minutes_from_now() {
+        let (path, _dir) = tmp("ttl");
+        let clock = || {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("after 1970")
+                .as_secs()
+        };
+        let before = clock();
+        mint(&path, Scope::Dashboard).unwrap();
+        let after = clock();
+        let pending: Pending =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            (before + 15 * 60..=after + 15 * 60).contains(&pending.expires_at),
+            "minted between {before} and {after}, expiring at {}",
+            pending.expires_at
+        );
+    }
+
+    /// Clearing leaves no token that still pairs. `uninstall` is the caller, and nothing ran it
+    /// against a pending token, so a `clear` that did nothing passed (`O109`).
+    #[test]
+    fn clearing_discards_the_pending_token() {
+        let (path, _dir) = tmp("clear");
+        let t = mint(&path, Scope::Dashboard).unwrap();
+        clear(&path);
+        assert!(!path.exists(), "the pending token is still on disk");
+        assert!(redeem(&path, &t).is_none(), "a cleared token still pairs");
+        clear(&path); // and clearing when there is nothing to clear is not an error
+    }
+
+    /// An advertised host prints as itself. `install` writes it straight into the address it
+    /// shows the parent (`https://{primary}:{port}`), and a `Display` writing nothing passed
+    /// (`O109`), which would have printed `https://:8443`.
+    #[test]
+    fn an_advertised_host_prints_as_itself() {
+        assert_eq!(
+            format!("https://{}:8443", AdvertisedHost("host.local")),
+            "https://host.local:8443"
+        );
+    }
+
     #[test]
     fn mint_then_redeem_once() {
         let (path, _dir) = tmp("once");

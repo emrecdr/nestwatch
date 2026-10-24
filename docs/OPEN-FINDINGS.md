@@ -2027,7 +2027,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 382 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 365 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2123,4 +2123,14 @@ signed-in-devices card was never checked against the expiry it is derived from; 
 cap was tested only from the refused side; and nothing tested the sliding refresh at all, so its
 comparison could be inverted or its five days made zero. The two left are `<` turned into `<=` in
 `LoginLimiter::check` and `prune`, which differ only when the clock reads the lockout's end to the
-nanosecond. The baseline holds 382 lines after this; `pairing.rs` and `cert.rs` are next.
+nanosecond. The baseline holds 382 lines after this.
+
+**`pairing.rs`, 2026-10-24: 17 survivors, all gone.** cargo-mutants on the functions involved: 27
+caught, none missed. Eleven were the dashboard QR's drawing — the quiet zone, each square's position
+and which modules count as dark — which only "is there a QR" ever checked, so a picture that looks
+like a QR and scans for nobody passed; it is now read back and compared with the `qrcode` library's
+own matrix. The console QR is read back the same way, which also pins the inversion that makes it
+scan on a dark terminal. The rest: a minted token's fifteen-minute life (`now + TTL` as a product,
+or a clock stuck at one, made a token that never expires), `clear` doing nothing on `uninstall`,
+and the advertised host's `Display`, which `install` prints into the parent's address. The baseline
+holds 365 lines after this; `cert.rs` is next.
