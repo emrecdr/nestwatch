@@ -18,8 +18,9 @@
 # showed that mutant had been "caught" by a flaky test, as were four others, and it is back. Both
 # flaky tests are fixed. That made it each name's highest count across those two runs, 397, which
 # the next full run (2026-10-23, da665c1) matched line for line. 15 of the 17 lines in `auth.rs`
-# were killed on 2026-10-24, and all 17 in `pairing.rs` and all 18 in `cert.rs` the same day,
-# leaving 347. Adding a line is a decision, not a formality.
+# were killed on 2026-10-24, and all 17 in `pairing.rs`, all 18 in `cert.rs`, all 8 in `curfew.rs`
+# and 9 of the 14 in `clock.rs` the same day, leaving 330. Adding a line is a decision, not a
+# formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -29,20 +30,11 @@ src/audit.rs: replace AuditLog::views_on -> u32 with 0
 src/audit.rs: replace AuditLog::views_on -> u32 with 1
 src/auth.rs: replace < with <= in LoginLimiter::check
 src/auth.rs: replace < with <= in prune
-src/clock.rs: replace != with == in log_tamper
-src/clock.rs: replace / with % in current_offset_mins
-src/clock.rs: replace / with * in current_offset_mins
 src/clock.rs: replace == with != in current_zone_identity
 src/clock.rs: replace == with != in current_zone_identity
-src/clock.rs: replace > with >= in restore
-src/clock.rs: replace current_offset_mins -> i32 with 0
 src/clock.rs: replace current_zone_identity -> Option<String> with None
 src/clock.rs: replace current_zone_identity -> Option<String> with Some("xyzzy".into())
-src/clock.rs: replace current_zone_identity -> Option<String> with Some("xyzzy".into())
 src/clock.rs: replace current_zone_identity -> Option<String> with Some(String::new())
-src/clock.rs: replace current_zone_identity -> Option<String> with Some(String::new())
-src/clock.rs: replace log_tamper with ()
-src/clock.rs: replace set_anchor_zone with ()
 src/config.rs: replace + with * in <impl Serialize for EarnedDay>::serialize
 src/config.rs: replace + with * in <impl Serialize for EarnedDay>::serialize
 src/config.rs: replace > with == in Policy::validate
@@ -64,14 +56,6 @@ src/control/mod.rs: replace > with == in encode_shot
 src/control/mod.rs: replace > with >= in encode_shot
 src/control/mod.rs: replace > with >= in encode_shot
 src/control/mod.rs: replace || with && in encode_shot
-src/curfew.rs: delete ! in run_enforcer
-src/curfew.rs: replace + with - in Enforcer::decide
-src/curfew.rs: replace == with != in Enforcer::tick
-src/curfew.rs: replace > with >= in Curfew::undo_extension
-src/curfew.rs: replace > with >= in Curfew::validate
-src/curfew.rs: replace default_warn_secs -> u32 with 1
-src/curfew.rs: replace || with && in Days::any
-src/curfew.rs: replace || with && in run_enforcer
 src/doctor.rs: delete ! in all_public
 src/doctor.rs: delete ! in network_profiles
 src/doctor.rs: delete ! in platform_checks

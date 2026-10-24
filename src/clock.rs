@@ -802,6 +802,61 @@ mod tests {
         assert_eq!(HIGH_WATER_MINS.load(Ordering::Relaxed), SUMMER);
     }
 
+    /// Fourteen hours is a real offset (Kiribati's), so a mark there is a reading, not a corrupt
+    /// file. The refusal was tested at fifteen and never at the limit itself, so `>` as `>=`
+    /// refused the one zone at the edge (`O109`).
+    #[test]
+    fn a_mark_at_the_furthest_real_offset_is_restored() {
+        let _g = guard();
+        set_anchor(WINTER);
+        restore(Mark {
+            anchor_mins: WINTER,
+            high_water_mins: 14 * 60,
+        });
+        assert_eq!(HIGH_WATER_MINS.load(Ordering::Relaxed), 14 * 60);
+    }
+
+    /// The recorded zone is what `now()` compares the machine's against. Off Windows nothing can be
+    /// compared (see `current_zone_identity`), so storing it is the whole observable; a setter that
+    /// stored nothing passed (`O109`), and on Windows it would have switched the check off.
+    #[test]
+    fn the_recorded_zone_is_kept() {
+        let _g = guard();
+        set_anchor_zone(Some("W. Europe Standard Time".into()));
+        assert_eq!(
+            ANCHOR_ZONE
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_deref(),
+            Some("W. Europe Standard Time")
+        );
+    }
+
+    /// Off Windows there is no zone identity to read, so it says so rather than inventing one: an
+    /// invented one would never match a recorded zone and would put every dev run on the tamper
+    /// fallback (`O109`).
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_there_is_no_zone_identity() {
+        assert_eq!(current_zone_identity(), None);
+    }
+
+    /// A moved clock is reported once per distinct reading, not once per check. The report is a log
+    /// line and nothing read it (`O109`), so a `log_tamper` that said nothing, or said it only when
+    /// the reading had *not* changed, passed.
+    #[test]
+    fn a_moved_clock_is_reported_once_per_distinct_reading() {
+        let _g = guard();
+        let log = crate::testutil::LogCapture::start();
+        let reports = || log.text().matches("ignoring the change").count();
+        // Offsets no other test produces, so the last one reported is not already one of these.
+        log_tamper(-7 * 60 - 1, WINTER);
+        log_tamper(-7 * 60 - 1, WINTER);
+        assert_eq!(reports(), 1, "the same reading twice is one change");
+        log_tamper(-7 * 60 - 2, WINTER);
+        assert_eq!(reports(), 2, "a different reading is another");
+    }
+
     /// Without an anchor there is nothing to persist, and nothing a file says is applied.
     #[test]
     fn an_unanchored_install_has_no_mark_and_restores_none() {

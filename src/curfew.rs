@@ -1445,6 +1445,87 @@ mod tests {
         assert!(bad.validate().is_err());
     }
 
+    /// A curfew whose config does not name a warning gives the child a minute, and so does a rules
+    /// config: they share the default. The two existing checks compare `Default` with the serde
+    /// default, which agree whatever the number is, so a default of one second passed (`O109`).
+    #[test]
+    fn an_unset_warning_gives_the_child_a_minute() {
+        let curfew: Curfew =
+            serde_json::from_str(r#"{"enabled":true,"start":"21:00","end":"07:00"}"#).unwrap();
+        assert_eq!(curfew.warn_secs, 60);
+        assert_eq!(Curfew::default().warn_secs, 60);
+        let rules: crate::rules::Rules = serde_json::from_str("{}").unwrap();
+        assert_eq!(rules.warn_secs, 60);
+    }
+
+    /// A curfew set for one day only applies on that day — every day, each tried alone. The
+    /// selector's "any day chosen?" was tested with several days at once, where one `||` turned
+    /// into `&&` is hidden by the others, so a Sunday-only bedtime could apply all week (`O109`).
+    #[test]
+    fn a_single_day_selects_that_day_and_no_other() {
+        let all = [
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+            Weekday::Sat,
+            Weekday::Sun,
+        ];
+        for day in all {
+            let only = Days {
+                mon: day == Weekday::Mon,
+                tue: day == Weekday::Tue,
+                wed: day == Weekday::Wed,
+                thu: day == Weekday::Thu,
+                fri: day == Weekday::Fri,
+                sat: day == Weekday::Sat,
+                sun: day == Weekday::Sun,
+            };
+            assert!(only.includes(day), "{day} alone does not select {day}");
+            assert!(
+                !only.includes(day.succ()),
+                "{day} alone also selects {}",
+                day.succ()
+            );
+        }
+    }
+
+    /// An extension that ends this instant is spent, and undoing it answers that nothing is
+    /// running rather than shortening it to now. Only extensions well inside or past the floor were
+    /// tried, so `t > now` as `>=` passed (`O109`).
+    #[test]
+    fn an_extension_ending_now_is_already_spent() {
+        let now = DateTime::parse_from_rfc3339("2026-10-24T21:30:00+02:00").unwrap();
+        let mut c = Curfew {
+            enabled: true,
+            extra_until: Some(now),
+            ..Curfew::default()
+        };
+        assert_eq!(c.undo_extension(now), None);
+        assert_eq!(
+            c.extra_until,
+            Some(now),
+            "and a spent extension is left as it was"
+        );
+    }
+
+    /// The longest warning allowed is allowed. Only the refused side was tested, so the bound as
+    /// `>=` refused the ten minutes the dashboard offers as its maximum (`O109`).
+    #[test]
+    fn the_longest_warning_is_accepted() {
+        let at = |warn_secs| Curfew {
+            enabled: true,
+            warn_secs,
+            ..Curfew::default()
+        };
+        assert!(
+            at(600).validate().is_ok(),
+            "ten minutes is the limit, not past it"
+        );
+        assert!(at(601).validate().is_err());
+    }
+
     // ---- Enforcer state machine ----
 
     const WARN: Duration = Duration::from_secs(60);
@@ -1527,6 +1608,42 @@ mod tests {
         let (action, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
         assert_eq!(action, Action::None, "not bedtime yet");
         assert_eq!(warning, Some(15), "and the child gets the heads-up");
+    }
+
+    /// After an abort the countdown re-arms even when the reading taken on the abort tick would
+    /// make the next one a crossing. The test above reads 15 twice, which is no crossing whether
+    /// the countdown re-armed or not, so dropping the re-arm passed (`O109`).
+    #[test]
+    fn an_abort_re_arms_even_when_the_next_reading_would_cross() {
+        let mut e = Enforcer::new();
+        let base = Instant::now();
+        e.tick(true, Upcoming::Nothing, base, WARN, SLACK);
+        let (action, _) = e.tick(false, Upcoming::In(Some(16)), base, WARN, SLACK);
+        assert_eq!(action, Action::Abort);
+        let (_, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(
+            warning, None,
+            "a reading taken while the window was closing must not count towards the next bedtime"
+        );
+    }
+
+    /// A re-issued shutdown gets its own warning time before it is re-issued again. The re-issue
+    /// test above ticks a minute and a half apart, past both deadlines, so a re-issue whose new
+    /// deadline lay in the past passed (`O109`) — and would have run `shutdown.exe` on every tick.
+    #[test]
+    fn a_re_issued_shutdown_is_not_re_issued_on_the_next_tick() {
+        let base = Instant::now();
+        let mut e = Enforcer::new();
+        assert_eq!(act(&mut e, true, base, WARN, SLACK), Action::Shutdown);
+        assert_eq!(
+            act(&mut e, true, base + Duration::from_secs(90), WARN, SLACK),
+            Action::ShutdownNow
+        );
+        assert_eq!(
+            act(&mut e, true, base + Duration::from_secs(120), WARN, SLACK),
+            Action::None,
+            "thirty seconds after a re-issue is inside its own warning time"
+        );
     }
 
     /// `Nothing` and `In(None)` are not the same, and collapsing them would misfire.

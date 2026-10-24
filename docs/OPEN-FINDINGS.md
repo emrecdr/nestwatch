@@ -1049,10 +1049,16 @@ order, bounded at 64, and — since the app-stopped work — every `notify_user`
 bounded at 128, with `notification_bodies()` for the common assertion. This entry used to end by
 naming that gap: *"the warnings — the half of the sequence that carries the ordering risk — cannot
 be asserted on at all until it records too."* They can now, and
-`tests/enforcer_app_stopped.rs` is the first test to do it. **What remains** is the same sequence
-for the curfew loop — the 15/5/1 before bedtime through `Countdown::observe_upcoming`, the
-shutdown, an extension calling it off — and a midnight rollover driven through either loop, which
-needs the loop's `today` to be injectable rather than read from `config::today()`.
+`tests/enforcer_app_stopped.rs` is the first test to do it.
+
+**The curfew loop's countdown is driven too, since 2026-10-24.** `tests/curfew_countdown.rs` moves
+bedtime closer by rewriting the window and waking the loop, hears the fifteen- and five-minute
+warnings once each, and checks that switching curfew off and back on near bedtime re-primes rather
+than announcing a threshold that passed while it was off. **What remains** is the rest of that
+sequence — the shutdown at bedtime and an extension calling it off, in one run — and a midnight
+rollover. The rules loop can now be started on the far side of midnight by seeding a tally dated
+yesterday (`tests/enforcer_paused.rs`); the curfew loop keeps no day of its own to seed, so a
+rollover there still needs its clock injectable rather than read from `clock::now()`.
 
 **helper.rs is untouched by any of the above** and stands at 0%: capture, lock and watch are
 Windows shell-outs that no host test reaches. That row of the original measurement is unchanged,
@@ -2027,7 +2033,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 347 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 330 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2143,5 +2149,17 @@ silent; and the machine name came from environment variables no test set, which
 `tests/cert_hosts.rs` now does in a binary of its own. The loopback filter on the LAN address could
 not be reached through a machine that is online, so it moved into `reachable_address`, which is
 tested directly. The log is read through `testutil::LogCapture`, which `request_span.rs`'s tests now
-share. The baseline holds 347 lines after this. Next in the order of work are `install.rs`,
-`doctor.rs` and `lib.rs`, much of which only means anything on Windows.
+share. The baseline holds 347 lines after this.
+
+**`clock.rs` and `curfew.rs`, 2026-10-24: 22 survivors, 17 gone.** cargo-mutants on the functions
+involved: 49 caught, 13 unviable, 5 missed, and the 5 are the `#[cfg(windows)]` zone reading, which
+a Linux build never compiles. In `curfew.rs` a default warning of one second, a Sunday-only bedtime
+applying all week, an extension ending this instant treated as running, the dashboard's own
+ten-minute maximum refused, a countdown not re-armed after a window closed, and a re-issued shutdown
+re-issued on every tick all passed, because each was tested only away from its edge; and the loop's
+choice of what to count down to was driven by nothing, which `tests/curfew_countdown.rs` now does.
+In `clock.rs`: a mark at the furthest real offset (fourteen hours), the recorded zone, the
+non-Windows "no identity", the once-per-reading tamper warning, and the anchor offset's unit, which
+is zero on a UTC machine whatever the arithmetic and is now read under India's half-hour offset in
+`tests/clock_offset.rs`. The baseline holds 330 lines after this. Next in the order of work are
+`install.rs`, `doctor.rs` and `lib.rs`, much of which only means anything on Windows.
