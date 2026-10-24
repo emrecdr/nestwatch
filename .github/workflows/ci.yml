@@ -270,9 +270,30 @@ jobs:
       # every mutant is reported unviable — a red job that says nothing about the tests.
       - if: steps.diff.outputs.has_rust == 'true'
         uses: ./.github/actions/frontend-css
+      # A deadline of its own, inside the job's. A job stopped by its `timeout-minutes` is recorded
+      # as CANCELLED, grey beside the green ones and read as "somebody stopped it", which is how a
+      # push with more mutants than fit (about 23 at 66.5 s each, measured) used to end. Stopping
+      # cargo-mutants here instead leaves the job time to fail red and say how far it got. 26
+      # minutes leaves the job's 30 room for the setup above (about 45 s, measured), cargo-mutants
+      # stopping after the signal (`--kill-after` bounds it) and the upload below. Whatever is not
+      # reached is tested by `mutants-weekly.yml`.
       - name: Test the mutants the diff introduces
         if: steps.diff.outputs.has_rust == 'true'
-        run: cargo mutants --no-shuffle -vV --in-place --in-diff git.diff
+        run: |
+          set +e
+          timeout --signal=INT --kill-after=60 26m \
+            cargo mutants --no-shuffle -vV --in-place --in-diff git.diff
+          status=$?
+          set -e
+          if [ "$status" -eq 124 ]; then
+            # `total_mutants` counts the outcomes so far, not the plan; `mutants.json` is the plan.
+            tested=$(jq '.caught + .missed + .timeout + .unviable' mutants.out/outcomes.json \
+              2>/dev/null || echo "?")
+            total=$(jq 'length' mutants.out/mutants.json 2>/dev/null || echo "?")
+            msg="out of time after $tested of $total mutants; the weekly run tests the rest"
+            echo "::error::$msg"
+          fi
+          exit "$status"
       - if: always()
         uses: actions/upload-artifact@v7
         with:

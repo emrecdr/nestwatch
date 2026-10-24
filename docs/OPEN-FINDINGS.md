@@ -1942,52 +1942,27 @@ than do it: every capture map is a field serde must consider on each load, they 
 to be told none of them are settings. Worth doing when a nested field is actually added, and
 probably not before.
 
-### O103 · The in-diff mutants job still dies grey on a large push
+### O103 · A weekly shard that loses its runner is not run again
 
-`ci.yml`'s `mutants` job tests the mutants a push introduces inside `timeout-minutes: 30`. Measured
-on the runners: **66.5 s median per viable mutant** (2026-09-09, from a cancelled job's own
-`mutants.out`), so after the baseline and setup roughly 1,550 s remain — about **23 viable
-mutants** per run. Any single push that generates more times out, and a job killed by
-`timeout-minutes` is recorded as **cancelled**: grey beside five green jobs, the word a reader
-supplies for it being *somebody stopped it*. Observed twice on backlog pushes (2026-09-09, 21
-commits, 77 mutants; 2026-09-11, the fourteen-commit push that carried `v0.9.0`).
+`mutants-weekly.yml` tests the crate in 32 shards, and twice in its first four runs a shard lost its
+runner partway: shard 25 on 2026-10-05, cancelled after 31 minutes with no reason given and nothing
+uploaded, and shard 15 on 2026-10-22, cancelled with "The runner has received a shutdown signal"
+after 59 of its 71 mutants. Their mutants go untested that week. Re-running the one job recovers the
+shard; nothing in the workflow does it unasked.
 
-**What is no longer open — 2026-10-03.** The backlog half is answered by
-`.github/workflows/mutants-weekly.yml`: the whole crate (2,293 mutants at that date) in 32 shards
-every Monday, each shard a FAILURE on a survivor rather than a cancellation, each uploading its
-`mutants.out`. Whatever the in-diff job cannot finish is covered within a week. Filed because a
-manual run of the same backlog on 2026-09-29 found 19 survivors, 17 of them real test gaps and two
-of them bugs (`ad21b41`, `bcb4a7f`) — the kind of yield that should not depend on somebody running
-it by hand.
+**What is no longer open is the silence.** The `whole-run` job fails the run when a shard's
+`outcomes.json` does not account for all its mutants, so a lost shard is a red Monday naming the
+shard rather than a week that looked tested. `ci.yml`'s in-diff job had the grey version of the
+same failure on any push with more mutants than its 30 minutes hold (about 23, at 66.5 s each,
+measured 2026-09-09), because a job stopped by its own `timeout-minutes` is recorded as cancelled.
+Since 2026-10-23 it stops `cargo mutants` at a deadline of its own and fails red, saying how many of
+the diff's mutants it reached.
 
-**What remains.** The in-diff job's own outcome on a large push is still grey, and grey is the
-problem: a check that cannot fail, reported as though it had run. Two options, both cheap, neither
-taken yet because `ci.yml` belongs to whoever is holding it:
-
-- Make a timeout **fail** rather than cancel (a `timeout` around the cargo-mutants step, or
-  `continue-on-error: false` with an explicit step deadline), so a red run says what happened.
-- Or shard the in-diff job as well (`--shard`), so a fixed slice per push finishes in budget and the
-  rest is left to the weekly run — which now exists to catch it.
-
-Before the weekly run existed, a cancelled job had already emitted two surviving mutants as
-check-run warnings (both in `control::child_notice_title`, fixed the same day), which is why the
-sharded shape was preferred over a shorter diff: partial coverage that accumulates is worth more
-than complete coverage of a smaller diff. What it must not do is stay grey.
-
-**The weekly run went grey on its first outing too — 2026-10-05, fixed 2026-10-06.** The paragraph
-above said each shard would be a failure rather than a cancellation. Four of the 32 were cancelled,
-killed at the 110-minute limit, and they were the four full of mutants in Windows-only code:
-`doctor.rs`, `install.rs` twice and `session.rs`. cargo-mutants does not evaluate `cfg`, so on a
-Linux runner those mutants are never compiled, every one "survives", and each survivor costs a whole
-test-suite run. A fifth, shard 25, was cancelled after 31 minutes with no reason given and uploaded
-nothing. The six Windows-only modules are now excluded in `.cargo/mutants.toml` (152 mutants, kept
-in step with the code by `tests/mutants_config.rs`), the limit is 240 minutes, and the run fails
-only on a survivor not already in `.cargo/mutants-baseline.txt` (`O109`). Shard 25's loss looked
-like the runner going away rather than anything in the job, and nothing here would prevent a repeat.
-**It repeated on 2026-10-22:** shard 15 was cancelled mid-run with "The runner has received a
-shutdown signal", and its mutants went untested. Re-running that one job recovers the shard; nothing
-in the workflow does it unasked. A lost shard does at least read as a failure now: the `whole-run`
-job fails the run when any shard's results do not account for all its mutants.
+**What would close it** is a retry that only a lost runner sets off: a small workflow on
+`workflow_run: completed` that re-runs the run's cancelled jobs once, and leaves a shard that
+*failed* — a survivor — alone. Unbuilt and unverified, including whether a lost runner always
+reports `cancelled`. The alternative is the current state: the next Monday tests the same mutants,
+and the red run already asks for the click.
 
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 

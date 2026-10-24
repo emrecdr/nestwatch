@@ -25,6 +25,15 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   day paused from start to end still shows as not measured in the report, and leaves a short row in
   the history only if something was refused that day.
 
+### Internal
+
+- **The per-push mutation check fails instead of going grey when a push brings more than it can
+  test.** It has 30 minutes, which holds about 23 mutants, and a job stopped by its own time limit
+  is recorded as *cancelled*: grey beside the green checks, and read as somebody having stopped it.
+  `cargo mutants` now runs under a deadline of its own inside that half hour, so a push too large to
+  finish ends red with a line saying how many of its mutants were reached. The weekly run still
+  tests the rest.
+
 ## [0.11.1] — 2026-10-23
 
 ### Security

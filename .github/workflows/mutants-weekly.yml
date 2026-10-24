@@ -5,9 +5,9 @@ name: mutants-weekly
 # `ci.yml`'s `mutants` job tests the mutants a push introduces, inside a 30-minute budget. That is
 # the right scope for a push of one commit and the wrong one for anything larger: measured at
 # 66.5 s per viable mutant on these runners, the budget holds about 23 of them, so a feature of any
-# size times out and the newest code is the least checked (`docs/OPEN-FINDINGS.md`, `O103`). A
-# manual run of the backlog on 2026-09-29 found 19 survivors — 17 were real test gaps and two were
-# bugs. This makes that run routine.
+# size runs out of time and the newest code is the least checked. A manual run of the backlog on
+# 2026-09-29 found 19 survivors — 17 were real test gaps and two were bugs. This makes that run
+# routine.
 #
 # Its own workflow rather than a job in `ci.yml`, because `ci.yml` cancels an in-progress run on the
 # same ref when a new push arrives (`concurrency.cancel-in-progress`). A Monday-morning push would
@@ -19,8 +19,9 @@ name: mutants-weekly
 # shard's time is set by its survivors, not its size: a caught mutant fails in seconds, a survivor
 # runs the whole suite (about two minutes here) and a hang runs to the timeout. The first run, on
 # 2026-10-05, had four shards killed at the old 110-minute limit — all of them full of Windows-only
-# survivors — so they were cancelled, the grey outcome `O103` warns about. The limit below has room
-# for a survivor-heavy shard even so. The repository is public, so the runner minutes are free.
+# survivors — so they were cancelled, the grey outcome a job's own time limit gives. The limit below
+# has room for a survivor-heavy shard even so. The repository is public, so the runner minutes are
+# free.
 #
 # A shard FAILS on a survivor that is not in `.cargo/mutants-baseline.txt`, never on one that is:
 # the known ones are listed there as debt, so a red Monday means something new got through rather
@@ -127,11 +128,14 @@ jobs:
         with:
           pattern: mutants-weekly-*
           path: shards
-      # Three verdicts. A shard whose `outcomes.json` does not account for all its mutants lost its
-      # runner or ran out of time (`O103`), and fails the run, which used to go grey. A survivor the
-      # baseline does not hold fails it, counted over all 32. A baseline line that nothing survived
-      # only warns: killing a mutant means deleting its line, but a timeout can come and go from
-      # one week to the next, and is not worth a red run. The 32 is the matrix above.
+      # Three verdicts. A shard whose `outcomes.json` has no `end_time`, which cargo-mutants writes
+      # only when a run finishes, lost its runner or ran out of time (`O103`), and fails the run,
+      # which used to go grey. (The sum beside it cannot catch that alone: `total_mutants` counts
+      # the outcomes so far, so it matches them in an interrupted run too — seen 2026-10-23.) A
+      # survivor the baseline does not hold fails it, counted over all 32. A baseline line that
+      # nothing survived only warns: killing a mutant means deleting its line, but a timeout can
+      # come and go from one week to the next, and is not worth a red run. The 32 is the matrix
+      # above.
       - name: The whole run against the baseline
         run: |
           set -euo pipefail
