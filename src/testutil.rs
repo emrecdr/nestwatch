@@ -4,7 +4,8 @@
 //! `#[cfg(test)]` module in the crate and from nothing else. [`ScratchDir`], used by nine modules,
 //! [`assert_all_lists_every_variant`], shared by `Language::ALL` in `config.rs` and
 //! `ShotTier::ALL` in `control/mod.rs`, and [`retry_while_busy`], for the tests in `control` that
-//! write a script and then run it.
+//! write a script and then run it. [`LogCapture`] is for the tests whose only observable is a
+//! log line, in `request_span.rs` and `cert.rs`.
 //!
 //! **`ScratchDir` is a deliberate twin of the one in `tests/common/mod.rs`, not an oversight.** The
 //! two cannot be one: `tests/common/mod.rs` is compiled into each integration-test binary, and
@@ -187,6 +188,57 @@ pub(crate) fn retry_while_busy<T, E: std::fmt::Display>(
 
 /// How many busy answers [`retry_while_busy`] waits out before handing the last one back.
 const BUSY_RETRIES: usize = 50;
+
+/// What `tracing` wrote on this thread while the capture was held, as plain text.
+///
+/// For a test whose only observable is a log line: a warning that is the whole of a function's
+/// effect cannot be asserted any other way. The subscriber is this thread's default for as long as
+/// the value lives, so a `#[tokio::test]` (one thread by default) sees everything its code logs,
+/// and tests on other threads see nothing of it.
+pub(crate) struct LogCapture {
+    sink: LogSink,
+    _guard: tracing::subscriber::DefaultGuard,
+}
+
+#[derive(Clone, Default)]
+struct LogSink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogSink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogCapture {
+    /// Capture everything at `DEBUG` and above, without colour codes.
+    pub(crate) fn start() -> Self {
+        let sink = LogSink::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer({
+                let sink = sink.clone();
+                move || sink.clone()
+            })
+            .finish();
+        Self {
+            sink,
+            _guard: tracing::subscriber::set_default(subscriber),
+        }
+    }
+
+    /// Everything written so far.
+    pub(crate) fn text(&self) -> String {
+        String::from_utf8_lossy(&self.sink.0.lock().unwrap_or_else(|p| p.into_inner())).into_owned()
+    }
+}
 
 #[cfg(test)]
 mod tests {

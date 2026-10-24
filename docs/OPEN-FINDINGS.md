@@ -2027,7 +2027,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 365 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 347 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2133,4 +2133,15 @@ own matrix. The console QR is read back the same way, which also pins the invers
 scan on a dark terminal. The rest: a minted token's fifteen-minute life (`now + TTL` as a product,
 or a clock stuck at one, made a token that never expires), `clear` doing nothing on `uninstall`,
 and the advertised host's `Display`, which `install` prints into the parent's address. The baseline
-holds 365 lines after this; `cert.rs` is next.
+holds 365 lines after this.
+
+**`cert.rs`, 2026-10-24: 18 survivors, all gone.** Nothing ran `ensure_cert`, so a startup that kept
+a certificate whose key was lost (HTTPS then cannot start) passed; nothing read the validity window,
+so a certificate valid from an hour in the future passed; nothing backdated a certificate, so the
+age and days-left `doctor` reports, and the service log's expiry warning, could be constants or
+silent; and the machine name came from environment variables no test set, which
+`tests/cert_hosts.rs` now does in a binary of its own. The loopback filter on the LAN address could
+not be reached through a machine that is online, so it moved into `reachable_address`, which is
+tested directly. The log is read through `testutil::LogCapture`, which `request_span.rs`'s tests now
+share. The baseline holds 347 lines after this. Next in the order of work are `install.rs`,
+`doctor.rs` and `lib.rs`, much of which only means anything on Windows.

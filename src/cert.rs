@@ -224,7 +224,15 @@ pub(crate) fn hostname() -> Option<String> {
 fn primary_lan_ip() -> Option<String> {
     let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("8.8.8.8:80").ok()?;
-    let ip = sock.local_addr().ok()?.ip();
+    reachable_address(sock.local_addr().ok()?.ip())
+}
+
+/// The address the route lookup chose, if another device could use it.
+///
+/// Apart from [`primary_lan_ip`] because that one answers for whatever network it runs on, and an
+/// online machine never hands it a loopback or unspecified address, so the refusal could only be
+/// tested here (`O109`).
+fn reachable_address(ip: std::net::IpAddr) -> Option<String> {
     if ip.is_loopback() || ip.is_unspecified() {
         return None;
     }
@@ -316,6 +324,143 @@ mod tests {
             !renewal_due(RENEW_WARN_DAYS + 1),
             "one day outside it is not"
         );
+    }
+
+    /// A file whose modification time is `days` days and an hour in the past, so whole days are
+    /// unambiguous whatever the second the test runs at.
+    fn backdated(path: &Path, days: u64) {
+        std::fs::write(path, "certificate").unwrap();
+        let then =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400 + 3_600);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
+    }
+
+    /// The server's startup makes a certificate when there is none, and leaves a complete pair
+    /// alone.
+    ///
+    /// Nothing ran it (`O109`), so a startup that never generated anything passed, and so did one
+    /// that kept a certificate whose key was gone. That second case is the one that bites: HTTPS
+    /// cannot start without both files, so the service would fail on every restart.
+    #[test]
+    fn startup_makes_a_missing_pair_and_keeps_a_complete_one() {
+        let dir = crate::testutil::ScratchDir::new("cert-ensure");
+        let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));
+
+        ensure_cert(&cert, &key).unwrap();
+        assert!(cert.exists() && key.exists(), "nothing was generated");
+        let first = read_fingerprint(&cert).unwrap();
+
+        ensure_cert(&cert, &key).unwrap();
+        assert_eq!(
+            read_fingerprint(&cert).unwrap(),
+            first,
+            "a complete pair was replaced, and with it the fingerprint every paired device trusts"
+        );
+
+        std::fs::remove_file(&key).unwrap();
+        ensure_cert(&cert, &key).unwrap();
+        assert!(
+            key.exists(),
+            "a certificate without its key was kept, so HTTPS cannot start"
+        );
+    }
+
+    /// Valid from an hour ago, for exactly 825 days. The 825 is Apple's ceiling and the hour is the
+    /// slack for a phone whose clock runs ahead; nothing read either (`O109`), so a start an hour
+    /// in the future — "not yet valid" on that phone — or an end before the start passed. Both
+    /// numbers are written out rather than read from the constants they check.
+    #[test]
+    fn the_certificate_starts_an_hour_back_and_lasts_825_days() {
+        let before = time::OffsetDateTime::now_utc();
+        let params = params_for(&[]).unwrap();
+        let after = time::OffsetDateTime::now_utc();
+        let hour = time::Duration::hours(1);
+        assert!(
+            params.not_before >= before - hour && params.not_before <= after - hour,
+            "valid from {}, made between {before} and {after}",
+            params.not_before
+        );
+        assert_eq!(
+            params.not_after - params.not_before,
+            time::Duration::days(825)
+        );
+    }
+
+    /// Age and days left come from the certificate file's modification time, which `install`
+    /// refreshes by rewriting it. No test backdated one (`O109`), so `doctor`'s "days left" could
+    /// read a constant, or the age be counted in seconds, with the suite green.
+    #[test]
+    fn a_certificate_100_days_old_has_725_left() {
+        let dir = crate::testutil::ScratchDir::new("cert-age");
+        let cert = dir.join("cert.pem");
+        backdated(&cert, 100);
+        assert_eq!(cert_age_days(&cert).unwrap(), 100);
+        assert_eq!(days_until_expiry(&cert), Some(725));
+        assert_eq!(
+            days_until_expiry(&dir.join("absent.pem")),
+            None,
+            "a missing certificate has no expiry, not a zero one"
+        );
+    }
+
+    /// The service log warns about a certificate near its end and says nothing about a fresh one.
+    /// The warning is the function's whole effect, so it is read from the log; a
+    /// `warn_if_expiring` that did nothing passed before (`O109`).
+    #[test]
+    fn an_old_certificate_is_warned_about_and_a_fresh_one_is_not() {
+        let dir = crate::testutil::ScratchDir::new("cert-warn");
+        let (old, fresh) = (dir.join("old.pem"), dir.join("fresh.pem"));
+        backdated(&old, 810);
+        backdated(&fresh, 0);
+
+        let log = crate::testutil::LogCapture::start();
+        warn_if_expiring(&fresh);
+        assert!(
+            !log.text().contains("TLS certificate"),
+            "a fresh certificate was warned about: {}",
+            log.text()
+        );
+        warn_if_expiring(&old);
+        assert!(
+            log.text().contains("TLS certificate is ~810 days old"),
+            "fifteen days from its end, nothing was said: {}",
+            log.text()
+        );
+    }
+
+    /// Only an address another device could reach is advertised.
+    #[test]
+    fn loopback_and_unspecified_addresses_are_never_advertised() {
+        for unusable in ["127.0.0.1", "0.0.0.0", "::1", "::"] {
+            assert_eq!(
+                reachable_address(unusable.parse().unwrap()),
+                None,
+                "{unusable}"
+            );
+        }
+        assert_eq!(
+            reachable_address("192.168.1.5".parse().unwrap()),
+            Some("192.168.1.5".to_string())
+        );
+    }
+
+    /// Whatever the real lookup finds is a usable address, or nothing at all when offline.
+    #[test]
+    fn the_lan_lookup_answers_with_an_address_or_nothing() {
+        if let Some(ip) = primary_lan_ip() {
+            let parsed: std::net::IpAddr = ip
+                .parse()
+                .unwrap_or_else(|_| panic!("not an address: {ip:?}"));
+            assert!(
+                !parsed.is_loopback() && !parsed.is_unspecified(),
+                "{parsed}"
+            );
+        }
     }
 
     #[test]

@@ -66,24 +66,6 @@ mod tests {
     use axum::{Router, middleware};
     use tower::ServiceExt;
 
-    /// Everything the subscriber wrote, shared with the test that reads it.
-    #[derive(Clone, Default)]
-    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Sink {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn captured(sink: &Sink) -> String {
-        String::from_utf8_lossy(&sink.0.lock().unwrap()).into_owned()
-    }
-
     /// The production shape in miniature: a nested `/api` router under the span layer, exactly
     /// where `server::build_router` puts it, and a handler that warns — the case the span exists
     /// for.
@@ -104,16 +86,7 @@ mod tests {
     /// from the field list: the template, never the name or the query.
     #[tokio::test]
     async fn a_request_is_logged_by_its_route_template_and_never_by_what_it_carried() {
-        let sink = Sink::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer({
-                let sink = sink.clone();
-                move || sink.clone()
-            })
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let log = crate::testutil::LogCapture::start();
 
         let res = app()
             .oneshot(
@@ -130,7 +103,7 @@ mod tests {
             "the span layer must not change the answer"
         );
 
-        let log = captured(&sink);
+        let log = log.text();
         assert!(
             log.contains("route=/api/providers/{name}"),
             "the route template, with the nest prefix, is what the span records: {log}"
@@ -164,16 +137,7 @@ mod tests {
     /// Two requests, two ids — the counter is what makes a line attributable to one request.
     #[tokio::test]
     async fn every_request_gets_its_own_number() {
-        let sink = Sink::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer({
-                let sink = sink.clone();
-                move || sink.clone()
-            })
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let log = crate::testutil::LogCapture::start();
 
         for _ in 0..2 {
             app()
@@ -186,7 +150,8 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let ids: std::collections::BTreeSet<&str> = captured(&sink)
+        let ids: std::collections::BTreeSet<&str> = log
+            .text()
             .lines()
             .filter(|l| l.contains("status="))
             .filter_map(|l| l.split("req=").nth(1))
