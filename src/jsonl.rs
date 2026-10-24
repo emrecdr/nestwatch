@@ -581,4 +581,51 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&backup);
     }
+
+    /// The log rotates one byte past 2 MiB, not at 2 MiB and not before. Rotation was only tried
+    /// far over the cap (`O109`), so a cap of about 1 MiB, or a rotation at exactly 2, passed. The
+    /// size is written out rather than read from `MAX_BYTES`.
+    #[test]
+    fn the_log_rotates_past_two_mebibytes_and_not_at_them() {
+        let dir = crate::testutil::ScratchDir::new("jsonl-cap");
+        let path = dir.join("log.jsonl");
+        let backup = path.with_extension("jsonl.1");
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        rotate_if_over_size(&path);
+        assert!(!backup.exists(), "a log of exactly 2 MiB was rotated");
+        std::fs::write(&path, vec![b'x'; 2 * 1024 * 1024 + 1]).unwrap();
+        rotate_if_over_size(&path);
+        assert!(backup.exists(), "a log one byte past 2 MiB was not rotated");
+    }
+
+    /// The last timestamp is found behind a row several kilobytes long, which a day with forty page
+    /// titles is. The tail window was only read past short rows (`O109`), so one of a kilobyte
+    /// passed — and would have left the rotation marker without the date history was lost before.
+    #[test]
+    fn the_last_timestamp_is_found_behind_a_long_row() {
+        let dir = crate::testutil::ScratchDir::new("jsonl-tail");
+        let path = dir.join("log.jsonl");
+        let row = json!({
+            "ts": "2026-10-24T20:00:00.000Z",
+            "event": "screentime_daily",
+            "pages": { "p".repeat(3_000): 5 },
+        });
+        std::fs::write(&path, format!("{row}\n")).unwrap();
+        assert_eq!(
+            last_timestamp(&path).as_deref(),
+            Some("2026-10-24T20:00:00.000Z")
+        );
+    }
+
+    /// "Could this log hold the needle?" answers no when it cannot. A filter that always said yes
+    /// passed (`O109`), since callers re-check what they parse; it would only have made them parse
+    /// the whole file on every request.
+    #[test]
+    fn a_needle_absent_from_the_log_is_reported_absent() {
+        let dir = crate::testutil::ScratchDir::new("jsonl-needle");
+        let log = JsonlLog::new(dir.join("log.jsonl"));
+        log.record("code_redeemed", json!({ "code": "K7Q2M9" }));
+        assert!(log.any_line_contains("K7Q2M9"));
+        assert!(!log.any_line_contains("ZZZZZZ"));
+    }
 }

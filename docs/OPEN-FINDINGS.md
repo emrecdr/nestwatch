@@ -2033,7 +2033,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 330 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 311 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2161,5 +2161,19 @@ choice of what to count down to was driven by nothing, which `tests/curfew_count
 In `clock.rs`: a mark at the furthest real offset (fourteen hours), the recorded zone, the
 non-Windows "no identity", the once-per-reading tamper warning, and the anchor offset's unit, which
 is zero on a UTC machine whatever the arithmetic and is now read under India's half-hour offset in
-`tests/clock_offset.rs`. The baseline holds 330 lines after this. Next in the order of work are
-`install.rs`, `doctor.rs` and `lib.rs`, much of which only means anything on Windows.
+`tests/clock_offset.rs`. The baseline holds 330 lines after this.
+
+**The storage files, 2026-10-24: 24 survivors, 19 gone.** `config.rs`, `sessionstore.rs`,
+`jsonl.rs`, `idempotency.rs`, `usage.rs` and `audit.rs`; cargo-mutants on the functions involved: 55
+caught, 3 unviable, 5 missed, and the 5 are equivalent. Three are the session store comparing
+`expiry_date > now`, where `>=` differs only for a session expiring at that nanosecond; two are
+`EarnedDay`'s field count, a length hint `serde_json` ignores, and JSON is the only format a config
+is written in. What the gaps were: an imported policy's routine limits checked from neither side; a
+revocation that a restart undid, and a disk write for revoking nothing; the log's 2 MiB cap and its
+rotation at exactly 2 MiB; the 8 KiB window that finds the last timestamp, which a kilobyte would
+not, behind a day with forty page titles; a "could this hold the needle" that always said yes; a
+stored response replaying for under an hour instead of two days; and the view count on the child's
+own page, read through the log by nothing. `UsageLog::recent_including_rotated` had two survivors
+and no caller anywhere, so it was deleted rather than tested. The baseline holds 311 lines after
+this. Next in the order of work are `install.rs`, `doctor.rs` and `lib.rs`, much of which only means
+anything on Windows.

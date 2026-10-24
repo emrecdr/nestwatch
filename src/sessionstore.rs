@@ -398,4 +398,29 @@ mod tests {
         store.save(&rec).await.unwrap();
         assert!(store.load(&rec.id).await.unwrap().is_some());
     }
+
+    /// Revoking a device is durable, and revoking nothing writes nothing. `revoke_all` is what the
+    /// *Signed-in devices* card and a provider's removal go through, and its `removed > 0` decides
+    /// both; neither was tested (`O109`), so a revocation undone by the next restart, or a disk
+    /// write for nothing, passed.
+    #[tokio::test]
+    async fn revoking_is_durable_and_revoking_nothing_writes_nothing() {
+        let (path, _dir) = tmp("revoke");
+        let store = FileSessionStore::new(path.clone());
+        assert_eq!(store.revoke_all(&[Id::default()]), 0);
+        assert!(!path.exists(), "revoking no known session wrote the file");
+
+        let (gone, kept) = (record(Duration::days(30)), record(Duration::days(30)));
+        store.save(&gone).await.unwrap();
+        store.save(&kept).await.unwrap();
+        assert_eq!(store.revoke_all(&[gone.id]), 1);
+        drop(store); // the service restarts
+
+        let reopened = FileSessionStore::new(path.clone());
+        assert!(
+            reopened.load(&gone.id).await.unwrap().is_none(),
+            "the revoked device is signed in again after a restart"
+        );
+        assert!(reopened.load(&kept.id).await.unwrap().is_some());
+    }
 }

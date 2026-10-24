@@ -19,15 +19,13 @@
 # flaky tests are fixed. That made it each name's highest count across those two runs, 397, which
 # the next full run (2026-10-23, da665c1) matched line for line. 15 of the 17 lines in `auth.rs`
 # were killed on 2026-10-24, and all 17 in `pairing.rs`, all 18 in `cert.rs`, all 8 in `curfew.rs`
-# and 9 of the 14 in `clock.rs` the same day, leaving 330. Adding a line is a decision, not a
-# formality.
+# and 9 of the 14 in `clock.rs` the same day, leaving 330; then 19 of 24 in the storage files,
+# leaving 311. Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
 # deleting its line here in the same commit. `docs/OPEN-FINDINGS.md` `O109` has the breakdown.
 src/api.rs: replace > with >= in extend_curfew
-src/audit.rs: replace AuditLog::views_on -> u32 with 0
-src/audit.rs: replace AuditLog::views_on -> u32 with 1
 src/auth.rs: replace < with <= in LoginLimiter::check
 src/auth.rs: replace < with <= in prune
 src/clock.rs: replace == with != in current_zone_identity
@@ -37,11 +35,6 @@ src/clock.rs: replace current_zone_identity -> Option<String> with Some("xyzzy".
 src/clock.rs: replace current_zone_identity -> Option<String> with Some(String::new())
 src/config.rs: replace + with * in <impl Serialize for EarnedDay>::serialize
 src/config.rs: replace + with * in <impl Serialize for EarnedDay>::serialize
-src/config.rs: replace > with == in Policy::validate
-src/config.rs: replace > with == in Policy::validate
-src/config.rs: replace > with >= in Policy::validate
-src/config.rs: replace > with >= in Policy::validate
-src/config.rs: replace || with && in Policy::validate
 src/control/fake.rs: replace * with + in <impl SystemControl for FakeControl>::screenshot
 src/control/fake.rs: replace * with + in <impl SystemControl for FakeControl>::screenshot
 src/control/fake.rs: replace * with / in <impl SystemControl for FakeControl>::screenshot
@@ -118,9 +111,6 @@ src/helper.rs: replace capture_to_file -> Result<()> with Ok(())
 src/helper.rs: replace capture_to_stdout -> Result<()> with Ok(())
 src/helper.rs: replace lock -> Result<()> with Ok(())
 src/helper.rs: replace watch -> Result<()> with Ok(())
-src/idempotency.rs: replace * with +
-src/idempotency.rs: replace * with +
-src/idempotency.rs: replace < with <= in IdempotencyCache::prune
 src/install.rs: delete ! in configure_firewall
 src/install.rs: delete ! in configure_firewall
 src/install.rs: delete ! in install
@@ -264,10 +254,6 @@ src/install.rs: replace | with ^ in deploy
 src/install.rs: replace | with ^ in remove_service
 src/install.rs: replace | with ^ in remove_service
 src/install.rs: replace | with ^ in terminate_and_wait
-src/jsonl.rs: replace * with +
-src/jsonl.rs: replace * with + in last_timestamp
-src/jsonl.rs: replace > with >= in rotate_if_over_size
-src/jsonl.rs: replace JsonlLog::any_line_contains -> bool with true
 src/lib.rs: delete ! in print_pairing
 src/lib.rs: delete match arm Some("--capture") in run_helper
 src/lib.rs: delete match arm Some("--capture-stdout") in run_helper
@@ -340,11 +326,8 @@ src/screentime.rs: replace > with >= in first_seen_in
 src/screentime.rs: replace || with && in ParsedRow::detail
 src/server.rs: replace * with +
 src/server.rs: replace serve -> Result<()> with Ok(())
-src/sessionstore.rs: replace > with < in FileSessionStore::revoke_all
-src/sessionstore.rs: replace > with == in FileSessionStore::revoke_all
 src/sessionstore.rs: replace > with >= in <impl SessionStore for FileSessionStore>::load
 src/sessionstore.rs: replace > with >= in FileSessionStore::persist
-src/sessionstore.rs: replace > with >= in FileSessionStore::revoke_all
 src/sessionstore.rs: replace > with >= in FileSessionStore::snapshot
 src/srcscan.rs: replace + with * in in_a_comment_line
 src/srcscan.rs: replace += with *= in statements
@@ -353,5 +336,3 @@ src/srcscan.rs: replace line_of -> usize with 1
 src/srcscan.rs: replace || with && in statements
 src/timereq.rs: replace < with <= in SubmitLimiter::count_and_check
 src/token.rs: replace % with / in random
-src/usage.rs: replace UsageLog::recent_including_rotated -> Vec<Value> with vec![Default::default()]
-src/usage.rs: replace UsageLog::recent_including_rotated -> Vec<Value> with vec![]

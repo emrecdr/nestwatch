@@ -628,4 +628,28 @@ mod tests {
             "a fresh viewing session must report on its first frame"
         );
     }
+
+    /// The number the child's own page shows — how often the screen was looked at — is read from
+    /// the log through the same reader `GET /status` uses. Only the pure count was tested
+    /// (`O109`), so a `views_on` answering nought passed: a transparency feature reporting that
+    /// nobody ever looked.
+    #[test]
+    fn the_childs_view_count_is_read_from_the_log() {
+        use chrono::Timelike;
+        let dir = crate::testutil::ScratchDir::new("audit-views");
+        let log = AuditLog::new(dir.join("audit.jsonl"));
+        log.record(SCREENSHOT_EVENT, serde_json::json!({}));
+        log.record(SCREENSHOT_EVENT, serde_json::json!({}));
+        log.record(LIVE_VIEW_EVENT, serde_json::json!({ "frames": 12 }));
+        log.record("process_kill", serde_json::json!({ "pid": 4 }));
+
+        // An offset that makes this moment local noon, so the day cannot turn while this runs.
+        let now = chrono::Utc::now();
+        let secs = 12 * 3600 - i32::try_from(now.num_seconds_from_midnight()).unwrap();
+        let offset = chrono::FixedOffset::east_opt(secs).unwrap();
+        assert_eq!(
+            log.views_on(now.with_timezone(&offset).date_naive(), offset),
+            3
+        );
+    }
 }

@@ -3401,4 +3401,33 @@ mod tests {
             "a source already counted today is not a new one"
         );
     }
+
+    /// An imported policy is held to the routine limits on both sides of them: twenty routines and
+    /// a forty-character name are allowed, one more of either is not, and a blank name is refused
+    /// however short. The import path checked none of it (`O109`), so a restore could carry what
+    /// the routine editor refuses. The limits are written out rather than read from the constants.
+    #[test]
+    fn an_imported_policy_is_held_to_the_routine_limits_at_and_past_them() {
+        let named = |name: &str| Routine {
+            name: name.into(),
+            ..Default::default()
+        };
+        let with = |routines: Vec<Routine>| Policy {
+            routines,
+            ..Default::default()
+        };
+        let many = |n: usize| (0..n).map(|i| named(&format!("routine {i}"))).collect();
+
+        assert!(with(many(20)).validate().is_ok(), "twenty routines");
+        assert!(with(many(21)).validate().is_err(), "twenty-one routines");
+        assert!(
+            with(vec![named(&"n".repeat(40))]).validate().is_ok(),
+            "a forty-character name"
+        );
+        assert!(
+            with(vec![named(&"n".repeat(41))]).validate().is_err(),
+            "forty-one characters"
+        );
+        assert!(with(vec![named("   ")]).validate().is_err(), "a blank name");
+    }
 }

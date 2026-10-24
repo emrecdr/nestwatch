@@ -47,9 +47,4 @@ impl UsageLog {
     pub fn recent_matching_including_rotated(&self, event: &str, limit: usize) -> Vec<Value> {
         self.0.recent_matching_including_rotated(event, limit)
     }
-
-    /// The most recent `limit` events, newest first, including the rotated backup.
-    pub fn recent_including_rotated(&self, limit: usize) -> Vec<Value> {
-        self.0.recent_including_rotated(limit)
-    }
 }

@@ -218,4 +218,24 @@ mod tests {
             Replay::Stored(json!("new"))
         );
     }
+
+    /// A stored response replays for two days and not a moment longer, in hours written out. The
+    /// expiry test above steps `RETENTION` plus a second, so it moved with any change to the
+    /// constant, and a window of under an hour passed (`O109`).
+    #[test]
+    fn a_response_replays_for_exactly_two_days() {
+        let hours = |h: u64| Duration::from_secs(h * 3600);
+        let start = Instant::now();
+        let mut cache = IdempotencyCache::default();
+        cache.record("k".into(), ANY, json!({ "ok": true }), start);
+        assert_eq!(
+            cache.replay("k", &ANY, start + hours(47)),
+            Replay::Stored(json!({ "ok": true }))
+        );
+        assert_eq!(
+            cache.replay("k", &ANY, start + hours(48)),
+            Replay::Fresh,
+            "at two days the response is gone"
+        );
+    }
 }
