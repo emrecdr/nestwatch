@@ -16,8 +16,9 @@
 # surviving once in each of five shards had passed against four lines), and two lines nothing
 # survived were deleted. A third deletion was wrong: a rerun of the same source on 2026-10-23
 # showed that mutant had been "caught" by a flaky test, as were four others, and it is back. Both
-# flaky tests are fixed. This list is now each name's highest count across those two runs, 397.
-# Adding a line is a decision, not a formality.
+# flaky tests are fixed. That made it each name's highest count across those two runs, 397, which
+# the next full run (2026-10-23, da665c1) matched line for line. 15 of the 17 lines in `auth.rs`
+# were killed on 2026-10-24, leaving 382. Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -25,23 +26,8 @@
 src/api.rs: replace > with >= in extend_curfew
 src/audit.rs: replace AuditLog::views_on -> u32 with 0
 src/audit.rs: replace AuditLog::views_on -> u32 with 1
-src/auth.rs: replace * with +
-src/auth.rs: replace * with + in describe_session
-src/auth.rs: replace * with + in require_auth
-src/auth.rs: replace * with /
-src/auth.rs: replace * with / in describe_session
-src/auth.rs: replace - with + in PasswordProblem::message
-src/auth.rs: replace - with + in describe_session
-src/auth.rs: replace - with / in PasswordProblem::message
-src/auth.rs: replace - with / in describe_session
 src/auth.rs: replace < with <= in LoginLimiter::check
 src/auth.rs: replace < with <= in prune
-src/auth.rs: replace < with == in prune
-src/auth.rs: replace < with > in prune
-src/auth.rs: replace > with >= in prune
-src/auth.rs: replace >= with < in require_auth
-src/auth.rs: replace match guard Instant::now() < until with true in LoginLimiter::check
-src/auth.rs: replace prune with ()
 src/cert.rs: delete ! in hostname
 src/cert.rs: replace && with || in ensure_cert
 src/cert.rs: replace + with - in params_for

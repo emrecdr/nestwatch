@@ -62,6 +62,27 @@ async fn revoke(app: &axum::Router, cookie: &str, handle: &str) -> (StatusCode, 
     )
 }
 
+/// Rewrite the one stored session through `edit`, the way time would have changed it.
+async fn age_session(
+    sessions: &nestwatch::sessionstore::FileSessionStore,
+    edit: impl FnOnce(&mut tower_sessions::session::Record),
+) {
+    let mut record = only_session(sessions);
+    edit(&mut record);
+    tower_sessions::SessionStore::save(sessions, &record)
+        .await
+        .expect("ageing the session");
+}
+
+/// The one stored session, as the last request left it.
+fn only_session(
+    sessions: &nestwatch::sessionstore::FileSessionStore,
+) -> tower_sessions::session::Record {
+    let mut all = sessions.snapshot();
+    assert_eq!(all.len(), 1, "expected exactly one session");
+    all.remove(0)
+}
+
 /// Everything the *Signed-in devices* card promises, in one test.
 ///
 /// **One `#[tokio::test]` in this binary, and that is a correctness requirement rather than a
@@ -249,6 +270,22 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
         let (status, _) = get_json(&app, &cookie, "/api/sessions").await;
         assert_eq!(status, StatusCode::OK);
 
+        // An hour short of the cap: still works. Only the refused side was tested, so the cap's
+        // `SESSION_MAX_DAYS * 86_400` turned into a sum, about a day, passed (`O109`), and would have
+        // signed every device out the day after it signed in.
+        let almost = tower_sessions::cookie::time::OffsetDateTime::now_utc().unix_timestamp()
+            - (nestwatch::auth::SESSION_MAX_DAYS * 86_400 - 3_600);
+        age_session(&sessions, |r| {
+            r.data.get_mut("device").expect("device record")["first_seen"] = json!(almost);
+        })
+        .await;
+        let (status, _) = get_json(&app, &cookie, "/api/sessions").await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a session inside its absolute age was refused"
+        );
+
         // Age the session past the cap, leaving the *expiry* untouched — an actively used session
         // always has a future expiry, which is the whole point: only the absolute rule can catch it.
         let mut record = sessions.snapshot().into_iter().next().expect("one session");
@@ -275,6 +312,62 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
             sessions.snapshot().is_empty(),
             "and the dead record is dropped, so it stops being re-rejected on every later request \
              and stops appearing in the Signed-in devices card"
+        );
+    }
+
+    // --- The idle window slides with use, a few days at a time. ---------------------------
+    //
+    // `require_auth` re-stamps `seen`, which saves the session and with it a fresh expiry, once the
+    // stamp is five days old: often enough that a device in use never reaches its idle expiry, and
+    // rarely enough that reading the dashboard is not a disk write per request. Nothing tested it,
+    // so the comparison could be inverted, or the five days made zero or one, with the suite green
+    // (`O109`). The days are written out rather than read from a constant the test would agree with.
+    {
+        let state = state_with(test_config());
+        let sessions = state.sessions.clone();
+        let app = app_with(state);
+        let cookie = login(&app, PASSWORD).await.unwrap();
+        let now = tower_sessions::cookie::time::OffsetDateTime::now_utc();
+        let days = tower_sessions::cookie::time::Duration::days;
+
+        // Stamped four days ago, with the expiry that stamp would have set: left alone.
+        let four_ago = (now - days(4)).unix_timestamp();
+        age_session(&sessions, |r| {
+            r.data.insert("seen".into(), json!(four_ago));
+            r.expiry_date = now + days(26);
+        })
+        .await;
+        let (status, _) = get_json(&app, &cookie, "/api/sessions").await;
+        assert_eq!(status, StatusCode::OK);
+        let record = only_session(&sessions);
+        assert_eq!(
+            record.data["seen"],
+            json!(four_ago),
+            "a stamp under five days old was rewritten: a disk write on every request"
+        );
+
+        // Stamped six days ago: re-stamped, and the expiry moves out a full idle window.
+        let six_ago = (now - days(6)).unix_timestamp();
+        age_session(&sessions, |r| {
+            r.data.insert("seen".into(), json!(six_ago));
+            r.expiry_date = now + days(24);
+        })
+        .await;
+        let (status, _) = get_json(&app, &cookie, "/api/sessions").await;
+        assert_eq!(status, StatusCode::OK);
+        let record = only_session(&sessions);
+        assert!(
+            record.data["seen"]
+                .as_i64()
+                .is_some_and(|s| s >= now.unix_timestamp()),
+            "a stamp six days old was not refreshed: {:?}",
+            record.data["seen"]
+        );
+        assert!(
+            record.expiry_date > now + days(29),
+            "using the dashboard did not push the idle expiry out, so a device in daily use is \
+             signed out a month after its last refresh: {}",
+            record.expiry_date
         );
     }
 }

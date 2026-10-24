@@ -2027,7 +2027,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 397 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 382 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2114,3 +2114,13 @@ sibling test's fork can hold the script open for writing long enough for `exec` 
 here; those tests now retry on exactly that error, through a helper with tests of its own. The
 third deletion above was one of the five, a catch by the password test, and its line is back: the
 baseline is each name's highest count across the two runs, 397.
+
+**`auth.rs`, 2026-10-24: 17 survivors, 15 gone.** cargo-mutants on the functions involved: 30
+caught, 2 missed, and the 2 are equivalent. What the gaps were: the password message's "add N more"
+was never read; a lockout was only ever tested while running, so a guard that kept refusing after
+it ended passed, and nothing watched the limiter forget a device; *last seen* on the
+signed-in-devices card was never checked against the expiry it is derived from; the absolute session
+cap was tested only from the refused side; and nothing tested the sliding refresh at all, so its
+comparison could be inverted or its five days made zero. The two left are `<` turned into `<=` in
+`LoginLimiter::check` and `prune`, which differ only when the clock reads the lockout's end to the
+nanosecond. The baseline holds 382 lines after this; `pairing.rs` and `cert.rs` are next.

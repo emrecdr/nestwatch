@@ -1165,6 +1165,19 @@ mod tests {
         );
     }
 
+    /// "Add N more" is the line a parent acts on, so its arithmetic is pinned, the singular too.
+    ///
+    /// The test above checks that the counted number and the minimum appear; nothing read the
+    /// difference, so `MIN_PASSWORD_LEN - got` turned into `+` or `/` passed (`O109`). The expected
+    /// counts are written out against a minimum of eight rather than derived from the constant.
+    #[test]
+    fn the_too_short_message_says_how_many_more_to_add() {
+        let three = PasswordProblem::TooShort { got: 5 }.message();
+        assert!(three.contains("add 3 more characters."), "{three}");
+        let one = PasswordProblem::TooShort { got: 7 }.message();
+        assert!(one.contains("add 1 more character."), "{one}");
+    }
+
     /// NIST SP 800-63B Rev 4 prohibits composition rules, so digits-only is allowed — but the
     /// guesses an attacker actually starts with are not.
     #[test]
@@ -1308,6 +1321,80 @@ mod tests {
 
         // …but the parent's IP is unaffected (this is the DoS the global counter allowed).
         assert!(limiter.check(parent).is_ok(), "parent NOT locked out");
+    }
+
+    /// A lockout ends when its time is up. Every test above locks for a minute and stops there, so a
+    /// guard that kept refusing after the lockout had passed went unnoticed (`O109`): the device
+    /// would have stayed locked until the service restarted. A zero-length lockout is already over
+    /// when it is checked, which makes the expiry observable without a sleep.
+    #[test]
+    fn a_lockout_ends_when_its_time_is_up() {
+        let ip: IpAddr = "192.168.1.10".parse().unwrap();
+        let limiter = LoginLimiter::new(1, Duration::ZERO);
+        assert!(
+            limiter.record_failure(ip),
+            "one failure locks at a threshold of one"
+        );
+        assert!(
+            limiter.check(ip).is_ok(),
+            "a lockout whose time has passed must not go on refusing"
+        );
+    }
+
+    /// The map forgets a device once its lockout is over, and not before.
+    ///
+    /// `prune` is what keeps the map to the devices actively misbehaving; nothing observed it, so it
+    /// could be emptied, or made to keep everything or drop live lockouts, with the suite green
+    /// (`O109`). Dropping a live one is the dangerous direction: a second device's wrong password
+    /// would unlock the first.
+    #[test]
+    fn the_limiter_forgets_an_expired_lockout_and_keeps_a_live_one() {
+        let first: IpAddr = "192.168.1.30".parse().unwrap();
+        let second: IpAddr = "192.168.1.31".parse().unwrap();
+        let key = crate::security::throttle_key(first);
+
+        // Over at once, so the next failure from anyone prunes it.
+        let limiter = LoginLimiter::new(1, Duration::ZERO);
+        limiter.record_failure(first);
+        limiter.record_failure(second);
+        assert!(
+            !limiter.map().contains_key(&key),
+            "an expired lockout is still held, so the map grows with every device that ever failed"
+        );
+
+        // Still running, so it survives the same prune and still refuses.
+        let limiter = LoginLimiter::new(1, Duration::from_secs(60));
+        limiter.record_failure(first);
+        limiter.record_failure(second);
+        assert!(
+            limiter.map().contains_key(&key),
+            "a live lockout was pruned"
+        );
+        assert!(
+            limiter.check(first).is_err(),
+            "another device's wrong password unlocked this one"
+        );
+    }
+
+    /// Last activity is the stored expiry less the idle window. It is derived rather than stored
+    /// (see `describe_session`), and no test read it, so the subtraction could become an addition
+    /// or a division with the suite green (`O109`). Thirty days is written out: a copy of
+    /// `SESSION_IDLE_DAYS` here would agree with any change to the constant instead of checking it.
+    #[test]
+    fn last_seen_is_the_expiry_less_the_idle_window() {
+        let expires = OffsetDateTime::now_utc() + tower_sessions::cookie::time::Duration::days(20);
+        let record = Record {
+            id: Id::default(),
+            data: Default::default(),
+            expiry_date: expires,
+        };
+        let card = describe_session(&record, None);
+        assert_eq!(card["expires"], expires.unix_timestamp());
+        assert_eq!(
+            card["last_seen"],
+            expires.unix_timestamp() - 30 * 86_400,
+            "a session expiring in twenty days was last active ten days ago"
+        );
     }
 
     /// The allowlist is exact, and the third route is scoped to the caller's own name.
