@@ -23,19 +23,18 @@
 //! `tokio::time::pause()` is not usable here: the loop measures elapsed time with
 //! `std::time::Instant`, which tokio's clock does not virtualise, so a paused clock would tick the
 //! loop while charging it zero seconds. It does not need to be paused. `tokio::time::interval`
-//! fires its **first** tick immediately, and the property under test needs no elapsed time —
-//! `usage_state.json` is written on a measuring tick and never reached on a stood-down one, and
-//! `Usage::accrue` sets `day` even when the interval it charges is zero. So each case spawns the
-//! loop, waits for the observable that first tick produces, and aborts.
+//! fires its **first** tick immediately, and the property under test needs no elapsed time — a
+//! measuring tick clears the day's paused mark even when the interval it charges is zero, and a
+//! stood-down tick sets it and measures nothing. So each case spawns the loop, waits for the
+//! observable that first tick produces, and aborts.
 
 use std::path::Path;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
 
 use nestwatch::config::data_paths;
 use nestwatch::control::{FakeControl, SystemControl};
 use nestwatch::foreground::Feed;
-use nestwatch::rules::{Rules, run_rules_enforcer};
+use nestwatch::rules::{Rules, Usage, run_rules_enforcer};
 use nestwatch::screentime::ScreentimeLog;
 use nestwatch::usage::UsageLog;
 
@@ -68,20 +67,19 @@ fn tally_path() -> std::path::PathBuf {
     data_paths().dir.join("usage_state.json")
 }
 
-fn day_in(path: &Path) -> Option<String> {
-    let raw = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    v.get("day")?.as_str().map(str::to_string)
+fn tally_in(path: &Path) -> Option<Usage> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
 /// The whole point of `TickMode`, observed through the loop rather than argued from its source.
 ///
 /// One test rather than two, because `NESTWATCH_DATA_DIR` is process-global and two `#[tokio::test]`
 /// functions in one binary run concurrently by default — they would race over the same override.
-/// Sequencing them here also makes the paused phase carry its own weight: it leaves the data
-/// directory empty, so the measuring phase's "the file now exists" is unambiguous.
+/// Sequencing them here also makes the paused phase carry its own weight: it leaves a tally marked
+/// as not measured, so the measuring phase's "the mark is gone" can only come from a tick that
+/// measured.
 #[tokio::test]
-async fn a_paused_tick_records_nothing_and_an_unconfigured_one_still_measures() {
+async fn a_paused_tick_measures_nothing_and_an_unconfigured_one_still_measures() {
     let tmp = ScratchDir::new("enforcer-loop");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
@@ -94,7 +92,7 @@ async fn a_paused_tick_records_nothing_and_an_unconfigured_one_still_measures() 
     );
     assert!(!tally.exists(), "the scratch data dir must start empty");
 
-    // ---- Paused: the tick must reach the loop and then record nothing at all ----------------
+    // ---- Paused: the tick must reach the loop and then measure nothing ----------------------
     let paused = spawn_enforcer(Rules {
         enabled: false,
         // Configured, so this is unambiguously the pause and not an empty rule set.
@@ -107,32 +105,44 @@ async fn a_paused_tick_records_nothing_and_an_unconfigured_one_still_measures() 
         "the paused loop never stamped a heartbeat — it must keep reporting itself alive, or \
          pausing would make the dashboard show enforcement as dead within two minutes"
     );
-    // The heartbeat is stamped on entry to the tick, and everything a stood-down tick does after
-    // that is in-memory. Nothing on that path can ever write the tally, so there is no race in
-    // the direction this assertion cares about; the margin only guards a wildly descheduled task.
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    // A stood-down tick does write the tally: the day still turns while paused, and what was
+    // refused is kept for the card (`RulesEnforcer::stand_down`). What it must never write is a
+    // measurement. Pause is the control that means "stop watching him", so the record of a paused
+    // day has to be a gap, not a quieter kind of surveillance.
     assert!(
-        !tally.exists(),
-        "a paused tick wrote {}. Pause is the control that means 'stop watching him' — it must \
-         leave a gap in the record, not a quieter kind of surveillance.",
-        tally.display()
+        wait_for(|| tally_in(&tally).is_some()).await,
+        "the paused tick never saved the day it turned onto"
+    );
+    let paused_day = tally_in(&tally).expect("the tally");
+    assert_eq!(
+        paused_day.total_secs, 0,
+        "a paused tick charged screen time"
+    );
+    for (what, empty) in [
+        ("per-app", paused_day.per_app_secs.is_empty()),
+        ("per-group", paused_day.per_group_secs.is_empty()),
+        ("focus", paused_day.foreground_secs.is_empty()),
+        ("page", paused_day.page_secs.is_empty()),
+    ] {
+        assert!(empty, "a paused tick recorded {what} time: {paused_day:?}");
+    }
+    assert!(
+        paused_day.unmeasured,
+        "the paused day is not marked as unmeasured, so its rollover would write a row of zeros \
+         and the report would show a day nobody watched as a day nobody used the PC"
     );
     paused.abort();
 
     // ---- Enabled with nothing configured: the tick must measure ----------------------------
     let measuring = spawn_enforcer(Rules::default()); // a fresh install, exactly as shipped
-    let appeared = wait_for(|| tally.exists()).await;
+    let measured = wait_for(|| tally_in(&tally).is_some_and(|u| !u.unmeasured)).await;
     measuring.abort();
 
     assert!(
-        appeared,
-        "an enabled install with no rules yet wrote no tally at all. This is the defect \
-         `TickMode::Measure` exists to prevent: it is the state every install starts in, the \
-         dashboard calls it \"tracking only\", and `doctor` calls it \"counting screen time\"."
-    );
-    assert!(
-        day_in(&tally).is_some(),
-        "the tally exists but carries no `day`, so nothing was accrued into it — the loop \
-         reached the write without reaching `decide`"
+        measured,
+        "an enabled install with no rules yet never measured the day: the tally still carries the \
+         paused mark, so no tick reached `decide`. This is the defect `TickMode::Measure` exists \
+         to prevent: it is the state every install starts in, the dashboard calls it \"tracking \
+         only\", and `doctor` calls it \"counting screen time\"."
     );
 }

@@ -220,6 +220,9 @@ fn usage_today() {
             time_codes_refused: 4,
             wrong_passwords: 5,
         },
+        // A measured day. The mark never reaches the client; it decides only what the day's
+        // rollover writes.
+        unmeasured: false,
     };
     golden(
         "usage-today",
@@ -253,6 +256,7 @@ fn usage_today() {
         page_secs: BTreeMap::new(),
         // Nothing refused, which is what almost every real day looks like.
         refused: Refused::default(),
+        unmeasured: false,
     };
     golden(
         "usage-today-unmeasured",

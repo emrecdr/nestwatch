@@ -192,9 +192,9 @@ pub fn wrong_password_refused() {
 /// Take everything counted since the last call, leaving the counters at zero.
 ///
 /// `swap` rather than a read-then-clear: two reads cannot both see the same increment, and nothing
-/// counted between the read and the clear is lost. There is exactly one caller in production — the
-/// rules enforcer's tick — and that is the property this makes safe to rely on rather than merely
-/// true today.
+/// counted between the read and the clear is lost. There is exactly one consumer in production — the
+/// rules enforcer's tick, which drains once whichever way it goes, paused or not — and that is the
+/// property this makes safe to rely on rather than merely true today.
 pub fn drain() -> Refused {
     Refused {
         clock_changes: CLOCK_CHANGES.swap(0, Ordering::Relaxed),

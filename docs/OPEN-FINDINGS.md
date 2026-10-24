@@ -909,7 +909,7 @@ the workaround is a footnote and the proper fix is a lexer.
 
 Inserting an item directly above an existing one silently transfers the doc comment: the new item
 adopts the block, and the item that owned it is left undocumented. Neither `cargo test` nor
-`clippy -D warnings` nor the cross-compile has ever failed on it. It has happened **six times** in
+`clippy -D warnings` nor the cross-compile has ever failed on it. It has happened **seven times** in
 this codebase.
 
 All five are fixed. `screentime::totals_across` and two others went in `0eb0bc4`; `api::notify` was
@@ -986,11 +986,17 @@ list at two, and by the October audit it was three: `be1c07e` (2026-09-03) had i
 opened a different function's doc. It was found the way four of the first five were — by a person
 reading — and fixed by moving the block back. The two legitimate entries, `config::data_paths` and
 `install::install`, now carry docs of their own, and
-`doc_claims::every_module_level_pub_fn_has_its_own_doc_comment` asserts the list is empty, so a
-seventh insertion against a module-level `pub fn` fails on the day it lands and names the file and
+`doc_claims::every_module_level_pub_fn_has_its_own_doc_comment` asserts the list is empty, so the
+next insertion against a module-level `pub fn` fails on the day it lands and names the file and
 line. What remains open is everything that guard cannot see: private and `pub(crate)` functions —
 `screentime::totals_across` and `api::notify` among the earlier victims — methods, and the deletion
 form above, which leaves no absence at all.
+
+**The seventh was a method, found 2026-10-23.** `RulesEnforcer::decide` carried no doc, and its two
+opening lines ("Decide this tick's actions. Pure: …") opened `decide_after_snapshot`'s instead,
+above a paragraph about something else — stranded since the root commit `e760aa4`, like `run_cli`.
+Found by a person reading the block while adding a neighbour, and moved back; no guard reaches a
+method.
 
 ### O70 · The enforcer loops are driven down one path each, never across a scripted day
 
@@ -2045,32 +2051,6 @@ recorded rather than defaulted.
 **Trigger.** The first time a routine with a lower limit is scheduled on the PC, or the
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
-
-### O108 · While the rules are paused, nothing refused reaches *Refused today*
-
-**Found 2026-10-05, by reading.** Every refusal is counted into a process-global counter where it
-happens, and the rules enforcer moves those counts onto the day's tally once per tick
-(`enforcer.usage.refused.merge(refusals::drain())` in `run_rules_enforcer`). That line sits below
-the stand-down `continue`, so while a parent has paused the rules — the *free evening* toggle —
-nothing is drained. The counts are not lost: they wait in the counters and land on whatever day the
-enforcer next ticks in, which after a weekend's pause is Monday, shown as *today*.
-
-It mattered less before 2026-10-05. Clock changes, day resets and shutdown cancellations are things
-the enforcement loops find for themselves; with the rules paused there is little to find. Wrong
-passwords and refused time codes arrive from outside on their own schedule, and wrong passwords were
-added to the card on that date — so a paused evening is now exactly when someone working on the
-password would be invisible on the card, and then misdated.
-
-**Why it is not a one-line move.** The drain is placed after `decide_after_snapshot` on purpose:
-`accrue` clears the day's refusals when the day turns, and the ending day's rollup row has been
-snapshotted by then. While stood down `decide` does not run, so the tally's day is not advanced
-either; draining above the branch would attach counts to a day that may already be over. The fix
-needs the day turned on paused ticks too, or the counts kept with their own date — either of which
-touches the stand-down path that `standing_down_closes_an_open_session` pins. The audit's attempts
-log is unaffected and still records every wrong password as it happens.
-
-**Trigger.** The next change to the stand-down path, or the first report of refusals appearing on
-the wrong day.
 
 ### O109 · A full sweep leaves 397 mutants alive, recorded in a baseline rather than fixed
 

@@ -478,6 +478,19 @@ pub struct Usage {
     /// on upgrade day, which is the same trap `foreground_secs` documents above.
     #[serde(default)]
     pub refused: crate::refusals::Refused,
+    /// This day began while the rules were paused, and no tick has measured it since.
+    ///
+    /// The day turns whether or not the rules are paused (see [`RulesEnforcer::stand_down`]), but
+    /// a paused tick measures nothing, so a day that is paused from start to end has an empty tally
+    /// that is not a measured zero. Without this mark its rollover would write `minutes_used: 0`,
+    /// and the report would show a paused Saturday as a Saturday nobody used the PC — the
+    /// measured-versus-absent line this codebase keeps everywhere else. The first tick that
+    /// measures clears it (`accrue`), so a day paused only in the evening keeps its row.
+    ///
+    /// Persisted because a pause can outlast a reboot, and written only when set so a tally from
+    /// any day that was measured reads exactly as it did before this existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unmeasured: bool,
 }
 
 /// Rule-derived, normalized enforcement targets for one tick — built once by `decide` and shared
@@ -582,6 +595,9 @@ impl Usage {
             // at midnight.
             *self = std::mem::take(self).read_on(today);
         }
+        // Every tick that reaches here is measuring, active or not, so the day is no longer one
+        // the rules were paused for throughout. See `unmeasured`.
+        self.unmeasured = false;
         self.total_secs = self.total_secs.saturating_add(delta_secs);
         for name in running {
             if targets.app_limits.contains_key(name) {
@@ -975,8 +991,9 @@ pub enum RuleAction {
 
 /// The day's tally as it stood *before* a tick ran — the numbers a rollover row describes.
 ///
-/// Produced only by [`RulesEnforcer::decide_after_snapshot`], which is the point: these values are
-/// unrecoverable once `decide` has run, so there is no way to ask for them too late.
+/// Produced only by [`RulesEnforcer::decide_after_snapshot`] and [`RulesEnforcer::stand_down`],
+/// which is the point: these values are unrecoverable once the tick has run, so there is no way to
+/// ask for them too late.
 #[derive(Default)]
 pub struct PreRollover {
     pub day: Option<NaiveDate>,
@@ -993,6 +1010,9 @@ pub struct PreRollover {
     pub per_group_secs: BTreeMap<String, u64>,
     /// What the day that just ended refused, so the rollup row keeps it after the tally is cleared.
     pub refused: crate::refusals::Refused,
+    /// The day was paused from start to end, so it has no figures to report. See
+    /// [`Usage::unmeasured`].
+    pub unmeasured: bool,
 }
 
 /// Deadline-based budget state machine (mirrors `curfew::Enforcer`), plus the running tally.
@@ -1068,8 +1088,23 @@ impl RulesEnforcer {
         }
     }
 
-    /// Decide this tick's actions. Pure: accrues into `self.usage`, updates `budget_deadline`,
-    /// and returns the actions — no I/O, no real clock. `now`/`today` are injected.
+    /// The day's tally as it stands before this tick changes it: the figures a rollover row
+    /// describes. Taken by both kinds of tick,
+    /// [`decide_after_snapshot`](Self::decide_after_snapshot) and [`stand_down`](Self::stand_down),
+    /// so the two cannot describe a day differently.
+    fn snapshot(&self) -> PreRollover {
+        PreRollover {
+            day: self.usage.day,
+            total_secs: self.usage.total_secs,
+            per_app_secs: self.usage.per_app_secs.clone(),
+            foreground_secs: self.usage.foreground_secs.clone(),
+            page_secs: self.usage.page_secs.clone(),
+            per_group_secs: self.usage.per_group_secs.clone(),
+            refused: self.usage.refused,
+            unmeasured: self.usage.unmeasured,
+        }
+    }
+
     /// Take the pre-rollover snapshot and run [`decide`](Self::decide) in one call.
     ///
     /// The two are fused **so the snapshot cannot drift below the decision**. `decide` calls
@@ -1085,16 +1120,40 @@ impl RulesEnforcer {
         procs: &[RunningProcess],
         t: Tick,
     ) -> (PreRollover, Vec<RuleAction>) {
-        let prev = PreRollover {
-            day: self.usage.day,
-            total_secs: self.usage.total_secs,
-            per_app_secs: self.usage.per_app_secs.clone(),
-            foreground_secs: self.usage.foreground_secs.clone(),
-            page_secs: self.usage.page_secs.clone(),
-            per_group_secs: self.usage.per_group_secs.clone(),
-            refused: self.usage.refused,
-        };
+        let prev = self.snapshot();
         (prev, self.decide(rules, procs, t))
+    }
+
+    /// A paused tick's share of the work: the day still turns, and what was refused is still kept.
+    /// Only measurement and enforcement stand down.
+    ///
+    /// `accounting_day` runs on every tick and books a day change as an honoured reset whether or
+    /// not the tick goes on to `decide`. When only `decide` moved the tally, a pause that ran past
+    /// midnight left the tally on the paused day with the reset already booked, so every paused
+    /// tick after it looked like a second reset inside `MIN_RESET_GAP`. Each was refused and
+    /// counted, and the first ticks after the pause were accounted against the paused day: a day
+    /// that ended over its limit locked the next morning. Turning the day here keeps the tally on
+    /// the day the guard believes it is on.
+    ///
+    /// The new day is marked [`Usage::unmeasured`] until a tick measures it. `refused` is the
+    /// tick's drain, added after the turn so a refusal lands on the day it happened.
+    ///
+    /// Returns the snapshot for the reason `decide_after_snapshot` does: on the tick that turns the
+    /// day it is the only copy left of the day that ended.
+    pub fn stand_down(
+        &mut self,
+        today: NaiveDate,
+        refused: crate::refusals::Refused,
+    ) -> PreRollover {
+        let prev = self.snapshot();
+        if self.usage.day != Some(today) {
+            // What `decide` retires on a new day, done here because `decide` will not see this one.
+            self.announced.clear();
+            self.usage = std::mem::take(&mut self.usage).read_on(today);
+            self.usage.unmeasured = true;
+        }
+        self.usage.refused.merge(refused);
+        prev
     }
 
     /// Fold one watcher report into the day's **report-only** tallies.
@@ -1160,6 +1219,8 @@ impl RulesEnforcer {
         );
     }
 
+    /// Decide this tick's actions. Pure: accrues into `self.usage`, updates `budget_deadline`,
+    /// and returns the actions — no I/O, no real clock. `now`/`today` are injected.
     pub fn decide(&mut self, rules: &Rules, procs: &[RunningProcess], t: Tick) -> Vec<RuleAction> {
         let mut actions = Vec::new();
 
@@ -1541,6 +1602,52 @@ fn rollup_row(prev: &PreRollover, date: NaiveDate, budget: Option<u32>) -> Value
     Value::Object(row)
 }
 
+/// The row a tick writes for the day it ended, or `None` when it ended none.
+///
+/// Both kinds of tick end days, a paused one as well as an active one (see
+/// [`RulesEnforcer::stand_down`]), and both write through here, so a day is described the same way
+/// whichever tick happened to end it. A day paused from start to end measured nothing, so it gets
+/// [`paused_row`] rather than a row of zeros.
+fn rollover_row(prev: &PreRollover, today: NaiveDate, budget: Option<u32>) -> Option<Value> {
+    let ended = prev.day.filter(|d| *d != today)?;
+    if prev.unmeasured {
+        paused_row(prev, ended)
+    } else {
+        Some(rollup_row(prev, ended, budget))
+    }
+}
+
+/// The row for a day the rules were paused from start to end, kept only for what it refused.
+///
+/// No `minutes_used`: `screentime::parse_row` skips a row without one, so the report goes on
+/// showing the day as not measured rather than as a day nobody used the PC. `paused` tells anyone
+/// reading the export why the figures are missing. Written only when something was refused, so a
+/// quiet paused day leaves no row, as every paused day did before the day turned while paused.
+fn paused_row(prev: &PreRollover, date: NaiveDate) -> Option<Value> {
+    prev.refused.any().then(|| {
+        serde_json::json!({
+            "date": date.to_string(),
+            "paused": true,
+            "refused": prev.refused,
+        })
+    })
+}
+
+/// Write the row for the day this tick ended, if it ended one, to both stores.
+fn record_rollover(
+    prev: &PreRollover,
+    today: NaiveDate,
+    budget: Option<u32>,
+    usage_log: &crate::usage::UsageLog,
+    screentime_log: &crate::screentime::ScreentimeLog,
+) {
+    if let Some(row) = rollover_row(prev, today, budget) {
+        usage_log.record("screentime_daily", row.clone());
+        // The durable copy, in a file noisy events cannot rotate away.
+        screentime_log.record(row);
+    }
+}
+
 /// Background loop: every [`CHECK_INTERVAL`], enforce the usage rules. Runs for the life of the
 /// server; if it ever returns, the caller logs that loudly.
 ///
@@ -1685,6 +1792,13 @@ pub async fn run_rules_enforcer(
                 serde_json::json!({ "reason": reason }),
             )
             .await;
+            // The day still turns while paused and what was refused is still kept: see
+            // `RulesEnforcer::stand_down` for what went wrong when only `decide` turned it. The row
+            // for a day this ends goes through the active path's writer, and the tally is saved so
+            // the card shows today's refusals today, not on whatever day the rules resume.
+            let prev = enforcer.stand_down(today, crate::refusals::drain());
+            record_rollover(&prev, today, prev_budget, &usage_log, &screentime_log);
+            save_tally_if_changed(&enforcer.usage, &tally_path, &mut last_saved_tally).await;
             prev_active = None; // resume treats the next active tick as a fresh session_start
             continue;
         }
@@ -1807,14 +1921,7 @@ pub async fn run_rules_enforcer(
         // after a restart we have no carried value: `rollup_row` then omits `budget` rather than
         // guessing today's, which used to write a false "over budget" verdict on a day it never
         // applied to (see `rollup_row`'s doc comment).
-        if let Some(pd) = prev.day
-            && pd != today
-        {
-            let row = rollup_row(&prev, pd, prev_budget);
-            usage_log.record("screentime_daily", row.clone());
-            // The durable copy, in a file noisy events cannot rotate away.
-            screentime_log.record(row);
-        }
+        record_rollover(&prev, today, prev_budget, &usage_log, &screentime_log);
         prev_budget = Some(budget);
 
         let used_mins = enforcer.usage.used_mins();
@@ -3528,6 +3635,205 @@ mod tests {
         // Written even though it is zero: the *day* had refusals, so every field is now a measured
         // figure. Only the whole-day case is omitted.
         assert_eq!(loud["refused"]["shutdown_cancels"], 0);
+    }
+
+    /// A pause that runs past midnight still turns the day, so the twelve-hour guard and the tally
+    /// agree about which day it is.
+    ///
+    /// The sequence is the loop's paused tick, `accounting_day` then `stand_down`, followed by the
+    /// first tick after the pause. When only `decide` turned the day, every paused tick after the
+    /// first was refused as a second reset (959 in eight hours, measured) and the resume tick was
+    /// accounted against the paused day: Friday ended over its limit, so Saturday's first tick was
+    /// a `LockWarning`. A refused reset is exactly an `accounting_day` that answers Friday, which
+    /// is what this asserts on rather than the refusal counters, which are global and shared with
+    /// every other test in this binary. `tests/enforcer_paused.rs` drives the same through the
+    /// loop.
+    #[test]
+    fn a_pause_across_midnight_turns_the_day_so_the_guard_never_refuses_it() {
+        let mut e = RulesEnforcer::new(Usage::default());
+        let fri = day();
+        let sat = fri.succ_opt().expect("a representable Saturday");
+        let t0 = Instant::now();
+        assert_eq!(e.accounting_day(fri, t0), fri);
+        e.usage.day = Some(fri);
+        e.usage.total_secs = 130 * 60; // Friday ended over a 120-minute limit
+
+        // Paused from the evening until Saturday 08:00, one tick every thirty seconds.
+        let midnight = t0 + Duration::from_secs(24 * 3600);
+        for i in 0..8 * 120 {
+            let now = midnight + TICK * i;
+            assert_eq!(
+                e.accounting_day(sat, now),
+                sat,
+                "paused tick {i} after midnight was accounted against Friday"
+            );
+            e.stand_down(sat, Default::default());
+        }
+        assert_eq!(e.usage.day, Some(sat));
+        assert!(e.usage.unmeasured, "nothing has measured Saturday yet");
+
+        // The rules come back on at 08:00.
+        let resume = midnight + Duration::from_secs(8 * 3600);
+        let today = e.accounting_day(sat, resume);
+        assert_eq!(
+            today, sat,
+            "the first tick after the pause was accounted against Friday"
+        );
+        let rules = Rules {
+            enabled: true,
+            daily_budget_mins: 120,
+            ..Default::default()
+        };
+        let mut t = tk(resume, 0);
+        t.today = today;
+        let actions = e.decide(&rules, &[], t);
+        assert!(
+            !actions.contains(&RuleAction::LockWarning),
+            "Saturday was locked for Friday's minutes: {actions:?}"
+        );
+        assert!(
+            !e.usage.unmeasured,
+            "Saturday is measured from the first tick that runs"
+        );
+    }
+
+    /// What a paused tick keeps: its drain lands on the day it happened, after any turn.
+    #[test]
+    fn a_paused_tick_keeps_its_refusals_on_the_day_they_happened() {
+        use crate::refusals::Refused;
+        let fri = day();
+        let sat = fri.succ_opt().expect("a representable Saturday");
+        let mut e = RulesEnforcer::new(Usage {
+            day: Some(fri),
+            total_secs: 600,
+            refused: Refused {
+                wrong_passwords: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        e.announced.insert("game.exe".into());
+
+        // The evening of the same day: kept beside Friday's own, and nothing turned.
+        let two = Refused {
+            wrong_passwords: 2,
+            ..Default::default()
+        };
+        let prev = e.stand_down(fri, two);
+        assert_eq!(prev.day, Some(fri));
+        assert_eq!(e.usage.day, Some(fri));
+        assert_eq!(e.usage.refused.wrong_passwords, 3);
+        assert_eq!(e.usage.total_secs, 600, "a paused tick measures nothing");
+        assert!(
+            !e.usage.unmeasured,
+            "a day measured until the pause stays measured"
+        );
+        assert!(
+            e.announced.contains("game.exe"),
+            "the same day keeps its announcements"
+        );
+
+        // Past midnight: the snapshot is all of Friday, and Saturday's refusal is Saturday's alone.
+        let code = Refused {
+            time_codes_refused: 1,
+            ..Default::default()
+        };
+        let prev = e.stand_down(sat, code);
+        assert_eq!(prev.day, Some(fri));
+        assert_eq!(prev.total_secs, 600);
+        assert_eq!(
+            prev.refused.wrong_passwords, 3,
+            "Friday's row keeps Friday's refusals"
+        );
+        assert!(!prev.unmeasured);
+        assert_eq!(e.usage.day, Some(sat));
+        assert_eq!(e.usage.total_secs, 0);
+        assert_eq!(
+            e.usage.refused, code,
+            "Saturday's card shows Saturday's refusals only"
+        );
+        assert!(
+            e.usage.unmeasured,
+            "a day opened while paused is not measured yet"
+        );
+        assert!(
+            e.announced.is_empty(),
+            "Friday's announcements would silence Saturday's first app-stopped notice"
+        );
+    }
+
+    /// The first tick that measures a day clears its paused mark, inactive or not: nobody at the PC
+    /// is a measured fact, and a day the rules resumed on must keep the row its measured part
+    /// earned.
+    #[test]
+    fn a_measuring_tick_clears_the_paused_mark() {
+        let mut usage = Usage {
+            day: Some(day()),
+            unmeasured: true,
+            ..Default::default()
+        };
+        usage.accrue(day(), 0, &BTreeSet::new(), &Targets::default());
+        assert!(!usage.unmeasured);
+    }
+
+    /// A day paused from start to end leaves no figures in history, only what it refused.
+    #[test]
+    fn a_day_paused_throughout_writes_no_figures() {
+        let fri = day();
+        let sat = fri.succ_opt().expect("a representable Saturday");
+
+        // A measured day writes its row, whichever tick ended it; a tick that ended no day, none.
+        let measured = PreRollover {
+            day: Some(fri),
+            total_secs: 95 * 60,
+            ..Default::default()
+        };
+        let row = rollover_row(&measured, sat, Some(120)).expect("a measured day writes its row");
+        assert_eq!(row["minutes_used"], 95);
+        assert_eq!(row["budget"], 120);
+        assert!(
+            rollover_row(&measured, fri, Some(120)).is_none(),
+            "no day ended"
+        );
+
+        // Paused throughout and quiet: no row at all, as before the day turned while paused.
+        let quiet = PreRollover {
+            day: Some(fri),
+            unmeasured: true,
+            ..Default::default()
+        };
+        assert!(rollover_row(&quiet, sat, Some(120)).is_none());
+
+        // Paused throughout and something refused: the counts, and nothing that reads as measured.
+        let loud = PreRollover {
+            day: Some(fri),
+            unmeasured: true,
+            refused: crate::refusals::Refused {
+                wrong_passwords: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let row = rollover_row(&loud, sat, Some(120)).expect("a paused day keeps what it refused");
+        assert_eq!(row["date"], fri.to_string());
+        assert_eq!(row["paused"], true);
+        assert_eq!(row["refused"]["wrong_passwords"], 4);
+        for key in [
+            "minutes_used",
+            "budget",
+            "apps",
+            "focused",
+            "pages",
+            "groups",
+        ] {
+            assert!(row.get(key).is_none(), "a paused day wrote `{key}`: {row}");
+        }
+        // And the report reads that day as not measured rather than as a day of no use.
+        let report = crate::screentime::build_report(&[row], sat, 1);
+        assert_eq!(
+            report.measured_days, 0,
+            "a paused day was reported as measured"
+        );
     }
 
     /// Yesterday's refusals do not follow the tally into today.
@@ -5300,6 +5606,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
+            unmeasured: false,
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
@@ -5337,6 +5644,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
+            unmeasured: false,
         };
         let s = today_summary(
             &rules,
@@ -5366,6 +5674,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
+            unmeasured: false,
         };
         let s = today_summary(
             &rules,
@@ -5396,6 +5705,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
+            unmeasured: false,
         };
         let s = today_summary(
             &rules,
@@ -5429,6 +5739,7 @@ mod tests {
             foreground_secs: Default::default(),
             page_secs: Default::default(),
             refused: Default::default(),
+            unmeasured: false,
         };
 
         let fresh = today_summary(

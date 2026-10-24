@@ -7,6 +7,24 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Fixed
+
+- **Pausing the rules past midnight no longer locks the PC the next morning, and what is refused
+  during a pause reaches the card.** The day's screen-time tally moved to a new day only on checks
+  that enforce, so a pause that ran past midnight (the free-evening toggle left on overnight, or the
+  rules switched off for a weekend) left it on the paused day, while the guard against resetting a
+  day twice in twelve hours believed it had moved. Three things followed. For up to twelve hours
+  after the rules came back on, the new day was charged to the old one and judged against its
+  limit: a child who ended Friday over the limit was locked out by Saturday morning's first check.
+  Every half-minute of the pause after midnight was counted as a refused attempt to reset the day,
+  about 120 an hour, all landing on *Refused today* the day the rules resumed. And wrong passwords
+  and refused time codes during any pause stayed off the card until the rules came back, then
+  appeared under that day. The day now turns while paused too; only counting and enforcing stop. A
+  day paused from start to end still shows as not measured in the report, and leaves a short row in
+  the history only if something was refused that day.
+
 ## [0.11.1] — 2026-10-23
 
 ### Security
