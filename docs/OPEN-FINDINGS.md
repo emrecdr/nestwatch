@@ -2033,7 +2033,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 295 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 263 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2207,5 +2207,21 @@ refuses an honest 200-character reason once it is escaped; the source scanner's 
 no fixture needed because each closed its brackets on a line that could not end a statement; a char
 literal holding only `(`, which ran its statement on, because the one fixture held it inside a call
 whose line also had `')`; and `line_of` answering 1 for every match, which a guard prints only when
-it fires. The baseline holds 295 lines after this. Next in the order of work are `install.rs`,
-`doctor.rs` and `lib.rs`, much of which only means anything on Windows.
+it fires. The baseline holds 295 lines after this.
+
+**The command-line entry points, 2026-10-25: 33 survivors, 32 gone.** `lib.rs`, `helper.rs` and
+`main.rs`. Every other test called the library and none ran the program, so a `main` that did
+nothing passed, as did a `helper` answering `--lock` with a usage error and a `remote-setup`
+printing the teardown script whichever was asked for. `tests/cli.rs` now runs the built binary with
+its data folder in a scratch directory and kills it at a deadline. A run against the full suite
+named the 33 exactly, and a second, after the tests, caught 32. What the gaps were: a preview tier
+the helper never found on its command line, which sent every preview at full size; an empty or
+one-byte image passed down the pipe as a success; a setup script with no machine name in it; `pair`
+naming a token after `pair` or `--integration`, both valid, so the refusal of `parent` never came;
+`run` serving in silence, its log pointed at the service's file or set up not at all; and
+`check_flags` doubling its index after an option that was not the first, which waved through
+whatever followed, or not advancing after a bare one, which never returned. That last was a timeout
+rather than a catch, so the flag tests now run on a thread with a deadline and a hang fails them.
+The one left is `helper::lock`, which off Windows is the fake's silent no-op, so returning `Ok` at
+once is the same thing. The baseline holds 263 lines after this. Next are `install.rs`, `doctor.rs`
+and `preflight.rs`, much of which only means anything on Windows.

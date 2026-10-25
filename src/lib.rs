@@ -483,6 +483,19 @@ mod tests {
             .collect()
     }
 
+    /// [`check_flags`] for `nestwatch parts…`, on a thread, failing if it never returns.
+    ///
+    /// A skip that stops advancing never returns, and a test that never returns stalls the suite
+    /// instead of failing it: a step of `*= 1` after a bare option was a timeout here, never a
+    /// catch (`O109`).
+    fn flags(parts: &[&str]) -> Result<(), String> {
+        let (cmd, args) = (parts[0].to_string(), argv(parts));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(check_flags(&cmd, &args)));
+        rx.recv_timeout(std::time::Duration::from_secs(5))
+            .expect("check_flags never returned")
+    }
+
     /// The typo that inverts the operation.
     ///
     /// `remote-setup` prints the teardown script with `--off` and the *setup* script without it.
@@ -491,33 +504,30 @@ mod tests {
     /// next step in the guide is to run that file, elevated.
     #[test]
     fn a_mistyped_off_is_refused_rather_than_inverted() {
-        assert!(check_flags("remote-setup", &argv(&["remote-setup", "--of"])).is_err());
-        assert!(check_flags("remote-setup", &argv(&["remote-setup", "-off"])).is_err());
-        assert!(check_flags("remote-setup", &argv(&["remote-setup", "--off"])).is_ok());
-        assert!(check_flags("remote-setup", &argv(&["remote-setup"])).is_ok());
+        assert!(flags(&["remote-setup", "--of"]).is_err());
+        assert!(flags(&["remote-setup", "-off"]).is_err());
+        assert!(flags(&["remote-setup", "--off"]).is_ok());
+        assert!(flags(&["remote-setup"]).is_ok());
     }
 
     /// A mistyped `--port` used to install on 8443 without a word about it.
     #[test]
     fn a_mistyped_port_is_refused_and_a_real_one_keeps_working() {
-        assert!(check_flags("install", &argv(&["install", "--prot", "9000"])).is_err());
-        assert!(check_flags("install", &argv(&["install", "--port", "9000"])).is_ok());
+        assert!(flags(&["install", "--prot", "9000"]).is_err());
+        assert!(flags(&["install", "--port", "9000"]).is_ok());
         // The value is data and is never examined: a port is not a flag, even if it looks like one.
-        assert!(check_flags("install", &argv(&["install", "--port", "--fix"])).is_ok());
+        assert!(flags(&["install", "--port", "--fix"]).is_ok());
         // Every real install flag, together.
         assert!(
-            check_flags(
+            flags(&[
                 "install",
-                &argv(&[
-                    "install",
-                    "--fix",
-                    "--new-cert",
-                    "--reset-config",
-                    "--revoke-sessions",
-                    "--port",
-                    "9000"
-                ])
-            )
+                "--fix",
+                "--new-cert",
+                "--reset-config",
+                "--revoke-sessions",
+                "--port",
+                "9000"
+            ])
             .is_ok()
         );
     }
@@ -525,14 +535,14 @@ mod tests {
     /// Commands that take nothing say so, and the message names the command.
     #[test]
     fn a_command_with_no_options_says_so() {
-        let err = check_flags("doctor", &argv(&["doctor", "--verbose"])).unwrap_err();
+        let err = flags(&["doctor", "--verbose"]).unwrap_err();
         assert!(
             err.contains("--verbose"),
             "name the offending option: {err}"
         );
         assert!(err.contains("takes no options"), "{err}");
 
-        let err = check_flags("uninstall", &argv(&["uninstall", "--purgee"])).unwrap_err();
+        let err = flags(&["uninstall", "--purgee"]).unwrap_err();
         assert!(err.contains("--purge"), "list what it does accept: {err}");
     }
 
@@ -675,9 +685,9 @@ mod tests {
     #[test]
     fn the_internal_commands_are_left_alone() {
         // `helper` validates its own, and must not be intercepted before it streams JPEG bytes.
-        assert!(check_flags("helper", &argv(&["helper", "--capture-stdout"])).is_ok());
+        assert!(flags(&["helper", "--capture-stdout"]).is_ok());
         // `service-run` is started by the SCM. Refusing here would mean a service that won't run.
-        assert!(check_flags("service-run", &argv(&["service-run", "--whatever"])).is_ok());
+        assert!(flags(&["service-run", "--whatever"]).is_ok());
     }
 
     /// The table cannot fall behind the code that reads the flags.
@@ -765,5 +775,15 @@ mod tests {
              refused:\n{}",
             missing.join("\n")
         );
+    }
+
+    /// An option is checked after a valued one that is not the first. Every fixture put `--port`
+    /// straight after the command, where skipping two and doubling the index land in the same
+    /// place, so a doubled index passed and waved through whatever followed a later `--port`
+    /// (`O109`).
+    #[test]
+    fn an_option_after_a_later_valued_one_is_still_checked() {
+        let err = flags(&["install", "--fix", "--port", "9000", "--prot"]).unwrap_err();
+        assert!(err.contains("--prot"), "{err}");
     }
 }
