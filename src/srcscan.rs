@@ -267,7 +267,7 @@ mod tests {
         parts(src).join("\n")
     }
 
-    /// The statements of `src`, for the two tests that need them apart rather than run together.
+    /// The statements of `src`, for the tests that need them apart rather than run together.
     fn parts(src: &str) -> Vec<String> {
         statements(src).into_iter().map(|(_, s)| s).collect()
     }
@@ -449,5 +449,43 @@ mod tests {
         }
         let real = "fn keep() {}\n#[cfg(test)]\nmod tests {\n    let msg = \"x\";\n}\n";
         assert_eq!(production_source(real), "fn keep() {}");
+    }
+
+    /// A closure body inside an open call does not end the statement, although its line ends in
+    /// `{`. Every statement these tests join closes its parens on lines ending in `,` or `)`, so a
+    /// depth that never counted, or counted the wrong way, passed (`O109`) — and would split a
+    /// sink from the literal handed to it inside a closure.
+    #[test]
+    fn a_closure_body_inside_a_call_does_not_end_the_statement() {
+        let src = "fn f() {\n    let n = items.iter().filter(|x| {\n        x.ok()\n    });\n}\n";
+        let all = parts(src);
+        assert!(
+            all.iter()
+                .any(|s| s.contains("filter(|x| {") && s.contains("x.ok()") && s.ends_with(");")),
+            "the closure was cut out of its call: {all:?}"
+        );
+    }
+
+    /// A match is reported on its own line, counted from one. Guards print this only when they
+    /// fire, so nothing read it on a passing run, and a `line_of` answering 1 passed (`O109`): the
+    /// next real failure would have pointed at the top of the file.
+    #[test]
+    fn a_match_is_reported_on_its_own_line() {
+        let text = "first\nsecond\nthird line\n";
+        assert_eq!(line_of(text, 0), 1);
+        assert_eq!(line_of(text, text.find("third").unwrap()), 3);
+    }
+
+    /// A char literal holding only an open bracket is scrubbed on its own. The fixture above holds
+    /// `'('` inside a call, so its line also contains `')`, and a scrub that waited for both passed
+    /// (`O109`): a plain `let open = '(';` would have run on into everything after it.
+    #[test]
+    fn a_lone_open_bracket_literal_does_not_run_the_statement_on() {
+        let src = "fn f() {\n    let open = '(';\n    let m = 1;\n}\n";
+        let stmts = parts(src);
+        assert!(
+            stmts.iter().any(|s| s == "let open = '(';"),
+            "the lone char literal ran on: {stmts:?}"
+        );
     }
 }

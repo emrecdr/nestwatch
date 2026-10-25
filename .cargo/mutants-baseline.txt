@@ -20,8 +20,8 @@
 # the next full run (2026-10-23, da665c1) matched line for line. 15 of the 17 lines in `auth.rs`
 # were killed on 2026-10-24, and all 17 in `pairing.rs`, all 18 in `cert.rs`, all 8 in `curfew.rs`
 # and 9 of the 14 in `clock.rs` the same day, leaving 330; then 19 of 24 in the storage files,
-# leaving 311; then 8 of 12 in the report and tracking files, leaving 303. Adding a line is a
-# decision, not a formality.
+# leaving 311; then 8 of 12 in the report and tracking files, leaving 303; then 8 of 21 in the
+# test-support files, leaving 295. Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -45,11 +45,8 @@ src/control/fake.rs: replace / with % in <impl SystemControl for FakeControl>::s
 src/control/fake.rs: replace / with * in <impl SystemControl for FakeControl>::screenshot
 src/control/fake.rs: replace / with * in <impl SystemControl for FakeControl>::screenshot
 src/control/fake.rs: replace <impl SystemControl for FakeControl>::lock_workstation -> Result<(), ControlError> with Ok(())
-src/control/mod.rs: replace > with == in encode_shot
-src/control/mod.rs: replace > with == in encode_shot
 src/control/mod.rs: replace > with >= in encode_shot
 src/control/mod.rs: replace > with >= in encode_shot
-src/control/mod.rs: replace || with && in encode_shot
 src/doctor.rs: delete ! in all_public
 src/doctor.rs: delete ! in network_profiles
 src/doctor.rs: delete ! in platform_checks
@@ -319,13 +316,8 @@ src/rules.rs: delete ! in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace && with || in maybe_abort_budget_shutdown
-src/server.rs: replace * with +
 src/server.rs: replace serve -> Result<()> with Ok(())
 src/sessionstore.rs: replace > with >= in <impl SessionStore for FileSessionStore>::load
 src/sessionstore.rs: replace > with >= in FileSessionStore::persist
 src/sessionstore.rs: replace > with >= in FileSessionStore::snapshot
 src/srcscan.rs: replace + with * in in_a_comment_line
-src/srcscan.rs: replace += with *= in statements
-src/srcscan.rs: replace += with -= in statements
-src/srcscan.rs: replace line_of -> usize with 1
-src/srcscan.rs: replace || with && in statements

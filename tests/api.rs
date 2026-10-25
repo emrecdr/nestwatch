@@ -552,6 +552,33 @@ async fn the_child_facing_posts_cap_the_body_far_below_axums_default() {
         StatusCode::OK,
         "the longest reason `ask.html` permits was rejected"
     );
+
+    // And the worst honest body the limit's own doc allows for: 200 characters that each
+    // JSON-escape to `\uXXXX`, about 1.2 KiB. Both checks above pass with a limit of about one
+    // KiB, which `8 * 1024` written as a sum is (`O109`), and that limit refuses this body. A fresh
+    // app, so the request limiter has not counted the two above.
+    let escaped = json!({ "minutes": 30, "reason": "\u{1}".repeat(200) }).to_string();
+    assert!(
+        escaped.len() > 1_100,
+        "the body must be over a kibibyte: {}",
+        escaped.len()
+    );
+    let res = test_app()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/time-request")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(escaped))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        res.status(),
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "a reason the child's page can produce was refused for its size"
+    );
 }
 
 #[tokio::test]

@@ -889,4 +889,24 @@ mod tests {
         // hard-coded string would satisfy every other assertion in this file.
         crate::testutil::assert_each_language_differs(&titles);
     }
+
+    /// A frame larger than the preview box in one dimension only is still fitted to it. The preview
+    /// tests used frames larger in both dimensions or in neither (`O109`), so judging the two with
+    /// `&&`, or either with `==`, passed and would have sent such a frame out at full size on every
+    /// preview. The box is written out rather than read from `PREVIEW_W` and `PREVIEW_H`.
+    #[test]
+    fn a_frame_too_large_in_one_dimension_is_still_fitted() {
+        for (w, h) in [(1920, 500), (500, 1080)] {
+            let frame = image::DynamicImage::ImageRgb8(image::RgbImage::new(w, h));
+            let preview = encode_shot(frame, ShotTier::Preview).expect("encodes");
+            let decoded =
+                image::load_from_memory(&preview).expect("a preview is a decodable image");
+            assert!(
+                decoded.width() <= 960 && decoded.height() <= 540,
+                "a {w}x{h} frame came back {}x{}",
+                decoded.width(),
+                decoded.height()
+            );
+        }
+    }
 }

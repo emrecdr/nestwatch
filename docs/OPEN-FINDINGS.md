@@ -2033,7 +2033,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 303 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 295 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2190,5 +2190,22 @@ thirty-two, which cuts a pairing token from 80 bits to 48 while every token stil
 drained key kept at zero for the life of the watcher; and a torn last line on the helper's pipe,
 where the mutant hung the suite rather than failing it. That test now reads on a thread with a
 deadline, so a hang there is a failure in five seconds rather than a timeout. The baseline holds 303
-lines after this. Next in the order of work are `install.rs`, `doctor.rs` and `lib.rs`, much of
-which only means anything on Windows.
+lines after this.
+
+**The test-support files, 2026-10-25: 21 survivors, 8 gone.** `control/fake.rs`, `control/mod.rs`,
+`srcscan.rs` and `server.rs`. A run against the full suite named the 21 exactly, and a second, after
+the tests, caught the 8. Nine of the 13 left are the fake controller's: eight in the arithmetic of
+the gradient its screenshot draws, a picture whose colours nothing reads, and its
+`lock_workstation`, a no-op whose mutant only drops a log line. Three are equivalent: `encode_shot`
+fitting a frame exactly the preview's width or height into the preview box, which resizes it to the
+size it already has (two); and `in_a_comment_line` starting its line at the newline rather than
+after it, which `trim_start` then strips. The last is `serve` returning at once, the console's entry
+point, which binds the real port and returns only when stopped. What the gaps were: a frame too
+large in one dimension only, sent to the parent at full size, because every test frame was too large
+in both or in neither; the cap on a child's request body cut from 8 KiB to 1,032 bytes, which
+refuses an honest 200-character reason once it is escaped; the source scanner's bracket depth, which
+no fixture needed because each closed its brackets on a line that could not end a statement; a char
+literal holding only `(`, which ran its statement on, because the one fixture held it inside a call
+whose line also had `')`; and `line_of` answering 1 for every match, which a guard prints only when
+it fires. The baseline holds 295 lines after this. Next in the order of work are `install.rs`,
+`doctor.rs` and `lib.rs`, much of which only means anything on Windows.
