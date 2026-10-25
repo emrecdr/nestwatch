@@ -1678,4 +1678,63 @@ mod tests {
             let _ = std::fs::remove_file(p);
         }
     }
+
+    /// Using exactly the limit is not going over it. Only days well past their limit were tried
+    /// (`O109`), so `>` as `>=` passed — and would have called a child who stopped on time over
+    /// budget.
+    #[test]
+    fn a_day_that_used_exactly_its_limit_is_not_over_it() {
+        let r = build_report(
+            &[row("2026-08-15", 181, 180), row("2026-08-16", 180, 180)],
+            d("2026-08-17"),
+            2,
+        );
+        assert!(r.days[0].over_budget, "a minute past the limit");
+        assert!(!r.days[1].over_budget, "exactly at the limit");
+    }
+
+    /// A baseline of exactly 2,000 apps is still used, and only one more abandons the check. The
+    /// abandoning case was tested one past the cap and the cap itself never (`O109`).
+    #[test]
+    fn a_baseline_at_the_cap_is_still_used() {
+        let many: Vec<(String, u64)> = (0..2_000).map(|i| (format!("app{i}.exe"), 1)).collect();
+        let refs: Vec<(&str, u64)> = many.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+        let rows = vec![
+            focus_row("2026-08-18", &refs),
+            focus_row("2026-08-19", &[("brand-new.exe", 10)]),
+        ];
+        let fs = report_of(&rows)
+            .first_seen
+            .expect("a usable baseline answers");
+        assert!(!fs.baseline_overflow, "2,000 apps is the cap, not past it");
+        let names: Vec<&str> = fs.apps.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["brand-new.exe"]);
+    }
+
+    /// Page titles alone are focus data: a row that recorded them knows about that measurement and
+    /// beats a wider legacy row that does not. The test above gives its winner focus and pages
+    /// both, so only one half of "either" was ever asked (`O109`).
+    #[test]
+    fn a_row_with_page_titles_alone_still_knows_about_focus() {
+        let mut wide = serde_json::Map::new();
+        for i in 0..40 {
+            wide.insert(format!("app{i}.exe"), serde_json::json!(1));
+        }
+        let legacy = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90, "apps": wide,
+        });
+        let pages_only = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16",
+            "minutes_used": 90,
+            "apps": {"chrome.exe": 60},
+            "pages": {"Homework - Google Docs": 20},
+        });
+        let r = build_report(&[legacy, pages_only], d("2026-08-17"), 1);
+        assert_eq!(
+            r.days[0].pages.len(),
+            1,
+            "the row with page titles must win"
+        );
+    }
 }

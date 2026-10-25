@@ -1635,9 +1635,32 @@ mod tests {
             r#"{"apps":{}}"#
         );
 
-        assert!(
-            !read_bounded_line(&mut input, &mut buf, MAX_LINE).expect("reading must not fail"),
-            "a half-written trailing line is EOF, not a record"
+        // On a thread with a deadline, because the way this breaks is a hang: a skip loop that
+        // misses the end of the input spins forever, and a test that never finishes reports
+        // nothing — the weekly mutation run could only time out on it (`O109`).
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let more = read_bounded_line(&mut input, &mut buf, MAX_LINE);
+            let _ = tx.send(more.expect("reading must not fail"));
+        });
+        let more = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a torn final line never finished");
+        assert!(!more, "a half-written trailing line is EOF, not a record");
+    }
+
+    /// A key whose time has all been reported is forgotten at the drain. Without the prune a key is
+    /// kept for the life of the watcher, which for page titles is the slow leak the drain's own
+    /// comment describes, and keeping keys at zero passed (`O109`).
+    #[test]
+    fn a_key_with_nothing_left_is_forgotten_at_the_drain() {
+        let mut t = Tracker::new();
+        t.focus(Some("game.exe"), 0);
+        t.focus(None, 2_000); // exactly two seconds, so nothing is carried
+        assert_eq!(
+            t.drain(2_000),
+            BTreeMap::from([("game.exe".to_string(), 2)])
         );
+        assert!(t.millis.is_empty(), "a key carrying nothing is still held");
     }
 }

@@ -131,4 +131,15 @@ mod tests {
         assert_eq!(normalize("  abcd1234  "), "ABCD1234");
         assert_eq!(normalize(""), "");
     }
+
+    /// Every character of the alphabet is drawn. `%` as `/` passed (`O109`): it maps each random
+    /// byte onto the first eight characters only, which cuts a sixteen-character pairing token from
+    /// 80 bits to 48 while every token still looks right. A thousand tokens draw each of the 32
+    /// characters about 500 times, so missing one by chance is not a real outcome.
+    #[test]
+    fn every_character_of_the_alphabet_is_drawn() {
+        let seen: std::collections::BTreeSet<u8> =
+            (0..1_000).flat_map(|_| random(16).into_bytes()).collect();
+        assert_eq!(seen.len(), 32, "only these were ever drawn: {seen:?}");
+    }
 }

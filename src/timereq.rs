@@ -448,4 +448,24 @@ mod tests {
                 .is_ok()
         );
     }
+
+    /// A request exactly one window old no longer counts against the quota. Every test above asks
+    /// within a single instant (`O109`), so a window that held on to its own edge passed.
+    #[test]
+    fn a_request_a_full_window_old_no_longer_counts() {
+        let ip: IpAddr = "192.168.1.5".parse().unwrap();
+        let start = Instant::now();
+        let lim = SubmitLimiter::new(1, Duration::from_secs(60));
+        assert!(lim.count_and_check(ip, start).is_ok());
+        assert!(
+            lim.count_and_check(ip, start + Duration::from_secs(59))
+                .is_err(),
+            "inside the minute"
+        );
+        assert!(
+            lim.count_and_check(ip, start + Duration::from_secs(60))
+                .is_ok(),
+            "a minute on, the first request has aged out"
+        );
+    }
 }

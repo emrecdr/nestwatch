@@ -20,7 +20,8 @@
 # the next full run (2026-10-23, da665c1) matched line for line. 15 of the 17 lines in `auth.rs`
 # were killed on 2026-10-24, and all 17 in `pairing.rs`, all 18 in `cert.rs`, all 8 in `curfew.rs`
 # and 9 of the 14 in `clock.rs` the same day, leaving 330; then 19 of 24 in the storage files,
-# leaving 311. Adding a line is a decision, not a formality.
+# leaving 311; then 8 of 12 in the report and tracking files, leaving 303. Adding a line is a
+# decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -99,10 +100,8 @@ src/doctor.rs: replace network_profiles -> Vec<String> with vec![]
 src/doctor.rs: replace platform_checks with ()
 src/doctor.rs: replace platform_network_checks with ()
 src/doctor.rs: replace || with && in run
-src/foreground.rs: replace == with != in read_bounded_line
 src/foreground.rs: replace > with >= in Tracker::bank
 src/foreground.rs: replace > with >= in Tracker::bank
-src/foreground.rs: replace > with >= in Tracker::drain
 src/foreground.rs: replace > with >= in bound
 src/helper.rs: replace capture -> Result<Vec<u8>> with Ok(vec![0])
 src/helper.rs: replace capture -> Result<Vec<u8>> with Ok(vec![1])
@@ -320,10 +319,6 @@ src/rules.rs: delete ! in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace != with == in run_rules_enforcer
 src/rules.rs: replace && with || in maybe_abort_budget_shutdown
-src/screentime.rs: replace > with == in first_seen_in
-src/screentime.rs: replace > with >= in DayRow::measured
-src/screentime.rs: replace > with >= in first_seen_in
-src/screentime.rs: replace || with && in ParsedRow::detail
 src/server.rs: replace * with +
 src/server.rs: replace serve -> Result<()> with Ok(())
 src/sessionstore.rs: replace > with >= in <impl SessionStore for FileSessionStore>::load
@@ -334,5 +329,3 @@ src/srcscan.rs: replace += with *= in statements
 src/srcscan.rs: replace += with -= in statements
 src/srcscan.rs: replace line_of -> usize with 1
 src/srcscan.rs: replace || with && in statements
-src/timereq.rs: replace < with <= in SubmitLimiter::count_and_check
-src/token.rs: replace % with / in random

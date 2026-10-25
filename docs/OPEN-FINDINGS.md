@@ -2033,7 +2033,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 311 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 303 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2175,5 +2175,20 @@ not, behind a day with forty page titles; a "could this hold the needle" that al
 stored response replaying for under an hour instead of two days; and the view count on the child's
 own page, read through the log by nothing. `UsageLog::recent_including_rotated` had two survivors
 and no caller anywhere, so it was deleted rather than tested. The baseline holds 311 lines after
-this. Next in the order of work are `install.rs`, `doctor.rs` and `lib.rs`, much of which only means
-anything on Windows.
+this.
+
+**The report and tracking files, 2026-10-25: 12 survivors, 8 gone.** `screentime.rs`,
+`foreground.rs`, `token.rs`, `timereq.rs` and `probe.rs`. A run against the full suite named the 12
+exactly — 11 missed and one that hung — and a second, after the tests, caught the 8. The 4 left are
+equivalent: `bound` scaling by `elapsed / claimed` when the two are equal, which multiplies by one;
+`Tracker::bank` moving its marker to the value it already holds, and banking zero milliseconds; and
+`probe::run_once` reading the tally when the threshold is zero, which decides the same way. What the
+gaps were: a child who used exactly the limit reported as over it; a first-seen baseline at the cap
+of 2,000 apps abandoned as if past it; a row with page titles but no focus losing to a wider legacy
+row; a request exactly one window old still counted; tokens drawn from eight characters instead of
+thirty-two, which cuts a pairing token from 80 bits to 48 while every token still looks right; a
+drained key kept at zero for the life of the watcher; and a torn last line on the helper's pipe,
+where the mutant hung the suite rather than failing it. That test now reads on a thread with a
+deadline, so a hang there is a failure in five seconds rather than a timeout. The baseline holds 303
+lines after this. Next in the order of work are `install.rs`, `doctor.rs` and `lib.rs`, much of
+which only means anything on Windows.
