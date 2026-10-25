@@ -61,7 +61,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # `ring` (rustls crypto provider) assembles its primitives with NASM on the MSVC
       # target; it isn't reliably preinstalled on windows-latest. (Perl is.)
       - name: Install NASM (Windows, for ring)
@@ -138,7 +138,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # `build.rs` fails the build if assets/app.css is missing, so the CSS has to exist even for
       # a lint-only run.
       - uses: ./.github/actions/frontend-css
@@ -257,7 +257,7 @@ jobs:
       # from the mutants job's own previous run — the saving lands from the second run on, not the
       # first.
       - if: steps.diff.outputs.has_rust == 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Pinned to a commit for the same reason as the supply-chain job above: this action downloads
       # and executes binaries. The tool is version-pinned too, so a cargo-mutants release cannot
       # change what this gate accepts without a commit here.
@@ -314,7 +314,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch @ 2026-08-05
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install NASM (for ring)
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       - uses: ./.github/actions/frontend-css
