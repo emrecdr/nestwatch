@@ -11,8 +11,8 @@
 //! the end — see [`beat`], which explains why that placement is load-bearing.)
 //!
 //! **This signal is reported, not acted on.** Nothing restarts a wedged enforcer; the parent has
-//! to notice the dashboard or run `doctor`. Closing that loop is tracked as O4 in
-//! `docs/OPEN-FINDINGS.md`.
+//! to notice the dashboard. `doctor` cannot: it runs as a process of its own, in which no enforcer
+//! stamps anything, and says so. Closing that loop is tracked as O4 in `docs/OPEN-FINDINGS.md`.
 //!
 //! Deliberately a plain timestamp rather than a health *judgement*: the freshness threshold is a
 //! presentation decision (the UI says "stale" past a couple of minutes) and putting it here would

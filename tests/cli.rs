@@ -171,7 +171,18 @@ mod off_windows {
     use std::io::BufRead;
     use std::sync::mpsc;
 
+    use nestwatch::config::Config;
+
     use super::*;
+
+    /// `config` written where `nestwatch` will read it.
+    fn install_config(dir: &ScratchDir, config: &Config) {
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::to_string(config).unwrap(),
+        )
+        .unwrap();
+    }
 
     /// Width and height of the JPEG in `bytes`.
     fn size(bytes: &[u8]) -> (u32, u32) {
@@ -295,15 +306,13 @@ mod off_windows {
     #[test]
     fn run_announces_where_it_is_serving_on_its_console() {
         let dir = ScratchDir::new("cli-run");
-        let config = nestwatch::config::Config {
-            port: 0,
-            ..common::test_config()
-        };
-        std::fs::write(
-            dir.join("config.json"),
-            serde_json::to_string(&config).unwrap(),
-        )
-        .unwrap();
+        install_config(
+            &dir,
+            &Config {
+                port: 0,
+                ..common::test_config()
+            },
+        );
 
         let mut child = command(dir.path(), &["run"])
             .spawn()
@@ -336,5 +345,88 @@ mod off_windows {
             announced,
             "`run` never said where it was serving: {seen:#?}"
         );
+    }
+
+    /// `doctor` on a machine with nothing installed names what is missing and exits failing. It is
+    /// where the README sends a parent when something looks wrong, and nothing ran it (`O109`).
+    #[test]
+    fn doctor_on_a_bare_machine_names_what_is_missing_and_fails() {
+        let dir = ScratchDir::new("cli-doctor-bare");
+        let ran = nestwatch(dir.path(), &["doctor"]);
+        let out = ran.out();
+        assert_eq!(ran.code, Some(1), "{out}");
+        assert!(out.contains("not installed — no config found"), "{out}");
+        assert!(out.contains("no TLS certificate"), "{out}");
+        // Off Windows every console counts as elevated, so nothing may be put down to that.
+        assert!(!out.contains("not an elevated console"), "{out}");
+        assert!(
+            out.contains("running on a non-Windows host (dev mode)"),
+            "{out}"
+        );
+    }
+
+    /// A settings file that is there and does not parse is named as that, not as no install.
+    #[test]
+    fn doctor_names_a_settings_file_it_cannot_parse() {
+        let dir = ScratchDir::new("cli-doctor-corrupt");
+        std::fs::write(dir.join("config.json"), "{ not json").unwrap();
+        let out = nestwatch(dir.path(), &["doctor"]).out();
+        assert!(
+            out.contains("config.json at") && out.contains("is unreadable"),
+            "{out}"
+        );
+        assert!(!out.contains("not installed"), "{out}");
+    }
+
+    /// The install record is read even when the settings are gone, because it says which build put
+    /// them there.
+    #[test]
+    fn doctor_reads_the_install_record_without_the_settings() {
+        let dir = ScratchDir::new("cli-doctor-record");
+        let version = env!("CARGO_PKG_VERSION");
+        std::fs::write(
+            dir.join("installed.json"),
+            format!(r#"{{"version":"{version}"}}"#),
+        )
+        .unwrap();
+        let out = nestwatch(dir.path(), &["doctor"]).out();
+        assert!(
+            out.contains(&format!("installed version {version} matches this binary")),
+            "{out}"
+        );
+    }
+
+    /// A healthy install passes: settings, a port something listens on, a fresh certificate shown
+    /// by the ends of its fingerprint, and an exit that says so.
+    #[test]
+    fn doctor_passes_a_healthy_install() {
+        let dir = ScratchDir::new("cli-doctor-healthy");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        install_config(
+            &dir,
+            &Config {
+                port,
+                ..common::test_config()
+            },
+        );
+        nestwatch::cert::generate(
+            &dir.join("cert.pem"),
+            &dir.join("key.pem"),
+            &["localhost".to_string()],
+        )
+        .unwrap();
+
+        let ran = nestwatch(dir.path(), &["doctor"]);
+        let out = ran.out();
+        // `doctor` exits failing exactly when a line failed, so this is "no problems" too.
+        assert_eq!(ran.code, Some(0), "{out}");
+        assert!(
+            out.contains(&format!("something is listening on port {port}")),
+            "{out}"
+        );
+        assert!(out.contains("valid for about"), "{out}");
+        assert!(out.contains("fingerprint starts"), "{out}");
+        drop(listener);
     }
 }

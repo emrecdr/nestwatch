@@ -24,6 +24,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   appeared under that day. The day now turns while paused too; only counting and enforcing stop. A
   day paused from start to end still shows as not measured in the report, and leaves a short row in
   the history only if something was refused that day.
+- **`doctor` no longer calls the clock anchored when it is not.** A settings file holding a time
+  zone but no offset, which only editing it by hand produces since install and re-anchoring always
+  write both, leaves the service on plain local time. `doctor` reported it as anchored, or reported
+  a change of zone as held off by "the recorded zone". It now says the clock is not anchored, which
+  is what the service is doing.
 
 ### Internal
 

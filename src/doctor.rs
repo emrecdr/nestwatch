@@ -198,6 +198,20 @@ fn clock_check(recorded_zone: Option<&str>, current_zone: Option<&str>, anchored
     const REINSTALL: &str = "Re-run `nestwatch install` from an elevated console. It re-records \
 both,\nand preserves your port, curfew and rules.";
 
+    // No offset, no anchor: `clock::now` runs on plain local time whatever zone the file names.
+    // Install and re-anchor write the two together, so a zone alone means a hand-edited file, and
+    // asking it first is what keeps every arm below from calling that anchored.
+    if !anchored {
+        return warn(
+            "clock NOT anchored — plain local time is in use",
+            format!(
+                "Changing the time zone needs no administrator rights, so the daily budget \
+                 and the\ncurfew window can both be moved by the child until this is \
+                 recorded.\n{REINSTALL}"
+            ),
+        );
+    }
+
     match (recorded_zone, current_zone) {
         (Some(recorded), Some(current)) if recorded == current => ok(format!(
             "clock anchored to this machine's time zone ({recorded})"
@@ -213,7 +227,7 @@ both,\nand preserves your port, curfew and rules.";
             "If the PC genuinely moved, re-anchor it: sign in to the dashboard and use\n             `Re-anchor the clock`, or re-run `nestwatch install`. If it did not move,\n             someone changed the time zone — the controls held, and that is what this says.",
         ),
         // Windows could not tell us, or this is a dev build. Not an error; just not the strong check.
-        (Some(recorded), None) if anchored => ok(format!(
+        (Some(recorded), None) => ok(format!(
             "clock anchored (zone {recorded} recorded; this platform cannot read the current one)"
         )),
         // Nothing recorded, and this machine cannot report a zone either — so the absence says
@@ -223,7 +237,7 @@ both,\nand preserves your port, curfew and rules.";
         // zone check", and prescribed a re-install that cannot record what cannot be read. A
         // warning that is wrong every time it appears on the machine a developer runs is a
         // warning they learn to skip, and it is real on Windows.
-        (None, None) if anchored => warn(
+        (None, None) => warn(
             "clock anchored by offset only — this platform reports no time zone",
             // Bare `\n`: the printer already indents every line of a fix by eleven spaces
             // (see `Report::render`), so padding here lands on top of that.
@@ -232,25 +246,13 @@ both,\nand preserves your port, curfew and rules.";
              instead means the system call is failing, and is worth a look."
                 .to_string(),
         ),
-        (None, Some(_)) if anchored => warn(
+        (None, Some(_)) => warn(
             "clock anchored by offset only — no time zone recorded",
             format!(
                 "This install predates the zone check, so it uses the weaker one: an offset \
                  alone\ncannot tell two zones apart, and a child can shift the clock up to two \
                  hours in\nsummer by choosing one that shares the offset.\n{REINSTALL}"
             ),
-        ),
-        (None, _) => warn(
-            "clock NOT anchored — plain local time is in use",
-            format!(
-                "Changing the time zone needs no administrator rights, so the daily budget \
-                 and the\ncurfew window can both be moved by the child until this is \
-                 recorded.\n{REINSTALL}"
-            ),
-        ),
-        (Some(_), None) => warn(
-            "clock anchored, but the current time zone could not be read",
-            "Non-fatal: the service falls back to the offset check, which is what it always\n             used. Worth a look if this is Windows — it means a system call is failing.",
         ),
     }
 }
@@ -423,12 +425,97 @@ fn version_check(stamped: &crate::install::Stamp, running: &str, installed: bool
     })
 }
 
+/// The Enforcement section for an installed config: what is set to be enforced, whether anything
+/// can be seen running it, the earned-time line, and whether the child is warned first.
+///
+/// Pure, taking the probe scheduler's age as an argument, for the same reason [`clock_check`] is:
+/// every line here is a reading of the config, and built inside `run` it could be tested only by
+/// running the whole report against a real data folder (`O109`).
+fn enforcement_checks(cfg: &Config, probe_age: Option<i64>) -> Vec<Check> {
+    let mut checks = Vec::new();
+    let curfew_on = cfg.curfew.enabled;
+    let rules_on = cfg.rules.enabled;
+    // `has_targets` alone, so the "configured but paused" branch below stays
+    // reachable. Folding `enabled` in here — as the since-removed `any_configured`
+    // did — made that branch dead and reported a fully configured, paused install as
+    // "nothing is being enforced yet", advising the parent to add limits they already
+    // had. `tick_mode` is the predicate that answers both questions at once, and the
+    // branch below uses it where the *counting* claim has to be right.
+    let configured = cfg.rules.has_targets();
+
+    if !curfew_on && !configured {
+        // Split on `tick_mode`, because "counting screen time" is true on one of these
+        // two paths and not the other, and this line is the most-read statement the
+        // product makes about it. A paused install with nothing configured counts
+        // nothing — it used to be told, here, that it was counting.
+        checks.push(match cfg.rules.tick_mode() {
+            crate::rules::TickMode::Measure => warn(
+                "nothing is being enforced yet",
+                "Nestwatch is running and counting screen time, but no limits exist.\n\
+                 Open the dashboard and set a daily limit, or turn on Curfew.",
+            ),
+            _ => warn(
+                "nothing is being enforced, and nothing is being counted",
+                "Screen-time rules are paused, so Nestwatch is not recording screen\n\
+                 time either. Turn Enforcing back on in the dashboard to resume\n\
+                 tracking, then set a daily limit or turn on Curfew.",
+            ),
+        });
+    } else {
+        if configured && rules_on {
+            checks.push(ok(format!(
+                "screen-time rules active (daily limit {} min, {} blocked app(s), \
+                 {} per-app limit(s))",
+                cfg.rules.daily_budget_mins,
+                cfg.rules.blocklist.len(),
+                cfg.rules.app_limits.len()
+            )));
+        } else if configured && !rules_on {
+            checks.push(warn(
+                "screen-time rules are configured but PAUSED",
+                "Flip Enforcing back on in the dashboard when the break is over.",
+            ));
+        }
+        if curfew_on {
+            checks.push(ok("curfew is on"));
+        } else {
+            checks.push(warn(
+                "curfew is off",
+                "Set a bedtime window in the dashboard if you want one.",
+            ));
+        }
+    }
+
+    // Liveness, and why no reading stands behind it. The enforcers stamp an in-memory heartbeat,
+    // and `doctor` is a process of its own in which none of them runs, so the reading here was
+    // always empty: the "checked in" and "stopped" lines it once chose between could never print
+    // (`O109`). The dashboard's Today card asks the running service.
+    checks.push(warn(
+        "no enforcement check-in seen from this process",
+        "Expected when running `doctor` as a one-off — the live service keeps its\n\
+         own heartbeat. Check the dashboard's Today card, which reads the running\n\
+         service's value.",
+    ));
+
+    // The probe scheduler, asked separately — see `earned_time_check`.
+    checks.extend(earned_time_check(&cfg.providers, probe_age));
+
+    if configured && cfg.rules.warn_secs == 0 {
+        checks.push(warn(
+            "the child gets no warning before enforcement fires",
+            "Set a warning of 30-60 seconds in the dashboard so a lock isn't a\n\
+             surprise mid-sentence.",
+        ));
+    }
+    checks
+}
+
 /// The probe scheduler's line, or `None` for a household with no probe on a switched-on
 /// integration.
 ///
 /// Separate from the enforcement check because it is not enforcement — nothing that check covers
-/// stops when this loop dies, and `heartbeat::worst_age_secs` deliberately does not hear it, so a
-/// parent reading "enforcement checked in 3s ago" is reading something true. Asked only of a
+/// stops when this loop dies, and `heartbeat::worst_age_secs` deliberately does not hear it, so the
+/// dashboard's warning that enforcement has stopped is never about this loop. Asked only of a
 /// household that named a probe, because the loop runs either way and has nothing to say to one
 /// that has not asked it to do anything.
 ///
@@ -700,93 +787,10 @@ pub fn run() -> Result<()> {
                 "can't tell — no config",
                 "Install first, then run this again.",
             )),
-            Some(cfg) => {
-                let curfew_on = cfg.curfew.enabled;
-                let rules_on = cfg.rules.enabled;
-                // `has_targets` alone, so the "configured but paused" branch below stays
-                // reachable. Folding `enabled` in here — as the since-removed `any_configured`
-                // did — made that branch dead and reported a fully configured, paused install as
-                // "nothing is being enforced yet", advising the parent to add limits they already
-                // had. `tick_mode` is the predicate that answers both questions at once, and the
-                // branch below uses it where the *counting* claim has to be right.
-                let configured = cfg.rules.has_targets();
-
-                if !curfew_on && !configured {
-                    // Split on `tick_mode`, because "counting screen time" is true on one of these
-                    // two paths and not the other, and this line is the most-read statement the
-                    // product makes about it. A paused install with nothing configured counts
-                    // nothing — it used to be told, here, that it was counting.
-                    checks.push(match cfg.rules.tick_mode() {
-                        crate::rules::TickMode::Measure => warn(
-                            "nothing is being enforced yet",
-                            "Nestwatch is running and counting screen time, but no limits exist.\n\
-                             Open the dashboard and set a daily limit, or turn on Curfew.",
-                        ),
-                        _ => warn(
-                            "nothing is being enforced, and nothing is being counted",
-                            "Screen-time rules are paused, so Nestwatch is not recording screen\n\
-                             time either. Turn Enforcing back on in the dashboard to resume\n\
-                             tracking, then set a daily limit or turn on Curfew.",
-                        ),
-                    });
-                } else {
-                    if configured && rules_on {
-                        checks.push(ok(format!(
-                            "screen-time rules active (daily limit {} min, {} blocked app(s), \
-                             {} per-app limit(s))",
-                            cfg.rules.daily_budget_mins,
-                            cfg.rules.blocklist.len(),
-                            cfg.rules.app_limits.len()
-                        )));
-                    } else if configured && !rules_on {
-                        checks.push(warn(
-                            "screen-time rules are configured but PAUSED",
-                            "Flip Enforcing back on in the dashboard when the break is over.",
-                        ));
-                    }
-                    if curfew_on {
-                        checks.push(ok("curfew is on"));
-                    } else {
-                        checks.push(warn(
-                            "curfew is off",
-                            "Set a bedtime window in the dashboard if you want one.",
-                        ));
-                    }
-                }
-
-                // Liveness: a dead enforcer looks exactly like an idle day everywhere else.
-                match crate::heartbeat::worst_age_secs() {
-                    Some(age) if age <= 150 => {
-                        checks.push(ok(format!("enforcement checked in {age}s ago")))
-                    }
-                    Some(age) => checks.push(warn(
-                        format!("enforcement last checked in {} min ago", age / 60),
-                        "If the service is running, its background checks have stopped — limits\n\
-                         and curfew are not being applied. Restart it:\n\
-                         sc stop HostHealthService && sc start HostHealthService",
-                    )),
-                    None => checks.push(warn(
-                        "no enforcement check-in seen from this process",
-                        "Expected when running `doctor` as a one-off — the live service keeps its\n\
-                         own heartbeat. Check the dashboard's Today card, which reads the running\n\
-                         service's value.",
-                    )),
-                }
-
-                // The probe scheduler, asked separately — see `earned_time_check`.
-                checks.extend(earned_time_check(
-                    &cfg.providers,
-                    crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe),
-                ));
-
-                if configured && cfg.rules.warn_secs == 0 {
-                    checks.push(warn(
-                        "the child gets no warning before enforcement fires",
-                        "Set a warning of 30-60 seconds in the dashboard so a lock isn't a\n\
-                         surprise mid-sentence.",
-                    ));
-                }
-            }
+            Some(cfg) => checks.extend(enforcement_checks(
+                cfg,
+                crate::heartbeat::age_secs(crate::heartbeat::Enforcer::Probe),
+            )),
         }
     }
 
@@ -1259,6 +1263,40 @@ mod tests {
                 );
             }
         }
+
+        /// No offset means no anchor: the service runs on plain local time whatever zone the file
+        /// names (`clock::now`). Install and re-anchor always write the two together, so only a
+        /// hand-edited file holds a zone alone, and every arm it reached called that anchored, one
+        /// of them a zone change "using the recorded zone" (`O109`).
+        #[test]
+        fn a_zone_without_an_offset_is_not_anchored() {
+            for current in [Some(HOME), Some("UTC"), None] {
+                let c = clock_check(Some(HOME), current, false);
+                assert_eq!(c.level, Level::Warn, "current={current:?}");
+                assert!(
+                    c.text.contains("NOT anchored"),
+                    "current={current:?}: {}",
+                    c.text
+                );
+            }
+        }
+
+        /// An install older than both records, on a machine that can read its zone, is not
+        /// anchored at all, rather than anchored "by offset only" with no offset to anchor by.
+        #[test]
+        fn an_install_with_neither_record_is_not_anchored() {
+            let c = clock_check(None, Some(HOME), false);
+            assert!(c.text.contains("NOT anchored"), "{}", c.text);
+        }
+
+        /// An anchored install whose zone the platform cannot read now is fine, and says which zone
+        /// it holds: the offset check it falls back to is the one it always used.
+        #[test]
+        fn an_anchored_zone_the_platform_cannot_read_is_fine() {
+            let c = clock_check(Some(HOME), None, true);
+            assert_eq!(c.level, Level::Ok);
+            assert!(c.text.contains(HOME), "{}", c.text);
+        }
     }
 
     use super::*;
@@ -1685,6 +1723,100 @@ mod tests {
                 fix.contains("sc start"),
                 "and it still says how to restart: {fix}"
             );
+        }
+    }
+
+    /// The Enforcement section, which no test reached while it was built inside `run`: whether
+    /// rules, curfew and the warning are reported as set is a reading of the config alone, and
+    /// nine mutants of it survived the backlog sweep (`O109`).
+    mod enforcement {
+        use super::super::{Check, Level, enforcement_checks};
+        use crate::config::Config;
+
+        fn config(curfew: bool, rules_on: bool, limit_mins: u32, warn_secs: u32) -> Config {
+            let mut cfg = Config::default();
+            cfg.curfew.enabled = curfew;
+            cfg.rules.enabled = rules_on;
+            cfg.rules.daily_budget_mins = limit_mins;
+            cfg.rules.warn_secs = warn_secs;
+            cfg
+        }
+
+        fn has(checks: &[Check], text: &str) -> bool {
+            checks.iter().any(|c| c.text.contains(text))
+        }
+
+        /// With nothing set, the line says so, and whether time is still being counted: rules
+        /// switched on count with no limit to apply, and paused rules count nothing.
+        #[test]
+        fn nothing_set_says_so_and_whether_anything_is_counted() {
+            let counting = enforcement_checks(&config(false, true, 0, 60), None);
+            assert!(has(&counting, "nothing is being enforced yet"));
+            assert!(!has(&counting, "nothing is being counted"));
+
+            let paused = enforcement_checks(&config(false, false, 0, 60), None);
+            assert!(has(
+                &paused,
+                "nothing is being enforced, and nothing is being counted"
+            ));
+
+            // Said on every run, because `doctor` never shares a process with the enforcers.
+            let live = paused
+                .iter()
+                .find(|c| c.text == "no enforcement check-in seen from this process")
+                .expect("the liveness line");
+            assert_eq!(live.level, Level::Warn);
+        }
+
+        /// A daily limit is reported as active, or as paused, and never as nothing set.
+        #[test]
+        fn a_set_limit_is_reported_active_or_paused() {
+            let active = enforcement_checks(&config(false, true, 120, 60), None);
+            assert!(has(
+                &active,
+                "screen-time rules active (daily limit 120 min, 0 blocked app(s), 0 per-app \
+                 limit(s))"
+            ));
+            assert!(has(&active, "curfew is off"));
+            assert!(!has(&active, "nothing is being enforced"));
+            assert!(!has(&active, "PAUSED"));
+
+            let paused = enforcement_checks(&config(false, false, 120, 60), None);
+            assert!(has(&paused, "screen-time rules are configured but PAUSED"));
+            assert!(!has(&paused, "screen-time rules active"));
+        }
+
+        /// A curfew alone is enforcement too, and pausing rules that set nothing pauses nothing.
+        #[test]
+        fn a_curfew_alone_is_reported_without_a_rules_line() {
+            for rules_on in [true, false] {
+                let checks = enforcement_checks(&config(true, rules_on, 0, 60), None);
+                assert!(has(&checks, "curfew is on"), "rules_on={rules_on}");
+                assert!(
+                    !has(&checks, "nothing is being enforced"),
+                    "rules_on={rules_on}"
+                );
+                assert!(!has(&checks, "screen-time rules"), "rules_on={rules_on}");
+            }
+        }
+
+        /// No warning before a lock is worth a line only where a limit could fire one, and only
+        /// at no warning at all.
+        #[test]
+        fn no_warning_is_flagged_only_where_a_limit_would_fire() {
+            const LINE: &str = "the child gets no warning before enforcement fires";
+            assert!(has(
+                &enforcement_checks(&config(false, true, 120, 0), None),
+                LINE
+            ));
+            assert!(!has(
+                &enforcement_checks(&config(false, true, 120, 30), None),
+                LINE
+            ));
+            assert!(!has(
+                &enforcement_checks(&config(true, true, 0, 0), None),
+                LINE
+            ));
         }
     }
 }

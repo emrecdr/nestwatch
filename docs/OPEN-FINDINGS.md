@@ -213,9 +213,10 @@ before the feature.
 ### O4 · A wedged enforcer is reported but never recovered
 
 `heartbeat.rs` calls a silently dead enforcer "the worst failure this product can have", and then
-only *displays* the staleness — `api::usage_today` (which feeds the dashboard's Today card) and
-`doctor` are its only two consumers. It was `rules::today_summary` until the read moved out to
-the edge; the mechanism is unchanged, only where it is called from.
+only *displays* the staleness — `api::usage_today`, which feeds the dashboard's Today card, is its
+only consumer. `doctor` runs as a process of its own, in which no enforcer stamps anything, so it
+says it cannot see one rather than reading it. It was `rules::today_summary` until the read moved
+out to the edge; the mechanism is unchanged, only where it is called from.
 
 There is no `process::abort` anywhere in `src/`, and nothing restarts the loop.
 (`std::process::exit` *does* appear — argument errors in `lib.rs`, a failing `doctor` — but those
@@ -2033,7 +2034,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 263 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 234 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2223,5 +2224,22 @@ naming a token after `pair` or `--integration`, both valid, so the refusal of `p
 whatever followed, or not advancing after a bare one, which never returned. That last was a timeout
 rather than a catch, so the flag tests now run on a thread with a deadline and a hang fails them.
 The one left is `helper::lock`, which off Windows is the fake's silent no-op, so returning `Ok` at
-once is the same thing. The baseline holds 263 lines after this. Next are `install.rs`, `doctor.rs`
-and `preflight.rs`, much of which only means anything on Windows.
+once is the same thing. The baseline holds 263 lines after this.
+
+**`doctor.rs`, 2026-10-25: 50 survivors, 29 gone.** 18 are in functions only Windows compiles, the
+network-profile and listening checks and the service, firewall and disk checks, and stay until a
+mutation run on Windows. Of the 32 in code the Linux tests run, three remain: two differ only when
+the console is not elevated, which off Windows it never is, and the third lets a fingerprint of any
+length through where a SHA-256 one always has 32 groups. No test had ever run `doctor`, so nothing
+read its report for a bare machine, a settings file that does not parse, an install record without
+settings or a healthy install, nor the exit code that tells them apart; `tests/cli.rs` now runs all
+four, which took 14. The Enforcement section lived inline in `run`, as the earned-time check once
+did, and is now `enforcement_checks`, a reading of the config with tests of its own, which took 9.
+Six were not test gaps. Three were the liveness line's "checked in" and "stopped" arms, which read
+an in-memory heartbeat that no enforcer ever stamps in `doctor`'s own process, so they could never
+print; they are deleted, and `heartbeat.rs` and `O4` no longer say `doctor` reports it. The other
+three, in `clock_check`, pointed at a defect: a settings file with a zone and no offset, which only
+editing it by hand produces, runs on plain local time, while `doctor` called it anchored or called a
+zone change held off by "the recorded zone". It now asks for the anchor first. The baseline holds
+234 lines after this. Next are `install.rs` and `preflight.rs`, much of which only means anything on
+Windows.
