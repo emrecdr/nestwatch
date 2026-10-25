@@ -22,7 +22,8 @@
 # and 9 of the 14 in `clock.rs` the same day, leaving 330; then 19 of 24 in the storage files,
 # leaving 311; then 8 of 12 in the report and tracking files, leaving 303; then 8 of 21 in the
 # test-support files, leaving 295; then 32 of 33 in the command-line entry points, leaving 263;
-# then 29 of 50 in `doctor.rs`, leaving 234. Adding a line is a decision, not a formality.
+# then 29 of 50 in `doctor.rs`, leaving 234; then 9 of 35 in `preflight.rs`, leaving 225. Adding
+# a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -225,27 +226,18 @@ src/preflight.rs: delete field dwOSVersionInfoSize from struct OSVERSIONINFOW ex
 src/preflight.rs: replace == with != in apply
 src/preflight.rs: replace == with != in check_existing_service
 src/preflight.rs: replace == with != in check_existing_service
-src/preflight.rs: replace == with != in check_port
 src/preflight.rs: replace apply -> Result<String, String> with Ok("xyzzy".into())
-src/preflight.rs: replace apply -> Result<String, String> with Ok("xyzzy".into())
-src/preflight.rs: replace apply -> Result<String, String> with Ok(String::new())
 src/preflight.rs: replace apply -> Result<String, String> with Ok(String::new())
 src/preflight.rs: replace check_existing_service with ()
 src/preflight.rs: replace check_mark_of_the_web with ()
 src/preflight.rs: replace check_network_profile with ()
 src/preflight.rs: replace check_windows_build with ()
-src/preflight.rs: replace gather -> Vec<Finding> with vec![]
-src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::AddrInUse with true in check_port
 src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in apply
 src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in apply
-src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::PermissionDenied with false in check_port
-src/preflight.rs: replace match guard e.kind() == std::io::ErrorKind::PermissionDenied with true in check_port
 src/preflight.rs: replace os_build -> u32 with 0
 src/preflight.rs: replace os_build -> u32 with 1
 src/preflight.rs: replace running_service_port -> Option<u16> with None
 src/preflight.rs: replace running_service_port -> Option<u16> with Some(0)
-src/preflight.rs: replace running_service_port -> Option<u16> with Some(0)
-src/preflight.rs: replace running_service_port -> Option<u16> with Some(1)
 src/preflight.rs: replace running_service_port -> Option<u16> with Some(1)
 src/preflight.rs: replace zone_identifier -> String with "xyzzy".into()
 src/preflight.rs: replace zone_identifier -> String with String::new()

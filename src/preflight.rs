@@ -457,9 +457,21 @@ fn check_port(port: u16, ours_on: Option<u16>, out: &mut Vec<Finding>) {
     }
     // 0.0.0.0 because that is what the server binds; a listener on a single interface would miss
     // a conflict on another one.
-    match TcpListener::bind(("0.0.0.0", port)) {
-        Ok(l) => drop(l),
-        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => out.push(Finding::blocker(
+    out.extend(bind_finding(
+        port,
+        TcpListener::bind(("0.0.0.0", port)).map(drop),
+    ));
+}
+
+/// What a bind of `port` that came back `bound` means for the install.
+///
+/// Apart from the bind so that each way it fails can be tested. A held port is easy to produce on
+/// demand; a refused one needs a port below 1024 without root on Linux and never happens on macOS,
+/// so no test reached that branch, nor checked that a held port was not mistaken for it (`O109`).
+fn bind_finding(port: u16, bound: std::io::Result<()>) -> Option<Finding> {
+    match bound {
+        Ok(()) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => Some(Finding::blocker(
             format!("port {port} is already in use"),
             "The service binds this port at startup. Another program has it, so the service \n\
              would start, fail to bind, and exit within a second of being installed.",
@@ -468,7 +480,7 @@ fn check_port(port: u16, ours_on: Option<u16>, out: &mut Vec<Finding>) {
                  Then either stop it, or install on a different port:  install --port 8444"
             ),
         )),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => out.push(Finding::blocker(
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Some(Finding::blocker(
             format!("not allowed to bind port {port}"),
             "Windows refused the port. Ports below 1024 are reserved, and a port can also be \n\
              held in an excluded range.",
@@ -477,7 +489,7 @@ fn check_port(port: u16, ours_on: Option<u16>, out: &mut Vec<Finding>) {
         )),
         // Anything else (a firewall hook, an exotic failure) is not something to block on: the
         // service gets the same treatment and reports it properly now.
-        Err(_) => {}
+        Err(_) => None,
     }
 }
 
@@ -910,5 +922,55 @@ mod tests {
     fn counts_agree_with_singular_and_plural() {
         assert!(render(&[b()], Machine::Untouched).contains("1 thing that will stop"));
         assert!(render(&[b(), b()], Machine::Untouched).contains("2 things that will stop"));
+    }
+
+    /// Each way a bind can fail is named for what it is, and only those two block.
+    #[test]
+    fn each_bind_failure_is_named_for_what_it_is() {
+        use std::io::{Error, ErrorKind};
+        let in_use = bind_finding(9443, Err(Error::from(ErrorKind::AddrInUse))).expect("blocks");
+        assert_eq!(in_use.what, "port 9443 is already in use");
+        let refused =
+            bind_finding(80, Err(Error::from(ErrorKind::PermissionDenied))).expect("blocks");
+        assert_eq!(refused.what, "not allowed to bind port 80");
+        assert!(blocked(&[in_use, refused]));
+        assert_eq!(bind_finding(9443, Err(Error::from(ErrorKind::Other))), None);
+        assert_eq!(bind_finding(9443, Ok(())), None);
+    }
+
+    /// `gather` runs the port check. Every other test here calls `check_port` itself, so a
+    /// `gather` that checked nothing passed them all, and with it an install over a held port.
+    #[cfg(not(windows))]
+    #[test]
+    fn gather_reports_a_held_port() {
+        let live = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = live.local_addr().unwrap().port();
+        let findings = gather(port);
+        assert_eq!(findings.len(), 1, "{findings:#?}");
+        assert_eq!(findings[0].what, format!("port {port} is already in use"));
+    }
+
+    /// Off Windows no service of ours runs, so none holds a port. `gather` relies on it: any port
+    /// this answered with would be waved through as an upgrade over ourselves.
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_no_service_of_ours_holds_a_port() {
+        assert_eq!(running_service_port(), None);
+    }
+
+    /// Off Windows every remedy is refused, and says which: nothing here can perform one, and an
+    /// `Ok` would print `done:` for a change that never happened.
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_every_remedy_is_refused_by_name() {
+        for (remedy, name) in [
+            (Remedy::MakeNetworkPrivate, "MakeNetworkPrivate"),
+            (Remedy::UnblockFile("nestwatch.exe".into()), "UnblockFile"),
+            (Remedy::EnableService, "EnableService"),
+        ] {
+            let err = apply(&remedy).expect_err("nothing can be applied off Windows");
+            assert!(err.contains(name), "{err}");
+            assert!(err.contains("only available on Windows"), "{err}");
+        }
     }
 }

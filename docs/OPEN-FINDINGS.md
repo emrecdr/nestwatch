@@ -2034,7 +2034,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 234 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 225 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2241,5 +2241,16 @@ print; they are deleted, and `heartbeat.rs` and `O4` no longer say `doctor` repo
 three, in `clock_check`, pointed at a defect: a settings file with a zone and no offset, which only
 editing it by hand produces, runs on plain local time, while `doctor` called it anchored or called a
 zone change held off by "the recorded zone". It now asks for the anchor first. The baseline holds
-234 lines after this. Next are `install.rs` and `preflight.rs`, much of which only means anything on
-Windows.
+234 lines after this.
+
+**`preflight.rs`, 2026-10-25: 35 survivors, 9 gone.** 26 are in functions only Windows compiles: the
+system-tool, existing-service, downloaded-file, network-profile and Windows-build checks, and the
+remedies and service lookups behind them. All 9 in code the Linux tests run are gone. No test called
+`gather`, only `check_port` directly, so a `gather` that checked nothing passed, and with it an
+install over a held port. Nothing tested the off-Windows stand-ins for `apply` and
+`running_service_port` either: an `apply` answering `Ok` prints `done:` for a change that never
+happened, and a stand-in answering with a port waves that port through as an upgrade over ourselves.
+The other four were the refused-port branch of `check_port`, which a test can reach only by binding
+below 1024 without root on Linux, and never on macOS. The bind's result is now judged apart from the
+bind, by `bind_finding`, and each way it fails is tested. The baseline holds 225 lines after this.
+That leaves `install.rs`, the last file, much of which only means anything on Windows.
