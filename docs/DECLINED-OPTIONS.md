@@ -202,10 +202,11 @@ pending action, which is why that colour is reserved for *Save* and *Take screen
 
 ### Have the scanner sweep read whole files instead of cutting at the test module
 
-**Proposed** 2026-08-31 (this session), as `O79`'s third item: `tests/scanner_guards.rs` composes
-`statements(production_source(&text))`, so it cannot see below `#[cfg(test)] mod tests` — which is
-where source-scanning guards actually live. `src/server.rs`'s route scanner, the canonical broken
-instance of the class, sits there and is invisible to the sweep meant to catch its kind.
+**Proposed** 2026-08-31 (this session), as the third item of `O79` (since closed):
+`tests/scanner_guards.rs` composes `statements(production_source(&text))`, so it cannot see below
+`#[cfg(test)] mod tests` — which is where source-scanning guards actually live. `src/server.rs`'s
+route scanner, the canonical broken instance of the class, sits there and is invisible to the sweep
+meant to catch its kind.
 
 **Tried and backed out** by the other session, same day. Scanning whole files produces false
 positives the rule cannot adjudicate at this resolution: a test *fixture* holding a needle string,

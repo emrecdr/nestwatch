@@ -1414,36 +1414,6 @@ Neither reaches a locked phone. That limit is real and must stay stated — but 
 all" and "cannot notify while away from the page" are different claims, and the docs currently make
 the stronger one.
 
-### O79 · The meta-guard classifies a file as line-oriented from a substring of its own comments
-
-**The class is otherwise closed.** A guard whose needle spans a syntactic boundary is defeated by
-`rustfmt`; `src/srcscan.rs` is the shared answer and `tests/scanner_guards.rs` pushes new scanners
-onto it. Every scanner in the crate now reads tokens rather than lines, the last two migrating in
-`f76ba07` and the commit that added this entry. What is left is how the meta-guard decides which
-files to police.
-
-**`reads_lines` is `text.contains(".lines()")` over the whole file, comments included.** So a file
-that no longer reads a line anywhere is still classified as line-oriented if any comment in it
-*mentions* `.lines()` — and `tests/spawn_paths.rs` is now exactly that file: its scanners use
-`find_tokens`, and the only `.lines()` left is a doc comment recording the historical bug. It
-remains on the `KNOWN_SAFE` list for that reason alone.
-
-This is the mirror of the defect fixed in `e8f257e`, which stopped adoption being decided by a
-substring. Both read code out of prose; they differ only in direction — that one over-exempted, this
-one over-reports. Over-reporting is the safe direction, which is why this is a tidy-up rather than a
-hole, but the two rules should not disagree about whether comments are code.
-
-**Adoption has the same shape, and its content is now wrong.** `adopted` requires the `use` item to
-name `statements` — the reader `f76ba07` replaced *for failing open*. A file importing `find_tokens`,
-the primitive that superseded it, is therefore not credited with adopting anything, and the guard's
-own failure message still tells authors to use `statements`.
-
-**Fix.** Decide both from parsed items rather than raw text: `reads_lines` from a `.lines()` call
-outside comments, `adopted` from a `use` naming any of the reflow-proof primitives. Then delete the
-`tests/spawn_paths.rs` row from `KNOWN_SAFE`, whose stated reason — that its needle is matched with
-`match_indices` over the whole text — is stale as of this commit.
-
-
 ### O81 · Nothing bounds the number of connections
 
 **The stalled-connection half of this is fixed; what is left is the count.** The entry used to

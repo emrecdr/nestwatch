@@ -63,7 +63,7 @@ pub mod server;
 pub mod sessionstore;
 /// Reflow-tolerant primitives shared by the source-scanning guards. Not `cfg(test)`: the
 /// scanners live in both the library's own test module and in integration binaries, and a
-/// `cfg(test)` helper cannot be seen from the latter. See the module docs for O79.
+/// `cfg(test)` helper cannot be seen from the latter. Its module docs record why it exists.
 pub mod srcscan;
 pub mod state;
 #[cfg(test)]
@@ -674,7 +674,7 @@ mod tests {
 
         // The scan must actually have found the table. Without this the test passes just as
         // happily against a `print_usage` that prints nothing and an `accepts` that returns
-        // empty lists — which is the failure mode `O79` records three scanners dying of.
+        // empty lists — the failure mode `srcscan`'s module docs record three scanners dying of.
         assert!(
             checked >= 6,
             "only {checked} options were checked — the table scan drifted and proves nothing"

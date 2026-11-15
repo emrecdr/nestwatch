@@ -103,8 +103,8 @@ const CLASSIFIED: [(&str, bool); 38] = [
 /// Matched as a **token sequence** rather than as the string `"audit.record("`, and that is not
 /// style. `rustfmt` breaks a call before the dot and after the open paren, so a line-oriented search
 /// for that needle stops matching the moment the call grows past the line width — and this guard
-/// would then find nothing, report success, and check nothing. `O79` is the record of three
-/// scanners that failed exactly that way. [`find_tokens`] matches across the break.
+/// would then find nothing, report success, and check nothing. `srcscan`'s module docs record
+/// three scanners that failed exactly that way. [`find_tokens`] matches across the break.
 fn recorded_tags() -> Vec<(String, String)> {
     let mut out = Vec::new();
     for (path, full) in crate_sources(&["src"]) {

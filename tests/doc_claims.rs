@@ -579,7 +579,8 @@ fn every_command_and_flag_in_the_usage_message_is_findable_in_the_readme() {
     }
 
     // Both scans must have found something. A parser that silently matches nothing passes this
-    // test while proving nothing — the failure mode `O79` records three scanners dying of.
+    // test while proving nothing — the failure mode `srcscan`'s module docs record three scanners
+    // dying of.
     assert!(
         commands.len() >= 6 && flags.len() >= 5,
         "usage scan found {} commands and {} flags — it has drifted and proves nothing",
@@ -705,7 +706,7 @@ fn the_bodyless_post_count_in_the_csrf_argument_is_the_real_one() {
     }
 
     // Non-vacuity: a scan that matched nothing would agree with a prose count of zero and prove
-    // nothing at all. `O79` records three guards that died exactly this way.
+    // nothing at all. `srcscan`'s module docs record three guards that died exactly this way.
     assert!(
         actual >= 5,
         "only {actual} bodyless POST routes found — the router scan has drifted and proves nothing"

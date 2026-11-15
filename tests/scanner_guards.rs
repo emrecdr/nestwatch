@@ -14,8 +14,8 @@
 //!
 //! **That sweep is the thing worth keeping, and a sweep done once by hand is not kept.** This test
 //! is that sweep, run on every push, so a fifth scanner written the old way fails on the day it
-//! lands rather than waiting for somebody to independently have the idea again. `O79` records the
-//! reasoning; [`nestwatch::srcscan`] is the shared answer this points people at.
+//! lands rather than waiting for somebody to independently have the idea again.
+//! [`nestwatch::srcscan`] records the three, and is the shared answer this points people at.
 //!
 //! # What it does not claim
 //!
@@ -27,7 +27,7 @@
 
 use std::path::Path;
 
-use nestwatch::srcscan::{production_source, statements};
+use nestwatch::srcscan::{find_tokens, production_source, statements};
 
 mod common;
 use common::crate_sources;
@@ -39,20 +39,12 @@ use common::crate_sources;
 /// row here is a decision someone has to write a sentence about.
 ///
 /// **The exemption is per file, not per needle, and that is a real limitation rather than a
-/// simplification.** `tests/spawn_paths.rs` holds several needle-shaped literals; the row below
-/// justifies the one that actually fires, and the exemption then covers all of them — so if the
-/// reflow-tolerance on any of the others were reverted, this guard would not notice. Per-needle
-/// exemptions would close it, at the cost of an exemption list keyed on the very strings it is
-/// policing, which rots differently. Listed as the trade it is; each file's own fixture tests are
-/// what actually hold the needles this excuses.
-const KNOWN_SAFE: [(&str, &str); 3] = [
-    (
-        "tests/spawn_paths.rs",
-        "Both needle-shaped literals here are safe, and for different reasons. `Command::new(` — \
-         the one that actually fires — is matched with `match_indices` over the whole text, so the \
-         formatter cannot hide it. `system32(` is counted against `system32(\"`, so a broken call \
-         trips a count mismatch and fails CLOSED.",
-    ),
+/// simplification.** A row justifies the needle that fires, and the exemption then covers every
+/// other needle in that file — so if the reflow-tolerance on one of those were reverted, this guard
+/// would not notice. Per-needle exemptions would close it, at the cost of an exemption list keyed
+/// on the very strings it is policing, which rots differently. Listed as the trade it is; each
+/// file's own fixture tests are what actually hold the needles this excuses.
+const KNOWN_SAFE: [(&str, &str); 2] = [
     (
         "src/web.rs",
         "`budgetTone(`/`limitTone(`/`gamePortal(` are matched against the whole markup, not line \
@@ -67,8 +59,11 @@ const KNOWN_SAFE: [(&str, &str); 3] = [
 ];
 
 /// Whether `text` reads its input a line at a time, which is the hazard this guard is about.
+///
+/// Read from the code, not the prose: a comment that mentions `.lines()` reads nothing, and a file
+/// whose only mention was a doc comment recording the old bug used to be policed for it.
 fn reads_lines(text: &str) -> bool {
-    text.contains(".lines()")
+    !find_tokens(text, &[".lines", "(", ")"]).is_empty()
 }
 
 /// A string literal of the form `IDENT(` — an identifier immediately followed by an open paren.
@@ -108,6 +103,20 @@ fn holds_a_call_shaped_needle(stmt: &str) -> bool {
     false
 }
 
+/// Whether the statement `stmt` imports a reader that survives the formatter.
+///
+/// `statements` is not one of them. It joins lines until the parentheses balance, and failed open
+/// on ordinary Rust — a closure, an attribute, a comment holding a `(` — which is why
+/// `find_tokens` replaced it (see its docs). Crediting its import would excuse the very scanner
+/// this guard exists to catch.
+fn adopts_a_reflow_proof_reader(stmt: &str) -> bool {
+    stmt.starts_with("use ")
+        && stmt.contains("srcscan")
+        && ["find_tokens", "call_arguments"]
+            .iter()
+            .any(|reader| stmt.contains(reader))
+}
+
 #[test]
 fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -123,7 +132,7 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
 
         // **Cut at the test module, and this is the guard's honest limit rather than an
         // oversight.** A source scanner usually lives inside `#[cfg(test)]`, so cutting there
-        // hides some of what this exists to find — `O79` records it. Scanning the whole file was
+        // hides some of what this exists to find. Scanning the whole file was
         // tried and produces false positives the rule cannot adjudicate: a test *fixture* holding
         // a needle string, and a whole-text `split_once` in a file that uses `.lines()` somewhere
         // unrelated, both look identical to a real line-oriented scanner at this resolution.
@@ -136,13 +145,11 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
         // single COMMENT naming the module switch the guard off for a whole file — demonstrated by
         // adding one to `spawn_paths.rs` and watching it stop being checked. A comment cannot
         // import anything, so requiring the import closes it.
-        // The import must name `statements`, not merely `srcscan`. `production_source` is the other
-        // export and it does nothing about reflow — a file importing only that one, while still
+        // The import must name a reflow-proof reader, not merely `srcscan`. `production_source`
+        // and `line_of` do nothing about reflow — a file importing only those, while still
         // hand-rolling a line-oriented needle scan, would otherwise be excused for the very thing
         // this guard is about. Adoption means using the tolerant reader, not touching the module.
-        let adopted = stmts.iter().any(|(_, s)| {
-            s.starts_with("use ") && s.contains("srcscan") && s.contains("statements")
-        });
+        let adopted = stmts.iter().any(|(_, s)| adopts_a_reflow_proof_reader(s));
         // Whether a needle in THIS file is worth reporting is entirely a property of the file, so
         // it is decided once. Line-oriented reading is the hazard; a whole-text scan is not one.
         // Leaving these inside the loop meant re-scanning the whole text once per needle —
@@ -162,8 +169,9 @@ fn a_scanner_with_a_call_shaped_needle_reads_statements_not_lines() {
                 offenders.push(format!(
                     "{rel}:{line}\n    {}\n    ^ a needle of the form `IDENT(` in a file that reads \
                      `.lines()`. rustfmt can break a call at exactly that point, and the scan would \
-                     then match nothing while reporting success. Use `nestwatch::srcscan::statements`, \
-                     or add the file to KNOWN_SAFE with the reason it fails closed.",
+                     then match nothing while reporting success. Use \
+                     `nestwatch::srcscan::find_tokens`, or add the file to KNOWN_SAFE with the \
+                     reason it fails closed.",
                     stmt.chars().take(120).collect::<String>()
                 ));
             }
@@ -220,4 +228,34 @@ fn the_needle_detector_knows_the_shape_from_its_neighbours() {
             "should NOT have matched: {no}"
         );
     }
+}
+
+/// Which files the guard polices is read from their code, not from their prose.
+///
+/// A file whose only `.lines()` was a doc comment recording the old bug was still read as
+/// line-oriented, and stayed on `KNOWN_SAFE` for that alone. And importing `find_tokens`, the
+/// reader that replaced `statements` because that one failed open, did not count as adopting
+/// anything, while importing `statements` still did.
+#[test]
+fn which_files_are_policed_is_read_from_code_not_comments() {
+    assert!(!reads_lines("//! `.lines()` was the bug.\nfn f() {}\n"));
+    assert!(!reads_lines(
+        "fn f() {}\n// it used to call text.lines() here\n"
+    ));
+    assert!(reads_lines("for line in text.lines() {}\n"));
+    assert!(reads_lines("for line in text\n    .lines()\n{}\n"));
+
+    assert!(adopts_a_reflow_proof_reader(
+        "use nestwatch::srcscan::{find_tokens, line_of};"
+    ));
+    assert!(adopts_a_reflow_proof_reader(
+        "use nestwatch::srcscan::call_arguments;"
+    ));
+    assert!(!adopts_a_reflow_proof_reader(
+        "use nestwatch::srcscan::statements;"
+    ));
+    assert!(!adopts_a_reflow_proof_reader(
+        "use nestwatch::srcscan::{line_of, production_source};"
+    ));
+    assert!(!adopts_a_reflow_proof_reader("use other::find_tokens;"));
 }
