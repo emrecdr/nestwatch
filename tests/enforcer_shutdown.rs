@@ -13,8 +13,8 @@
 //!   address, so a Shutdown-configured install never told the child how to ask, while an otherwise
 //!   identical Lock-configured one always did.
 //!
-//! Neither is arithmetic; both are **wiring**, which is the class `docs/OPEN-FINDINGS.md` O70 names
-//! as this project's recurring failure and the reason it asks for a driver test. A test on
+//! Neither is arithmetic; both are **wiring**, which is the class `docs/OPEN-FINDINGS.md` O75 names
+//! as this project's recurring failure, and the reason this is a driver test. A test on
 //! `shutdown_message(lang)` proves the string is translated and says nothing about whether the loop
 //! calls it, and `FakeControl::shutdown` only wrote to `tracing`, so until now nothing *could*
 //! observe the message at all.

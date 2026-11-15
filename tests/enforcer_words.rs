@@ -10,7 +10,7 @@
 //! this feature added around it: the loop has to clamp the helper's report *before* `decide` rather
 //! than only inside `record_foreground`, and it has to ask `SystemControl::child_processes` — and pass
 //! the answer through — on ticks where a group has words. A loop that forgot either would leave
-//! every unit test green and close nothing, which is this project's recurring failure (`O70`).
+//! every unit test green and close nothing, which is this project's recurring failure (`O75`).
 //!
 //! # Why one second of real waiting
 //!

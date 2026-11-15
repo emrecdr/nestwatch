@@ -29,6 +29,12 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   write both, leaves the service on plain local time. `doctor` reported it as anchored, or reported
   a change of zone as held off by "the recorded zone". It now says the clock is not anchored, which
   is what the service is doing.
+- **Undoing a bedtime extension straight away no longer skips the warning it promises.** When an
+  extension called off a pending bedtime shutdown, the bedtime countdown started again from nothing,
+  so an extension undone or shortened within half a minute of being granted brought bedtime back
+  without the fifteen- or five-minute warning the child should hear first, the warning the undo
+  button promises. The countdown now carries on from the reading taken when the shutdown was called
+  off. Bedtimes and extensions left alone behave exactly as before.
 
 ### Internal
 

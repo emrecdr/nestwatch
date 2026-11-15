@@ -357,18 +357,20 @@ impl Enforcer {
         //
         // * A shutdown is pending — bedtime has *arrived*, and Windows' own countdown dialog is on
         //   screen. A popup promising it is still coming is a plain contradiction.
-        // * One was just aborted — the window ended this tick, so the next is a whole day off and
-        //   the countdown is re-priming. Announcing from a reading taken before the abort would
-        //   count down to a bedtime that already happened.
+        // * One was just aborted — the window ended this tick, and the tick that calls a shutdown
+        //   off is no moment to announce the next bedtime.
         //
-        // The loop happens to pass `Nothing` in both cases today, so this changes no behaviour. It
-        // moves the guarantee from "the caller is careful" to "the enforcer cannot do otherwise",
-        // which is the difference between a convention and a rule.
+        // That second rule silences the tick, not the reading: what the countdown took on it is
+        // this tick's view, after whatever ended the window, so the next reading is compared with
+        // it. That matters when bedtime comes back within the countdown's horizon — an extension
+        // undone or shortened before the next tick. Resetting the countdown here, as this once did
+        // on the theory that the next bedtime was a day off, made that next reading prime instead
+        // of cross, and the child lost the warning `Curfew::undo_extension` promises
+        // (`tests/curfew_sequence.rs`).
+        //
+        // It moves the guarantee from "the caller is careful" to "the enforcer cannot do
+        // otherwise", which is the difference between a convention and a rule.
         if self.deadline.is_some() || action == Action::Abort {
-            if action == Action::Abort {
-                // Re-arm, so the first reading after the window closes primes rather than warns.
-                self.countdown.reset();
-            }
             return (action, None);
         }
 
@@ -1610,21 +1612,25 @@ mod tests {
         assert_eq!(warning, Some(15), "and the child gets the heads-up");
     }
 
-    /// After an abort the countdown re-arms even when the reading taken on the abort tick would
-    /// make the next one a crossing. The test above reads 15 twice, which is no crossing whether
-    /// the countdown re-armed or not, so dropping the re-arm passed (`O109`).
+    /// A bedtime that comes back within the countdown's horizon after an abort is warned about:
+    /// the reading taken on the abort tick stands, so the next one is a crossing. This test used
+    /// to assert the opposite, pinning a re-arm written when an abort could only mean the window
+    /// had closed for the night. An extension also ends the window, and undone before the next
+    /// tick it brings bedtime back fifteen minutes out — where the re-arm lost the warning
+    /// `Curfew::undo_extension` promises. `tests/curfew_sequence.rs` drives it through the loop.
     #[test]
-    fn an_abort_re_arms_even_when_the_next_reading_would_cross() {
+    fn a_bedtime_coming_back_soon_after_an_abort_is_warned_about() {
         let mut e = Enforcer::new();
         let base = Instant::now();
         e.tick(true, Upcoming::Nothing, base, WARN, SLACK);
-        let (action, _) = e.tick(false, Upcoming::In(Some(16)), base, WARN, SLACK);
+        let (action, warning) = e.tick(false, Upcoming::In(Some(16)), base, WARN, SLACK);
         assert_eq!(action, Action::Abort);
-        let (_, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
         assert_eq!(
             warning, None,
-            "a reading taken while the window was closing must not count towards the next bedtime"
+            "nothing is said on the tick that calls the shutdown off"
         );
+        let (_, warning) = e.tick(false, Upcoming::In(Some(15)), base, WARN, SLACK);
+        assert_eq!(warning, Some(15));
     }
 
     /// A re-issued shutdown gets its own warning time before it is re-issued again. The re-issue

@@ -37,8 +37,8 @@ pub struct FakeControl {
     /// was hard-coded English on every install, and it was the one child-facing message that never
     /// carried the "where to ask for more time" address. A `tracing::warn!` cannot be asserted on,
     /// so nothing could reach the loop that builds it. `tests/enforcer_shutdown.rs` and
-    /// `tests/curfew_enforcer.rs` now do, through this field; `docs/OPEN-FINDINGS.md` O70 tracks
-    /// what a driver test still cannot see, which is the *order* the loop does things in.
+    /// `tests/curfew_enforcer.rs` now do, through this field, and `tests/enforcer_day.rs` and
+    /// `tests/curfew_sequence.rs` assert the *order* the loops do things in.
     shutdowns: Mutex<Vec<(u32, Option<String>)>>,
     /// Every `(title, body)` this fake was asked to show the child, in order.
     ///

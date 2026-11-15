@@ -20,19 +20,7 @@ use nestwatch::curfew::{Curfew, run_enforcer};
 use nestwatch::usage::UsageLog;
 
 mod common;
-use common::wait_for;
-
-/// A curfew whose window opens `mins` minutes from now and lasts an hour.
-fn bedtime_in(mins: i64) -> Curfew {
-    let start = nestwatch::clock::now() + chrono::Duration::minutes(mins);
-    let hm = |t: chrono::DateTime<chrono::FixedOffset>| t.format("%H:%M").to_string();
-    Curfew {
-        enabled: true,
-        start: hm(start),
-        end: hm(start + chrono::Duration::hours(1)),
-        ..Default::default()
-    }
-}
+use common::{bedtime_in, wait_for};
 
 #[tokio::test]
 async fn bedtime_is_counted_down_while_curfew_is_on_and_not_announced_on_switching_it_on() {

@@ -9,7 +9,8 @@
 //! multi-tick sequences in seventeen unit tests, and `enforcer_shutdown.rs` runs one budget out to
 //! one shutdown. What none of them sees is the **order of what reaches the child**: a warning that
 //! fires twice, one that fires after the ending, a grant that does not re-arm, or an audit row
-//! recorded for a notice that was never delivered. `docs/OPEN-FINDINGS.md` `O70` names that shape —
+//! recorded for a notice that was never delivered. `O70` named that shape, and closed once this
+//! and `tests/curfew_sequence.rs` drove both loops in order —
 //! ordering is where this project's wiring defects have lived — and the gate work this month found
 //! two more of them (`ad21b41`, `bcb4a7f`) at exactly the join between tested pieces.
 //!

@@ -17,7 +17,7 @@
 //!
 //! # How this crosses midnight without a clock
 //!
-//! The loop's `today` is not injectable (`docs/OPEN-FINDINGS.md` `O70`), but its tally is read
+//! The loop's `today` is not injectable, but its tally is read
 //! from disk. A tally dated yesterday is exactly what a pause that ran past midnight leaves behind,
 //! so seeding one puts the loop on the far side of midnight from its first tick.
 //!

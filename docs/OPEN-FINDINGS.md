@@ -999,77 +999,6 @@ above a paragraph about something else — stranded since the root commit `e760a
 Found by a person reading the block while adding a neighbour, and moved back; no guard reaches a
 method.
 
-### O70 · The enforcer loops are driven down one path each, never across a scripted day
-
-The coverage run that opened this entry (`cargo llvm-cov`, 2026-08-27 at `7091c84`, host target)
-put the crate at **84.03%** of lines. The number was not the finding; where the misses sat was:
-
-| file | lines uncovered | what they are |
-|---|---|---|
-| `rules.rs` | 251 of 1,471 | almost all of `run_rules_enforcer` |
-| `curfew.rs` | 72 of 579 | almost all of `run_enforcer` |
-| `helper.rs` | 29 of 32 (**0%**) | the whole file — capture/lock/watch, all Windows shell-outs |
-| `clock.rs` | 6 of 224 | effectively none |
-
-**The headline this entry used to carry — that no test executes the loops — is retired.** Three
-now do, all spawning the real driver against a `FakeControl`: `tests/enforcer_loop.rs` asserts what
-a paused tick and an unconfigured one write to the tally, `tests/enforcer_shutdown.rs` runs the
-budget out to its shutdown and asserts the bytes the child would really see, and
-`tests/curfew_enforcer.rs` does the same for `run_enforcer` at bedtime.
-
-**What survives is the shape of the coverage rather than its absence.** Each of those drives one
-path to one ending. Nothing asserts a *sequence*: the 15/5/1 warnings in order and each fired once,
-then the kill or lock or shutdown, with the tally write and the audit rows that belong beside them,
-over a simulated day. Ordering is where this project's real defects have lived — the dropped
-`enabled` guard and the Win+L bypass were both wiring — and a single-path test cannot see a warning
-that fires twice, one that fires after the ending, or an audit row written for a notice that never
-reached the child.
-
-**Not a coverage gate** — see the row in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md), whose
-re-raise trigger this entry has now tripped. The remaining work was a scripted sequence asserting
-an ordered list of control calls — not with `tokio::time` pause/advance, which `enforcer_loop.rs`
-shows cannot move a loop that charges `std::time::Instant`, but by walking the budget through the
-config the loop reads on every tick.
-
-**The rules loop has its sequence — 2026-10-03.** `tests/enforcer_day.rs` seeds a hundred minutes
-used and lowers the daily limit step by step with a wake after each write, the way a parent's edit
-wakes the loop: remaining crosses 15, 5, 1 and 0 in four ticks. It asserts, on the fake's recorded
-calls in order, the three warnings each said once with their `budget_countdown` rows, one shutdown
-with the configured grace and no fourth notice (Windows' own box carries that message), a grant
-calling the shutdown off at the day it made and announcing nothing, and the fifteen-minute warning
-said again afterwards because the grant re-armed the countdown. Two hand mutants — announcing the
-reading instead of the threshold, and never aborting a shutdown — each fail it. The re-arm turned
-out to have **two independent spellings**: the stand-down `reset()` when the budget is spent
-(`rules.rs`), and `Countdown::observe`'s rule that a rising reading is not a crossing. Removing
-either alone leaves the harness green, because the other still re-arms; removing both fails it at
-the post-grant warning. That is the shape `control/mod.rs` documents for the probe timeout —
-defence in depth, measured rather than assumed — and it is now written at the test.
-
-**The harness is now whole.** `FakeControl` records every `shutdown` as `(delay_secs, message)` in
-order, bounded at 64, and — since the app-stopped work — every `notify_user` as `(title, body)`,
-bounded at 128, with `notification_bodies()` for the common assertion. This entry used to end by
-naming that gap: *"the warnings — the half of the sequence that carries the ordering risk — cannot
-be asserted on at all until it records too."* They can now, and
-`tests/enforcer_app_stopped.rs` is the first test to do it.
-
-**The curfew loop's countdown is driven too, since 2026-10-24.** `tests/curfew_countdown.rs` moves
-bedtime closer by rewriting the window and waking the loop, hears the fifteen- and five-minute
-warnings once each, and checks that switching curfew off and back on near bedtime re-primes rather
-than announcing a threshold that passed while it was off. **What remains** is the rest of that
-sequence — the shutdown at bedtime and an extension calling it off, in one run — and a midnight
-rollover. The rules loop can now be started on the far side of midnight by seeding a tally dated
-yesterday (`tests/enforcer_paused.rs`); the curfew loop keeps no day of its own to seed, so a
-rollover there still needs its clock injectable rather than read from `clock::now()`.
-
-**helper.rs is untouched by any of the above** and stands at 0%: capture, lock and watch are
-Windows shell-outs that no host test reaches. That row of the original measurement is unchanged,
-and it is not the row a driver test can move.
-
-**Already banked from the original run.** Three child-facing strings were reachable only from these
-loops and so had never been asserted at all — `lock_warning_message`, `limit_reached_message` and
-`bedtime_title`, each with a Dutch translation that nothing checked. Fixed, with `Language::ALL`
-added so the tests cannot go stale when a third language lands.
-
 ### O71 · The dashboard is one Alpine component, and the usual argument for splitting it is wrong
 
 `assets/app.js` is **4,146 lines** registering a single `Alpine.data("app", app)` with 171
@@ -1620,7 +1549,7 @@ tier-3 surface, and only one of them is visible.
 has exercised: a schedule that opens and closes against `clock`'s tamper-anchored local time and
 must hand back on close; the `once per source per day` latch surviving a service restart; a provider
 toggle that must stop a grant without unpairing. Each is the kind of wiring that
-`O70`/`O75` record as the class where this project's real defects live.
+`O75` records as the class where this project's real defects live.
 
 **Fix.** A section I for 0.6.0, written to section H's standard — each item saying *what it proves*,
 because H's own preamble warns that several checks pass trivially when the underlying call is

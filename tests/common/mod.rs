@@ -28,6 +28,21 @@ use nestwatch::usage::UsageLog;
 
 pub const PASSWORD: &str = "test-password";
 
+/// A curfew whose window opens `mins` minutes from the trusted clock's now and lasts an hour.
+///
+/// Bedtime is moved rather than the clock: a test writes one of these and wakes the loop, the way
+/// a parent's edit does. Negative `mins` gives a window already open.
+pub fn bedtime_in(mins: i64) -> nestwatch::curfew::Curfew {
+    let start = nestwatch::clock::now() + chrono::Duration::minutes(mins);
+    let hm = |t: chrono::DateTime<chrono::FixedOffset>| t.format("%H:%M").to_string();
+    nestwatch::curfew::Curfew {
+        enabled: true,
+        start: hm(start),
+        end: hm(start + chrono::Duration::hours(1)),
+        ..Default::default()
+    }
+}
+
 /// A default [`Config`] carrying the test password.
 pub fn test_config() -> Config {
     Config {

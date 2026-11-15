@@ -410,7 +410,7 @@ pattern is not speculative; `onetun` ships it, in the outbound direction.
 | A network adapter visible in the OS | **None** |
 | `#[cfg(windows)]`, so no host test can see it | **Cross-platform.** Runs and is tested on the dev machine and in CI |
 
-That last row is the one that should decide it. `O87`, `O70` and `O75` all record the same thing:
+That last row is the one that should decide it. `O87` and `O75` both record the same thing:
 this project's real defects live in Windows-only code that nothing can execute. A Wintun design is
 born into that category. A userspace design is not.
 

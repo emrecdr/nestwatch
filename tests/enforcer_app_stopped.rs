@@ -6,7 +6,7 @@
 //!
 //! # Why this drives the loop rather than testing the message function
 //!
-//! The defect this closes was **entirely wiring**, which is the class `docs/OPEN-FINDINGS.md` O70
+//! The defect this closes was **entirely wiring**, which is the class `docs/OPEN-FINDINGS.md` O75
 //! names as this project's recurring failure. Every piece needed to tell a child why their game
 //! shut was already present and correct — `notify_child`, `with_hint`, `ask_hint`, the translation
 //! convention — and the blocklist / per-app-limit / group-pool paths simply did not call any of
