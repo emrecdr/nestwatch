@@ -429,4 +429,256 @@ mod off_windows {
         assert!(out.contains("fingerprint starts"), "{out}");
         drop(listener);
     }
+
+    const PASSWORD: &str = "kw7pxq2mzv";
+
+    /// `nestwatch install args…`, headless, with this machine's name pinned so the certificate
+    /// covers the same hosts on every run.
+    fn install(data: &Path, args: &[&str]) -> Ran {
+        let all: Vec<&str> = std::iter::once("install")
+            .chain(args.iter().copied())
+            .collect();
+        let mut cmd = command(data, &all);
+        cmd.env("NESTWATCH_PASSWORD", PASSWORD)
+            .env("HOSTNAME", "nw-cli-host")
+            .env_remove("COMPUTERNAME");
+        finish(cmd, &all.join(" "))
+    }
+
+    fn free_port() -> String {
+        let probe = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        probe.local_addr().unwrap().port().to_string()
+    }
+
+    fn read_config(data: &Path) -> Config {
+        serde_json::from_str(&std::fs::read_to_string(data.join("config.json")).unwrap()).unwrap()
+    }
+
+    fn write_config(data: &Path, config: &Config) {
+        std::fs::write(
+            data.join("config.json"),
+            serde_json::to_string(config).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn fingerprint(data: &Path) -> String {
+        nestwatch::cert::read_fingerprint(&data.join("cert.pem")).unwrap()
+    }
+
+    /// A first install makes the data folder and writes the settings, the certificate and the
+    /// record of what is installed. Nothing ran `install` before (`O109`).
+    #[test]
+    fn install_writes_the_settings_the_certificate_and_the_record() {
+        let scratch = ScratchDir::new("cli-install");
+        let data = scratch.join("data");
+        let port = free_port();
+        let ran = install(&data, &["--port", &port]);
+        assert_eq!(ran.code, Some(0), "{}\n{}", ran.out(), ran.stderr);
+
+        let cfg = read_config(&data);
+        assert_eq!(cfg.port.to_string(), port);
+        assert!(nestwatch::auth::verify_password(
+            PASSWORD,
+            &cfg.password_hash
+        ));
+        assert!(
+            cfg.tz_offset_mins.is_some(),
+            "the clock is anchored at install"
+        );
+        assert!(
+            cfg.cert_sans.contains(&"nw-cli-host".to_string()),
+            "{:?}",
+            cfg.cert_sans
+        );
+        let record: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(data.join("installed.json")).unwrap())
+                .unwrap();
+        assert_eq!(record["version"], env!("CARGO_PKG_VERSION"));
+
+        let out = ran.out();
+        assert!(out.contains("(service install is Windows-only"), "{out}");
+        assert!(out.contains("\nInstalled."), "{out}");
+        assert!(out.contains(&format!("  {}", fingerprint(&data))), "{out}");
+    }
+
+    /// A reinstall keeps the parent's settings and the certificate their devices trust, and
+    /// reissues the certificate only on `--new-cert`, a changed address or a missing key.
+    #[test]
+    fn a_reinstall_keeps_the_settings_and_the_certificate_until_told_otherwise() {
+        let scratch = ScratchDir::new("cli-reinstall");
+        let data = scratch.join("data");
+        let port = free_port();
+        assert_eq!(install(&data, &["--port", &port]).code, Some(0));
+        let first = fingerprint(&data);
+        // A limit set since, and a zone recorded somewhere else.
+        let mut cfg = read_config(&data);
+        cfg.rules.daily_budget_mins = 95;
+        cfg.tz_zone = Some("Stale Zone".into());
+        write_config(&data, &cfg);
+
+        let again = install(&data, &[]);
+        assert_eq!(again.code, Some(0), "{}", again.stderr);
+        assert!(again.out().contains("Keeping the existing certificate"));
+        assert_eq!(fingerprint(&data), first);
+        let cfg = read_config(&data);
+        assert_eq!(
+            cfg.port.to_string(),
+            port,
+            "the saved port, with no --port given"
+        );
+        assert_eq!(cfg.rules.daily_budget_mins, 95);
+        assert_eq!(
+            cfg.tz_zone, None,
+            "re-recorded here, where there is no zone to record"
+        );
+
+        let renewed = install(&data, &["--new-cert"]);
+        assert!(!renewed.out().contains("Keeping the existing certificate"));
+        assert!(!renewed.out().contains("address changed"));
+        assert_ne!(fingerprint(&data), first);
+
+        let mut cfg = read_config(&data);
+        cfg.cert_sans = vec!["10.255.255.1".into()];
+        write_config(&data, &cfg);
+        let before_move = fingerprint(&data);
+        let moved = install(&data, &[]);
+        assert!(
+            moved
+                .out()
+                .contains("This PC's address changed (10.255.255.1 -> "),
+            "{}",
+            moved.out()
+        );
+        assert_ne!(fingerprint(&data), before_move);
+        assert!(
+            read_config(&data)
+                .cert_sans
+                .contains(&"nw-cli-host".to_string())
+        );
+
+        std::fs::remove_file(data.join("key.pem")).unwrap();
+        let before_rekey = fingerprint(&data);
+        let rekeyed = install(&data, &[]);
+        assert!(!rekeyed.out().contains("Keeping the existing certificate"));
+        assert!(!rekeyed.out().contains("address changed"));
+        assert_ne!(fingerprint(&data), before_rekey);
+    }
+
+    /// Settings that are there and do not parse stop the install rather than being reset in
+    /// silence, and `--reset-config` is the way through.
+    #[test]
+    fn an_unreadable_settings_file_stops_the_install_until_reset() {
+        let scratch = ScratchDir::new("cli-install-corrupt");
+        std::fs::write(scratch.join("config.json"), "{ not json").unwrap();
+        let port = free_port();
+        let refused = install(scratch.path(), &["--port", &port]);
+        assert_eq!(refused.code, Some(1), "{}", refused.out());
+        assert!(
+            refused.stderr.contains("re-run with `--reset-config`"),
+            "{}",
+            refused.stderr
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("config.json")).unwrap(),
+            "{ not json"
+        );
+
+        let reset = install(scratch.path(), &["--port", &port, "--reset-config"]);
+        assert_eq!(reset.code, Some(0), "{}", reset.stderr);
+        assert!(
+            reset
+                .out()
+                .contains("(--reset-config: replacing the unreadable")
+        );
+        assert_eq!(read_config(scratch.path()).port.to_string(), port);
+    }
+
+    /// A port something else holds stops the install before it writes anything, and with nothing
+    /// fixable off Windows there is no second report.
+    #[test]
+    fn a_held_port_stops_the_install_before_anything_is_written() {
+        let scratch = ScratchDir::new("cli-install-held");
+        let data = scratch.join("data");
+        let held = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        let ran = install(&data, &["--port", &port.to_string()]);
+        assert_eq!(ran.code, Some(1), "{}", ran.out());
+        assert!(
+            ran.stderr
+                .contains("pre-flight checks failed — nothing was installed"),
+            "{}",
+            ran.stderr
+        );
+        assert!(
+            ran.out()
+                .contains(&format!("port {port} is already in use"))
+        );
+        assert!(!ran.out().contains("Still outstanding"), "{}", ran.out());
+        assert!(!data.exists(), "nothing may be written");
+        drop(held);
+    }
+
+    /// Devices signed in before an install stay signed in, and say so, unless
+    /// `--revoke-sessions` signs them out while the service is stopped.
+    #[test]
+    fn a_reinstall_keeps_devices_signed_in_unless_told_to_sign_them_out() {
+        use nestwatch::sessionstore::FileSessionStore;
+        let scratch = ScratchDir::new("cli-install-sessions");
+        let sessions = scratch.join("sessions.json");
+        let mut record = tower_sessions::session::Record {
+            id: tower_sessions::session::Id::default(),
+            data: std::collections::HashMap::new(),
+            expiry_date: tower_sessions::cookie::time::OffsetDateTime::now_utc()
+                + tower_sessions::cookie::time::Duration::days(30),
+        };
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(tower_sessions::SessionStore::create(
+                &FileSessionStore::new(sessions.clone()),
+                &mut record,
+            ))
+            .unwrap();
+        let live = || FileSessionStore::new(sessions.clone()).snapshot().len();
+        assert_eq!(live(), 1);
+
+        let kept = install(scratch.path(), &["--port", &free_port()]);
+        assert!(
+            kept.out().contains("1 device is still signed in"),
+            "{}",
+            kept.out()
+        );
+        assert_eq!(live(), 1);
+
+        let revoked = install(scratch.path(), &["--revoke-sessions"]);
+        assert!(
+            revoked.out().contains("Signed out 1 device."),
+            "{}",
+            revoked.out()
+        );
+        assert_eq!(live(), 0);
+    }
+
+    /// `uninstall` removes the record of what was installed and keeps the settings, and
+    /// `--purge` removes the data folder too.
+    #[test]
+    fn uninstall_keeps_the_settings_unless_purged() {
+        let scratch = ScratchDir::new("cli-uninstall");
+        let data = scratch.join("data");
+        assert_eq!(install(&data, &["--port", &free_port()]).code, Some(0));
+
+        let ran = nestwatch(&data, &["uninstall"]);
+        assert_eq!(ran.code, Some(0), "{}", ran.stderr);
+        assert!(ran.out().contains("(service uninstall is Windows-only)"));
+        assert!(ran.out().contains("\nUninstalled."));
+        assert!(!data.join("installed.json").exists());
+        assert!(
+            data.join("config.json").exists(),
+            "settings stay without --purge"
+        );
+
+        let purged = nestwatch(&data, &["uninstall", "--purge"]);
+        assert_eq!(purged.code, Some(0), "{}", purged.stderr);
+        assert!(!data.exists());
+    }
 }

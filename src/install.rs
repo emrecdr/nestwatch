@@ -139,17 +139,9 @@ pub fn install() -> Result<()> {
     }
 
     // Interactive by default; NESTWATCH_PASSWORD allows a silent/headless install.
-    let password = match std::env::var("NESTWATCH_PASSWORD") {
-        // Headless: there is nobody to re-prompt, so a bad value has to fail — but it still says
-        // exactly what was wrong with it, and names the variable, because the value is invisible
-        // here in a way a typed one is not.
-        Ok(pw) if !pw.is_empty() => {
-            if let Err(problem) = auth::check_password(&pw) {
-                bail!("NESTWATCH_PASSWORD is not usable: {}", problem.message());
-            }
-            pw
-        }
-        _ => prompt_for_password()?,
+    let password = match password_from_env(std::env::var("NESTWATCH_PASSWORD").ok()) {
+        Some(headless) => headless?,
+        None => prompt_for_password()?,
     };
 
     let paths = config::data_paths();
@@ -572,6 +564,25 @@ fn offer_fixes(findings: &[crate::preflight::Finding], assume_yes: bool) -> Resu
     Ok(changed)
 }
 
+/// The password `NESTWATCH_PASSWORD` gives a headless install, or `None` to ask at the console.
+///
+/// Headless: there is nobody to re-prompt, so a bad value has to fail — but it still says exactly
+/// what was wrong with it, and names the variable, because the value is invisible here in a way a
+/// typed one is not. Unset or empty means somebody is there to type one.
+///
+/// Apart from `install` so it can be tested: the other answer is a terminal prompt no test can type
+/// into, and every branch here was untested (`O109`).
+fn password_from_env(var: Option<String>) -> Option<Result<String>> {
+    let pw = var.filter(|pw| !pw.is_empty())?;
+    Some(match auth::check_password(&pw) {
+        Ok(()) => Ok(pw),
+        Err(problem) => Err(anyhow::anyhow!(
+            "NESTWATCH_PASSWORD is not usable: {}",
+            problem.message()
+        )),
+    })
+}
+
 /// Ask for the password, and keep asking.
 ///
 /// This used to `bail!` on the first mismatch or short entry, which aborted the whole install
@@ -582,8 +593,6 @@ fn offer_fixes(findings: &[crate::preflight::Finding], assume_yes: bool) -> Resu
 /// this was "I am entering 10 characters and it says I need 10": a message that only restates the
 /// rule cannot resolve that, and a message carrying the count resolves it immediately.
 fn prompt_for_password() -> Result<String> {
-    const TRIES: u32 = 5;
-
     // Said *before* the prompt, not after, because it changes how the password is chosen.
     //
     // There is no reset link, no recovery email and no vendor to ring — those all need an account
@@ -608,10 +617,17 @@ fn prompt_for_password() -> Result<String> {
          Each device asks for it again a month after it signs in, so put it in a password\n\
          manager now rather than trusting memory.\n"
     );
+    prompt_with(|prompt| rpassword::prompt_password(prompt))
+}
+
+/// The prompt loop, asking through `ask` so a test can answer it. `rpassword` reads the terminal,
+/// which no test has, so the retries and the count of attempts left were untested (`O109`).
+fn prompt_with(mut ask: impl FnMut(&str) -> std::io::Result<String>) -> Result<String> {
+    const TRIES: u32 = 5;
 
     for attempt in 1..=TRIES {
-        let pw = rpassword::prompt_password("Set a control password: ")?;
-        let confirm = rpassword::prompt_password("Confirm password:      ")?;
+        let pw = ask("Set a control password: ")?;
+        let confirm = ask("Confirm password:      ")?;
 
         let complaint = if pw != confirm {
             Some(auth::describe_mismatch(&pw, &confirm))
@@ -2397,5 +2413,71 @@ mod tests {
             "`alternate_note` no longer returns the text this guard searches for, so the scan \
              above is now vacuous — update both together"
         );
+    }
+
+    /// `NESTWATCH_PASSWORD` set and usable is the password, set and unusable fails naming the
+    /// variable, and unset or empty leaves it to the console.
+    #[test]
+    fn the_headless_password_is_used_refused_or_left_to_the_console() {
+        assert!(password_from_env(None).is_none());
+        assert!(password_from_env(Some(String::new())).is_none());
+        let err = password_from_env(Some("short".into()))
+            .expect("a value was given")
+            .expect_err("too short to use");
+        assert!(
+            err.to_string()
+                .starts_with("NESTWATCH_PASSWORD is not usable:"),
+            "{err}"
+        );
+        let pw = password_from_env(Some("kw7pxq2mzv".into())).expect("a value was given");
+        assert_eq!(pw.unwrap(), "kw7pxq2mzv");
+    }
+
+    /// A typo in the confirmation asks again rather than ending the install.
+    #[test]
+    fn a_mismatched_confirmation_asks_again() {
+        let mut answers = ["kw7pxq2mzv", "kw7pxq2mzX", "kw7pxq2mzv", "kw7pxq2mzv"].into_iter();
+        let mut asked = 0;
+        let pw = prompt_with(|_| {
+            asked += 1;
+            Ok(answers.next().expect("asked too often").to_string())
+        })
+        .expect("the second pair matches");
+        assert_eq!(pw, "kw7pxq2mzv");
+        assert_eq!(asked, 4);
+    }
+
+    /// The fifth failed try ends it, and not the fourth or a sixth.
+    #[test]
+    fn the_fifth_failed_try_ends_it() {
+        let mut asked = 0;
+        let err = prompt_with(|_| {
+            asked += 1;
+            Ok(if asked % 2 == 1 {
+                "kw7pxq2mzv"
+            } else {
+                "kw7pxq2mzX"
+            }
+            .to_string())
+        })
+        .expect_err("the two never match");
+        assert!(err.to_string().contains("No attempts left"), "{err}");
+        assert_eq!(asked, 10);
+    }
+
+    /// A removal that failed because the thing was already gone is no leftover. Any other failure
+    /// is one, and says what, where and why.
+    #[test]
+    fn only_a_removal_that_failed_for_a_real_reason_is_a_leftover() {
+        use std::io::{Error, ErrorKind};
+        let path = Path::new("/nowhere/installed.json");
+        assert!(Leftover::removal("the record", path, Ok(())).is_none());
+        let gone = Err(Error::from(ErrorKind::NotFound));
+        assert!(Leftover::removal("the record", path, gone).is_none());
+        let refused = Err(Error::from(ErrorKind::PermissionDenied));
+        let left = Leftover::removal("the record", path, refused).expect("a refusal is left over");
+        assert_eq!(left.what, "the record");
+        assert_eq!(left.detail, "/nowhere/installed.json");
+        assert!(!left.why.is_empty());
     }
 }

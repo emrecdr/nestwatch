@@ -22,8 +22,8 @@
 # and 9 of the 14 in `clock.rs` the same day, leaving 330; then 19 of 24 in the storage files,
 # leaving 311; then 8 of 12 in the report and tracking files, leaving 303; then 8 of 21 in the
 # test-support files, leaving 295; then 32 of 33 in the command-line entry points, leaving 263;
-# then 29 of 50 in `doctor.rs`, leaving 234; then 9 of 35 in `preflight.rs`, leaving 225. Adding
-# a line is a decision, not a formality.
+# then 29 of 50 in `doctor.rs`, leaving 234; then 9 of 35 in `preflight.rs`, leaving 225; then
+# 45 of 143 in `install.rs`, leaving 180. Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -77,23 +77,10 @@ src/helper.rs: replace lock -> Result<()> with Ok(())
 src/install.rs: delete ! in configure_firewall
 src/install.rs: delete ! in configure_firewall
 src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
-src/install.rs: delete ! in install
 src/install.rs: delete ! in offer_fixes
 src/install.rs: delete ! in remove_service
 src/install.rs: delete ! in run_icacls
-src/install.rs: delete ! in uninstall
 src/install.rs: delete field dwSize from struct PROCESSENTRY32W expression in processes_named
-src/install.rs: delete field password_hash from struct Config expression in install
-src/install.rs: delete field port from struct Config expression in install
-src/install.rs: delete field tz_offset_mins from struct Config expression in install
-src/install.rs: delete field tz_zone from struct Config expression in install
 src/install.rs: delete match arm 1053 in describe_service_error
 src/install.rs: delete match arm 1056 in describe_service_error
 src/install.rs: delete match arm 1058 in describe_service_error
@@ -108,13 +95,6 @@ src/install.rs: delete match arm 2 in describe_service_error
 src/install.rs: delete match arm 5 in describe_service_error
 src/install.rs: replace != with == in deploy
 src/install.rs: replace != with == in is_elevated
-src/install.rs: replace != with == in prompt_for_password
-src/install.rs: replace && with || in install
-src/install.rs: replace && with || in install
-src/install.rs: replace && with || in install
-src/install.rs: replace && with || in install
-src/install.rs: replace && with || in install
-src/install.rs: replace && with || in install
 src/install.rs: replace && with || in is_elevated
 src/install.rs: replace && with || in remove_service
 src/install.rs: replace && with || in terminate_and_wait
@@ -122,20 +102,11 @@ src/install.rs: replace * with + in start_and_verify
 src/install.rs: replace * with / in start_and_verify
 src/install.rs: replace += with *= in start_and_verify
 src/install.rs: replace += with -= in start_and_verify
-src/install.rs: replace < with <= in prompt_for_password
-src/install.rs: replace < with == in prompt_for_password
-src/install.rs: replace < with > in prompt_for_password
-src/install.rs: replace == with != in Leftover::removal
-src/install.rs: replace == with != in install
-src/install.rs: replace == with != in install
-src/install.rs: replace == with != in install
-src/install.rs: replace == with != in install
 src/install.rs: replace == with != in install
 src/install.rs: replace == with != in start_and_verify
 src/install.rs: replace == with != in start_and_verify
 src/install.rs: replace == with != in stop_and_wait
 src/install.rs: replace == with != in terminate_and_wait
-src/install.rs: replace == with != in uninstall
 src/install.rs: replace > with < in service_still_registered
 src/install.rs: replace > with < in terminate_resident_helpers
 src/install.rs: replace > with == in service_still_registered
@@ -144,11 +115,9 @@ src/install.rs: replace > with >= in service_still_registered
 src/install.rs: replace > with >= in settle_sessions
 src/install.rs: replace > with >= in terminate_resident_helpers
 src/install.rs: replace >= with < in start_and_verify
-src/install.rs: replace Leftover::removal -> Option<Self> with None
 src/install.rs: replace configure_firewall -> Result<()> with Ok(())
 src/install.rs: replace configure_recovery with ()
 src/install.rs: replace delete_firewall_rule with ()
-src/install.rs: replace deploy -> Result<()> with Ok(())
 src/install.rs: replace deploy -> Result<()> with Ok(())
 src/install.rs: replace describe_service_error -> String with "xyzzy".into()
 src/install.rs: replace describe_service_error -> String with String::new()
@@ -163,16 +132,7 @@ src/install.rs: replace harden_acl -> Result<()> with Ok(())
 src/install.rs: replace harden_program_dir -> Result<()> with Ok(())
 src/install.rs: replace install_dir -> std::path::PathBuf with Default::default()
 src/install.rs: replace is_elevated -> bool with false
-src/install.rs: replace is_elevated -> bool with false
 src/install.rs: replace is_elevated -> bool with true
-src/install.rs: replace match guard !config::data_paths().config.exists() with false in install
-src/install.rs: replace match guard !config::data_paths().config.exists() with true in install
-src/install.rs: replace match guard !pw.is_empty() with false in install
-src/install.rs: replace match guard !pw.is_empty() with true in install
-src/install.rs: replace match guard attempt < TRIES with false in prompt_for_password
-src/install.rs: replace match guard attempt < TRIES with true in prompt_for_password
-src/install.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in Leftover::removal
-src/install.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in Leftover::removal
 src/install.rs: replace match guard out.status.success() with false in configure_recovery
 src/install.rs: replace match guard out.status.success() with true in configure_recovery
 src/install.rs: replace match guard s.current_state == ServiceState::Running with false in start_and_verify
@@ -182,7 +142,6 @@ src/install.rs: replace match guard s.current_state == ServiceState::Stopped wit
 src/install.rs: replace match guard status.current_state == ServiceState::Stopped with false in stop_and_wait
 src/install.rs: replace match guard status.current_state == ServiceState::Stopped with true in stop_and_wait
 src/install.rs: replace offer_fixes -> Result<bool> with Ok(false)
-src/install.rs: replace offer_fixes -> Result<bool> with Ok(true)
 src/install.rs: replace prepare_data_dir -> Result<()> with Ok(())
 src/install.rs: replace prepare_data_dir -> Result<()> with Ok(())
 src/install.rs: replace process_image_path -> Option<String> with None
@@ -196,19 +155,15 @@ src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![]
 src/install.rs: replace prompt_for_password -> Result<String> with Ok("xyzzy".into())
 src/install.rs: replace prompt_for_password -> Result<String> with Ok(String::new())
 src/install.rs: replace remove_service -> Result<()> with Ok(())
-src/install.rs: replace remove_service -> Result<()> with Ok(())
 src/install.rs: replace run_icacls -> Result<()> with Ok(())
 src/install.rs: replace service_still_registered -> bool with false
 src/install.rs: replace service_still_registered -> bool with true
 src/install.rs: replace show_firewall_rule -> std::io::Result<std::process::Output> with Ok(Default::default())
-src/install.rs: replace stamp_path -> std::path::PathBuf with Default::default()
 src/install.rs: replace start_and_verify -> Result<()> with Ok(())
 src/install.rs: replace stop_and_wait -> Result<()> with Ok(())
 src/install.rs: replace terminate_and_wait -> bool with false
 src/install.rs: replace terminate_and_wait -> bool with true
 src/install.rs: replace terminate_resident_helpers with ()
-src/install.rs: replace uninstall -> Result<()> with Ok(())
-src/install.rs: replace write_stamp -> Result<()> with Ok(())
 src/install.rs: replace | with & in deploy
 src/install.rs: replace | with & in remove_service
 src/install.rs: replace | with & in remove_service

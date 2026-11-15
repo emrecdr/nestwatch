@@ -2034,7 +2034,7 @@ recorded rather than defaulted.
 scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
 comes first.
 
-### O109 · A full sweep leaves 225 mutants alive, recorded in a baseline rather than fixed
+### O109 · A full sweep leaves 180 mutants alive, recorded in a baseline rather than fixed
 
 **Measured 2026-10-05, the first weekly run, at `260f4d8`.** Of 2,242 mutants planned: 1,287 caught,
 338 unviable, 555 survived and 2 timed out — and about 130 were never tested, because shard 25
@@ -2253,4 +2253,27 @@ happened, and a stand-in answering with a port waves that port through as an upg
 The other four were the refused-port branch of `check_port`, which a test can reach only by binding
 below 1024 without root on Linux, and never on macOS. The bind's result is now judged apart from the
 bind, by `bind_finding`, and each way it fails is tested. The baseline holds 225 lines after this.
-That leaves `install.rs`, the last file, much of which only means anything on Windows.
+
+**`install.rs`, 2026-11-15: 143 survivors, 45 gone.** 89 are in functions only Windows compiles, the
+service, firewall, ACL and process work behind `deploy` and `remove_service`. Of the 54 in code the
+Linux tests run, nine remain, and none of them can die off Windows: `offer_fixes`, and the two lines
+of `install` that call it, have nothing to do where no finding carries a remedy; `ensure_elevated`
+always passes where every console counts as elevated; `prepare_data_dir` does nothing that saving
+the settings does not do anyway; the two answers of `prompt_for_password` come from a terminal no
+test has; and `settle_sessions` clearing a store with nothing in it is the same as not clearing it.
+No test had ever run `install` or `uninstall`. `tests/cli.rs` now installs headless into a scratch
+folder and reads back what it wrote, the settings, the password hash, the clock anchor, the
+certificate and the install record, and covers a reinstall keeping all of them and the certificate
+until `--new-cert`, a changed address or a missing key; an unreadable settings file stopping the
+install until `--reset-config`; a held port stopping it before anything is written; devices staying
+signed in unless `--revoke-sessions`; and `uninstall` keeping the settings unless `--purge`. The
+`NESTWATCH_PASSWORD` decision and the prompt's retries moved into `password_from_env` and
+`prompt_with`, so neither needs a terminal to be tested. The baseline holds 180 lines after this.
+
+**Every file has now been worked through.** What is left is 180 lines: 138 in functions only Windows
+compiles, which no Linux test can reach and only a mutation run on Windows could judge, and 42
+labelled in the paragraphs above as equivalent, or as reachable only on Windows, from a real
+terminal or in the dev-only fake controller. That leaves one decision in this finding: whether a
+mutation run on a Windows runner is worth what it costs (see *Order of work*). Until then the
+baseline does its job: a new survivor fails the weekly run, and a line comes off only with the test
+that kills it.
