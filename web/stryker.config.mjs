@@ -17,6 +17,14 @@
 //
 // `ask.js` is not mutated: its tests read its text and none runs it, so every mutant would survive
 // whatever it changed. That gap is `O75`'s remaining half.
+//
+// `web/package.json` overrides two packages inside Stryker's own tree, because Stryker pins them
+// below their security fixes: `minimatch` (pinned `~10.2.4`, fixed in 11.0.1) and `qs` (pinned
+// exactly 6.15.1 by `typed-rest-client`, fixed in 6.16.1). Neither is reachable the way this runs —
+// `qs` serves only the dashboard reporter, which is not used, and `minimatch` sees only the
+// patterns below — but an open advisory is an open advisory. Checked with minimatch 11 against a
+// whole-file dry run, a run that must fail on survivors, and a range with nothing to mutate. Drop
+// them once Stryker raises its pins.
 export default {
   testRunner: "command",
   commandRunner: {

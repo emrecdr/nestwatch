@@ -15,5 +15,13 @@
     "@tailwindcss/cli": "4.3.3",
     "daisyui": "5.7.46",
     "tailwindcss": "4.3.3"
+  },
+  "overrides": {
+    "@stryker-mutator/core": {
+      "minimatch": "11.0.8"
+    },
+    "typed-rest-client": {
+      "qs": "6.17.1"
+    }
   }
 }
