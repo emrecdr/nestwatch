@@ -1236,9 +1236,9 @@ found are in `web/stryker.config.mjs`: the test harness evaluates `app.js` in a 
 has to be handed the live mutant or every mutant reports surviving, and the guards that read
 `app.js` as text (`READS_SOURCE`) skip during a mutation run, because the run rewrites that text.
 The translation table is exempt for the same reason, since only those guards check it. The whole
-file is 3,927 mutants at about half a second each; a push's lines are seconds. `extendCurfew` alone
-has 20 survivors today, mostly a toast's kind and the `finally` that clears its busy flag, so the
-first change that touches it will have to answer them.
+file is 4,026 mutants under Stryker 10, at about half a second each; a push's lines are seconds.
+`extendCurfew` alone has 21 survivors today, mostly a toast's kind and the `finally` that clears its
+busy flag, so the first change that touches it will have to answer them.
 
 **What has not: the child's page.** `assets/ask.js`, the script behind the page the child asks for
 more time on, is read as text by its tests and run by none of them: `ask-i18n.test.js` checks its

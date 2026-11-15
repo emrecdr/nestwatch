@@ -11,7 +11,7 @@
     "mutate": "cd .. && stryker run web/stryker.config.mjs"
   },
   "devDependencies": {
-    "@stryker-mutator/core": "8.7.1",
+    "@stryker-mutator/core": "10.1.1",
     "@tailwindcss/cli": "4.3.3",
     "daisyui": "5.7.46",
     "tailwindcss": "4.3.3"
