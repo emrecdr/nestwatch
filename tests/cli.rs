@@ -445,9 +445,27 @@ mod off_windows {
         finish(cmd, &all.join(" "))
     }
 
+    /// A free port for `install` to bind, from outside the range the system hands to a bind on port
+    /// 0.
+    ///
+    /// Taking one from port 0 and releasing it raced the rest of this file: the `run` server, the
+    /// `doctor` listener and the held-port test all bind port 0, and could be given the number
+    /// between the probe here and the install that binds it a second later — which once failed a
+    /// reinstall's pre-flight on a port nothing in that test held. Below 32768 is under the
+    /// ephemeral range on Linux (32768 up) and on macOS and Windows (49152 up), so no bind on port
+    /// 0 can land there, and the counter keeps two tests in this binary from picking the same one.
     fn free_port() -> String {
-        let probe = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
-        probe.local_addr().unwrap().port().to_string()
+        use std::sync::atomic::{AtomicU16, Ordering};
+        // Started from the process id, so two runs at once on one machine begin far apart.
+        static NEXT: AtomicU16 = AtomicU16::new(0);
+        let start = 20_000 + (std::process::id() % 6_000) as u16;
+        loop {
+            let port = start + NEXT.fetch_add(1, Ordering::Relaxed);
+            assert!(port < 32_768, "ran out of ports below the ephemeral range");
+            if std::net::TcpListener::bind(("0.0.0.0", port)).is_ok() {
+                return port.to_string();
+            }
+        }
     }
 
     fn read_config(data: &Path) -> Config {
