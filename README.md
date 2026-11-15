@@ -355,6 +355,7 @@ NESTWATCH_PASSWORD=dev-password cargo run -- install   # 8+ chars, or install re
 cargo run -- run        # https://localhost:8443
 cargo test              # unit + HTTP integration tests (run on any OS)
 cd web && npm test      # the dashboard's own logic (node:test, no framework installed)
+cd web && npm run mutate -- --mutate assets/app.js:120-160   # mutation-test lines you changed
 ```
 
 Skip the CSS build and the UI serves unstyled — `build.rs` warns, it is not an error. It also

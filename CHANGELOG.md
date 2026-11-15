@@ -38,6 +38,10 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Internal
 
+- **The dashboard's JavaScript is mutation-tested on every push, as the Rust already was.** A new CI
+  job runs StrykerJS on the lines of `assets/app.js` a push changes and fails if one can be altered
+  with no test noticing. `npm run mutate` in `web/` runs the same thing locally. The child's page
+  (`ask.js`) is not covered yet: its tests read its text and none runs it.
 - **The per-push mutation check fails instead of going grey when a push brings more than it can
   test.** It has 30 minutes, which holds about 23 mutants, and a job stopped by its own time limit
   is recorded as *cancelled*: grey beside the green checks, and read as somebody having stopped it.

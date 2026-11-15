@@ -36,3 +36,6 @@
 # sweep that picked these up would find a second, near-identical copy of both pages and every
 # future scanner would have to learn to skip them.
 web/.scan/
+
+# StrykerJS sandbox (`npm run mutate`, web/stryker.config.mjs).
+.stryker-tmp/

@@ -301,6 +301,69 @@ jobs:
           path: mutants.out
           if-no-files-found: ignore
 
+  # The same question for the dashboard's JavaScript, which `cargo-mutants` never reads: can a line
+  # this push changed in `assets/app.js` be altered with no test noticing? StrykerJS answers it, on
+  # exactly those lines. `web/stryker.config.mjs` says why its setup differs from a stock one, and
+  # why `ask.js` is not mutated (`docs/OPEN-FINDINGS.md` `O75`). Blocking for the reason the job
+  # above gives; a mutant that is genuinely equivalent is disabled where it lives, with a reason.
+  web-mutants:
+    if: >-
+      (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
+      || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # The base is chosen exactly as for `mutants` above, for the same reasons. What differs is
+      # the output: Stryker takes line ranges, so the hunks this diff adds to `app.js` become
+      # `assets/app.js:start-end`, and a hunk that only deletes contributes nothing, because there
+      # is no new line left to mutate.
+      - name: Collect the lines of app.js this diff changed
+        id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+          BASE_REF: ${{ github.base_ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            base="origin/$BASE_REF"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            base="$BEFORE"
+          else
+            echo "No previous tip for this ref — falling back to the first parent of HEAD."
+            base="HEAD~1"
+          fi
+          echo "Diffing against $base"
+          ranges=$(git diff -U0 "$base"...HEAD -- assets/app.js | awk '
+            /^@@ / {
+              split($3, plus, ",")
+              start = substr(plus[1], 2) + 0
+              count = (plus[2] == "") ? 1 : plus[2] + 0
+              if (count > 0) {
+                printf "%sassets/app.js:%d-%d", sep, start, start + count - 1
+                sep = ","
+              }
+            }')
+          echo "mutate=$ranges" >> "$GITHUB_OUTPUT"
+          if [ -z "$ranges" ]; then
+            echo "No line of app.js added or changed in this diff — nothing to mutate."
+          else
+            echo "Mutating $ranges"
+          fi
+      # Installs the web toolchain, Stryker included, and builds `assets/app.css`, which the tests
+      # read.
+      - if: steps.diff.outputs.mutate != ''
+        uses: ./.github/actions/frontend-css
+      - name: Test the mutants on those lines
+        if: steps.diff.outputs.mutate != ''
+        working-directory: web
+        env:
+          MUTATE: ${{ steps.diff.outputs.mutate }}
+        run: npm run mutate -- --mutate "$MUTATE"
+
   # Produce the shippable Windows .exe. Only on main / tags (not every branch/PR push), and not
   # on the weekly run: `test (windows-latest)` already builds and tests on Windows there, so this
   # job would only re-package an artifact nobody downloads. A scheduled run reports `github.ref`

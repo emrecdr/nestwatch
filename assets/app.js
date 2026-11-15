@@ -120,6 +120,10 @@ applyLangAttr(readLang());
 // borrowings; the eighth is a shell command and must never be translated. They are not untranslated
 // leftovers, and the guard that would catch real ones — every table answering every key — cannot
 // tell the two apart, so this note is the only thing that does.
+//
+// Stryker disable all: this table is data, and the guards that check it read this file as text —
+// which a mutation run rewrites, so it skips them (`READS_SOURCE` in `web/test/harness.js`). Left
+// mutated, every string here would survive and fail any change that touches one.
 const UI = {
   en: {
     signInToContinue: "Sign in to continue",
@@ -994,6 +998,7 @@ const UI = {
     tChildPageIsNow: "Çocuğun sayfası artık {}.",
   },
 };
+// Stryker restore all
 // Register the component under a name Alpine can look up.
 //
 // `x-data="app()"` worked with the standard build because that build evaluates the attribute as

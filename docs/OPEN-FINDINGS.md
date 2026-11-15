@@ -1192,7 +1192,7 @@ diverge without an error.
 the rule and split the directive in one change — and look at the page afterwards, because no test
 here can see a CSP the browser enforces.
 
-### O75 · Call sites hide silent reverts, and nothing finds them in the dashboard's JavaScript
+### O75 · Call sites hide silent reverts, and the child's page is tested only as text
 
 Five instances in two days, across two sessions working this repository concurrently. Each one is
 the same shape, and in each the deletion was **measured**, not argued:
@@ -1229,28 +1229,24 @@ and that function is now excluded with the reason written beside it. The disk ha
 warned about is answered by where the runs happen, on CI runners, and locally only with a target
 directory of their own.
 
-**What has not: the JavaScript.** `cargo-mutants` mutates Rust only, and the mutants job skips a
-push with no Rust in it. The dashboard's logic lives in `assets/*.js`, tested by `node --test` in
-`web/`, and the fifth instance above, `noteOtherLimit(j)` in `extendCurfew`, is exactly the
-call-site shape in that half. Nothing would find the next one there but somebody looking.
+**The dashboard's JavaScript has the same since 2026-11-15.** `cargo-mutants` never reads
+`assets/*.js`, so `ci.yml`'s `web-mutants` job runs StrykerJS on the lines of `assets/app.js` a push
+adds or changes, and fails on a survivor. A spike measured it first, and the two adaptations it
+found are in `web/stryker.config.mjs`: the test harness evaluates `app.js` in a `vm` context, which
+has to be handed the live mutant or every mutant reports surviving, and the guards that read
+`app.js` as text (`READS_SOURCE`) skip during a mutation run, because the run rewrites that text.
+The translation table is exempt for the same reason, since only those guards check it. The whole
+file is 3,927 mutants at about half a second each; a push's lines are seconds. `extendCurfew` alone
+has 20 survivors today, mostly a toast's kind and the `finally` that clears its busy flag, so the
+first change that touches it will have to answer them.
 
-**The candidate is StrykerJS, and a spike on 2026-11-15 measured it** in a throwaway copy, with its
-`command` runner over `node --test`. It needs two adaptations, both found by running it rather than
-reading about it. The harness evaluates `app.js` in a `vm` context, and Stryker's instrumented code
-reads the active mutant from `globalThis.process.env`, which that context does not have: unadapted,
-every mutant reports survived, including emptying the block that calls `noteOtherLimit(j)`, which
-the call-site test kills once adapted. Passing that one variable into the context when it is set is
-the adaptation. And the suite's source-reading tests, the UI-key, `askUrl` and translation-table
-scans, read the instrumented source and fail the initial run, so a mutation run has to skip them;
-they keep running in the ordinary suite.
-
-With both, `extendCurfew` and `noteOtherLimit` gave 34 mutants in 5 seconds, 13 killed and 21
-surviving, mostly the toast's kind and the `finally` that clears `extendingCurfew`, the call-site
-shape this entry is about. The two files hold 4,280 mutants at about half a second of test run each,
-so a whole-file run is minutes and a run scoped to a diff, passing `mutate` the changed line ranges,
-is seconds. Adopting it means a web dev-dependency (178 packages), the harness change and an in-diff
-job beside the Rust one, which is a decision not yet taken. Until then the interim measure stands
-for the JavaScript: mutate a new helper's call site once by hand before believing the tests.
+**What has not: the child's page.** `assets/ask.js`, the script behind the page the child asks for
+more time on, is read as text by its tests and run by none of them: `ask-i18n.test.js` checks its
+translations and nothing checks what it does. So it is not mutated, because every mutant would
+survive whatever it changed, and a silent revert there would be found the way the five above were,
+by somebody looking. Closing it means a harness for `ask.js` like the one `app.js` has, after which
+it joins the `mutate` list. Until then the interim measure stands for that file: mutate a new call
+site once by hand before believing the tests.
 
 ### O76 · The enforcement wake fires on every config write, including the ones that change nothing
 

@@ -12,7 +12,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { withState, loadApp } from "./harness.js";
+import { withState, loadApp, READS_SOURCE } from "./harness.js";
 // For the i18n guards at the foot of this file, which read the tables and the script as text rather than
 // standing up a DOM — the same trade harness.js records for the rest of app.js.
 import { readFileSync } from "node:fs";
@@ -3178,7 +3178,7 @@ function uiTables() {
   return tables;
 }
 
-test("every dashboard string exists in every language the selector offers", () => {
+test("every dashboard string exists in every language the selector offers", READS_SOURCE, () => {
   const tables = uiTables();
   const tags = Object.keys(tables);
   assert.ok(tags.length >= 3, `expected en/nl/tr at minimum, found ${tags}`);
@@ -3258,7 +3258,7 @@ test("every method the markup calls exists on the component", () => {
   );
 });
 
-test("every key the markup calls t() with is answered by the English table", () => {
+test("every key the markup calls t() with is answered by the English table", READS_SOURCE, () => {
   const html = asset("index.html");
   const used = [...html.matchAll(T_IN_MARKUP)].map((m) => m[1]);
   assert.ok(used.length > 100, `expected the markup to call t() throughout, found ${used.length}`);
@@ -3287,7 +3287,7 @@ test("every key the markup calls t() with is answered by the English table", () 
 // A browser dialog is the one place the page cannot style around a wrong language, and these
 // are the destructive actions — signing a device out, removing an integration, replacing the
 // settings — where a parent most needs to read what they are agreeing to.
-test("no dashboard string reaches a person as a literal at the call site", () => {
+test("no dashboard string reaches a person as a literal at the call site", READS_SOURCE, () => {
   const src = asset("app.js");
   // `toast("...")`, `confirm(`...`)`, `rejection(r, "...")` — a literal in the message position,
   // whichever quote it uses and whether or not it starts on the same line.
@@ -3334,7 +3334,7 @@ const BUILDS_ENGLISH = [
 // ignore it.
 const NOT_COPY = ["appLabel"];
 
-test("no bound method starts building English that no table can translate", () => {
+test("no bound method starts building English that no table can translate", READS_SOURCE, () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const html = readFileSync(join(root, "assets", "index.html"), "utf8");
   const parsed = stripJs(readFileSync(join(root, "assets", "app.js"), "utf8"));
@@ -3514,7 +3514,7 @@ function isProse(literal) {
   return words.some((w, i) => /^[A-Za-z]{2,}$/.test(w) && /^[A-Za-z]{2,}$/.test(words[i + 1] ?? ""));
 }
 
-test("every UI key is used, and every used key exists", () => {
+test("every UI key is used, and every used key exists", READS_SOURCE, () => {
   const js = asset("app.js");
   const html = asset("index.html");
   const en = uiTables().en;
