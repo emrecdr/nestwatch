@@ -24,3 +24,14 @@ exclude_globs = [
   "src/syspath.rs",
   "src/watcher.rs",
 ]
+
+# `prompt_for_password` in `src/install.rs` reads the password from the terminal through
+# `rpassword`. A test that called it would stop and wait for a typed answer under a developer's
+# console, and fail before asking in CI, so no test can both run everywhere and kill its two
+# whole-body mutants ("answer with this password instead of asking"). The loop it hands the answers
+# to is `prompt_with`, which takes them from a closure and is tested in full; this excludes only the
+# function that touches the terminal. The same reasoning as the modules above: what nothing can kill
+# is excluded, not carried as debt.
+exclude_re = [
+  "replace prompt_for_password -> ",
+]

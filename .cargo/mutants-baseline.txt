@@ -23,7 +23,8 @@
 # leaving 311; then 8 of 12 in the report and tracking files, leaving 303; then 8 of 21 in the
 # test-support files, leaving 295; then 32 of 33 in the command-line entry points, leaving 263;
 # then 29 of 50 in `doctor.rs`, leaving 234; then 9 of 35 in `preflight.rs`, leaving 225; then
-# 45 of 143 in `install.rs`, leaving 180. Adding a line is a decision, not a formality.
+# 45 of 143 in `install.rs`, and two more excluded in `mutants.toml` because they read a terminal,
+# leaving 178. Adding a line is a decision, not a formality.
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
@@ -152,8 +153,6 @@ src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(0, Stri
 src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(1, "xyzzy".into())]
 src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![(1, String::new())]
 src/install.rs: replace processes_named -> Vec<(u32, String)> with vec![]
-src/install.rs: replace prompt_for_password -> Result<String> with Ok("xyzzy".into())
-src/install.rs: replace prompt_for_password -> Result<String> with Ok(String::new())
 src/install.rs: replace remove_service -> Result<()> with Ok(())
 src/install.rs: replace run_icacls -> Result<()> with Ok(())
 src/install.rs: replace service_still_registered -> bool with false
