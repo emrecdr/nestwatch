@@ -1192,7 +1192,7 @@ diverge without an error.
 the rule and split the directive in one change — and look at the page afterwards, because no test
 here can see a CSP the browser enforces.
 
-### O75 · Pure helpers are tested thoroughly; the lines that call them are not tested at all
+### O75 · Call sites hide silent reverts, and nothing finds them in the dashboard's JavaScript
 
 Five instances in two days, across two sessions working this repository concurrently. Each one is
 the same shape, and in each the deletion was **measured**, not argued:
@@ -1218,28 +1218,39 @@ that was fixing the same class elsewhere** — a driver test was written for the
 its sibling for curfew was not, so a helper added that hour was already unguarded at its only call
 site.
 
-**What has been done.** Each of the five now has a guard, and each guard was proven by re-applying
-the mutation: `tests/curfew_extend.rs`, `install.rs`'s two source scans,
-`tests/curfew_enforcer.rs`, and three call-site tests in `web/test/app.test.js`.
+**What has been done.** Each of the five has a guard, each proven by re-applying the mutation:
+`tests/curfew_extend.rs`, `install.rs`'s two source scans, `tests/curfew_enforcer.rs`, and three
+call-site tests in `web/test/app.test.js`. And in Rust the next one is now found without anybody
+looking. `ci.yml`'s `mutants` job runs `cargo-mutants --in-diff` on every push and fails on a mutant
+that survives on a changed line, and `mutants-weekly.yml` runs the whole crate against
+`.cargo/mutants-baseline.txt` (`O109`). It has done this job since: on 2026-11-15 it failed a push
+on the two mutants of `prompt_for_password`, which no test could reach because it reads a terminal,
+and that function is now excluded with the reason written beside it. The disk hazard this entry once
+warned about is answered by where the runs happen, on CI runners, and locally only with a target
+directory of their own.
 
-**What has not.** Nothing finds the *next* one. Every guard above was written after a human or an
-agent went looking, and the searching was manual each time.
+**What has not: the JavaScript.** `cargo-mutants` mutates Rust only, and the mutants job skips a
+push with no Rust in it. The dashboard's logic lives in `assets/*.js`, tested by `node --test` in
+`web/`, and the fifth instance above, `noteOtherLimit(j)` in `extendCurfew`, is exactly the
+call-site shape in that half. Nothing would find the next one there but somebody looking.
 
-**The obvious answer, and the reason it is not simply done.** `cargo-mutants` is built for exactly
-this — it injects mutations and reports which survive, which is the question asked five times by
-hand above — and it is on the Thoughtworks Technology Radar rather than being exotic. It is already
-installed on this machine and another project here runs it. Two things to weigh before adopting it:
+**The candidate is StrykerJS, and a spike on 2026-11-15 measured it** in a throwaway copy, with its
+`command` runner over `node --test`. It needs two adaptations, both found by running it rather than
+reading about it. The harness evaluates `app.js` in a `vm` context, and Stryker's instrumented code
+reads the active mutant from `globalThis.process.env`, which that context does not have: unadapted,
+every mutant reports survived, including emptying the block that calls `noteOtherLimit(j)`, which
+the call-site test kills once adapted. Passing that one variable into the context when it is set is
+the adaptation. And the suite's source-reading tests, the UI-key, `askUrl` and translation-table
+scans, read the instrumented source and fail the initial run, so a mutation run has to skip them;
+they keep running in the ordinary suite.
 
-* **Cost.** Each mutant is an incremental build plus a test run. This crate's baseline test run is
-  already seconds and the mutant count would be in the hundreds. The practical shapes are
-  `--in-diff` on pull requests, or a scheduled full run, not a per-push gate.
-* **Disk, concretely.** A single `cargo-mutants` run on a *sibling* project filled this machine's
-  shared `~/.cache/cargo-target` to 100% while this entry was being written, which is exactly the
-  hazard that makes builds fail in crates nobody touched. Whatever is adopted has to bound where it
-  builds, or it takes the whole machine down with it.
-
-A cheaper interim measure, and the one already in use: when adding a helper, mutate its call site
-once by hand before believing the tests. Four of the five above were found that way in an afternoon.
+With both, `extendCurfew` and `noteOtherLimit` gave 34 mutants in 5 seconds, 13 killed and 21
+surviving, mostly the toast's kind and the `finally` that clears `extendingCurfew`, the call-site
+shape this entry is about. The two files hold 4,280 mutants at about half a second of test run each,
+so a whole-file run is minutes and a run scoped to a diff, passing `mutate` the changed line ranges,
+is seconds. Adopting it means a web dev-dependency (178 packages), the harness change and an in-diff
+job beside the Rust one, which is a decision not yet taken. Until then the interim measure stands
+for the JavaScript: mutate a new helper's call site once by hand before believing the tests.
 
 ### O76 · The enforcement wake fires on every config write, including the ones that change nothing
 
