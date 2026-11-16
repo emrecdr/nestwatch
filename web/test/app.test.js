@@ -2378,7 +2378,7 @@ test("budgetTone treats an unknown remaining as ordinary, never as urgent", () =
 // all 148 tests passing: the helper was covered, the line calling it was not. That is the fifth
 // instance of one shape found in this repo in two days — a pure helper is cheap to test and gets
 // tested well, while the one line wiring it in is reachable only through an async method and gets
-// nothing at all. See `docs/OPEN-FINDINGS.md` O75.
+// nothing at all. The `web-mutants` job in `ci.yml` now catches the next one.
 
 /** An app whose fetch always succeeds and returns `body`, recording the toasts raised. */
 function appReturning(body) {

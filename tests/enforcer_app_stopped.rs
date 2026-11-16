@@ -6,11 +6,12 @@
 //!
 //! # Why this drives the loop rather than testing the message function
 //!
-//! The defect this closes was **entirely wiring**, which is the class `docs/OPEN-FINDINGS.md` O75
-//! names as this project's recurring failure. Every piece needed to tell a child why their game
-//! shut was already present and correct — `notify_child`, `with_hint`, `ask_hint`, the translation
-//! convention — and the blocklist / per-app-limit / group-pool paths simply did not call any of
-//! it. `decide` pushed `Kill(pid)`, the loop killed the pid, and that was the whole interaction:
+//! The defect this closes was **entirely wiring**, which is this project's recurring failure: the
+//! class the per-push mutation jobs in `ci.yml` now catch. Every piece needed to tell a child why
+//! their game shut was already present and correct — `notify_child`, `with_hint`, `ask_hint`, the
+//! translation convention — and the blocklist / per-app-limit / group-pool paths simply did not
+//! call any of it. `decide` pushed `Kill(pid)`, the loop killed the pid, and that was the whole
+//! interaction:
 //!
 //! * the child saw a window vanish, which reads as a crash rather than as a rule;
 //! * nothing was written to the usage log either, so a parent could not answer "did my limit

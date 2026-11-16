@@ -22,6 +22,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { READS_SOURCE } from "./harness.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ASK_JS = readFileSync(join(here, "..", "..", "assets", "ask.js"), "utf8");
@@ -64,7 +65,7 @@ function translatedTables() {
   return tags.map((tag) => [tag, blockAfter(`  ${tag}: {`)]);
 }
 
-test("every string the script builds in English has a counterpart in each language", () => {
+test("every string the script builds in English has a counterpart in each language", READS_SOURCE, () => {
   const en = keysOf(blockAfter("const EN = "));
   assert.ok(en.size > 10, `expected a real English table, found ${en.size} keys`);
 
@@ -79,7 +80,7 @@ test("every string the script builds in English has a counterpart in each langua
   }
 });
 
-test("every key the markup asks for is answered by each language", () => {
+test("every key the markup asks for is answered by each language", READS_SOURCE, () => {
   const wanted = [
     ...ASK_HTML.matchAll(/data-i18n(?:-placeholder|-label)?="([A-Za-z0-9]+)"/g),
   ].map((m) => m[1]);
@@ -97,7 +98,7 @@ test("every key the markup asks for is answered by each language", () => {
   }
 });
 
-test("the disclosure survives into every language, whole", () => {
+test("the disclosure survives into every language, whole", READS_SOURCE, () => {
   for (const [tag, block] of translatedTables()) {
     assert.match(
       block,

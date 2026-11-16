@@ -1,5 +1,5 @@
-// Mutation testing for the dashboard's JavaScript (`assets/app.js`), the JavaScript half of what
-// `cargo-mutants` does for the Rust (`docs/OPEN-FINDINGS.md` `O75`).
+// Mutation testing for the web pages' JavaScript (`assets/app.js` and `assets/ask.js`), the
+// JavaScript half of what `cargo-mutants` does for the Rust.
 //
 // Run from the repository root — `npm run mutate` does that — because the sandbox Stryker copies
 // has to hold both the code it mutates (`assets/`) and the tests that judge it (`web/test/`). On
@@ -15,8 +15,8 @@
 //   `READS_SOURCE` and skip when `NESTWATCH_MUTATION_RUN` is set, which only the command below
 //   does; the ordinary `npm test` runs them in full.
 //
-// `ask.js` is not mutated: its tests read its text and none runs it, so every mutant would survive
-// whatever it changed. That gap is `O75`'s remaining half.
+// `ask.js` is mutated too, run by `web/test/ask-harness.js` against a stub of its page. Before that
+// harness existed its tests only read its text, and every mutant would have survived.
 //
 // `web/package.json` overrides two packages inside Stryker's own tree, because Stryker pins them
 // below their security fixes: `minimatch` (pinned `~10.2.4`, fixed in 11.0.1) and `qs` (pinned
@@ -30,7 +30,7 @@ export default {
   commandRunner: {
     command: 'cd web && NESTWATCH_MUTATION_RUN=1 node --test "test/*.test.js"',
   },
-  mutate: ["assets/app.js"],
+  mutate: ["assets/app.js", "assets/ask.js"],
   // Only what the tests read goes into the sandbox, not the Rust tree beside it.
   ignorePatterns: ["/*", "!/assets/", "!/web/", "/web/node_modules/", "/web/.scan/"],
   // The command runner cannot report which tests cover a mutant, so every mutant runs the suite.

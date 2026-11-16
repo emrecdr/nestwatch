@@ -4,10 +4,10 @@
 //!
 //! The single-path tests each reach one ending: `curfew_countdown.rs` the warnings,
 //! `curfew_enforcer.rs` the shutdown. Ordering is where this project's real defects have lived (the
-//! wiring class `docs/OPEN-FINDINGS.md` `O75` records), and one path cannot see a warning said
-//! after the shutdown, a shutdown an extension did not call off, or bedtime that never came back
-//! once the extension ran out. Each step here waits for its own effect before the next is written,
-//! so the order is asserted, not just the set.
+//! wiring class the per-push mutation jobs in `ci.yml` catch), and one path cannot see a warning
+//! said after the shutdown, a shutdown an extension did not call off, or bedtime that never came
+//! back once the extension ran out. Each step here waits for its own effect before the next is
+//! written, so the order is asserted, not just the set.
 //!
 //! Bedtime and the extension are moved rather than the clock, the way a parent's edits move them.
 //!

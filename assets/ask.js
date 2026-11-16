@@ -10,6 +10,9 @@
 // same shape, because a missing key would silently leave one English sentence in an otherwise
 // translated page. Adding a language means adding a block here and a `Language` variant in
 // src/config.rs; the Rust side will not compile until its own message functions answer too.
+//
+// Stryker disable all: these tables are data, and the guards that check them read this file as
+// text — which a mutation run rewrites, so it skips them (`READS_SOURCE` in `web/test/harness.js`).
 const STRINGS = {
   en: null, // the markup is already English; nothing to swap
   nl: {
@@ -135,6 +138,7 @@ const EN = {
   watchedOnce: "Your screen was looked at once today.",
   watchedMany: (n) => `Your screen was looked at ${n} times today.`,
 };
+// Stryker restore all
 
 let strings = EN;
 
@@ -244,15 +248,18 @@ function renderWeek(days) {
 
   for (const d of days) {
     const col = document.createElement("div");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     col.className = "flex flex-1 flex-col items-center gap-1";
 
     const track = document.createElement("div");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     track.className = "flex w-full items-end";
     track.style.height = `${WEEK_BAR_PX}px`;
 
     const bar = document.createElement("div");
     const measured = typeof d.minutes === "number";
     if (measured) {
+      // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
       bar.className = "w-full rounded-sm bg-primary";
       // A floor of 2px so a short-but-real day is still visibly different from an empty one.
       bar.style.height = `${Math.max(2, Math.round((d.minutes / peak) * WEEK_BAR_PX))}px`;
@@ -263,6 +270,7 @@ function renderWeek(days) {
     track.append(bar);
 
     const label = document.createElement("span");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     label.className = "text-[10px] opacity-60";
     label.textContent = weekdayName(d.date);
 
@@ -294,6 +302,7 @@ function renderWatched(n) {
 async function loadStatus() {
   try {
     const r = await fetch("/status");
+    // Stryker disable next-line StringLiteral: the message is caught below and never shown
     if (!r.ok) throw new Error("status " + r.status);
     const s = await r.json();
     limitedToday = !!s.limited;
@@ -309,6 +318,7 @@ async function loadStatus() {
 
     if (!s.limited) {
       const p = document.createElement("p");
+      // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
       p.className = "py-2 text-lg font-semibold text-success";
       p.textContent = strings.noLimit;
       todayEl.append(p);
@@ -316,14 +326,17 @@ async function loadStatus() {
     }
 
     const left = document.createElement("p");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     left.className = "text-4xl font-bold tabular-nums";
     left.textContent = s.remaining_mins;
     const unit = document.createElement("p");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     unit.className = "text-sm opacity-70";
     unit.textContent =
       s.remaining_mins === 1 ? strings.minuteLeft : strings.minutesLeft;
 
     const bar = document.createElement("progress");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     bar.className = "progress progress-primary mt-3 w-full";
     bar.max = s.budget_mins;
     bar.value = Math.min(s.used_mins, s.budget_mins);
@@ -333,6 +346,7 @@ async function loadStatus() {
     );
 
     const detail = document.createElement("p");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     detail.className = "mt-1 text-xs opacity-60";
     detail.textContent = strings.usedOf(s.used_mins, s.budget_mins);
 
@@ -341,6 +355,7 @@ async function loadStatus() {
     limitedToday = null;
     todayEl.innerHTML = "";
     const p = document.createElement("p");
+    // Stryker disable next-line StringLiteral: Tailwind classes, which only a browser can judge
     p.className = "text-sm opacity-70";
     p.textContent = strings.cantCheck;
     todayEl.append(p);

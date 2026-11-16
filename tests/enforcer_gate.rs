@@ -10,8 +10,8 @@
 //! replaced by `None` the whole suite passed, 699 tests — the gate did nothing to the child while
 //! every card he and his parent could see said 35 minutes. Replacing only the enforcer's
 //! cannot-check set with an empty one passed too, which would have turned a StudyGo outage into a
-//! lost day with nothing red. That is `docs/OPEN-FINDINGS.md` `O75`'s class again: every piece
-//! tested, the line that joins them not.
+//! lost day with nothing red. That is the call-site class again, which the per-push mutation jobs
+//! in `ci.yml` now catch: every piece tested, the line that joins them not.
 //!
 //! So this asserts on what the loop's own code does and writes: the shutdown it asks for, and the
 //! budget it records having enforced.

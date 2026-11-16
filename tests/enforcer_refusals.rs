@@ -9,10 +9,10 @@
 //! 25 binaries, 585 tests — while the feature did nothing at all. Counters would have climbed
 //! forever and the card would have read zero.
 //!
-//! That is the class `docs/OPEN-FINDINGS.md` `O75` names — pure helpers tested thoroughly, the
-//! lines that call them not tested at all — and the same wiring gap `enforcer_app_stopped.rs`
-//! exists for. So this asserts on the bytes that actually land in `usage_state.json`, produced by
-//! the loop's own code.
+//! That is the class the per-push mutation jobs in `ci.yml` now catch — pure helpers tested
+//! thoroughly, the lines that call them not tested at all — and the same wiring gap
+//! `enforcer_app_stopped.rs` exists for. So this asserts on the bytes that actually land in
+//! `usage_state.json`, produced by the loop's own code.
 //!
 //! # Why its own binary
 //!

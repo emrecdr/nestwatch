@@ -410,9 +410,9 @@ pattern is not speculative; `onetun` ships it, in the outbound direction.
 | A network adapter visible in the OS | **None** |
 | `#[cfg(windows)]`, so no host test can see it | **Cross-platform.** Runs and is tested on the dev machine and in CI |
 
-That last row is the one that should decide it. `O87` and `O75` both record the same thing:
-this project's real defects live in Windows-only code that nothing can execute. A Wintun design is
-born into that category. A userspace design is not.
+That last row is the one that should decide it. `O87` records the same thing: this project's real
+defects live in Windows-only code that nothing can execute. A Wintun design is born into that
+category. A userspace design is not.
 
 **The cost is `smoltcp` — measured at 7 crates — and an inbound TCP bridge.** `onetun` does this
 outbound; inbound is the mirror and is the genuinely novel work here. That is where surprises

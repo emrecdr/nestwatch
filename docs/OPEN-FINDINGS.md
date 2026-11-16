@@ -1192,62 +1192,6 @@ diverge without an error.
 the rule and split the directive in one change — and look at the page afterwards, because no test
 here can see a CSP the browser enforces.
 
-### O75 · Call sites hide silent reverts, and the child's page is tested only as text
-
-Five instances in two days, across two sessions working this repository concurrently. Each one is
-the same shape, and in each the deletion was **measured**, not argued:
-
-| what was removed | suite afterwards | what the family would have lost |
-|---|---|---|
-| `api.rs:228`, carrying `extra_until` across a curfew save | **497 pass** | a granted bedtime extension, silently revoked by saving the form |
-| `install.rs`'s call to `web::ask_url` | **497 pass** | the child's link reverts to a LAN IP that moves on a new lease |
-| `install.rs`'s call to `alternate_note` | **504 pass** | both printed addresses labelled the same; the durable one unmarked |
-| `curfew.rs:444`'s call to `bedtime_shutdown_message` | **507 pass** | the bedtime notice reduced to the single word "Bedtijd" |
-| `app.js`'s `noteOtherLimit(j)` in `extendCurfew` | **148 web pass** | the parent is not told screen time will still lock the PC |
-
-**The mechanism is structural, not carelessness.** A pure function is trivial to call from a test,
-so it attracts thorough tests — `alternate_note` has four, `bedtime_shutdown_message` has one per
-language. The single line that *calls* it sits inside an enforcer loop, an install routine or an
-async handler, none of which a unit test can reach. So the suite grows precisely where testing is
-cheap, and the hole forms precisely where a silent revert does the most damage. Coverage cannot see
-this: the call site is *executed* by nothing, and even when it is, executing a line is not asserting
-on it.
-
-The fourth entry is the sharpest evidence that this is structural. It was introduced **in the commit
-that was fixing the same class elsewhere** — a driver test was written for the rules enforcer and
-its sibling for curfew was not, so a helper added that hour was already unguarded at its only call
-site.
-
-**What has been done.** Each of the five has a guard, each proven by re-applying the mutation:
-`tests/curfew_extend.rs`, `install.rs`'s two source scans, `tests/curfew_enforcer.rs`, and three
-call-site tests in `web/test/app.test.js`. And in Rust the next one is now found without anybody
-looking. `ci.yml`'s `mutants` job runs `cargo-mutants --in-diff` on every push and fails on a mutant
-that survives on a changed line, and `mutants-weekly.yml` runs the whole crate against
-`.cargo/mutants-baseline.txt` (`O109`). It has done this job since: on 2026-11-15 it failed a push
-on the two mutants of `prompt_for_password`, which no test could reach because it reads a terminal,
-and that function is now excluded with the reason written beside it. The disk hazard this entry once
-warned about is answered by where the runs happen, on CI runners, and locally only with a target
-directory of their own.
-
-**The dashboard's JavaScript has the same since 2026-11-15.** `cargo-mutants` never reads
-`assets/*.js`, so `ci.yml`'s `web-mutants` job runs StrykerJS on the lines of `assets/app.js` a push
-adds or changes, and fails on a survivor. A spike measured it first, and the two adaptations it
-found are in `web/stryker.config.mjs`: the test harness evaluates `app.js` in a `vm` context, which
-has to be handed the live mutant or every mutant reports surviving, and the guards that read
-`app.js` as text (`READS_SOURCE`) skip during a mutation run, because the run rewrites that text.
-The translation table is exempt for the same reason, since only those guards check it. The whole
-file is 4,026 mutants under Stryker 10, at about half a second each; a push's lines are seconds.
-`extendCurfew` alone has 21 survivors today, mostly a toast's kind and the `finally` that clears its
-busy flag, so the first change that touches it will have to answer them.
-
-**What has not: the child's page.** `assets/ask.js`, the script behind the page the child asks for
-more time on, is read as text by its tests and run by none of them: `ask-i18n.test.js` checks its
-translations and nothing checks what it does. So it is not mutated, because every mutant would
-survive whatever it changed, and a silent revert there would be found the way the five above were,
-by somebody looking. Closing it means a harness for `ask.js` like the one `app.js` has, after which
-it joins the `mutate` list. Until then the interim measure stands for that file: mutate a new call
-site once by hand before believing the tests.
-
 ### O76 · The enforcement wake fires on every config write, including the ones that change nothing
 
 `api::try_update_config` calls `heartbeat::wake` after every save. That choke point is deliberate and
@@ -1555,8 +1499,8 @@ tier-3 surface, and only one of them is visible.
 **Not a documentation problem.** The features carry real Windows-side behaviour that nothing here
 has exercised: a schedule that opens and closes against `clock`'s tamper-anchored local time and
 must hand back on close; the `once per source per day` latch surviving a service restart; a provider
-toggle that must stop a grant without unpairing. Each is the kind of wiring that
-`O75` records as the class where this project's real defects live.
+toggle that must stop a grant without unpairing. Each is the kind of wiring where this project's
+real defects have lived.
 
 **Fix.** A section I for 0.6.0, written to section H's standard — each item saying *what it proves*,
 because H's own preamble warns that several checks pass trivially when the underlying call is

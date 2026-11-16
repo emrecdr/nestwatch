@@ -16,9 +16,9 @@
 //! working this repo — `api.rs`'s extension-preservation line, `install.rs`'s `ask_url` and
 //! `alternate_note` call sites, this, and `app.js`'s `noteOtherLimit`. Every time, a pure helper is
 //! easy to test and gets tested thoroughly, while the one line that calls it is reachable only from
-//! a loop, a handler or an async method and gets nothing.
-//! **The suite grows where testing is cheap, and the hole forms exactly where a silent revert does
-//! the most damage.** `docs/OPEN-FINDINGS.md` O75 records the class and what to do about it.
+//! a loop, a handler or an async method and gets nothing. **The suite grows where testing is cheap,
+//! and the hole forms exactly where a silent revert does the most damage.** The per-push mutation
+//! jobs in `ci.yml` now catch the class, in the Rust and in the pages' JavaScript.
 //!
 //! Its own binary, matching `enforcer_shutdown.rs`. This one needs no `NESTWATCH_DATA_DIR`: the
 //! curfew loop reads config and writes only to a `UsageLog`, so it never touches the data
