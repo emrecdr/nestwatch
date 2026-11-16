@@ -1167,59 +1167,6 @@ land with a test per handler.
 `running_processes`, or a config-writing endpoint that stops being human-paced. The probe scheduler
 became the third of those on 2026-09-09; the `O84` fix above is why that no longer forces this one.
 
-### O78 · The notification decision rests on an assumption nobody has spent a minute testing
-
-`app.js::titleFor` reasons through the options for telling a parent that their child is waiting,
-and lands on the tab title. Two of its three rejections are solid and should not be re-opened: Web
-Push needs an external push service, which "nothing leaves the house" forbids outright, and the
-Badging API needs an installed app, which `MOBILE-APP.md` already refuted because an installed PWA
-does not inherit the browser's certificate exception.
-
-The third was not a rejection. It read: *"The Notifications API needs a secure context, and whether
-a self-signed certificate accepted on a private IP counts as one is **unverified**"* — an honest
-note that stood in for a decision.
-
-**Settled, and the lean recorded here was backwards.** This entry used to say the research leaned
-toward `false`. It leans toward `true`:
-
-* W3C *Secure Contexts*, algorithm **Is origin potentially trustworthy?**, step 3 — *"If origin's
-  scheme is either `https` or `wss`, return Potentially Trustworthy."* The algorithm has **no step
-  that examines certificate validity**. The `localhost` / `file:` / `wss:` steps are additional
-  exemptions for origins that are *not* `https`, not a narrowing of it; reading them as a list of
-  the only trustworthy cases is the mistake this entry made.
-* Chromium's stated position, on the W3C webpayments list: once the user proceeds past the
-  interstitial the context **is** considered secure, and individual APIs are neutered case by case
-  (Payment Request is the worked example) rather than the context being downgraded.
-
-**The conclusion survives, for a reason nobody had named.** The API is unavailable on the devices
-this product is used from, and not because of the certificate:
-
-* `new Notification()` throws a `TypeError` in nearly all **mobile** browsers by design — MDN says
-  so outright and adds "this is unlikely to change", because pages on phones do not run in the
-  background. The phone path needs `ServiceWorkerRegistration.showNotification()`.
-* Chromium **refuses to register a service worker** on an origin whose certificate error was
-  bypassed (`crbug 40423989`) — which is every install of this tool.
-* iOS Safari needs an installed Home Screen web app, which `MOBILE-APP.md` already refutes: an
-  installed PWA does not inherit the certificate exception and cannot connect at all.
-
-So notifications work in a **desktop browser tab and nowhere else** — the surface this product
-cares least about, since the parent is on a phone. `app.js`'s `titleFor` comment has been corrected
-to say this; it stated the wrong reason.
-
-The `isSecureContext` check on the paired phone is still worth a console tap, but it is now a
-confirmation rather than the decision.
-
-**Which makes the fallback the more interesting half.** There is a permission-free option the
-comment does not consider: the dashboard already holds an SSE connection and already knows the
-moment a request arrives. An **audio cue** needs no secure context, no permission prompt, no
-service worker and no installed app — only a prior user gesture, which a parent who has just signed
-in has made. On a phone with the tab open that is the difference between a silent title change and
-something a person notices.
-
-Neither reaches a locked phone. That limit is real and must stay stated — but "cannot notify at
-all" and "cannot notify while away from the page" are different claims, and the docs currently make
-the stronger one.
-
 ### O81 · Nothing bounds the number of connections
 
 **The stalled-connection half of this is fixed; what is left is the count.** The entry used to

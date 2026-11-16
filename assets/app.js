@@ -3395,8 +3395,10 @@ function app() {
     //
     // Net: notifications are available in a DESKTOP browser tab and nowhere else — the surface
     // this product cares least about, since the parent is on a phone. So: the title, which needs
-    // no permission, no service worker and no external anything. `O78` tracks the one thing still
-    // worth doing here, which is the audio cue on the SSE arrival — that needs none of the above.
+    // no permission, no service worker and no external anything. An audio cue on the SSE arrival
+    // needs none of the above either, and was declined (`DECLINED-OPTIONS.md`, raised as `O78`): a
+    // phone suspends a hidden page's events and audio, so it would sound only where the request
+    // already shows.
     //
     // `null` is unknown, not zero. Titling the tab "(0)" for a service we could not reach is the
     // same false confidence the badge used to show.

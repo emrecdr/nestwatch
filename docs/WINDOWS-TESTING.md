@@ -406,8 +406,8 @@ this PC**, which is the half that matters and the half only you can do.
       report should carry a **By category** list. It cannot show history from before this release;
       days recorded earlier have no category data and correctly show none.
 - [ ] **The tab title counts waiting requests.** Have him ask for extra time and leave the dashboard
-      open in a background tab. The tab should read **(1) Nestwatch**. This is the only way this
-      product can tell you something without a tab being open somewhere — there is no push
+      open in a background tab. The tab should read **(1) Nestwatch**. With the dashboard in a
+      background tab, the title is the only signal this product gives: there is no push
       notification and there will not be one.
 - [ ] **App names read like apps.** `RobloxPlayerBeta.exe` should show as *Roblox*. Hover gives the
       real file name back. If something common on his PC still shows as an executable, say which —
