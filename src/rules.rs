@@ -872,6 +872,11 @@ pub struct Tick {
     /// The check programs configured on the Integrations card, normalised. They run under the
     /// child's account too, and no word may close one mid-check.
     pub check_programs: BTreeSet<String>,
+    /// The daily budget the schedule will put in force at each of the next minutes, as
+    /// `(minutes_from_now, budget_mins)`, from [`budgets_ahead`]. Read only to count down to a
+    /// routine that will start below what today has already used, so the lock it brings is not the
+    /// first the child hears of it; empty when no minute is left before midnight.
+    pub coming_budgets: Vec<(u32, u32)>,
 }
 
 /// An action the enforcer decided on for this tick.
@@ -1387,6 +1392,11 @@ impl RulesEnforcer {
                 // *understates* — "5 minutes left" then means at least five, never four and a
                 // half, so the machine never takes back time the popup just promised.
                 let remaining_mins = ((budget_secs - self.usage.total_secs) / 60) as u32;
+                // A routine about to start below what is already used comes first when it is
+                // nearer: the routine starts on time, so its lock is what the countdown is for.
+                let remaining_mins = self
+                    .mins_until_cut(&t.coming_budgets)
+                    .map_or(remaining_mins, |cut| cut.min(remaining_mins));
                 if let Some(mins) = self.countdown.observe(remaining_mins) {
                     actions.push(RuleAction::TimeWarning(mins));
                 }
@@ -1400,17 +1410,67 @@ impl RulesEnforcer {
             // but deliberately do NOT clear `episode_warned`, or stepping away would launder the
             // warning.
             self.budget_deadline = None;
-            // An unlimited day has nothing to count down to. Re-prime, so switching a budget back
-            // on mid-day can't announce a threshold measured against the *old* budget's position.
-            // (An inactive tick on a limited day deliberately leaves the countdown alone: nothing
-            // accrues while away, so the child returns to exactly the remaining time they left.)
+            // An unlimited day has nothing of its own to count down to, so it re-primes: switching
+            // a budget back on mid-day must not announce a threshold measured against the *old*
+            // budget's position. A routine about to impose a limit already spent is the exception,
+            // counted down to while somebody is at the machine. (An inactive tick on a limited day
+            // deliberately leaves the countdown alone: nothing accrues while away, so the child
+            // returns to exactly the remaining time they left.)
             if budget_mins == 0 {
-                self.countdown.reset();
+                match self.mins_until_cut(&t.coming_budgets).filter(|_| t.active) {
+                    Some(cut) => {
+                        if let Some(mins) = self.countdown.observe(cut) {
+                            actions.push(RuleAction::TimeWarning(mins));
+                        }
+                    }
+                    None => self.countdown.reset(),
+                }
             }
         }
 
         actions
     }
+
+    /// Minutes until a coming budget is already met, if one is in view: the first minute at which
+    /// the time used by then, counting on the machine staying in use, reaches the budget the
+    /// schedule puts in force at that minute. A budget of 0 is no limit, and cuts nothing.
+    fn mins_until_cut(&self, coming: &[(u32, u32)]) -> Option<u32> {
+        coming
+            .iter()
+            .find(|&&(m, b)| {
+                b > 0 && self.usage.total_secs + u64::from(m) * 60 >= u64::from(b) * 60
+            })
+            .map(|&(m, _)| m)
+    }
+}
+
+/// The daily budget the schedule will put in force at each of the next sixteen minutes, as
+/// `(minutes_from_now, budget_mins)`, for [`Tick::coming_budgets`].
+///
+/// One minute past the countdown's horizon, so that a routine first seen there primes the
+/// countdown and its fifteen-minute warning is a real crossing rather than a first reading, which
+/// says nothing. Read with today's adjustments, and only up to midnight: a new day's tally starts
+/// fresh, so a routine beyond it cuts nothing used today. Rules that are paused enforce nothing,
+/// so a paused routine reads as no limit.
+pub fn budgets_ahead(
+    config: &Config,
+    at: chrono::DateTime<chrono::FixedOffset>,
+    today: NaiveDate,
+    adjustments: Adjustments,
+) -> Vec<(u32, u32)> {
+    (1..=crate::countdown::LOOKAHEAD_MINS + 1)
+        .map(|m| (m, at + chrono::TimeDelta::minutes(m.into())))
+        .take_while(|(_, then)| then.date_naive() == at.date_naive())
+        .map(|(m, then)| {
+            let rules = config.rules_at(then);
+            let budget = if rules.enabled {
+                rules.effective_budget_mins(today, adjustments)
+            } else {
+                0
+            };
+            (m, budget)
+        })
+        .collect()
 }
 
 /// The check programs configured on the Integrations card, normalised. They run under the child's
@@ -1723,20 +1783,25 @@ pub async fn run_rules_enforcer(
         // Snapshot the config under the lock, then drop the guard before any await.
         // `port` and the curfew reading come out of the same guard the tick already takes, rather
         // than a second acquisition later — they feed `ask_hint`, which needs both.
-        let (rules, adjustments, lang, port, curfew_now, check_programs) = {
+        let (rules, adjustments, lang, port, curfew_now, check_programs, coming_budgets) = {
             let guard = crate::state::recover_read(&config);
             // `rules_at`, not `rules`: a routine whose schedule covers this instant is the policy
             // in force, and this is the tick that enforces it. The trusted clock rather than
             // `Local::now`, for the reason `Curfew::is_active_now` gives — a schedule is exactly
             // what shifting the time zone would be used to step outside of.
             let at = crate::clock::now();
+            let adjustments =
+                Adjustments::new(guard.extra.for_day(today), gate_ceiling(&guard, today));
             (
                 guard.rules_at(at).clone(),
-                Adjustments::new(guard.extra.for_day(today), gate_ceiling(&guard, today)),
+                adjustments,
                 guard.language,
                 guard.port,
                 guard.curfew.is_active_now(),
                 check_programs(&guard),
+                // From the same reading as `rules_at` above, so the minute the countdown says a
+                // routine starts is the minute this loop will find it in force.
+                budgets_ahead(&guard, at, today, adjustments),
             )
         };
         let hint = ask_hint(port, lang, curfew_now);
@@ -1885,6 +1950,7 @@ pub async fn run_rules_enforcer(
                 web,
                 child_processes,
                 check_programs,
+                coming_budgets,
             },
         );
         // Move what was refused since the last tick onto today's tally.
@@ -2471,6 +2537,7 @@ mod tests {
             web: BTreeMap::new(),
             child_processes: None,
             check_programs: BTreeSet::new(),
+            coming_budgets: Vec::new(),
         }
     }
 
@@ -6210,5 +6277,179 @@ mod tests {
             .await;
             assert_eq!(fake.aborted_shutdowns() - before, aborts, "{why}");
         }
+    }
+
+    /// The schedule's budget at each of the next minutes, as the loop reads it: `before` until a
+    /// routine with a `limit`-minute budget starts `in_mins` from now.
+    fn ahead(before: u32, in_mins: u32, limit: u32) -> Vec<(u32, u32)> {
+        (1..=crate::countdown::LOOKAHEAD_MINS + 1)
+            .map(|m| (m, if m >= in_mins { limit } else { before }))
+            .collect()
+    }
+
+    /// A tick that sees the schedule `coming` ahead of it.
+    fn tk_ahead(now: Instant, coming: Vec<(u32, u32)>, active: bool) -> Tick {
+        Tick {
+            coming_budgets: coming,
+            ..tk_active(now, 0, active)
+        }
+    }
+
+    /// An enforcer whose day has `mins` minutes on it.
+    fn used(mins: u64) -> RulesEnforcer {
+        RulesEnforcer::new(Usage {
+            day: Some(day()),
+            total_secs: mins * 60,
+            ..Default::default()
+        })
+    }
+
+    /// What the enforcer says as a routine with a `limit`-minute budget comes nearer, `before`
+    /// being the limit in force until it starts.
+    fn as_it_nears(
+        e: &mut RulesEnforcer,
+        before: u32,
+        limit: u32,
+        steps: &[u32],
+        active: bool,
+    ) -> Vec<u32> {
+        let base = Instant::now();
+        steps
+            .iter()
+            .flat_map(|&in_mins| {
+                e.decide(
+                    &budget(before),
+                    &[],
+                    tk_ahead(base, ahead(before, in_mins, limit), active),
+                )
+            })
+            .filter_map(|a| match a {
+                RuleAction::TimeWarning(m) => Some(m),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A routine about to cut today's limit below what is already used is counted down to, so the
+    /// lock it brings is not the first the child hears of it, as the README promises: 70 minutes
+    /// into a 120-minute day, with a 60-minute routine approaching.
+    #[test]
+    fn a_routine_about_to_cut_the_limit_below_what_is_used_is_counted_down_to() {
+        let mut e = used(70);
+        assert_eq!(
+            as_it_nears(&mut e, 120, 60, &[17, 16, 15, 5, 1], true),
+            vec![15, 5, 1]
+        );
+        // When it starts, the lock warning follows the countdown rather than replacing it.
+        let at_start = e.decide(
+            &budget(60),
+            &[],
+            tk_ahead(Instant::now(), ahead(60, 1, 60), true),
+        );
+        assert!(at_start.contains(&RuleAction::LockWarning), "{at_start:?}");
+    }
+
+    /// A day whose own rules set no limit hears the same countdown. The schedule is read sixteen
+    /// minutes out, one past the countdown's horizon, so the first sighting primes it and fifteen
+    /// is a real crossing rather than a first reading that says nothing.
+    #[test]
+    fn an_unlimited_day_still_hears_a_routine_that_will_cut_in() {
+        let mut e = used(75);
+        assert_eq!(
+            as_it_nears(&mut e, 0, 60, &[20, 16, 15, 5, 1], true),
+            vec![15, 5, 1]
+        );
+    }
+
+    /// A routine that still leaves time adds nothing, and neither does one with no limit at all.
+    #[test]
+    fn a_routine_that_leaves_time_adds_no_warning() {
+        for limit in [120, 0] {
+            let mut e = used(30);
+            let said = as_it_nears(&mut e, 0, limit, &[16, 15, 5, 1], true);
+            assert!(said.is_empty(), "limit {limit}: {said:?}");
+        }
+    }
+
+    /// Nobody at the machine is warned about anything.
+    #[test]
+    fn a_routine_nearing_an_empty_room_says_nothing() {
+        let mut e = used(75);
+        let said = as_it_nears(&mut e, 0, 60, &[16, 15, 5, 1], false);
+        assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// The cut falls on the first minute at which the time the child will have used meets the
+    /// budget then in force, counting the minute it meets it exactly.
+    #[test]
+    fn the_cut_is_the_first_minute_the_coming_limit_is_met() {
+        assert_eq!(
+            used(45).mins_until_cut(&ahead(0, 1, 60)),
+            Some(15),
+            "45 + 15 is exactly 60"
+        );
+        assert_eq!(used(44).mins_until_cut(&ahead(0, 1, 60)), Some(16));
+        assert_eq!(
+            used(43).mins_until_cut(&ahead(0, 1, 60)),
+            None,
+            "60 is out of view"
+        );
+        assert_eq!(
+            used(90).mins_until_cut(&ahead(0, 10, 60)),
+            Some(10),
+            "over when it starts"
+        );
+        assert_eq!(
+            used(90).mins_until_cut(&ahead(0, 1, 0)),
+            None,
+            "no limit cuts nothing"
+        );
+        assert_eq!(used(90).mins_until_cut(&[]), None);
+    }
+
+    /// The loop reads the schedule's budget for each of the next sixteen minutes, and stops at
+    /// midnight, where a new day's tally starts fresh.
+    #[test]
+    fn the_budgets_ahead_follow_the_schedule_and_stop_at_midnight() {
+        use chrono::TimeZone;
+        let cfg = Config {
+            rules: budget(120),
+            routines: vec![crate::config::Routine {
+                name: "Homework".into(),
+                rules: budget(60),
+                schedule: vec![crate::curfew::Window {
+                    start: "16:00".into(),
+                    end: "18:00".into(),
+                    days: Default::default(),
+                }],
+            }],
+            ..Default::default()
+        };
+        let at = |h, m| {
+            chrono::FixedOffset::east_opt(0)
+                .unwrap()
+                .with_ymd_and_hms(2026, 7, 9, h, m, 0)
+                .unwrap()
+        };
+        let minutes = |v: &[(u32, u32)]| v.iter().map(|&(m, _)| m).collect::<Vec<_>>();
+        let budgets = |v: &[(u32, u32)]| v.iter().map(|&(_, b)| b).collect::<Vec<_>>();
+
+        let afternoon = budgets_ahead(&cfg, at(15, 50), day(), Adjustments::default());
+        assert_eq!(minutes(&afternoon), (1..=16).collect::<Vec<_>>());
+        assert_eq!(budgets(&afternoon[..9]), vec![120; 9], "15:51 to 15:59");
+        assert_eq!(budgets(&afternoon[9..]), vec![60; 7], "16:00 onwards");
+
+        let late = budgets_ahead(&cfg, at(23, 55), day(), Adjustments::default());
+        assert_eq!(
+            minutes(&late),
+            vec![1, 2, 3, 4],
+            "00:00 belongs to tomorrow"
+        );
+
+        // A routine whose own rules are paused enforces nothing, so it reads as no limit.
+        let mut paused = cfg.clone();
+        paused.routines[0].rules.enabled = false;
+        let afternoon = budgets_ahead(&paused, at(15, 50), day(), Adjustments::default());
+        assert_eq!(budgets(&afternoon[9..]), vec![0; 7]);
     }
 }

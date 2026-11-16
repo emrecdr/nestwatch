@@ -36,6 +36,13 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   button promises. The countdown now carries on from the reading taken when the shutdown was called
   off. Bedtimes and extensions left alone behave exactly as before.
 
+- **A routine that will start below what the child has already used is now counted down to.** A
+  scheduled routine with a lower limit, starting on a day that had used more than that limit, locked
+  the PC at its start with only the lock's own short grace, although the warnings at 15, 5 and 1
+  minutes promise that a limit is never a surprise. The enforcer now reads the schedule sixteen
+  minutes ahead, as bedtime already did, and counts down to the routine; the routine still starts on
+  time.
+
 ### Internal
 
 - **The web pages' JavaScript is mutation-tested on every push, as the Rust already was.** A new CI
