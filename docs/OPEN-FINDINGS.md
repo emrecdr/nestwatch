@@ -1584,28 +1584,6 @@ than do it: every capture map is a field serde must consider on each load, they 
 to be told none of them are settings. Worth doing when a nested field is actually added, and
 probably not before.
 
-### O103 · A weekly shard that loses its runner is not run again
-
-`mutants-weekly.yml` tests the crate in 32 shards, and twice in its first four runs a shard lost its
-runner partway: shard 25 on 2026-10-05, cancelled after 31 minutes with no reason given and nothing
-uploaded, and shard 15 on 2026-10-22, cancelled with "The runner has received a shutdown signal"
-after 59 of its 71 mutants. Their mutants go untested that week. Re-running the one job recovers the
-shard; nothing in the workflow does it unasked.
-
-**What is no longer open is the silence.** The `whole-run` job fails the run when a shard's
-`outcomes.json` does not account for all its mutants, so a lost shard is a red Monday naming the
-shard rather than a week that looked tested. `ci.yml`'s in-diff job had the grey version of the
-same failure on any push with more mutants than its 30 minutes hold (about 23, at 66.5 s each,
-measured 2026-09-09), because a job stopped by its own `timeout-minutes` is recorded as cancelled.
-Since 2026-10-23 it stops `cargo mutants` at a deadline of its own and fails red, saying how many of
-the diff's mutants it reached.
-
-**What would close it** is a retry that only a lost runner sets off: a small workflow on
-`workflow_run: completed` that re-runs the run's cancelled jobs once, and leaves a shard that
-*failed* — a survivor — alone. Unbuilt and unverified, including whether a lost runner always
-reports `cancelled`. The alternative is the current state: the next Monday tests the same mutants,
-and the red run already asks for the click.
-
 ### O104 · Everything this service says to the child evaporates after thirty seconds
 
 Every message the child receives goes through `control::notify`, which on Windows is
