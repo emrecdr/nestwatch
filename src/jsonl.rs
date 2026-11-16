@@ -469,10 +469,10 @@ mod tests {
 
     /// A rotation that destroys a previous backup says what it destroyed.
     ///
-    /// `O67`'s remaining half. The report card's *History from …* is derived from what survived, so
-    /// it cannot tell a fresh install from one that silently dropped a year; this row is the other
-    /// side of that, and it travels into `GET /api/export` where a parent can check the tool
-    /// against itself.
+    /// The other half of what `O67` built. The report card's *History from …* is derived from what
+    /// survived, so it cannot tell a fresh install from one that silently dropped a year; this row
+    /// is the other side of that, and it travels into `GET /api/export` where a parent can check
+    /// the tool against itself.
     #[test]
     fn a_rotation_that_destroys_a_backup_records_what_went() {
         let dir = crate::testutil::ScratchDir::new("jsonl-mark");

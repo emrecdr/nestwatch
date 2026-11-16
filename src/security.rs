@@ -58,11 +58,12 @@ fn is_lan(ip: IpAddr) -> bool {
 /// answered at once. Folding them costs a legitimate caller nothing, because no other machine can
 /// reach this service over loopback.
 ///
-/// Everything else is keyed as it arrives, so a phone on the LAN is still not locked out by guessing
-/// somewhere else — the reason the throttles are per device at all (`auth::LoginLimiter`). Two keys
-/// remain that this does not fold: the PC's own LAN address, which is one more quota for the same
-/// machine rather than millions, and a device whose owner controls its addressing and binds several.
-/// `O95` records why a ceiling spanning addresses is a product decision rather than a default.
+/// Everything else is keyed as it arrives, so a phone on the LAN is still not locked out by
+/// guessing somewhere else — the reason the throttles are per device at all (`auth::LoginLimiter`).
+/// Two keys remain that this does not fold: the PC's own LAN address, which is one more quota for
+/// the same machine rather than millions, and a device whose owner controls its addressing and
+/// binds several. `docs/DECLINED-OPTIONS.md` records why a ceiling spanning addresses was declined
+/// (raised as `O95`).
 ///
 /// An IPv4 address arriving mapped into IPv6 is unwrapped first, so two spellings of one address
 /// are one key.

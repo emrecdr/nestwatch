@@ -209,8 +209,9 @@ pub struct Report {
     /// clobbers the older one, with no prune, no retention setting and no notice — so a parent
     /// reading a 90-day report has no way to learn the tool will never show them a year, and the
     /// oldest days leave silently long before anyone runs `uninstall --purge`. Of the three options
-    /// weighed for that (`docs/OPEN-FINDINGS.md`, O67), this is the cheapest and the only one that
-    /// changes nothing about what is stored: it turns a silent loss into a visible limit.
+    /// weighed for that (`docs/DECLINED-OPTIONS.md`, raised as O67), this is the cheapest and the
+    /// only one that changes nothing about what is stored: it turns a silent loss into a visible
+    /// limit.
     ///
     /// Free to compute — `by_date` is already built from every retained row before the window is
     /// applied, so this is its first key.

@@ -356,6 +356,12 @@ more than they admit. Stating it is not the same as fixing it, and this entry st
 knock-on if it is ever taken: `DECLINED-OPTIONS.md` names "a row per `(day, app)`" as the trigger
 that would make SQLite defensible, and per-account multiplies rows by the same argument.
 
+**Decided 2026-11-16: one managed child per PC.** Per-account enforcement is declined and recorded
+in `DECLINED-OPTIONS.md` with the reasoning above. What stays open here is the smaller half,
+reporting usage per Windows account against the one shared budget, which changes `SystemControl`
+across six files and is verifiable only on the PC. **Trigger.** The next change that opens
+`SystemControl` anyway; not on its own.
+
 ### O16 · UWP windows resolve to `ApplicationFrameHost.exe`, not to the app
 
 The watcher identifies an app by taking `GetForegroundWindow`, asking it for a pid, and reading that
@@ -798,62 +804,6 @@ on-device verification pass would mean that when something misbehaves on the mac
 to tell the capture work from the refactor. Same reasoning as O2's revised trigger.
 
 **Trigger.** After `docs/WINDOWS-TESTING.md` has been run on the device.
-
-### O67 · There is no retention policy — only rotation, and rotation deletes
-
-`jsonl.rs::append_line` renames the live file to `.jsonl.1` once it passes `MAX_BYTES` (2 MiB) and
-**clobbers any existing `.1`**. Each log therefore keeps two generations and nothing else. There is
-no prune, no configurable retention, and no notice: the oldest days are deleted at rotation time,
-silently, long before anyone runs `--purge`.
-
-This is a design decision rather than a defect, which is why it is recorded rather than fixed — how
-much of a child's history a parental tool should keep is a question for a household, and erring
-toward keeping less is defensible on its own terms. What makes it worth tracking is that **nobody is
-told**. A parent reading a 90-day report has no way to know the tool will never show them a year.
-
-**The 4 MiB across two generations is the fact; the horizon is a model.** A daily row's size is set
-by how many apps, pages and groups were used, so it is a property of the household, not the product.
-Two independent estimates, differing only in assumed name lengths, agreed on shape and differed by
-~40%: decades of light use, and roughly **two to three years** for a child at `foreground::MAX_PAGES`
-every day. Quote it as a range or not at all — "7.5 years" reads as a guarantee.
-
-`screentime.rs`'s log holds nothing but rollups, so it is the slow one. `usage.jsonl` carries them
-among session starts, stops, locks, warnings and grants, so it rotates far sooner and its copy of a
-given day dies first — but that only affects installs predating `screentime.jsonl`, and
-`screentime::history_rows` reads both for exactly that reason.
-
-**The third option is done.** `Report::history_from` carries the oldest completed day still on
-disk, and the report card renders it as *History from 2026-07-01* beside *Measured days 25/30*. It
-is read from `by_date` — the whole retained history — rather than from the window, and
-`the_oldest_day_held_does_not_move_when_the_window_narrows` pins that: derived from `day_rows` it
-would compile, pass a single-window test, and then report a different horizon for each of the
-7/30/90 buttons. Shown unconditionally rather than only once history is shorter than the range
-asked for, because surfacing it only when it has already bitten leaves exactly the parent who has
-not hit it yet uninformed, which is the same silence written differently.
-
-**The loss is now recorded as well as previewed.** *History from …* is derived from what
-**survived**, so it answers "how far back can I see" and cannot distinguish a fresh install from
-one that quietly dropped a year. `jsonl::rotate_if_over_size` now writes a `rotated` row into the
-newly-emptied file whenever a rotation actually destroys a previous backup, carrying
-`discarded_bytes` and `discarded_through` — the newest timestamp in the backup being clobbered,
-i.e. the instant before which history no longer exists. It travels into `GET /api/export`, so a
-parent checking the tool against itself sees the gap rather than having to notice an absence.
-
-Deliberately not a full read of the doomed file: that would be up to 2 MiB on whichever thread
-called `record`, and for the audit log that is an axum handler on the async runtime. A `stat` for
-the size and an 8 KiB tail read for the last timestamp cost one short read per 2 MiB written. The
-line **count** is what that trade gives up. A *first* rotation destroys nothing and writes nothing,
-because a row reporting that no data was lost is noise in a file a parent reads.
-
-**What remains open is the deletion itself, which is untouched.** Rotation still keeps two
-generations and still clobbers the older one; nothing prunes and nothing is configurable. The two
-costed-at-nothing options stand: a rollup-only prune that keeps N days regardless of bytes, or a
-larger `MAX_BYTES` for `screentime.jsonl` specifically, since its rows are the irreplaceable ones.
-What has changed is that the loss is now both visible in advance and recorded after the fact, so
-this is no longer silent — only unbounded.
-
-**Trigger.** Any decision to advertise a retention period, or the first parent who watches
-*History from* move forward and asks why.
 
 ### O56 · The screen-time report pays for every day ever recorded, not the window asked for
 
@@ -1437,6 +1387,10 @@ reads its own client source rather than restating it, and fixtures captured verb
 **Trigger.** A third consumer, or the next deliberate change to `/api/extra-time`'s response body —
 at which point somebody has to re-vendor bytes that no mechanism currently hands them.
 
+**Decided 2026-11-16: the second shape.** `tests/golden/` becomes *shapes any client parses*, with a
+per-file consumer manifest that `check_golden.sh` reads, which needs the matching change in
+`nestwatch-mobile`. It waits on the trigger above rather than being done on its own.
+
 ---
 
 ### O87 · Six features are not in the Windows checklist at all
@@ -1570,20 +1524,6 @@ and the payload size is inferred from this repo's own 4K measurements. Nobody ha
 Two lines, no behaviour change. **Measure first** — this is on the child's machine, which is where
 this project's guesses have been wrong before.
 
-### O66 · A full frame is sized by the overlay being open, not by what the overlay can show
-
-`liveTier()` returns `full` whenever `shotFull` is set, and full means the native capture — 3840×2160
-on a 4K panel. The overlay renders it `object-contain` inside `inset-0`. On the parent's phone, which
-is the device the pairing QR exists for, that box resolves roughly 1170×658 of the frame: about a
-tenth of the pixels the child's PC captured, encoded, piped, encrypted and uploaded. On a 2560×1440
-desktop browser the overhang is closer to 2.4×, so this is phone-shaped.
-
-**Fix, and it is a decision rather than a tidy-up.** The overlay could send its own device-pixel box
-(`?tier=full&w=…&h=…`, clamped to native) and let `encode_shot` fit to it; the machinery exists and
-`a_small_frame_is_never_scaled_up` already pins the never-upscale rule. Against that,
-`ShotTier`'s doc argues deliberately for one variant and one code path so the full path cannot rot,
-and a third size axis is exactly what it was written against. Weigh those before touching it.
-
 ### O91 · The firewall rule and the app-layer gate would disagree about a tunnel peer, and neither would say so
 
 Two independent gates decide whether a client may reach this service, and they encode the same
@@ -1639,6 +1579,12 @@ on the local subnet. Until then the two gates agree and there is nothing to do.
 because this tree held uncommitted edits to this file. Both source claims re-verified independently
 before it was written down.
 
+**Decided 2026-11-16: no endpoint on the PC.** Remote access, when it is set up, goes through a
+Tailscale subnet router on a separate always-on box at home (`REMOTE-ACCESS.md`, option 3). It
+masquerades, so a remote request reaches the service from that box's address on the local subnet,
+which both gates admit, and the firewall rule needs no change. This entry stays for the other route:
+WireGuard on the PC itself, stock or embedded, is exactly the case it describes.
+
 ### O94 · Server refusals reach a translated dashboard in English
 
 The dashboard now speaks English, Dutch or Turkish, and `app.js` holds every string it builds
@@ -1686,51 +1632,6 @@ the English the parent reads today. So the fix needs a wire shape first — `{"e
 codes, then roughly 40 reviewed strings per language (`O96`'s caution applies). The dashboard half
 is one function, `rejection()`, which already prefers the server's prose and need only prefer a
 known code above it.
-
-### O95 · The redeem throttle counts per address, and nothing counts across them
-
-`SubmitLimiter` keys on `peer.ip()` and nothing else, and `require_lan_peer` admits every RFC1918
-address. So the 5-per-minute limit that `timecode.rs` and `SECURITY.md` both quote their security
-margin from is a per-address quota, and the address is chosen by whoever is calling. A device on
-the home network whose owner controls its addressing collects a fresh quota for each address it
-binds.
-
-**Measured 2026-09-07.** 32^6 is 1,073,741,824; at `MAX_ACTIVE_CODES` (50) and 5/min that is the
-~8 years both documents state. A hundred source addresses makes it about a month. Neither figure
-was wrong — they answer a question about one attacker at one address, and were being read as
-statements about the endpoint. Both documents now say so.
-
-**What was done instead, and why.** Every refused submission is counted
-(`refusals::time_code_refused`) and reaches the *Refused today* card, so sustained guessing stops
-being indistinguishable from a quiet week — which is the half that was missing. A wrong *password*
-already wrote `auth_failure`; a wrong *code* wrote nothing anywhere.
-
-**What would close this** is a second ceiling that spans addresses. It is not built because it is
-not purely a security decision: a shared budget that *refuses* also decides what a legitimately
-issued code does while that budget is spent. Note the usual objection does not apply here — the
-redeem endpoint is the child's, so a child exhausting a global budget denies mainly themselves —
-but "your code stopped working and the tool will not say why" is still a product call, and it wants
-a deliberate answer rather than a default. A counter is bounded by construction; a lockout is not.
-
-**Narrowed 2026-10-05: the PC itself is now one address.** The flaw was wider than this entry said,
-and the cheapest half of it is closed. All five throttles — login and pairing (`LoginLimiter`), time
-requests, code redemption and the child's status poll (`SubmitLimiter`) — keyed on the raw peer
-address, and `require_lan_peer` admits every loopback address, so a program on the child's own PC
-could collect a fresh quota from each of the sixteen million addresses in 127.0.0.0/8 without any
-second device or any network setting — that Windows lets an ordinary account choose those addresses
-is the one premise not yet confirmed on the PC (§H11). Reproduced against `260f4d8` for the
-password: five wrong guesses locked 127.0.0.1 and 127.0.0.2 was answered at once. Both limiters now
-count against `security::throttle_key`, which folds all of loopback into one key; a legitimate
-caller loses nothing, since no other machine can arrive that way. Wrong passwords are now counted on
-*Refused today* as well as audited. What this entry describes for a second device on the LAN that
-binds several RFC1918 addresses is unchanged and still a product call.
-
-**A delay spanning addresses was considered for the login and is not the gentle option it looks
-like.** Logins wait on one lock, `login_lock`, which tokio grants first come first served. A delay
-applied inside it grows with every request a guesser keeps queued, so the parent's own sign-in waits
-behind all of them — a lockout by another name, which is the outcome the per-device design exists to
-avoid. Applied outside the lock it is a refusal of whoever arrives during the delay, which is the
-same thing. Either version wants the deliberate answer this entry already asks for.
 
 ### O96 · The dashboard translates its labels and not the sentences it builds
 
@@ -1852,37 +1753,6 @@ a channel whose one property they do not want, and the alternative is documented
 already half-present in this repository. Left open because the registration touches `install`, and
 an install-time step that can fail silently is exactly the class this project spends the most
 effort avoiding.
-
-### O107 · A routine that lowers the limit mid-day reaches the child with no countdown
-
-**Found 2026-10-05, by reading; not reproduced on the PC.** The README promises warnings at 15, 5
-and 1 minutes "so the limit is never a surprise", and the budget path keeps it by counting down as
-the remaining minutes cross each threshold (`decide`, `countdown.observe`). That only works when the
-remaining time *falls through* the thresholds. When it jumps — the limit drops below what has
-already been used — there is no moment at which fifteen minutes were left, and the enforcer goes
-straight to the lock warning and its short grace (`warn_secs`, a minute by default).
-
-Two things make the limit jump. **A parent's save** now asks first: `POST /api/rules/preview`
-reports when saving would newly put today over, and the dashboard names the consequence — the lock
-or the shutdown, after how long, and that no countdown comes first — before sending it. **A
-scheduled routine starting** does not, and cannot be asked about, because nobody presses anything: a
-"Homework, 16:00–18:00" routine with a 60-minute limit, on a day with 75 minutes already used, locks
-the PC at 16:00 with a minute's notice. The curfew solved the same problem for its own windows with
-a lookahead — `Curfew::mins_until_active` probes the next fifteen minutes so the countdown starts
-before the window opens — and the rules enforcer has nothing like it.
-
-**Why it is not fixed alongside the preview.** The fix is in the enforcement path: either the rules
-loop probes `rules_at(now + m)` for the next fifteen minutes and counts down against the routine
-about to start, or a mid-day cut takes effect no sooner than the warning the child would have had —
-the floor `Curfew::undo_extension` already applies to a bedtime brought forward. Both change
-`decide`'s inputs, which is the function the declined-options list keeps out of restructures, and
-the second one also changes what a scheduled routine *means* (it would start fifteen minutes late on
-exactly the days it bites). That is a product decision about routines, not a parameter, so it is
-recorded rather than defaulted.
-
-**Trigger.** The first time a routine with a lower limit is scheduled on the PC, or the
-scheduled-routine part of the Windows checklist is run with a day already near its limit — whichever
-comes first.
 
 ### O109 · A full sweep leaves 178 mutants alive, recorded in a baseline rather than fixed
 
