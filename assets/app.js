@@ -1861,11 +1861,12 @@ function app() {
 
     // Load the first time the card is opened, not on page load.
     //
-    // `O88` records that `loadAll` already fires twelve requests before the parent has scrolled
-    // anywhere, and names deferring collapsed cards as the fix it could not justify without a DOM
-    // test. This card is the one place that argument is free: it is collapsed by default, nothing
-    // else reads `sessions`, and it is consulted only when a parent has a reason to. Adding it to
-    // `loadAll` would have made the storm a thirteenth request for a card most visits never open.
+    // `loadAll` fires twelve requests at sign-in. Deferring the collapsed cards among them was
+    // measured and declined (`DECLINED-OPTIONS.md`, raised as `O88`): they cost little, and the
+    // change needs a DOM test. This card is the one place deferring is free: it is collapsed by
+    // default, nothing else reads `sessions`, and it is consulted only when a parent has a reason
+    // to. Adding it to `loadAll` would have made a thirteenth request for a card most visits never
+    // open.
     // Now reached from the Integrations card as well, which needs the same list to say what a
     // provider is paired to. Guarded on `sessionsLoaded` rather than on `sessions.length`: under
     // the old guard a household with genuinely nothing signed in re-fetched on every open, and —

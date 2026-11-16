@@ -1442,46 +1442,6 @@ unrun" as covering 0.6.0; it covers 0.5.0 and is silent about 0.6.0.
 
 ---
 
-### O88 · The dashboard fires twelve requests on load, before the parent has scrolled anywhere
-
-`app.js::loadAll` issues twelve fetches with no staggering, on `init()` and again on every
-`login()`. The first time it runs is immediately after the pairing QR is scanned, against a SYSTEM
-service on a family PC of unknown vintage — the tool's first impression, and its heaviest moment.
-
-**The obvious fix is half a fix, and the half it misses is the expensive half.** Six of the twelve
-feed cards that are collapsed `<details>` and could load on first `toggle` instead: `loadRoutines`,
-`loadProviders`, `loadCodes`, `loadAudit`, `loadUsage`, `loadLanguage`. Verified on 2026-09-02 that
-each writes only state its own card renders, so deferring them is safe — `todayAsked`, the one piece
-of shared state that looked like a counter-example, belongs to `loadToday` and gates the
-enforcement banner.
-
-But the two costly loaders are **always-open cards and cannot be deferred this way**:
-`loadScreentime` feeds *Screen time* (`index.html:1115`) and parses every retained day of history,
-although since 2026-11-16 it copies and sorts only the days it shows; `loadProcesses` feeds *Running
-apps* (`index.html:334`) and drives the `sysinfo` enumeration `DECLINED-OPTIONS.md` calls "the
-largest remaining win without new FFI". So the collapsed-card change halves the request **count**
-and leaves the **cost** concentration exactly where it is. Anyone proposing it should say which of
-the two they are buying.
-
-**Why this is filed rather than fixed.** The change lives entirely in the DOM-and-network half of
-`app.js`, which `O71` correctly identifies as the untested half — `web/test/` reaches the pure
-methods, and a deferred-load path is not one. It would ship on reasoning alone, which is the
-failure mode this file exists to record rather than repeat. Attacking the cost rather than the
-count was the better first move, and the report's waste beyond its window is gone.
-
-**Fix, when taken.** Either defer the six (small, local, per-card, needs a DOM test to be worth
-doing) or stagger the twelve so the always-open cards resolve before the collapsed ones compete
-with them. Measuring first is cheap and nobody has: open the dashboard, read the network panel.
-That is also the cheapest available answer to `O23`, which currently has no number at all.
-
-## Not covered by any of this
-
-**None of the above has run on the target machine.** Everything here was found by reading, tests,
-and cross-compilation — the same three gates that were green when `install` failed on real
-hardware, and again when `remove_file` turned out not to be exclusive. See
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md); it is the only method with a track record of finding what
-matters here.
-
 ### O64 · The helper pipe is a 4 KiB buffer, and full frames now cross it every tick
 
 `spawn_piped` passes `nSize = 0` to `CreatePipe` (`src/session.rs`), which asks Windows for the
