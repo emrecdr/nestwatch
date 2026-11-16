@@ -45,6 +45,11 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Internal
 
+- **The screen-time report no longer copies and sorts all of history to show a window of it.** Days
+  outside the window are parsed only for what reaches beyond it ("first seen", how far back history
+  goes, the previous period's total), and the days shown are moved into the report rather than
+  copied. A new test pins each of a day's four breakdowns as heaviest first, the order the dashboard
+  draws them in, which one test on page titles had covered for all four.
 - **The web pages' JavaScript is mutation-tested on every push, as the Rust already was.** A new CI
   job runs StrykerJS on the lines of `assets/app.js` and `assets/ask.js` a push changes, and fails
   if one can be altered with no test noticing. `npm run mutate` in `web/` runs the same thing

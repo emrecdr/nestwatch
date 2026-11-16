@@ -126,7 +126,15 @@ impl DayRow {
     /// A day the service ticked through. `measured` is derived here rather than passed in, so it
     /// cannot disagree with `minutes_used` — the two used to be set side by side at two call
     /// sites, one `null`-vs-`0` slip away from the confusion this whole type exists to prevent.
-    fn measured(date: NaiveDate, row: &ParsedRow) -> Self {
+    ///
+    /// Takes the parsed row by value and moves its breakdowns in, and sorts them here, heaviest
+    /// first: this is the only consumer that needs an order, so a day outside the window is
+    /// neither copied nor sorted.
+    fn measured(date: NaiveDate, row: ParsedRow) -> Self {
+        let heaviest_first = |mut v: Vec<AppMinutes>| {
+            sort_heaviest_first(&mut v);
+            v
+        };
         Self {
             date: date.to_string(),
             measured: true,
@@ -135,10 +143,10 @@ impl DayRow {
             over_budget: row
                 .budget
                 .is_some_and(|b| b > 0 && row.minutes_used > u64::from(b)),
-            apps: row.apps.clone(),
-            focused: row.focused.clone(),
-            pages: row.pages.clone(),
-            groups: row.groups.clone(),
+            apps: heaviest_first(row.apps),
+            focused: heaviest_first(row.focused),
+            pages: heaviest_first(row.pages),
+            groups: heaviest_first(row.groups),
         }
     }
 
@@ -453,14 +461,14 @@ fn parse_row(v: &Value) -> Option<(NaiveDate, ParsedRow)> {
     ))
 }
 
-/// Read one `{name: minutes}` map out of a stored row, heaviest app first.
+/// Read one `{name: minutes}` map out of a stored row, unsorted: `DayRow::measured` sorts the days
+/// a report shows, and nothing else reads the order.
 ///
 /// An **absent** key yields an empty vec, which callers must read as "not recorded" rather than
 /// as zero — every row written before foreground tracking existed has no `focused` key at all,
 /// and rendering those as a confident zero would misreport a year of history.
 fn app_minutes(v: &Value, key: &str) -> Vec<AppMinutes> {
-    let mut apps: Vec<AppMinutes> = v
-        .get(key)
+    v.get(key)
         .and_then(Value::as_object)
         .map(|m| {
             m.iter()
@@ -472,10 +480,7 @@ fn app_minutes(v: &Value, key: &str) -> Vec<AppMinutes> {
                 })
                 .collect()
         })
-        .unwrap_or_default();
-    // Heaviest first, then by name so the order is stable for equal minutes.
-    sort_heaviest_first(&mut apps);
-    apps
+        .unwrap_or_default()
 }
 
 /// Sum the measured minutes over an inclusive date range.
@@ -651,16 +656,9 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
     let span = chrono::Duration::days(i64::from(days) - 1);
     let start = end - span;
 
-    // Same window as the child's own view, from the same definition — see
-    // `window_ending_yesterday`. `start`/`end` are still needed below for `window_total` and the
-    // previous-period comparison, so the guard above stays; only the walk is shared.
-    let day_rows: Vec<DayRow> = window_ending_yesterday(today, days)
-        .map(|cursor| match by_date.get(&cursor) {
-            Some(row) => DayRow::measured(cursor, row),
-            None => DayRow::unmeasured(cursor),
-        })
-        .collect();
-
+    // Everything that only reads the retained history comes first. The window's own rows are then
+    // moved out of `by_date` rather than copied, and nothing reads it after that: every retained
+    // day is still parsed, but only the days shown are moved into the report and sorted.
     let (total_mins, measured_days) = window_total(&by_date, start, end);
 
     let (prev_total_mins, prev_measured) = match start.pred_opt() {
@@ -698,15 +696,25 @@ pub fn build_report(rows: &[Value], today: NaiveDate, days: u32) -> Report {
     // same app would be "new" or not depending on which button the parent last pressed.
     let first_seen = first_seen_in(&by_date);
 
+    // From `by_date` rather than `day_rows` for the same reason `first_seen` is: this is a fact
+    // about the whole retained history, and reading it from the window would make it move every
+    // time the parent pressed 7 / 30 / 90.
+    let history_from = by_date.keys().next().map(NaiveDate::to_string);
+
+    // Same window as the child's own view, from the same definition — see
+    // `window_ending_yesterday`. `start`/`end` are still needed above for `window_total` and the
+    // previous-period comparison, so the guard above stays; only the walk is shared.
+    let day_rows: Vec<DayRow> = window_ending_yesterday(today, days)
+        .map(|cursor| match by_date.remove(&cursor) {
+            Some(row) => DayRow::measured(cursor, row),
+            None => DayRow::unmeasured(cursor),
+        })
+        .collect();
+
     let app_totals = totals_across(&day_rows, |d| &d.apps);
     let focus_totals = totals_across(&day_rows, |d| &d.focused);
     let page_totals = totals_across(&day_rows, |d| &d.pages);
     let group_totals = totals_across(&day_rows, |d| &d.groups);
-
-    // Before `by_date` is consumed by anything, and from `by_date` rather than `day_rows` for the
-    // same reason `first_seen` is: this is a fact about the whole retained history, and reading it
-    // from the window would make it move every time the parent pressed 7 / 30 / 90.
-    let history_from = by_date.keys().next().map(NaiveDate::to_string);
 
     Report {
         first_seen,
@@ -1126,6 +1134,27 @@ mod tests {
         let legacy = row("2026-08-16", 90, 180);
         let r = build_report(&[legacy], d("2026-08-17"), 1);
         assert!(r.days[0].pages.is_empty(), "absent is unknown, not zero");
+    }
+
+    /// The dashboard draws a day's breakdowns in the order they arrive, so each of the four is
+    /// heaviest first. Every map below lists its lighter entry first, both as written and by name,
+    /// so a list left unsorted reads lighter-first whichever order the JSON map keeps.
+    #[test]
+    fn each_breakdown_of_a_day_is_heaviest_first() {
+        let day = serde_json::json!({
+            "event": "screentime_daily", "date": "2026-08-16", "minutes_used": 90,
+            "apps": {"discord.exe": 5, "roblox.exe": 50},
+            "focused": {"discord.exe": 3, "roblox.exe": 30},
+            "pages": {"Homework": 10, "Roblox": 45},
+            "groups": {"Chat": 5, "Games": 40},
+        });
+        let r = build_report(&[day], d("2026-08-17"), 1);
+        let names = |v: &[AppMinutes]| v.iter().map(|a| a.name.clone()).collect::<Vec<_>>();
+        let day = &r.days[0];
+        assert_eq!(names(&day.apps), ["roblox.exe", "discord.exe"]);
+        assert_eq!(names(&day.focused), ["roblox.exe", "discord.exe"]);
+        assert_eq!(names(&day.pages), ["Roblox", "Homework"]);
+        assert_eq!(names(&day.groups), ["Games", "Chat"]);
     }
 
     #[test]

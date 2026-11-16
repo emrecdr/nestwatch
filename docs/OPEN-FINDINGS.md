@@ -805,30 +805,6 @@ to tell the capture work from the refactor. Same reasoning as O2's revised trigg
 
 **Trigger.** After `docs/WINDOWS-TESTING.md` has been run on the device.
 
-### O56 · The screen-time report pays for every day ever recorded, not the window asked for
-
-`build_report` parses the whole retained history, then does work on rows it will never render:
-
-- `DayRow::measured` **deep-clones** four vectors (`apps`, `focused`, `pages`, `groups`) out of
-  `by_date`, a map local to `build_report` that is dropped moments later. Bounded by `MAX_APPS` 200 +
-  200 + `MAX_PAGES` 40 + groups, so up to ~445 `String` allocations per measured day — up to ~40,000
-  per request at the 90-day window, realistically a few thousand.
-- Out-of-window rows are still four-way sorted by `app_minutes`, although their only consumer is
-  `first_seen_in`, which reads **only** `focused`'s names — not the minutes, not the order, and none
-  of `apps`/`pages`/`groups`. A year installed with a 30-day window is ~335 such rows, ~17,000 wasted
-  `String` allocations and ~1,300 wasted sorts per request.
-
-Cost scales with **how long the tool has been installed**, not with the window requested — the same
-shape as the `usage.jsonl` waste already fixed one level up.
-
-**Fix.** Run `window_total` and `first_seen_in` before the day loop (both only read), then build
-`day_rows` with `by_date.remove(&cursor)` and move the vectors in; and move the sort into
-`DayRow::measured`, the only consumer that needs an order.
-
-**Why it is here and not done.** Measured at sub-millisecond to ~2 ms on a request a parent triggers
-by hand, and — the deciding fact — **it predates the reviewed diff**, so it falls outside "wasted work
-this change introduces". Mechanical and safe when someone is next in that file for another reason.
-
 ### O63 · The comment stripper cannot parse a regex literal containing a quote
 
 `stripJs`'s doc comment says regex literals are safe "by construction — a `/` is only treated as
@@ -1480,17 +1456,18 @@ of shared state that looked like a counter-example, belongs to `loadToday` and g
 enforcement banner.
 
 But the two costly loaders are **always-open cards and cannot be deferred this way**:
-`loadScreentime` feeds *Screen time* (`index.html:1115`) and pays the whole-history cost `O56`
-records; `loadProcesses` feeds *Running apps* (`index.html:334`) and drives the `sysinfo`
-enumeration `DECLINED-OPTIONS.md` calls "the largest remaining win without new FFI". So the
-collapsed-card change halves the request **count** and leaves the **cost** concentration exactly
-where it is. Anyone proposing it should say which of the two they are buying.
+`loadScreentime` feeds *Screen time* (`index.html:1115`) and parses every retained day of history,
+although since 2026-11-16 it copies and sorts only the days it shows; `loadProcesses` feeds *Running
+apps* (`index.html:334`) and drives the `sysinfo` enumeration `DECLINED-OPTIONS.md` calls "the
+largest remaining win without new FFI". So the collapsed-card change halves the request **count**
+and leaves the **cost** concentration exactly where it is. Anyone proposing it should say which of
+the two they are buying.
 
 **Why this is filed rather than fixed.** The change lives entirely in the DOM-and-network half of
 `app.js`, which `O71` correctly identifies as the untested half — `web/test/` reaches the pure
 methods, and a deferred-load path is not one. It would ship on reasoning alone, which is the
-failure mode this file exists to record rather than repeat. `O56` is the better first move: it
-attacks the cost instead of the count, and it is testable.
+failure mode this file exists to record rather than repeat. Attacking the cost rather than the
+count was the better first move, and the report's waste beyond its window is gone.
 
 **Fix, when taken.** Either defer the six (small, local, per-card, needs a DOM test to be worth
 doing) or stagger the twelve so the always-open cards resolve before the collapsed ones compete
