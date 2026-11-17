@@ -62,7 +62,7 @@ jobs:
       # `--in-place` builds into the ordinary `./target`, which is what this action saves, and
       # every shard pays a full baseline build before its first mutant. Keyed per job, so a shard
       # warms from its own previous week.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Pinned to a commit because this action downloads and executes binaries, and the tool is
       # version-pinned too, so a cargo-mutants release cannot change what this gate accepts
       # without a commit here. Same pins as `ci.yml`; keep them moving together.
