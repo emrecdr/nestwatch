@@ -1389,6 +1389,32 @@ unrun" as covering 0.6.0; it covers 0.5.0 and is silent about 0.6.0.
 
 ---
 
+### O110 · chrono is unmaintained, and every date and time here goes through it
+
+RUSTSEC-2026-0543, issued 2026-11-17, marks chrono unmaintained: its maintainer is winding it down
+and recommends `jiff` (chronotope/chrono#1768). It is informational, not a vulnerability, and no
+release fixes it, so `deny.toml` ignores it with that assessment written beside the entry; without
+the entry the blocking `supply-chain` job fails every run from that day. This crate uses chrono's
+`clock` and `serde` features only, and not chrono-tz, whose time-zone data is the part that has
+stopped being updated: local time comes from the OS offset, anchored by `clock.rs`.
+
+**What it costs to leave.** 29 files in `src/` and `tests/` name chrono, among them the anchored
+clock, the curfew windows, the day rollover and the stored dates in every log, so the move is a
+change to how this product tells time, with serde formats that must read back what older builds
+wrote. Not something to do as a dependency bump.
+
+**Trigger.** A chrono advisory that is a vulnerability, a Rust release chrono stops building on, or
+the next change that reworks time handling anyway. Until then the `deny.toml` entry stands, and it
+names this finding so that removing one means looking at the other.
+
+## Not covered by any of this
+
+**None of the above has run on the target machine.** Everything here was found by reading, tests,
+and cross-compilation — the same three gates that were green when `install` failed on real
+hardware, and again when `remove_file` turned out not to be exclusive. See
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md); it is the only method with a track record of finding what
+matters here.
+
 ### O64 · The helper pipe is a 4 KiB buffer, and full frames now cross it every tick
 
 `spawn_piped` passes `nSize = 0` to `CreatePipe` (`src/session.rs`), which asks Windows for the

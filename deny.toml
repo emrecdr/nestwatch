@@ -7,13 +7,21 @@
 # have landed in a job nobody looks at.
 #
 # Resolving the graph for the Windows target instead makes those crates legitimately absent, so
-# this can fail the build with NO ignores. If something is ignored here in future it should be
-# because it was assessed, not because the job was noisy.
+# this can fail the build with no blanket ignores. Anything ignored below was assessed, and says
+# why beside it, not because the job was noisy.
 [graph]
 targets = ["x86_64-pc-windows-msvc"]
 
 [advisories]
 version = 2
+ignore = [
+  # chrono is unmaintained (RUSTSEC-2026-0543, issued 2026-11-17): its maintainer is winding it
+  # down and recommends jiff (chronotope/chrono#1768). Informational, not a vulnerability, and no
+  # release fixes it. This crate uses chrono's `clock` and `serde` features only, and not
+  # chrono-tz, whose time-zone data is the part that has stopped being updated; local time comes
+  # from the OS offset, anchored by `clock.rs`. The move to jiff is `OPEN-FINDINGS.md` `O110`.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no vulnerability; migration tracked as O110" },
+]
 
 [bans]
 # Duplicate versions are informational — a few are unavoidable transitively.
