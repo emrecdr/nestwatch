@@ -12,9 +12,9 @@
   },
   "devDependencies": {
     "@stryker-mutator/core": "10.1.1",
-    "@tailwindcss/cli": "4.3.3",
-    "daisyui": "5.7.46",
-    "tailwindcss": "4.3.3"
+    "@tailwindcss/cli": "4.3.5",
+    "daisyui": "5.8.0",
+    "tailwindcss": "4.3.5"
   },
   "overrides": {
     "@stryker-mutator/core": {
