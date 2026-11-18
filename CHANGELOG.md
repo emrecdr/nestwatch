@@ -17,6 +17,13 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   the usage timeline. It needs a browser from 2022 or later (Firefox 108, Chrome 75, Safari 15.4);
   an older one would draw those two without their sizes.
 
+### Internal
+
+- **`tests/golden/limits.json` publishes the certificate-renewal threshold, `renew_warn_days`.** The
+  phone app warns from the pinned certificate at the same number `doctor` and the service log use,
+  and read it out of `src/cert.rs` with a `sed`, the channel `limits.json` was made to retire. It
+  now reads it from the golden file like the other five limits.
+
 ## [0.12.0] — 2026-11-18
 
 ### Fixed

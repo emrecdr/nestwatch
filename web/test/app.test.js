@@ -1026,7 +1026,8 @@ test("an unreadable certificate never renders as a countdown that hit zero", () 
 });
 
 // The threshold lives on the server. A `30` appearing in this file would be a fifth copy of
-// RENEW_WARN_DAYS, in the one place nobody thinks to grep (O72 records the fourth).
+// RENEW_WARN_DAYS, in the one place nobody thinks to grep (the phone app, reading limits.json, is
+// the fourth).
 test("the client owns no renewal threshold of its own", () => {
   const a = loadApp();
   a.today = { cert_days_left: 31, cert_expiring: false };
@@ -3097,7 +3098,8 @@ test("qrDataUri yields nothing rather than a broken image when there is no QR", 
 
 test("pairExpiryLabel reads the server's number instead of restating fifteen", () => {
   // The client must not own this threshold. A hard-coded "15 minutes" here would keep saying so
-  // after TTL_SECS changed, which is the same class of bug O72 records for RENEW_WARN_DAYS.
+  // after TTL_SECS changed, which is the same class of bug the phone app's copy of RENEW_WARN_DAYS
+  // was until `limits.json` published it (O72).
   const app = withState({});
   assert.equal(app.pairExpiryLabel(900), "15 minutes");
   assert.equal(app.pairExpiryLabel(60), "1 minute", "singular, not '1 minutes'");

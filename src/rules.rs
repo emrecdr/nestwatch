@@ -975,9 +975,9 @@ pub fn today_summary(
         "enforcer_age_secs": enforcer_age_secs,
         // Roughly how many days the TLS certificate has left, and whether that is inside the
         // renewal window. Both, because the client must not own the threshold: `RENEW_WARN_DAYS`
-        // already has three readers (this, the startup log, `doctor`) and `O72` records a fourth
-        // in another repository reading it out of this crate's source with `sed`. Sending the
-        // verdict as well as the number means the dashboard adds no fifth copy.
+        // already has three readers (this, the startup log, `doctor`) and the phone app is a
+        // fourth, reading it from `tests/golden/limits.json`. Sending the verdict as well as the
+        // number means the dashboard adds no fifth copy.
         //
         // **Why the dashboard needs this at all.** Nothing renews the certificate — `ensure_cert`
         // returns early whenever the files exist — so an install left alone reaches 825 days and
@@ -5432,9 +5432,9 @@ mod tests {
     /// The dashboard is told the verdict, not just the number — and the verdict is the server's.
     ///
     /// The client must not own the threshold. `RENEW_WARN_DAYS` already has three readers in this
-    /// crate and `O72` records a fourth in another repository reading it out of this source with
-    /// `sed`; a hard-coded `30` in `app.js` would be a fifth, in the one place nobody would think
-    /// to grep. Sending `cert_expiring` means the browser compares nothing.
+    /// crate and the phone app is a fourth, reading it from `tests/golden/limits.json`; a hard-coded
+    /// `30` in `app.js` would be a fifth, in the one place nobody would think to grep. Sending
+    /// `cert_expiring` means the browser compares nothing.
     ///
     /// The boundary is asserted rather than a comfortable middle value, because the off-by-one
     /// between `doctor` and the startup log — the defect `cert::renewal_due` was extracted to fix

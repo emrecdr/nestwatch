@@ -3398,8 +3398,8 @@ function app() {
     // and a fact that never changes is not that.
     //
     // The threshold is NOT here. The server sends `cert_expiring` already decided, because
-    // `RENEW_WARN_DAYS` has three readers in the Rust crate and a fourth in the Android client
-    // reading it out of the source with `sed` (O72); a `30` written here would be a fifth copy in
+    // `RENEW_WARN_DAYS` has three readers in the Rust crate and a fourth in the phone app, which
+    // reads it from `tests/golden/limits.json` (O72); a `30` written here would be a fifth copy in
     // the one place nobody greps. This asks only whether the server said so.
     //
     // Why it earns a place at all: nothing renews the certificate, and when it lapses the browser

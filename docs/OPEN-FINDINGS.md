@@ -30,8 +30,8 @@ This file is a **task list, not a history**. It answers exactly one question: *w
 ## Writing across the two repos
 
 `nestwatch-mobile` keeps the same file — `docs/OPEN-FINDINGS.md`, same rules — and the two now cite
-each other. `O72` is the first pair. That makes this a channel, and a channel needs an address rather
-than a sentence.
+each other. `O72` was the first pair, closed on 2026-11-18. That makes this a channel, and a channel
+needs an address rather than a sentence.
 
 **Cite a counterpart as `repo#ID`** — `nestwatch-mobile#M6`, `nestwatch#O72` — anywhere in the entry's
 prose. On an entry that crosses the boundary, open it with one line, carrying only the parts that
@@ -437,138 +437,6 @@ feature from the refactor.
 the `nestwatch run` CLI path. Worth doing for hygiene; not a substitute. If done, the seam is the
 `axum_server::Handle` already held in `server.rs`, not the `mpsc` in `service.rs`, which is
 single-receiver and already consumed.
-
-### O72 · `RENEW_WARN_DAYS` is client-visible, and only a source grep can reach it
-
-> **Cross-repo** · filed by `nestwatch-mobile` · pairs with `nestwatch-mobile#M6`
-
-`tests/golden.rs::limits` exists because a client renders some numbers *before* it can ask, and its
-own doc comment records why the alternative was retired: the client used to grep this repository's
-source for those constants, "the failure mode is that the check stops running rather than that a
-number is wrong", and "it broke within hours of being written, when these constants were named
-instead of left inline".
-
-`cert::RENEW_WARN_DAYS` is now in exactly that position and is not in `limits.json`.
-
-**Why it became client-visible.** The Android client pins this PC's certificate, and the pin is the
-sole authority — its `badCertificateCallback` returns true on a fingerprint match and nothing further
-is consulted, including the validity dates. **Measured on 2026-08-27**, in that repo's
-`test/expiry_test.dart`, against a TLS server presenting a certificate whose `notAfter` was
-2024-01-01: the pinned client completes the request normally. A browser hard-fails on the same
-certificate.
-
-So an expired certificate produces a *working phone and a broken dashboard*, and every instinct sends
-the parent looking at the PC rather than at a lapsed certificate. The phone is the only client still
-working, so it is the only one placed to explain — which means it warns, which means it needs a
-threshold.
-
-`RENEW_WARN_DAYS` is already `pub` for this same reason on this side. Its comment says it is public
-so that `doctor` "nags at the same threshold as the service log", because "two different answers to
-'is this cert about to lapse?' would have the parent reading a diagnostic that contradicts the
-warning in their log file". A phone carrying its own number is a third answer to that question.
-
-With no published channel, the client now reads `pub const RENEW_WARN_DAYS: u64 = <n>;` out of
-`src/cert.rs` with a `sed` in its own `tool/check_golden.sh`. That reader does have an explicit
-`UNREADABLE` branch, and both of its failure modes — a changed value, and a renamed constant — were
-watched to fire before it was trusted. It is still the retired channel, re-opened, and the previous
-one also looked fine right up until the day it stopped reading anything.
-
-**Fix.** One line each in `tests/golden.rs`:
-
-```rust
-use nestwatch::cert::RENEW_WARN_DAYS;
-// ...in fn limits(), alongside the other five:
-"renew_warn_days": RENEW_WARN_DAYS,
-```
-
-Checked rather than assumed: `src/lib.rs` already declares `pub mod cert`, and `RENEW_WARN_DAYS` is
-already `pub`, so this needs no visibility change. The client then vendors the enlarged `limits.json`
-like the other golden files, asserts it in its own suite, and deletes its `sed`.
-
-**The argument is consolidation, not automation, and an earlier draft of this entry said otherwise.**
-It claimed the client asserts the vendored copy "on every commit". It does not, and could not:
-measured in that repository on 2026-08-27, there is no CI of any kind — no `.github/`, no runner
-config of any flavour — and `.git/hooks/` contains nothing but the shipped `.sample` files. So
-`flutter test` there is exactly as manual as `tool/check_golden.sh` is. What this fix buys is not a
-manual gate replaced by an automatic one; it is one bespoke reader of this repository's source
-replaced by a gate that already covers five other values and is already run for them.
-
-**`VALIDITY_DAYS` is deliberately not part of this.** It is private, and the client does not need it:
-the handshake hands it the certificate's actual `notAfter`, which is better than a constant because
-it describes the certificate in front of it rather than the one this version would issue.
-
-**Cost of leaving it.** One bespoke reader of this repository's Rust, in a repository that cannot run
-this repository's tests, for a number a parent reads.
-
-Not, however, a *silent* one — and the first draft of this entry closed by saying it was, two
-paragraphs after saying the opposite. The `sed` shouts `UNREADABLE` when it cannot read, which is the
-lesson of the previous grep applied. What is wrong with it is narrower and worth stating exactly: it
-is a bespoke reader of another repository's source, which is the category that has already failed
-here once, and it only speaks when somebody runs it.
-
-**What the fix does not cover.** Publishing the constant moves it from a `sed` to a golden file, and
-that is better — but the two copies would then be pinned in opposite repositories with no shared
-gate. This repository's CI never runs the client's suite; the client's never runs this one. Drift is
-caught by `tool/check_golden.sh` over there, which needs both checkouts on one machine and a person
-choosing to run it. That mechanism does work — it is what reported `limits.json` arriving here before
-the client consumed it — but it is a manual gate, and "fix" should not be read as "closed". The
-retired channel failed by going blind; a cross-repo golden fails by drifting, which is quieter still.
-
-*(That last paragraph came from a review by a concurrent session in this repository, which verified
-the one-line fix independently and pointed out the gap. Recorded because the entry is better for it.)*
-
-**Three of this entry's premises stopped being true on 2026-08-31, filed by `nestwatch-mobile`.**
-It says, measured 2026-08-27, that the client repository has *"no CI of any kind — no `.github/`, no
-runner config of any flavour"*; that *"this repository's CI never runs the client's suite; the
-client's never runs this one"*; and that drift *"needs both checkouts on one machine and a person
-choosing to run it"*, making the `sed` a reader that *"only speaks when somebody runs it."*
-
-That repository now has `.github/workflows/ci.yml`. Because both repositories are public, one of its
-six jobs checks out `emrecdr/nestwatch` and runs `tool/check_golden.sh` against it on every push and
-pull request — no token, no person. **Observed, not planned:** run `33398694722`, job `contract
-against nestwatch`, reported `11 checks, nothing drifted` in 0.1 minutes against this repository's
-pushed `main`.
-
-**This does not close O72, and its argument is untouched.** The case made above is explicitly
-*"consolidation, not automation"* — one bespoke reader of this repository's Rust replaced by a gate
-already covering five other values — and a `sed` matching `pub const RENEW_WARN_DAYS: u64 = <n>;` is
-a reader of this repository's source whether a robot runs it or a person does. The one-line fix in
-`tests/golden.rs` is still the right one. What changed is only the *cost of leaving it*, which this
-entry gives as a reader that speaks only when somebody runs it; it now speaks on every push. So
-`nestwatch-mobile#M6` stays blocked here rather than becoming urgent.
-
-**One thing the new CI does confirm, which this entry predicted.** Its closing worry was that a
-cross-repo golden *"fails by drifting, which is quieter still"*, with both copies pinned in opposite
-repositories and no shared gate. Half of that is now answered — the client's CI is the shared gate,
-and it reads this repository's `tests/golden` directly rather than a vendored copy's word for it.
-The other half stands: this repository's CI still does not run the client's suite, so drift is caught
-on one side only, and only for as long as that side keeps looking.
-
-### O83 · The phone app cannot say which routine is running
-
-> **Cross-repo** · pairs with `nestwatch-mobile`
-
-`GET /api/usage/today` now carries `active_routine` — the name of the scheduled routine whose rules
-are in force, or `null` when the base rules are. The dashboard renders it under the budget, because
-a budget that changes at 16:00 with nothing to explain it reads as a defect rather than as a
-setting working.
-
-`nestwatch-mobile` shows the same budget and does not read the field. `UsageToday.fromJson` in
-`lib/src/api/models.dart` takes keys one at a time with null-safe defaults and there is no
-`json_serializable` anywhere, so the addition **cannot break it** — verified by reading, before the
-golden files were regenerated. The gap is display, not compatibility: a parent on the phone sees the
-number change and is told nothing, which is the same quiet failure the dashboard line exists to
-close, on the surface more likely to be checked in a hurry.
-
-Not filed on the other side, and deliberately: that repository was read-only for the session that
-made this change. Whoever picks it up should file the counterpart there and turn this into a proper
-`pairs with <repo>#<ID>` pair.
-
-**Fix.** One nullable field on `UsageToday`, and one line under the figures on the home screen.
-
-**Trigger.** The next change to `nestwatch-mobile`'s home screen, or the first parent who asks why
-the app and the dashboard disagree about how much time is left.
-
 
 ### O87 · Six features are not in the Windows checklist at all
 

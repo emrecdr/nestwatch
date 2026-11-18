@@ -36,6 +36,7 @@ use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use nestwatch::auth::{LOGIN_LOCKOUT, LOGIN_MAX_FAILS};
+use nestwatch::cert::RENEW_WARN_DAYS;
 use nestwatch::refusals::Refused;
 use nestwatch::rules::{AppGroup, Rules, Usage, today_summary};
 use nestwatch::timecode::{ActiveCode, CODE_LEN, MAX_ACTIVE_CODES, MAX_CODE_MINUTES};
@@ -92,6 +93,11 @@ fn golden(name: &str, value: &Value) {
 /// constants were named instead of left inline — a change that improved this side. A vendored copy
 /// of this file runs inside the client's own suite instead, on every commit, on a machine that has
 /// only that repository.
+///
+/// `renew_warn_days` is the certificate-renewal threshold. The phone pins this PC's certificate and
+/// keeps working when it has expired, while a browser refuses it, so the phone is the one client
+/// left to warn, from the handshake, where no usage payload has arrived to carry the server's own
+/// `cert_expiring` verdict. It warns at this number, the one `doctor` and the service log use.
 #[test]
 fn limits() {
     golden(
@@ -102,6 +108,7 @@ fn limits() {
             "login_max_fails": LOGIN_MAX_FAILS,
             "max_active_codes": MAX_ACTIVE_CODES,
             "max_code_minutes": MAX_CODE_MINUTES,
+            "renew_warn_days": RENEW_WARN_DAYS,
         }),
     );
 }
