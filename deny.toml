@@ -19,8 +19,9 @@ ignore = [
   # down and recommends jiff (chronotope/chrono#1768). Informational, not a vulnerability, and no
   # release fixes it. This crate uses chrono's `clock` and `serde` features only, and not
   # chrono-tz, whose time-zone data is the part that has stopped being updated; local time comes
-  # from the OS offset, anchored by `clock.rs`. The move to jiff is `OPEN-FINDINGS.md` `O110`.
-  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no vulnerability; migration tracked as O110" },
+  # from the OS offset, anchored by `clock.rs`. The move to jiff waits on a trigger:
+  # `DECLINED-OPTIONS.md`, raised as `O110`. Removing this entry means reading that row.
+  { id = "RUSTSEC-2026-0543", reason = "unmaintained, no vulnerability; move to jiff waits on O110's trigger" },
 ]
 
 [bans]

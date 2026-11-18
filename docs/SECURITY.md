@@ -380,8 +380,15 @@ open the door on its own.
   any returns — which matters more than most guards here, because a spread produces **no error at
   all**: the loop simply renders nothing, the same silent shape that once shipped a chart with
   thirty days of data and no bars.
-- **What is still permitted, and why:** `style-src` keeps `'unsafe-inline'` — the `[x-cloak]` rule
-  is an inline `<style>`, and Alpine writes `style` attributes for `x-show` and `:style`.
+- **`style-src` does not admit `'unsafe-inline'` either.** An injected `<style>` element is not
+  applied. Alpine writes `style` *attributes* for `x-show` and `:style`, and those alone are
+  admitted, by `style-src-attr 'unsafe-inline'`; the one inline stylesheet, the `[x-cloak]` rule,
+  lives in `assets/app.css`. That needs a browser from 2022 or later (Firefox 108, Chrome 75, Safari
+  15.4): an older one falls back to `style-src 'self'` and draws the report's bars and the usage
+  timeline without their sizes, which Alpine sets as `style` attributes. Show and hide are not
+  affected, since Alpine sets those through the element's style object.
+- **What is still permitted, and why:** `style-src-attr` keeps `'unsafe-inline'`, for Alpine's
+  `style` attributes.
   `connect-src` allows `api.github.com`, for the update check behind a button the parent presses;
   nothing contacts it otherwise.
 

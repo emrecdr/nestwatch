@@ -96,3 +96,8 @@ details[open] > summary .chev { transform: rotate(90deg); }
 @media (prefers-reduced-motion: reduce) {
   .chev { transition: none; }
 }
+
+/* Hide what Alpine has not set up yet. Here rather than in an inline <style>, because the security
+   policy's style-src admits no inline stylesheet (security::CSP), and loaded from <head> it applies
+   before the body is drawn. */
+[x-cloak] { display: none !important; }

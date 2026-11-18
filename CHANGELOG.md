@@ -7,6 +7,16 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Security
+
+- **An injected `<style>` element no longer applies on the dashboard.** The security policy's
+  `style-src` admitted `'unsafe-inline'` for one inline rule, `[x-cloak]`, which now lives in the
+  stylesheet; only `style` attributes stay admitted, by `style-src-attr`, for the report's bars and
+  the usage timeline. It needs a browser from 2022 or later (Firefox 108, Chrome 75, Safari 15.4);
+  an older one would draw those two without their sizes.
+
 ## [0.12.0] — 2026-11-18
 
 ### Fixed

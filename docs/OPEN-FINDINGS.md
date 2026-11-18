@@ -544,36 +544,6 @@ and it reads this repository's `tests/golden` directly rather than a vendored co
 The other half stands: this repository's CI still does not run the client's suite, so drift is caught
 on one side only, and only for as long as that side keeps looking.
 
-### O73 · One CSS rule is all that keeps `unsafe-inline` in `style-src`
-
-`security.rs` gives two reasons `style-src` still admits `'unsafe-inline'`: the `[x-cloak]` rule is
-an inline `<style>`, and Alpine writes `style` attributes for `x-show` and `:style`. Only the second
-is structural. The first is a single declaration — `[x-cloak] { display: none !important; }` at the
-end of `index.html`, the only `<style>` element on either served page.
-
-Moved into `web/src/app.css` it compiles into `assets/app.css`, which loads from `<head>` and so
-applies *earlier* than a `<style>` at the end of `<body>` — the anti-flash behaviour improves rather
-than degrades. With no inline stylesheet left, CSP Level 3 separates the two cases:
-
-```
-style-src 'self'; style-src-attr 'unsafe-inline';
-```
-
-Alpine keeps its attributes; an injected `<style>` element stops being executable. That is a real
-narrowing on the one page where injected content would land.
-
-**Why it is recorded rather than done, and the caution is the entry.** A browser that does not
-implement `style-src-attr` ignores it and falls back to `style-src 'self'` — which forbids Alpine's
-attributes and therefore breaks every `x-show` on the page. The failure mode is not a missing
-style: it is the whole dashboard rendering with every conditional element visible at once, including
-the ones `x-cloak` exists to hide. Firefox only shipped the directive in 128. This is precisely the
-class the Alpine CSP-build comment already warns about, where "looks equivalent" and "is equivalent"
-diverge without an error.
-
-**Trigger.** Confirm the browsers this household actually uses implement `style-src-attr`, then move
-the rule and split the directive in one change — and look at the page afterwards, because no test
-here can see a CSP the browser enforces.
-
 ### O83 · The phone app cannot say which routine is running
 
 > **Cross-repo** · pairs with `nestwatch-mobile`
@@ -672,24 +642,6 @@ being the tautological fixture `tests/spawn_paths.rs` exists to prevent.
 unrun" as covering 0.6.0; it covers 0.5.0 and is silent about 0.6.0.
 
 ---
-
-### O110 · chrono is unmaintained, and every date and time here goes through it
-
-RUSTSEC-2026-0543, issued 2026-11-17, marks chrono unmaintained: its maintainer is winding it down
-and recommends `jiff` (chronotope/chrono#1768). It is informational, not a vulnerability, and no
-release fixes it, so `deny.toml` ignores it with that assessment written beside the entry; without
-the entry the blocking `supply-chain` job fails every run from that day. This crate uses chrono's
-`clock` and `serde` features only, and not chrono-tz, whose time-zone data is the part that has
-stopped being updated: local time comes from the OS offset, anchored by `clock.rs`.
-
-**What it costs to leave.** 29 files in `src/` and `tests/` name chrono, among them the anchored
-clock, the curfew windows, the day rollover and the stored dates in every log, so the move is a
-change to how this product tells time, with serde formats that must read back what older builds
-wrote. Not something to do as a dependency bump.
-
-**Trigger.** A chrono advisory that is a vulnerability, a Rust release chrono stops building on, or
-the next change that reworks time handling anyway. Until then the `deny.toml` entry stands, and it
-names this finding so that removing one means looking at the other.
 
 ## Not covered by any of this
 

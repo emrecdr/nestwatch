@@ -245,8 +245,16 @@ fn is_same_origin(
 /// line, and matters more than most guards here because a spread fails *silently* — no console
 /// error, the loop simply renders nothing, which is how a chart shipped with no bars once before.
 ///
-/// `style-src` keeps `'unsafe-inline'`: the `[x-cloak]` rule is still an inline `<style>`, and
-/// Alpine writes `style` attributes for `x-show` and `:style`. `img-src` allows `blob:`
+/// **`style-src` admits no inline stylesheet**, so a `<style>` element injected into the page is not
+/// applied. Alpine writes `style` *attributes* for `x-show` and `:style`, which `style-src-attr`
+/// admits on its own (CSP Level 3, in every major browser since Firefox 108 in December 2022;
+/// Chrome 75, Safari 15.4). The one inline `<style>` that kept `'unsafe-inline'` on all styles, the
+/// `[x-cloak]` rule, is in `assets/app.css`. `x-show` is unaffected either way: Alpine sets it
+/// through the element's style object, which a policy does not govern. What needs the attribute
+/// directive is `:style` with a string — the report's bars and the usage timeline — which Alpine
+/// writes with `setAttribute("style", …)`. A browser older than 2022 falls back to `style-src
+/// 'self'` and draws those without their sizes. Checked in Chromium on 2026-11-18 against the
+/// served assets: the attribute applies, an injected `<style>` is refused. `img-src` allows `blob:`
 /// (screenshot object URLs) and `data:` (DaisyUI's inline-SVG backgrounds, and the favicon).
 ///
 /// `connect-src` also allows `api.github.com`, for the version check behind the button in the
@@ -260,7 +268,8 @@ fn is_same_origin(
 /// the marginal risk. `default-src 'none'` still blocks every other destination.
 const CSP: &str = "default-src 'none'; \
      script-src 'self'; \
-     style-src 'self' 'unsafe-inline'; \
+     style-src 'self'; \
+     style-src-attr 'unsafe-inline'; \
      img-src 'self' blob: data:; \
      connect-src 'self' https://api.github.com; \
      base-uri 'none'; \
@@ -371,6 +380,25 @@ mod tests {
                 "connect-src must not admit {forbidden:?}: {connect}"
             );
         }
+    }
+
+    /// An injected `<style>` element is not applied, and Alpine's `style` attributes still are.
+    ///
+    /// The two halves of one decision: drop either and the page breaks or the narrowing is gone.
+    /// `web::tests::no_inline_style_on_any_served_page` holds the markup's half.
+    #[test]
+    fn styles_come_from_the_stylesheet_and_alpine_may_set_attributes() {
+        let directive = |name: &str| {
+            CSP.split(';')
+                .map(str::trim)
+                .find(|d| d.split_whitespace().next() == Some(name))
+                .unwrap_or_else(|| panic!("the policy must state {name} explicitly"))
+        };
+        assert_eq!(directive("style-src"), "style-src 'self'");
+        assert_eq!(
+            directive("style-src-attr"),
+            "style-src-attr 'unsafe-inline'"
+        );
     }
 
     /// Every external URL in the page is either admitted by `connect-src` or listed as a link.

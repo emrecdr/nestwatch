@@ -541,6 +541,24 @@ mod tests {
         }
     }
 
+    /// No inline `<style>` on any served page.
+    ///
+    /// `security::CSP`'s `style-src` admits no inline stylesheet, so a `<style>` element here would
+    /// be refused by the browser, silently: the rules in it simply would not apply. The one that
+    /// was here, `[x-cloak]`, would then leave every element Alpine has not set up yet visible
+    /// while the page loads. Styles belong in `web/src/app.css`.
+    #[test]
+    fn no_inline_style_on_any_served_page() {
+        for (name, page) in PAGES {
+            let html = strip_html_comments(page);
+            assert!(
+                !html.contains("<style"),
+                "{name}: an inline <style>. style-src admits no inline stylesheet, so the browser \
+                 ignores it with no visible error. Put the rules in web/src/app.css.",
+            );
+        }
+    }
+
     /// No inline `<script>` on any served page.
     ///
     /// `security::CSP` dropped `'unsafe-inline'` from `script-src` once both pages moved their
