@@ -33,12 +33,12 @@ This file is a **task list, not a history**. It answers exactly one question: *w
 each other. `O72` was the first pair, closed on 2026-11-18. That makes this a channel, and a channel
 needs an address rather than a sentence.
 
-**Cite a counterpart as `repo#ID`** — `nestwatch-mobile#M6`, `nestwatch#O72` — anywhere in the entry's
+**Cite a counterpart as `repo#ID`** — `nestwatch-mobile#M20`, `nestwatch#O4` — anywhere in the entry's
 prose. On an entry that crosses the boundary, open it with one line, carrying only the parts that
 apply and only when they are not the default:
 
 ```
-> **Cross-repo** · filed by `nestwatch-mobile` · blocked on `nestwatch-mobile#M6`
+> **Cross-repo** · filed by `nestwatch-mobile` · blocked on `nestwatch-mobile#M20`
 ```
 
 | | |
@@ -433,8 +433,8 @@ exactly the set of cases a cooperative shutdown signal cannot cover.
 
 **Trigger.** Not before §D2. Adding a large piece of unverified Win32 to the spawn path of the
 service that locks a child's PC, on top of a release nobody has watched run, is the exact stacking
-O2 and O4 both decline — when something misbehaves on the device there would be no way to tell the
-feature from the refactor.
+`O4` declines, and that the split of `rules.rs` (now in `DECLINED-OPTIONS.md`) declined too — when
+something misbehaves on the device there would be no way to tell the feature from the refactor.
 
 **Related and deliberately not treated as the fix:** `run_watcher_supervisor` is a detached
 `std::thread::spawn` (`session.rs`) with no shutdown signal, which is a genuine root cause but a
@@ -475,13 +475,13 @@ working: its headline feature arrived with §H8 attached, written to section H's
 gap stopped growing at this release for the first time since it was filed.
 
 **0.9.0 did it once and failed to do it once, which is the more informative result.** Its message
-box arrived with §H9 in the same commit. The gate's two sentences to the child — `O101`'s fix,
-shipped the same day it was filed — arrived with nothing, and stayed uncounted for two days across
+box arrived with §H9 in the same commit. The gate's two sentences to the child — a fix shipped the
+same day its finding was filed — arrived with nothing, and stayed uncounted for two days across
 a cleanup pass, a docs-freshness pass and a release preparation, all three of which read that file.
 Three items were added to §H8 while cutting `v0.9.0`, before the tag rather than after it, which is
 the first time this gap has been closed on the same day it opened. The lesson is not that anyone
 was careless: **a feature shipped in a hurry is exactly the one whose checklist item is skipped**,
-and `O101` was closed the morning it was filed. A guard that counts items cannot catch this — the
+and that finding was closed the morning it was filed. A guard that counts items cannot catch this — the
 count was correct the whole time, it just counted a smaller feature set than had shipped.
 
 **They shipped in `0.7.0` on 2026-09-04, so this is no longer a warning about future work.** The
