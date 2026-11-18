@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 244 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 254 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -192,10 +192,10 @@ failures rather than being surprised by them.
       toggle only while Live is on, and changing one keeps the view running rather than switching
       it off.
 - [ ] **The picture says how old it is.** With Live on, a line under it reads "updated Ns ago" and
-      counts up on its own. Now **stop the service** (`sc stop Nestwatch`) with Live still on: the
-      line must turn red and read "not updating — last frame …". This is the whole point of it. A
-      frozen live view and a child sitting still are the same picture, and before this the last
-      good frame simply stayed on screen with the toggle still lit.
+      counts up on its own. Now **stop the service** (`sc stop HostHealthService`) with Live still
+      on: the line must turn red and read "not updating — last frame …". This is the whole point of
+      it. A frozen live view and a child sitting still are the same picture, and before this the
+      last good frame simply stayed on screen with the toggle still lit.
 - [ ] **Expand fetches a sharper frame, and *stays* sharp.** With Live running, click the picture
       (or **⤢ Expand**). The full-size view must be visibly sharper than the thumbnail — the live
       stream sends a 960×540 preview, and expanding asks for a full-resolution one. If it looks
@@ -241,9 +241,9 @@ failures rather than being surprised by them.
 - [ ] **The "when the PC was in use today" strip matches reality.** Sign in and out a couple of
       times during the day, then compare the strip against what actually happened. Two specific
       checks beyond "there are bars": pause the rules mid-session and confirm the bar *ends* there
-      rather than running on, and stop the service mid-session (`sc stop Nestwatch`) then restart
-      it — that session's end is unknowable and must appear as a thin gold marker, never as a bar
-      stretching to the restart.
+      rather than running on, and stop the service mid-session (`sc stop HostHealthService`) then
+      restart it — that session's end is unknowable and must appear as a thin gold marker, never as
+      a bar stretching to the restart.
 - [ ] **A new app is called out after it is first used.** Install something the child has never
       run (or rename a copy of an existing exe), open it for a few minutes, and let the day roll
       over at midnight. The next day the report must name it under "new apps". Two things to check
@@ -809,26 +809,27 @@ never executed on the platform it was written for.
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 66 items across §H1–§H12, where it held 61 at `v0.11.0`, 59 at
-`v0.10.0`, 53 before that release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`.
-The one thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist
-item (§H8) instead of being added to the list later or not at all, which is the failure `O87`
-records against 0.6.0 and 0.7.0.
+accumulated rather than turned over: 76 items across §H1–§H13, where it held 66 at `v0.12.1`, 61 at
+`v0.11.0`, 59 at `v0.10.0`, 53 before that release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and
+32 at `v0.7.0`. The one thing that improved at `v0.8.0` is that its headline feature arrived *with*
+its checklist item (§H8) instead of being added to the list later or not at all, which is the
+failure 0.6.0 and 0.7.0 made until §H13 caught up with them.
 
 **Five of the 66 are newer than `v0.11.1` and ship in `v0.12.0`**: §H12's, written in the commit
 that added what they cover — names with a `*` in the blocklist and the per-app limits, and a limit
-set after the play starting from it — which is the rule `O87` exists to enforce. Their first item is
-the one to run first: it shows whether the owner snapshot answers on the PC at all.
+set after the play starting from it — which is the rule that a feature ships with its items. Their
+first item is the one to run first: it shows whether the owner snapshot answers on the PC at all.
 
 **Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's. They arrived in the commit
-after the fix they cover rather than with it, which is the failure `O87` records, caught 24 minutes
-later rather than at the release. The release's headline feature, words on app groups, arrived
-with its items, seven more in §D2b, outside this section because its page half needs §D2's watcher.
-Its owner rule is the newest Windows-only code in the download, and the item to run first.
+after the fix they cover rather than with it, which is the failure of a feature shipping without its
+items, caught 24 minutes later rather than at the release. The release's headline feature, words on
+app groups, arrived with its items, seven more in §D2b, outside this section because its page half
+needs §D2's watcher. Its owner rule is the newest Windows-only code in the download, and the item to
+run first.
 
-**Fourteen of the 59 at `v0.10.0` were newer than `v0.9.0`.** Eight were written in the
-commits that added their features — the probe scheduler's heartbeat, the settling period before its
-first check, and the practice gate — which is the rule `O87` exists to enforce and the thing 0.6.0
+**Fourteen of the 59 at `v0.10.0` were newer than `v0.9.0`.** Eight were written in the commits that
+added their features — the probe scheduler's heartbeat, the settling period before its first check,
+and the practice gate — which is the rule that a feature ships with its items and the thing 0.6.0
 and 0.7.0 did not do. Six were written while cutting 0.10.0, for features that would otherwise have
 shipped without any: the summer mark across a reboot (§H2), the undo of a later bedtime (§H7), the
 gate-opened notice (§H8) and `install`'s sessions note (§H10).
@@ -1188,6 +1189,58 @@ him play Roblox for at least ten minutes first.
       once, and Edge too while it shows a Roblox page.
 - [ ] **The count runs with no rules set.** Remove every rule, have him play for two minutes, then
       add `*roblox*` with a 1-minute limit. **Expect** the question on Save and Roblox closed.
+
+### H13. Routines that run themselves, integrations, and the sign-in limits (never run on Windows)
+
+These shipped in 0.6.0 and 0.7.0 with no item anywhere in this file, which was `O87` until this
+section: scheduled routines, the integrations registry with its once-a-day grants, and the sign-in
+limits. Each turns on wiring this project's real defects have lived in — the trusted clock, a latch
+that must survive a restart, a scope that must hold — and none of it has run on the PC. The
+integration items need its pairing link and `curl.exe`, run from another device on the home network;
+`<PC>` and `<port>` are what the dashboard's own address uses.
+
+- [ ] **A scheduled routine starts and hands back by itself.** Under **Routines**, save one with a
+      60-minute limit and a schedule that opens 5 minutes from now and closes 10 minutes later.
+      **Expect** the Today card to read *Routine <name> is running now* and show its limit once the
+      window opens, and the line to go and the usual limit to return when it closes, with nothing
+      pressed. That proves the schedule is read on the PC's own trusted time and that handing back
+      needs no timer rewriting the settings.
+- [ ] **His time zone does not move the window.** With a routine's window an hour away, change the
+      time zone as **him** (a standard account may). **Expect** the routine not to start early, and
+      *Refused today* to count a clock change. That proves a schedule reads the anchored clock, not
+      the one he can set.
+- [ ] **A change made during the window is kept.** While a routine runs, change your everyday limit
+      and save. **Expect** the new everyday limit in force when the window closes, not the old one.
+      That proves a schedule chooses which settings apply rather than writing over them.
+- [ ] **An integration's earned time lands once a day.** On the **Integrations** card, press
+      **Pair** for one and copy the link. From another device: `curl.exe -k -c jar.txt "<link>"`,
+      then `curl.exe -k -b jar.txt -H "Content-Type: application/json" -d "{}"
+      https://<PC>:<port>/api/extra-time` twice. **Expect** the Today card's bonus to grow by the
+      integration's reward once, not twice. The reward comes from the PC's own registry, which is
+      why the body is empty.
+- [ ] **The once-a-day rule survives a restart.** After the item above, restart the service from an
+      elevated console (`sc stop HostHealthService`, then `sc start HostHealthService`) and send the
+      same request again. **Expect** no second grant. That proves the day's latch is on the PC's
+      disk, not in memory.
+- [ ] **A retried grant gets its first answer.** Send the request twice more with `-H
+      "Idempotency-Key: try-1"` on both. **Expect** the same answer both times and the bonus
+      unchanged by the second. That proves a phone whose reply was lost is told what happened rather
+      than paid again. A different body under the same key changes nothing for an integration, whose
+      minutes the PC never reads; only your own grants from the dashboard are refused for that.
+- [ ] **Turning an integration off stops it without unpairing.** Switch its toggle off on the
+      Integrations card and send a grant: **expect** it refused. Switch it back on and send again
+      the next day: **expect** it accepted, with the same jar, no new pairing. That proves the
+      toggle is the off switch and pairing is not.
+- [ ] **An integration cannot act as you.** With the integration's jar, ask for
+      `https://<PC>:<port>/api/rules`. **Expect** a refusal. That proves a paired app's sign-in
+      reaches only the routes it was paired for.
+- [ ] **Signing one device out leaves the rest.** Sign in on two devices. On one, under **Signed-in
+      devices**, press **Sign out** beside the other. **Expect** the other to land on the sign-in
+      page at its next action and this one to stay signed in. That proves revoking a device is per
+      device on the PC's own store.
+- [ ] **A sign-in ends after 30 days, however much it is used.** Note the day a phone first signs in
+      and use it daily. **Expect** it to be asked to sign in again on day 30 (`SESSION_MAX_DAYS`).
+      Long, so do it alongside the rest of the list rather than in one sitting.
 
 ## Troubleshooting
 

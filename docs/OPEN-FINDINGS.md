@@ -67,10 +67,10 @@ would confirm or kill them.
 
 Last **full** audit against the tree: **2026-08-31**. Entries that did not survive it were removed
 or rewritten rather than annotated, per the rules above. Individual entries have been re-measured
-since and carry their own later dates — `O87` was re-measured on 2026-10-22 and the release state
-below on 2026-10-23, and `O100` was deleted on 2026-09-09 once the markup it described had been
-converted. So read the date on an entry before the date on this line: this one bounds only how long
-ago every entry was last looked at *together*.
+since and carry their own later dates — the release state below on 2026-11-18, and `O100` was
+deleted on 2026-09-09 once the markup it described had been converted. So read the date on an entry
+before the date on this line: this one bounds only how long ago every entry was last looked at
+*together*.
 
 ## Release state
 
@@ -84,11 +84,11 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 binary attestation.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) holds **66 items across §H1–§H12**, 0.11.0's words on
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) carries 76 items across §H1–§H13, 0.11.0's words on
 app groups brought seven more in §D2b, and none of them has executed on Windows (re-measured
 2026-11-18). Which features they cover and what each release added is told once, in that section's
 preamble, rather than repeated here. Worth stating exactly: **no commit in this repository's history
-has ever recorded a ticked item in that file**, in any section, so all 244 boxes it carries are
+has ever recorded a ticked item in that file**, in any section, so all 254 boxes it carries are
 still open. The three gates that were green
 when it shipped are the same three that were green when `install` failed on real hardware and again
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
@@ -152,8 +152,10 @@ gained 129 lines, and both Windows implementations of `SystemControl::run_probe`
 `control/windows.rs` (+5) and `control/service_control.rs` (+7). That code is in 0.11.1 unchanged
 and still unrun (§H8).
 
-**And neither 0.6.0's nor 0.7.0's headline features are in the checklist at all** — which is worse
-than being in it unrun, because an unrun item is at least counted. Tracked as `O87`.
+**0.6.0's and 0.7.0's headline features reached the checklist only on 2026-11-18**, as §H13:
+scheduled routines, the integrations registry and its once-a-day grants, and the sign-in limits.
+Through the eight releases after 0.6.0 they were absent, which is worse than being unrun, because an
+unrun item is at least counted.
 
 **Re-measured 2026-09-09, and the keyword test this entry leaned on twice now needs reading with
 care.** Three of its eight terms match at last — `integration` (1), `provider` (2), `StudyGo` (1) —
@@ -442,79 +444,6 @@ something misbehaves on the device there would be no way to tell the feature fro
 the `nestwatch run` CLI path. Worth doing for hygiene; not a substitute. If done, the seam is the
 `axum_server::Handle` already held in `server.rs`, not the `mpsc` in `service.rs`, which is
 single-receiver and already consumed.
-
-### O87 · Six features are not in the Windows checklist at all
-
-The release state above says the checklist is "the only method here with a track record", and every
-other entry that defers to hardware defers to it. Scheduled routines and the integrations registry
-are not in it.
-
-**Measured 2026-09-02** by counting matches in `WINDOWS-TESTING.md`: `integration` **0**, `provider`
-**0**, `StudyGo` **0**, `earned` **0**, `idempot` **0**. The word `routine` appears three times and
-`schedule` twice, and none of those is the new behaviour — the only Routines item (§E2) is *"Save
-current as routine… then Apply → the settings revert"*, which is the manual press-a-preset path that
-predates the release. Section H, where new work goes, is titled **"New in 0.5.0"** and scoped to it.
-
-**Re-measured 2026-09-04, and the gap grew rather than closed.** All five counts above are still
-**0**, and four features merged since are absent on the same test: `revoke` **0**, `signed-in`
-**0**, `masquerad` **0**, and no item anywhere exercises the absolute session cap. (`scope` matches
-twice and `session` eighteen times; every one is unrelated — a firewall rule "scoped to
-`private,domain`", a Session 0 reference. Checked, not assumed.)
-
-**Re-measured 2026-09-09 at the 0.8.0 release, and the count moved for a reason that is not
-progress.** Three terms now match — `integration` **1**, `provider` **2**, `StudyGo` **1** — and
-every match is inside the new **§H8**, which covers 0.8.0's provider probe. None of the six features
-this entry is about gained an item. The five terms that track them are unchanged at **0**: `earned`,
-`idempot`, `revoke`, `signed-in`, `masquerad`. The lesson is about the measurement rather than the
-gap: a keyword count is a proxy for coverage, and a proxy that another feature can satisfy will
-report a closing gap that has not moved. Read the five, not the eight.
-
-**0.8.0 did the thing 0.6.0 and 0.7.0 did not**, which is worth recording because it is the fix
-working: its headline feature arrived with §H8 attached, written to section H's standard and titled
-*"never run on Windows"*. That does not close this entry — the six remain absent — but it means the
-gap stopped growing at this release for the first time since it was filed.
-
-**0.9.0 did it once and failed to do it once, which is the more informative result.** Its message
-box arrived with §H9 in the same commit. The gate's two sentences to the child — a fix shipped the
-same day its finding was filed — arrived with nothing, and stayed uncounted for two days across
-a cleanup pass, a docs-freshness pass and a release preparation, all three of which read that file.
-Three items were added to §H8 while cutting `v0.9.0`, before the tag rather than after it, which is
-the first time this gap has been closed on the same day it opened. The lesson is not that anyone
-was careless: **a feature shipped in a hurry is exactly the one whose checklist item is skipped**,
-and that finding was closed the morning it was filed. A guard that counts items cannot catch this — the
-count was correct the whole time, it just counted a smaller feature set than had shipped.
-
-**They shipped in `0.7.0` on 2026-09-04, so this is no longer a warning about future work.** The
-0.6.0 half of this entry became a gap by being forgotten at release; the 0.7.0 half was written
-down while it was still unreleased and shipped anyway, which is the more useful failure to record —
-knowing did not close it. All six now sit on the download page unexercised on the hardware they run
-on, and three of them decide whether a parent can sign in. Scoped pairing, per-device revocation and the absolute cap are all the
-*authentication* surface, where a checklist gap is worth most and where this release's one
-breaking change — every existing session refused — actually lands.
-
-**Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 66 items that have never executed (measured 2026-11-18; 61 at `v0.11.0`; 32 when this was
-written, and the checklist's section-H preamble has the steps between), so the gap has a size and a
-reader can weigh it. A feature absent from the checklist has no size. The release-state paragraph
-could be read as "0.6.0 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features
-were written down and left unchecked, 0.6.0's were never written down. The two together are the
-tier-3 surface, and only one of them is visible.
-
-**Not a documentation problem.** The features carry real Windows-side behaviour that nothing here
-has exercised: a schedule that opens and closes against `clock`'s tamper-anchored local time and
-must hand back on close; the `once per source per day` latch surviving a service restart; a provider
-toggle that must stop a grant without unpairing. Each is the kind of wiring where this project's
-real defects have lived.
-
-**Fix.** A section I for 0.6.0, written to section H's standard — each item saying *what it proves*,
-because H's own preamble warns that several checks pass trivially when the underlying call is
-failing. Worth writing with someone who can run them: an item authored from the code alone risks
-being the tautological fixture `tests/spawn_paths.rs` exists to prevent.
-
-**Trigger.** Already fired — the release is on the download page. Until then, do not read "tier 3
-unrun" as covering 0.6.0; it covers 0.5.0 and is silent about 0.6.0.
-
----
 
 ## Not covered by any of this
 

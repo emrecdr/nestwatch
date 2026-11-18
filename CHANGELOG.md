@@ -7,6 +7,21 @@ A released entry is normally left alone; `git` holds what it said. The one excep
 replaces, because a reader meeting it under a released heading has no way to know a later entry
 retracts it. `0.6.0`'s integration note is the first and so far only case.
 
+## [Unreleased]
+
+### Fixed
+
+- **The Windows checklist's service commands name the real service.** Two items said `sc stop
+  Nestwatch`, a service that does not exist on the PC, so they would have failed before testing
+  anything; they say `sc stop HostHealthService`, as the rest of the file does.
+
+### Internal
+
+- **The Windows checklist covers 0.6.0's and 0.7.0's features**, which shipped with no item: §H13
+  has ten for scheduled routines starting and handing back on the trusted clock, an integration's
+  once-a-day grant surviving a restart and a retry, its off switch and its limited reach, signing
+  one device out, and the 30-day sign-in limit. The checklist is now 76 items in §H1–§H13.
+
 ## [0.12.1] — 2026-11-18
 
 ### Security

@@ -426,7 +426,7 @@ the PC, because it is also how the service keeps the day's running time that a l
 starts from. It has never run on a Windows PC; §D2b and §H12 of the checklist are where to start.
 
 **Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for every release from `v0.5.0` on:
-section H of the checklist carries 66 items across §H1–§H12, words on app groups brought seven more
+section H of the checklist carries 76 items across §H1–§H13, words on app groups brought seven more
 in §D2b, the owner check among them, and none has been executed on a Windows machine. No box
 anywhere in that file has ever been ticked in a commit. That is stated here rather than only in the
 changelog, because tier 3 is the tier the sentence above says every serious bug has lived in, and a
