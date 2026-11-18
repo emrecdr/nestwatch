@@ -56,12 +56,13 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
   locally. The child's page, which its tests used to read only as text, now runs against a stub of
   itself in `web/test/ask-harness.js`, and its behaviour tests kill every mutant Stryker makes in
   it.
-- **The per-push mutation check fails instead of going grey when a push brings more than it can
-  test.** It has 30 minutes, which holds about 23 mutants, and a job stopped by its own time limit
-  is recorded as *cancelled*: grey beside the green checks, and read as somebody having stopped it.
-  `cargo mutants` now runs under a deadline of its own inside that half hour, so a push too large to
-  finish ends red with a line saying how many of its mutants were reached. The weekly run still
-  tests the rest.
+- **The per-push mutation check runs a large push to the end, and fails rather than going grey when
+  even that is not enough.** It had 30 minutes, about 23 mutants, so a change with more ended red
+  having tested a fraction of itself; it now has three hours, about 160 mutants, and a small push
+  still finishes in minutes. A job stopped by its own time limit is recorded as *cancelled*, grey
+  beside the green checks and read as somebody having stopped it, so `cargo mutants` runs under a
+  deadline of its own inside that limit, and a push too large even for it ends red with a line
+  saying how many of its mutants were reached. The weekly run still tests the rest.
 
 ## [0.11.1] — 2026-10-23
 

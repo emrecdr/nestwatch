@@ -202,7 +202,7 @@ jobs:
       (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/'))
       || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 190
     steps:
       - uses: actions/checkout@v7
         with:
@@ -271,17 +271,18 @@ jobs:
       - if: steps.diff.outputs.has_rust == 'true'
         uses: ./.github/actions/frontend-css
       # A deadline of its own, inside the job's. A job stopped by its `timeout-minutes` is recorded
-      # as CANCELLED, grey beside the green ones and read as "somebody stopped it", which is how a
-      # push with more mutants than fit (about 23 at 66.5 s each, measured) used to end. Stopping
-      # cargo-mutants here instead leaves the job time to fail red and say how far it got. 26
-      # minutes leaves the job's 30 room for the setup above (about 45 s, measured), cargo-mutants
-      # stopping after the signal (`--kill-after` bounds it) and the upload below. Whatever is not
-      # reached is tested by `mutants-weekly.yml`.
+      # as CANCELLED, grey beside the green ones and read as "somebody stopped it", so cargo-mutants
+      # is stopped here instead, leaving the job time to fail red and say how far it got. 180
+      # minutes hold about 160 mutants at 66.5 s each (measured), and leave the job's 190 room for
+      # the setup above (about 45 s), cargo-mutants stopping after the signal (`--kill-after` bounds
+      # it) and the upload below. It was 26 minutes, about 23 mutants, so a large change ended red
+      # having tested a fraction of itself; a small push still finishes in minutes. Whatever a push
+      # larger still does not reach is tested by `mutants-weekly.yml`.
       - name: Test the mutants the diff introduces
         if: steps.diff.outputs.has_rust == 'true'
         run: |
           set +e
-          timeout --signal=INT --kill-after=60 26m \
+          timeout --signal=INT --kill-after=60 180m \
             cargo mutants --no-shuffle -vV --in-place --in-diff git.diff
           status=$?
           set -e
