@@ -11,6 +11,21 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Fixed
 
+- **A limit or a blocked app can now reach every program and page with a word in its name, and a
+  limit set after the play counts the play.** A parent set a 45-minute limit on `Roblox` after 200
+  minutes of it, and the game kept running: a name matched one program exactly, `Roblox` is not
+  `RobloxPlayerBeta.exe`, nothing on the dashboard said so, and a limit counted only from when it
+  was saved. A name without a `*` is still one program, now with `.exe` optional, so no saved
+  setting changes meaning. A `*` at either end reaches every program of the child's, and every page
+  in Chrome, Edge, Firefox or Brave, whose name, title or address starts with the word (`roblox*`),
+  ends with it (`*roblox`) or contains it (`*roblox*`), by the rules a group's words already follow;
+  `*`, `*ro*` and `rob*lox` are refused. The service now keeps each of the child's programs' running
+  time for the day, so a limit or group added mid-day starts from what was played, and saving one
+  that is already used up names it and asks first. The line under each name shows what it reaches
+  now. A group's words accept `*` at either end too, meaning what they always meant.
+- **A progress bar at exactly 0 no longer slides back and forth.** A bar bound to 0 never got its
+  value written, so the browser drew it as still loading; a parent read the per-app bar of a
+  brand-new limit as something happening. Each bound bar now starts at 0.
 - **Pausing the rules past midnight no longer locks the PC the next morning, and what is refused
   during a pause reaches the card.** The day's screen-time tally moved to a new day only on checks
   that enforce, so a pause that ran past midnight (the free-evening toggle left on overnight, or the

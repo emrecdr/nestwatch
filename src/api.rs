@@ -2064,7 +2064,7 @@ pub async fn preview_rules(
 ) -> Result<Json<Value>, AppError> {
     candidate.validate().map_err(AppError::BadRequest)?;
     let today = crate::config::today();
-    let (now_rules, saved_rules, adjustments) = {
+    let (now_rules, saved_rules, adjustments, spared) = {
         let cfg = crate::state::recover_read(&state.config);
         let at = crate::clock::now();
         let adjustments = crate::rules::Adjustments::new(
@@ -2077,6 +2077,7 @@ pub async fn preview_rules(
             cfg.rules_at(at).clone(),
             saved.rules_at(at).clone(),
             adjustments,
+            crate::rules::check_programs(&cfg),
         )
     };
     let usage = spawn(move || crate::rules::Usage::load_for_today(today)).await?;
@@ -2087,13 +2088,22 @@ pub async fn preview_rules(
         "was_over": now_rules.spent_today(today, adjustments, &usage),
         "action": saved_rules.budget_action,
         "warn_secs": saved_rules.warn_secs,
+        // Limits and groups the save leaves already used up, whose programs the enforcer then
+        // closes with no warning: see `rules::spent_on_save`.
+        "closes_now": crate::rules::spent_on_save(&now_rules, &saved_rules, &usage, &spared),
     })))
 }
 
-/// Body of `POST /api/rules/words-preview`: one group's words, as typed.
+/// Body of `POST /api/rules/words-preview`: one group's words, or blocklist entries and per-app
+/// limits, as typed. Either may be left out.
 #[derive(Deserialize)]
 pub struct WordsPreview {
+    #[serde(default)]
     words: Vec<String>,
+    /// Names as the blocklist and the per-app limits take them, `*` patterns included
+    /// (`words::app_name`).
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 /// `POST /api/rules/words-preview` → which of the child's running programs these words would match.
@@ -2111,12 +2121,26 @@ pub async fn preview_words(
     Json(body): Json<WordsPreview>,
 ) -> Result<Json<Value>, AppError> {
     crate::words::check(&body.words).map_err(AppError::BadRequest)?;
+    if body.names.len() > crate::rules::MAX_RULE_ENTRIES {
+        return Err(AppError::BadRequest(format!(
+            "at most {} entries per list",
+            crate::rules::MAX_RULE_ENTRIES
+        )));
+    }
+    for name in &body.names {
+        crate::words::app_name(name)
+            .map_err(|problem| AppError::BadRequest(problem.message(name.trim())))?;
+    }
     let spared = crate::rules::check_programs(&crate::state::recover_read(&state.config));
     let control = state.control.clone();
     let snapshot = spawn(move || control.child_processes()).await?;
-    let programs = snapshot
-        .ok()
-        .map(|child| crate::words::preview(&body.words, &child, &spared));
+    let programs = snapshot.ok().map(|child| {
+        let mut reached = crate::words::preview(&body.words, &child, &spared);
+        reached.extend(crate::words::preview_names(&body.names, &child, &spared));
+        reached.sort();
+        reached.dedup();
+        reached
+    });
     Ok(Json(json!({ "programs": programs })))
 }
 

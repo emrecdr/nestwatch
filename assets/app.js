@@ -210,6 +210,10 @@ const UI = {
     groupWordsHint: "Separate words with commas. A program whose name contains one of these words, or a page in Chrome, Edge, Firefox or Brave whose title does, shares the group's time. Only the page in front counts. Only programs running under the signed-in Windows account are counted or closed, and a built-in list keeps words away from common Windows programs, but not from all of them: check what the line below lists.",
     runningNowWithWords: "Running now with these words in the name: {}",
     nothingRunningMatches: "Nothing running now has these words in its name.",
+    appNamesHint: "A name without a * is one program, capitals aside: Roblox is roblox.exe and nothing else. A * at either end reaches every program under the signed-in Windows account, and every page in Chrome, Edge, Firefox or Brave, whose name, title or address starts with the word (roblox*), ends with it (*roblox) or contains it (*roblox*). The line under each name shows what it reaches now.",
+    appNameLabel: "Program file name, or a word with *",
+    reachesNow: "Reaches now: {}",
+    reachesNothingNow: "Reaches nothing running now.",
     minOnTheWeb: "min on the web",
     routines: "Routines",
     saveTheCurrentScreenTime: "Save the current screen-time settings above as a named preset, then switch with one click (e.g. Homework, Weekend). Applying a routine replaces the live settings.",
@@ -403,6 +407,9 @@ const UI = {
     tRemovedIntegration: "Removed \"{}\"",
     tConfirmRulesLock: "Today {} minutes have been used and the new limit is {}, so saving puts today over it: it locks the PC after a {}-second warning, and no 15, 5 or 1-minute warning comes first.\n\nSave anyway?",
     tConfirmRulesShutdown: "Today {} minutes have been used and the new limit is {}, so saving puts today over it: it shuts the PC down after a {}-second warning, and no 15, 5 or 1-minute warning comes first.\n\nSave anyway?",
+    tConfirmClosesNow: "Saving closes {} now: each has already been used longer today than its new limit, and it is closed with no warning first.",
+    tClosesNowItem: "{} ({} of {} min)",
+    tSaveAnyway: "Save anyway?",
     tConfirmRestoreSettings: "Restore settings from {}?\n\nThis replaces your curfew, daily limits, app rules and routines. Your password, the port and the trusted clock are not touched.",
     tSavedRoutine: "Saved routine \"{}\"",
     tAppliedRoutine: "Applied \"{}\"",
@@ -498,6 +505,10 @@ const UI = {
     groupWordsHint: "Scheid woorden met komma's. Een programma waarvan de naam een van deze woorden bevat, of een pagina in Chrome, Edge, Firefox of Brave waarvan de titel dat doet, deelt de tijd van de groep. Alleen de pagina die voorop staat telt. Alleen programma's onder het aangemelde Windows-account worden meegeteld of gesloten, en een ingebouwde lijst houdt woorden weg van veelgebruikte Windows-programma's, maar niet van allemaal: kijk wat de regel hieronder noemt.",
     runningNowWithWords: "Nu actief met deze woorden in de naam: {}",
     nothingRunningMatches: "Er draait nu niets met deze woorden in de naam.",
+    appNamesHint: "Een naam zonder * is één programma, hoofdletters maken niet uit: Roblox is roblox.exe en verder niets. Een * aan het begin of eind bereikt elk programma onder het aangemelde Windows-account, en elke pagina in Chrome, Edge, Firefox of Brave, waarvan de naam, de titel of het adres met het woord begint (roblox*), ermee eindigt (*roblox) of het bevat (*roblox*). De regel onder elke naam laat zien wat die nu bereikt.",
+    appNameLabel: "Bestandsnaam van een programma, of een woord met *",
+    reachesNow: "Bereikt nu: {}",
+    reachesNothingNow: "Bereikt nu niets dat draait.",
     minOnTheWeb: "min op het web",
     routines: "Routines",
     saveTheCurrentScreenTime: "Bewaar de huidige schermtijdinstellingen hierboven als een preset met een naam en wissel met één klik (bijv. Huiswerk, Weekend). Een routine toepassen vervangt de actieve instellingen.",
@@ -691,6 +702,9 @@ const UI = {
     tRemovedIntegration: "\"{}\" verwijderd",
     tConfirmRulesLock: "Vandaag zijn er al {} minuten gebruikt en de nieuwe limiet is {}, dus opslaan zet vandaag over de limiet: de pc wordt vergrendeld na een waarschuwing van {} seconden, zonder eerst te waarschuwen bij 15, 5 of 1 minuut.\n\nToch opslaan?",
     tConfirmRulesShutdown: "Vandaag zijn er al {} minuten gebruikt en de nieuwe limiet is {}, dus opslaan zet vandaag over de limiet: de pc wordt uitgezet na een waarschuwing van {} seconden, zonder eerst te waarschuwen bij 15, 5 of 1 minuut.\n\nToch opslaan?",
+    tConfirmClosesNow: "Opslaan sluit {} nu: elk daarvan is vandaag al langer gebruikt dan de nieuwe limiet, en wordt zonder waarschuwing gesloten.",
+    tClosesNowItem: "{} ({} van {} min)",
+    tSaveAnyway: "Toch opslaan?",
     tConfirmRestoreSettings: "Instellingen herstellen uit {}?\n\nDit vervangt je bedtijd, daglimieten, app-regels en routines. Je wachtwoord, de poort en de vertrouwde klok blijven ongewijzigd.",
     tSavedRoutine: "Routine \"{}\" opgeslagen",
     tAppliedRoutine: "\"{}\" toegepast",
@@ -790,6 +804,10 @@ const UI = {
     groupWordsHint: "Kelimeleri virgülle ayırın. Adında bu kelimelerden biri geçen bir program ya da Chrome, Edge, Firefox veya Brave'de başlığında geçen bir sayfa grubun süresini paylaşır. Yalnızca öndeki sayfa sayılır. Yalnızca oturum açmış Windows hesabıyla çalışan programlar sayılır veya kapatılır; yerleşik bir liste kelimeleri yaygın Windows programlarından uzak tutar, ama hepsinden değil: aşağıdaki satırın ne listelediğine bakın.",
     runningNowWithWords: "Şu anda adında bu kelimeler geçenler: {}",
     nothingRunningMatches: "Şu anda adında bu kelimeler geçen bir program çalışmıyor.",
+    appNamesHint: "* içermeyen bir ad, büyük-küçük harf fark etmeksizin tek bir programdır: Roblox yalnızca roblox.exe'dir. Başta ya da sonda bir *, oturum açmış Windows hesabıyla çalışan ve adı bu kelimeyle başlayan (roblox*), biten (*roblox) ya da onu içeren (*roblox*) her programa, ve Chrome, Edge, Firefox veya Brave'de başlığı ya da adresi öyle olan her sayfaya ulaşır. Her adın altındaki satır şu anda neye ulaştığını gösterir.",
+    appNameLabel: "Program dosya adı ya da * içeren bir kelime",
+    reachesNow: "Şu anda ulaştıkları: {}",
+    reachesNothingNow: "Şu anda çalışan hiçbir şeye ulaşmıyor.",
     minOnTheWeb: "dk web'de",
     routines: "Rutinler",
     saveTheCurrentScreenTime: "Yukarıdaki mevcut ekran süresi ayarlarını adlandırılmış bir hazır ayar olarak kaydedin, sonra tek tıkla geçin (örn. Ödev, Hafta sonu). Bir rutini uygulamak canlı ayarların yerine geçer.",
@@ -983,6 +1001,9 @@ const UI = {
     tRemovedIntegration: "\"{}\" kaldırıldı",
     tConfirmRulesLock: "Bugün {} dakika kullanıldı ve yeni sınır {} dakika; kaydetmek bugünü sınırın üstüne çıkarır: bilgisayar {} saniyelik bir uyarının ardından kilitlenir ve önce 15, 5 ya da 1 dakika uyarısı gelmez.\n\nYine de kaydedilsin mi?",
     tConfirmRulesShutdown: "Bugün {} dakika kullanıldı ve yeni sınır {} dakika; kaydetmek bugünü sınırın üstüne çıkarır: bilgisayar {} saniyelik bir uyarının ardından kapanır ve önce 15, 5 ya da 1 dakika uyarısı gelmez.\n\nYine de kaydedilsin mi?",
+    tConfirmClosesNow: "Kaydetmek {} şimdi kapatır: bugün her biri yeni sınırından daha uzun süre kullanıldı ve önceden uyarı yapılmadan kapatılır.",
+    tClosesNowItem: "{} ({} / {} dk)",
+    tSaveAnyway: "Yine de kaydedilsin mi?",
     tConfirmRestoreSettings: "Ayarlar {} dosyasından geri yüklensin mi?\n\nBu, yatma vaktinizi, günlük sınırları, uygulama kurallarını ve rutinleri değiştirir. Parolanız, bağlantı noktası ve güvenilir saat olduğu gibi kalır.",
     tSavedRoutine: "\"{}\" rutini kaydedildi",
     tAppliedRoutine: "\"{}\" uygulandı",
@@ -1190,6 +1211,8 @@ function app() {
     // always has unless the parent fills these in.
     newRoutineWindow: { start: "", end: "", days: {} },
     appLimitRows: [],
+    // What each blocklist entry or per-app limit reaches now, by the text typed; see `previewName`.
+    nameMatches: {},
     groupRows: [],
     savingRules: false,
     routines: [],
@@ -1673,6 +1696,39 @@ function app() {
         : this.t("nothingRunningMatches");
     },
 
+    // Ask the server what a blocklist entry or per-app limit reaches now, for the line under it. The
+    // enforcer's own reading of the name (`words::app_name`: no `*` is one program, a `*` opens an
+    // end) on the real owner snapshot, so the line cannot promise more or less than the rule does.
+    // That line is what shows a parent that "Roblox" is not `RobloxPlayerBeta.exe`. Kept by the text
+    // typed, so a name focused again is not asked again; a failed answer is asked again.
+    async previewName(text) {
+      const name = this.nameKey(text);
+      if (!name || Array.isArray(this.nameMatches[name])) return;
+      let programs = null;
+      try {
+        const r = await this.postJSON("/api/rules/words-preview", { names: [name] });
+        if (r.ok) programs = (await r.json()).programs;
+      } catch {}
+      this.nameMatches = Object.assign({}, this.nameMatches, {
+        [name]: Array.isArray(programs) ? programs : null,
+      });
+    },
+
+    // A name as the cache keeps it: as typed, without the spaces around it. A row not yet typed into
+    // is the empty name, which nothing is asked about.
+    nameKey(text) {
+      return typeof text === "string" ? text.trim() : "";
+    },
+
+    // The line under a blocklist entry or per-app limit. Empty without an answer for exactly this
+    // text: no answer, or `null` — the server could not tell whose programs are whose — must not
+    // read as "reaches nothing", which is the answer a parent would act on.
+    nameMatchText(text) {
+      const programs = this.nameMatches[this.nameKey(text)];
+      if (!Array.isArray(programs)) return "";
+      return programs.length ? this.tf("reachesNow", programs.join(", ")) : this.t("reachesNothingNow");
+    },
+
     // Absolute URL of the child's page, so it can be copied and sent verbatim.
     askUrl() {
       return `${location.origin}/ask`;
@@ -1752,14 +1808,22 @@ function app() {
     // The sentence to confirm before saving rules, or "" when the save changes nothing the child
     // would notice right now. Pure, so the decision is testable without a server.
     //
-    // Only a lock or a shutdown is worth interrupting the parent for — warn-only shows a notice and
-    // takes nothing away — and only when the save is what does it: when today was already over
-    // before the change, the PC is already locked or warned.
+    // Two things are worth interrupting the parent for, and only when the save is what does them.
+    // A lock or a shutdown — warn-only shows a notice and takes nothing away — when today was not
+    // over before the change. And a per-app limit or group that the save leaves already used up
+    // (`closes_now`): a limit set after the play counts the day's play, so its programs are closed
+    // at the next check with no warning, which is right and should still not be a surprise.
     rulesConsequence(p) {
-      if (!p || !p.over || p.was_over) return "";
-      if (p.action === "lock") return this.tf("tConfirmRulesLock", p.used_mins, p.budget_mins, p.warn_secs);
-      if (p.action === "shutdown") return this.tf("tConfirmRulesShutdown", p.used_mins, p.budget_mins, p.warn_secs);
-      return "";
+      if (!p) return "";
+      let lock = "";
+      if (p.over && !p.was_over) {
+        if (p.action === "lock") lock = this.tf("tConfirmRulesLock", p.used_mins, p.budget_mins, p.warn_secs);
+        if (p.action === "shutdown") lock = this.tf("tConfirmRulesShutdown", p.used_mins, p.budget_mins, p.warn_secs);
+      }
+      const closes = (p.closes_now || []).map((c) => this.tf("tClosesNowItem", c.name, c.used_mins, c.limit_mins));
+      if (!closes.length) return lock;
+      // The lock sentence already ends by asking; without one, the question is asked once here.
+      return this.tf("tConfirmClosesNow", closes.join(", ")) + "\n\n" + (lock || this.t("tSaveAnyway"));
     },
 
     loadRoutines() {

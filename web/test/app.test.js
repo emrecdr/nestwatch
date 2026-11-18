@@ -3392,8 +3392,7 @@ test("no bound method starts building English that no table can translate", READ
 // translating one without removing it here fails too.
 const MARKUP_ENGLISH = [
   "(PID", ")? Unsaved work may be lost.", ", newer than the latest release (", "Active",
-  "App filename to limit", "Apps in this group, comma separated", "At a glance",
-  "Blocked app filename", "By category", "Choose a settings file to restore", "Colour theme",
+  "Apps in this group, comma separated", "At a glance", "By category", "Choose a settings file to restore", "Colour theme",
   "Connect", "Copy the child's page link", "Create a pairing link", "Create link",
   "Daily limit in minutes", "Daily screen-time minutes; choose a day", "Dashboard language",
   "Dashboard password", "Dashboard password", "Download every day this install still ho",
@@ -3531,4 +3530,90 @@ test("every UI key is used, and every used key exists", READS_SOURCE, () => {
   // the shape a renamed key leaves behind.
   const dead = [...en].filter((k) => !used.has(k));
   assert.deepEqual(dead, [], `in the table but never used: ${dead.join(", ")}`);
+});
+
+// --- names in the blocklist and the per-app limits ------------------------------------------
+//
+// A parent set a 45-minute limit on "Roblox" and the game kept running: limits name programs
+// exactly, and Roblox runs as RobloxPlayerBeta.exe. A name without a * is still one program; a * at
+// an end reaches every match. These pin what the dashboard shows about that before it bites.
+
+test("a save that leaves limits already used up names them, and asks once", () => {
+  const a = loadApp();
+  const closes = [
+    { name: "*roblox*", used_mins: 200, limit_mins: 45 },
+    { name: "Games", used_mins: 61, limit_mins: 60 },
+  ];
+  const quiet = { over: false, was_over: false, closes_now: closes };
+  const alone = a.rulesConsequence(quiet);
+  assert.match(alone, /\*roblox\* \(200 of 45 min\), Games \(61 of 60 min\)/);
+  assert.match(alone, /closed with no warning first\.\n\nSave anyway\?$/);
+  // With a lock as well, both are said, and the question is asked once.
+  const both = a.rulesConsequence({ ...OVER, closes_now: closes });
+  assert.match(both, /^Saving closes \*roblox\*/);
+  assert.match(both, /locks the PC/);
+  assert.equal(both.split("Save anyway?").length - 1, 1, both);
+  // Nothing closes and nothing locks: no question.
+  assert.equal(a.rulesConsequence({ over: false, was_over: false, closes_now: [] }), "");
+});
+
+/** The component with `fetch` answering the names preview from `answers`, in order. */
+function previewing(answers) {
+  const asked = [];
+  const app = loadApp({
+    fetch: async (url, init) => {
+      asked.push({ url, body: JSON.parse(init.body) });
+      const answer = answers.shift();
+      if (answer instanceof Error) throw answer;
+      return { ok: answer.ok !== false, status: 200, json: async () => answer };
+    },
+  });
+  return { app, asked };
+}
+
+test("the line under a name says what it reaches, and only once there is an answer", async () => {
+  const { app, asked } = previewing([
+    { programs: ["RobloxPlayerBeta.exe", "YellowRoblox.exe"] },
+    { programs: [] },
+  ]);
+  assert.equal(app.nameMatchText("*roblox*"), "", "no answer yet is not 'nothing'");
+  await app.previewName(" *roblox* ");
+  assert.deepEqual(asked[0], { url: "/api/rules/words-preview", body: { names: ["*roblox*"] } });
+  const reaches = "Reaches now: RobloxPlayerBeta.exe, YellowRoblox.exe";
+  assert.equal(app.nameMatchText("*roblox*"), reaches);
+  assert.equal(app.nameMatchText(" *roblox* "), reaches, "read back as it is kept, without spaces");
+  await app.previewName("*roblox*");
+  assert.equal(asked.length, 1, "a name already answered is not asked again");
+  await app.previewName("Roblox");
+  assert.equal(app.nameMatchText("Roblox"), "Reaches nothing running now.");
+  for (const blank of ["", "   ", undefined, null]) {
+    await app.previewName(blank);
+    assert.equal(app.nameMatchText(blank), "", String(blank));
+  }
+  assert.equal(asked.length, 2, "a blank name is not asked about");
+});
+
+test("a failed answer leaves the line blank and is asked again", async () => {
+  // A refusal is not an answer, even one that carries a list.
+  const refused = { ok: false, programs: ["refused.exe"] };
+  const { app, asked } = previewing([new Error("offline"), refused, { programs: null }, { programs: ["a.exe"] }]);
+  for (let i = 0; i < 3; i += 1) {
+    await app.previewName("*game*");
+    assert.equal(app.nameMatchText("*game*"), "", `attempt ${i + 1}`);
+  }
+  await app.previewName("*game*");
+  assert.equal(asked.length, 4);
+  assert.equal(app.nameMatchText("*game*"), "Reaches now: a.exe");
+});
+
+// A <progress> with no value attribute is indeterminate, which daisyUI draws as a bar sliding back
+// and forth. Alpine skips writing a value equal to the one the element reports, and an
+// indeterminate bar reports 0, so a bar bound to exactly 0 never got the attribute and slid instead
+// of standing empty — a parent read it as something happening. Each bound bar starts at 0.
+test("every bound progress bar starts determinate", READS_SOURCE, () => {
+  const bars = [...asset("index.html").matchAll(/<progress\b[^>]*>/g)].map((m) => m[0]);
+  assert.ok(bars.length > 0);
+  for (const bar of bars.filter((b) => /:value=/.test(b))) {
+    assert.match(bar, /\svalue="0"/, bar);
+  }
 });

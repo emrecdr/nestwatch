@@ -67,6 +67,7 @@ async fn rules_preview() {
 
     a_preview_says_when_saving_would_put_today_over_and_changes_nothing().await;
     a_routine_in_force_keeps_a_change_to_the_everyday_rules_from_reaching_today().await;
+    a_preview_names_a_limit_the_save_leaves_already_used_up().await;
 }
 
 async fn a_preview_says_when_saving_would_put_today_over_and_changes_nothing() {
@@ -206,5 +207,47 @@ async fn a_routine_in_force_keeps_a_change_to_the_everyday_rules_from_reaching_t
     assert_eq!(
         body["over"], false,
         "cutting the everyday limit cannot put today over while the routine decides it"
+    );
+}
+
+/// A limit set after the play is a limit on the day: 200 minutes of Roblox and a new 45-minute
+/// limit on `*roblox*` is already used up, and the enforcer closes Roblox at its next check. The
+/// preview names it, so the dashboard can ask first.
+async fn a_preview_names_a_limit_the_save_leaves_already_used_up() {
+    common::clear_of_midnight();
+    let mut config = test_config();
+    config.rules = rules(0);
+    let app = app_with(state_with(config));
+    let cookie = login(&app, PASSWORD).await.unwrap();
+    let usage = Usage {
+        day: Some(nestwatch::config::today()),
+        total_secs: 249 * 60,
+        running_secs: [("robloxplayerbeta.exe".to_string(), 200 * 60)].into(),
+        ..Default::default()
+    };
+    std::fs::create_dir_all(&data_paths().dir).unwrap();
+    std::fs::write(
+        data_paths().dir.join("usage_state.json"),
+        serde_json::to_string(&usage).unwrap(),
+    )
+    .unwrap();
+
+    let limited = |name: &str, mins: u32| Rules {
+        app_limits: [(name.to_string(), mins)].into(),
+        ..rules(0)
+    };
+    let (status, body) = preview(&app, &cookie, &limited("*roblox*", 45)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["closes_now"],
+        json!([{ "name": "*roblox*", "used_mins": 200, "limit_mins": 45 }])
+    );
+    let (_, body) = preview(&app, &cookie, &limited("*roblox*", 300)).await;
+    assert_eq!(body["closes_now"], json!([]));
+    let (_, body) = preview(&app, &cookie, &limited("Roblox", 45)).await;
+    assert_eq!(
+        body["closes_now"],
+        json!([]),
+        "\"Roblox\" is roblox.exe, which did not run"
     );
 }

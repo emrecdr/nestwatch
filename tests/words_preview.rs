@@ -99,3 +99,72 @@ async fn it_is_bounded_like_the_words_it_previews() {
     let (status, _) = preview(&app, Some(&cookie), json!([long])).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// The same answer for blocklist entries and per-app limits, read as those lists read them
+/// (`words::app_name`): a plain name is one program, a `*` opens an end. A plain name for a program
+/// that is not running reaches nothing, which is the line that would have shown a parent that
+/// "Roblox" was not `RobloxPlayerBeta.exe`.
+#[tokio::test]
+async fn names_are_previewed_as_the_blocklist_and_limits_read_them() {
+    let (app, cookie) = app(Ok(BTreeSet::from([CHROME, MINECRAFT, DISCORD]))).await;
+    let names = |names: Value| {
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            let res = post_json(
+                &app,
+                "/api/rules/words-preview",
+                Some(&cookie),
+                json!({ "names": names }),
+            )
+            .await;
+            let status = res.status();
+            (status, body_json(res).await)
+        }
+    };
+    for (typed, programs) in [
+        (json!(["Minecraft"]), json!(["Minecraft.exe"])),
+        (json!(["CHROME.exe"]), json!(["chrome.exe"])),
+        (json!(["*craft*"]), json!(["Minecraft.exe"])),
+        (
+            json!(["mine*", "*rome"]),
+            json!(["Minecraft.exe", "chrome.exe"]),
+        ),
+        (json!(["craft"]), json!([])),
+        (json!(["*cord*"]), json!([])),
+    ] {
+        let (status, body) = names(typed.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{typed}: {body}");
+        assert_eq!(body["programs"], programs, "{typed}");
+    }
+    for refused in [json!(["*"]), json!(["*ro*"]), json!(["rob*lox"])] {
+        let (status, _) = names(refused.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    }
+}
+
+/// The names list is bounded like the lists it previews: exactly the most a list may hold is
+/// answered, one more is refused.
+#[tokio::test]
+async fn names_are_bounded_like_the_lists_they_preview() {
+    let (app, cookie) = app(Ok(BTreeSet::new())).await;
+    let at: Vec<String> = (0..nestwatch::rules::MAX_RULE_ENTRIES)
+        .map(|i| format!("app{i}.exe"))
+        .collect();
+    let ask = |names: Vec<String>| {
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            post_json(
+                &app,
+                "/api/rules/words-preview",
+                Some(&cookie),
+                json!({ "names": names }),
+            )
+            .await
+            .status()
+        }
+    };
+    assert_eq!(ask(at.clone()).await, StatusCode::OK);
+    let mut over = at;
+    over.push("onemore.exe".into());
+    assert_eq!(ask(over).await, StatusCode::BAD_REQUEST);
+}

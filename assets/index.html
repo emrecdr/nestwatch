@@ -114,7 +114,7 @@
                aria-live="polite" aria-atomic="true">
             <template x-if="today && today.budget_mins > 0">
               <div class="flex flex-1 items-center gap-2 min-w-40">
-                <progress class="progress w-24" :class="'progress-' + budgetTone(today.remaining_mins)"
+                <progress value="0" class="progress w-24" :class="'progress-' + budgetTone(today.remaining_mins)"
                           :value="today.used_mins" :max="today.budget_mins"
                           :aria-label="todayBarLabel()"></progress>
                 <span><span class="font-semibold" x-text="today.remaining_mins"></span> min left</span>
@@ -587,7 +587,7 @@
                       <span class="opacity-70"><span x-text="today.remaining_mins"></span> min left<span
                         x-show="today.extra_mins > 0" x-text="bonusLabel()"></span></span>
                     </div>
-                    <progress class="progress w-full mt-1"
+                    <progress value="0" class="progress w-full mt-1"
                               :aria-label="todayBarLabel()"
                               :class="'progress-' + budgetTone(today.remaining_mins)"
                               :value="today.used_mins" :max="today.budget_mins"></progress>
@@ -645,7 +645,7 @@
                     <template x-for="a in today.per_app" :key="a.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" :title="a.name" x-text="appLabel(a.name)"></span>
-                        <progress class="progress flex-1"
+                        <progress value="0" class="progress flex-1"
                                   :aria-label="limitLabel(a)"
                                   :class="'progress-' + limitTone(a.used_mins, a.limit_mins)"
                                   :value="a.used_mins" :max="a.limit_mins"></progress>
@@ -712,7 +712,7 @@
                     <template x-for="g in today.groups" :key="g.name">
                       <div class="flex items-center gap-2 text-sm">
                         <span class="w-48 truncate" x-text="g.name"></span>
-                        <progress class="progress flex-1"
+                        <progress value="0" class="progress flex-1"
                                   :aria-label="limitLabel(g)"
                                   :class="'progress-' + limitTone(g.used_mins, g.limit_mins)"
                                   :value="g.used_mins" :max="g.limit_mins"></progress>
@@ -806,13 +806,18 @@
                 <span class="text-sm" x-text="t('blockedAppsKilledOnSight')"></span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(b, i) in rules.blocklist" :key="i">
-                    <div class="flex items-center gap-2">
-                      <input type="text" maxlength="64" x-model="rules.blocklist[i]" placeholder="game.exe"
-                             aria-label="Blocked app filename" class="input input-sm w-64" />
-                      <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
+                    <div class="flex flex-col gap-1">
+                      <div class="flex items-center gap-2">
+                        <input type="text" maxlength="64" x-model="rules.blocklist[i]" placeholder="game.exe"
+                               :aria-label="t('appNameLabel')" @focus="previewName(rules.blocklist[i])"
+                               @change="previewName(rules.blocklist[i])" class="input input-sm w-64" />
+                        <button class="btn btn-ghost btn-xs" aria-label="Remove app" @click="rules.blocklist.splice(i, 1)">✕</button>
+                      </div>
+                      <p class="text-xs opacity-60" x-text="nameMatchText(rules.blocklist[i])"></p>
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit" @click="rules.blocklist.push('')" x-text="t('addApp')"></button>
+                  <p class="text-xs opacity-60 mt-1" x-text="t('appNamesHint')"></p>
                 </div>
               </div>
 
@@ -821,16 +826,21 @@
                 <span class="text-sm" x-text="t('perAppDailyLimits')"></span>
                 <div class="mt-1 flex flex-col gap-1">
                   <template x-for="(row, i) in appLimitRows" :key="i">
-                    <div class="flex items-center gap-2">
-                      <input type="text" maxlength="64" x-model="row.name" placeholder="chrome.exe"
-                             aria-label="App filename to limit" class="input input-sm w-64" />
-                      <input type="number" min="0" max="10080" x-model.number="row.mins" :placeholder="t('min')"
-                             aria-label="Daily limit in minutes" class="input input-sm w-24" />
-                      <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
+                    <div class="flex flex-col gap-1">
+                      <div class="flex items-center gap-2">
+                        <input type="text" maxlength="64" x-model="row.name" placeholder="chrome.exe"
+                               :aria-label="t('appNameLabel')" @focus="previewName(row.name)" @change="previewName(row.name)"
+                               class="input input-sm w-64" />
+                        <input type="number" min="0" max="10080" x-model.number="row.mins" :placeholder="t('min')"
+                               aria-label="Daily limit in minutes" class="input input-sm w-24" />
+                        <button class="btn btn-ghost btn-xs" aria-label="Remove limit" @click="appLimitRows.splice(i, 1)">✕</button>
+                      </div>
+                      <p class="text-xs opacity-60" x-text="nameMatchText(row.name)"></p>
                     </div>
                   </template>
                   <button class="btn btn-ghost btn-sm w-fit"
                           @click="appLimitRows.push({ name: '', mins: 60 })" x-text="t('addLimit')"></button>
+                  <p class="text-xs opacity-60 mt-1" x-text="t('appNamesHint')"></p>
                 </div>
               </div>
 

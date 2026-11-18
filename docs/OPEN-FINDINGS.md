@@ -84,11 +84,11 @@ and `clippy -D warnings` on Linux and on a `windows-latest` runner, cross-compil
 binary attestation.
 
 What it was **not** verified by: running on the machine it is for. Section H of
-[WINDOWS-TESTING.md](WINDOWS-TESTING.md) holds **61 items across §H1–§H11**, 0.11.0's words on
+[WINDOWS-TESTING.md](WINDOWS-TESTING.md) holds **66 items across §H1–§H12**, 0.11.0's words on
 app groups brought seven more in §D2b, and none of them has executed on Windows (re-measured
-2026-10-23). Which features they cover and what each release added is told once, in that section's
+2026-11-18). Which features they cover and what each release added is told once, in that section's
 preamble, rather than repeated here. Worth stating exactly: **no commit in this repository's history
-has ever recorded a ticked item in that file**, in any section, so all 239 boxes it carries are
+has ever recorded a ticked item in that file**, in any section, so all 244 boxes it carries are
 still open. The three gates that were green
 when it shipped are the same three that were green when `install` failed on real hardware and again
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
@@ -1366,7 +1366,7 @@ on, and three of them decide whether a parent can sign in. Scoped pairing, per-d
 breaking change — every existing session refused — actually lands.
 
 **Why this is worse than an unrun item, not the same as one.** An unrun item is counted: section H
-carries 61 items that have never executed (measured 2026-10-22, at `v0.11.0`; 32 when this was
+carries 66 items that have never executed (measured 2026-11-18; 61 at `v0.11.0`; 32 when this was
 written, and the checklist's section-H preamble has the steps between), so the gap has a size and a
 reader can weigh it. A feature absent from the checklist has no size. The release-state paragraph
 could be read as "0.6.0 is unverified in the same way 0.5.0 was", and it is not — 0.5.0's features

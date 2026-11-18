@@ -100,7 +100,7 @@ pub enum WordProblem {
     TooShort,
     /// Over [`MAX_RULE_NAME`], the bound every other name in a rule has.
     TooLong,
-    /// A space, a control character or a `%` inside the word.
+    /// A space, a control character, or a `%` or `*` inside the word.
     Unsupported,
 }
 
@@ -124,7 +124,9 @@ impl WordProblem {
                 format!("the word \"{word}\" is too long: use at most {MAX_RULE_NAME} characters")
             }
             Self::Unsupported => {
-                format!("the word \"{word}\" can't contain spaces or % (a % at either end is fine)")
+                format!(
+                    "the word \"{word}\" can't contain spaces, % or * (one at either end is fine)"
+                )
             }
         }
     }
@@ -140,8 +142,9 @@ fn fold(text: &str) -> String {
 }
 
 /// Normalise one word as typed: `Ok(None)` for a blank entry, which is dropped rather than refused,
-/// `Ok(Some(word))` folded, with any `%` at the ends and a trailing `.exe` removed, or the rule it
-/// breaks.
+/// `Ok(Some(word))` folded, with any `%` or `*` at the ends and a trailing `.exe` removed, or the
+/// rule it breaks. A group's words always mean "containing", so a `*` at an end, which is how the
+/// blocklist and the per-app limits say it (see [`app_name`]), means nothing more here.
 ///
 /// `.exe` goes because programs are matched on their name without it: `roblox.exe`, copied from the
 /// apps field, would otherwise match nothing at all.
@@ -151,13 +154,13 @@ pub fn normalise(raw: &str) -> Result<Option<String>, WordProblem> {
     if raw.chars().count() > MAX_WORD_TYPED {
         return Err(WordProblem::TooLong);
     }
-    let word = raw.trim().trim_matches('%').trim();
+    let word = raw.trim().trim_matches(['%', '*']).trim();
     if word.is_empty() {
         return Ok(None);
     }
     if word
         .chars()
-        .any(|c| c == '%' || c.is_whitespace() || c.is_control())
+        .any(|c| c == '%' || c == '*' || c.is_whitespace() || c.is_control())
     {
         return Err(WordProblem::Unsupported);
     }
@@ -207,13 +210,108 @@ pub fn check(words: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// How a pattern meets a program's name or a page: anywhere in it, at its start, or at its end.
+///
+/// A group's words are always [`Pattern::Contains`]. A blocklist entry or a per-app limit is one of
+/// these when it has a `*` at an end; see [`app_name`]. The word inside is [`normalise`]d.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Pattern {
+    /// `*roblox*`: the word anywhere.
+    Contains(String),
+    /// `roblox*`: names and pages that start with the word.
+    Prefix(String),
+    /// `*roblox`: names and pages that end with it.
+    Suffix(String),
+}
+
+impl Pattern {
+    /// The pattern written back with its stars: `*roblox*`, `roblox*` or `*roblox`. The key its
+    /// time is kept under, so two spellings of one pattern share one count.
+    pub fn key(&self) -> String {
+        match self {
+            Self::Contains(w) => format!("*{w}*"),
+            Self::Prefix(w) => format!("{w}*"),
+            Self::Suffix(w) => format!("*{w}"),
+        }
+    }
+
+    /// Whether folded `text` meets this pattern.
+    fn meets(&self, text: &str) -> bool {
+        match self {
+            Self::Contains(w) => text.contains(w.as_str()),
+            Self::Prefix(w) => text.starts_with(w.as_str()),
+            Self::Suffix(w) => text.ends_with(w.as_str()),
+        }
+    }
+
+    /// Whether a visit's folded text, its title and then its address on a line of their own, meets
+    /// this pattern. The start and end are those of the title or of the address, not of the two run
+    /// together, so `roblox*` meets `roblox.com/games` and `*roblox` meets `Home - Roblox`.
+    fn meets_page(&self, text: &str) -> bool {
+        text.split('\n').any(|part| self.meets(part))
+    }
+}
+
+/// What one blocklist entry or per-app limit names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppName {
+    /// One program by its file name, normalised, with `.exe` added when it was left off.
+    Exact(String),
+    /// Every program of the child's whose name the pattern meets, and every page.
+    Pattern(Pattern),
+}
+
+/// Read one blocklist entry or per-app limit as the parent typed it.
+///
+/// **No `*` names one program, exactly**, capitals aside: `Roblox` is `roblox.exe` and nothing else,
+/// so it does not reach `RobloxPlayerBeta.exe`. **A `*` at an end opens that end**: `roblox*` is
+/// every name and page that starts with the word, `*roblox` every one that ends with it, and
+/// `*roblox*` every one that contains it. The parent asked for exactly this split, so that a plain
+/// name keeps meaning what it always meant and reaching further is something written down.
+///
+/// A pattern keeps a word's rules ([`normalise`]): at least [`MIN_WORD_CHARS`] letters besides the
+/// stars, and no space, `%` or `*` inside, so `*` alone, `*ro*` and `rob*lox` are refused. `Ok(None)`
+/// is a blank entry, dropped like a blank word.
+pub fn app_name(raw: &str) -> Result<Option<AppName>, WordProblem> {
+    let typed = raw.trim();
+    if typed.is_empty() {
+        return Ok(None);
+    }
+    if !typed.contains('*') {
+        let mut key = norm(typed);
+        if !key.ends_with(".exe") {
+            key.push_str(".exe");
+        }
+        return Ok(Some(AppName::Exact(key)));
+    }
+    // A blank core — `*` or `**` — names nothing, but it was not left blank: it is too short.
+    let word = normalise(typed.trim_matches('*'))?.ok_or(WordProblem::TooShort)?;
+    Ok(Some(AppName::Pattern(
+        match (typed.starts_with('*'), typed.ends_with('*')) {
+            (false, true) => Pattern::Prefix(word),
+            (true, false) => Pattern::Suffix(word),
+            _ => Pattern::Contains(word),
+        },
+    )))
+}
+
+/// Whether a program called `name` is one `pattern` reaches: never Nestwatch's, Windows' or a
+/// `spared` check program, and matched on its name without `.exe`. The owner rule is the caller's:
+/// [`match_groups`] applies it to a tick's processes, and the day's running count holds only the
+/// child's programs in the first place.
+pub fn program_meets(pattern: &Pattern, name: &str, spared: &BTreeSet<String>) -> bool {
+    program_stem(name, spared).is_some_and(|stem| pattern.meets(&stem))
+}
+
 /// Whether a program called `name` matches any of `words`, owner aside — the name half of the rule,
 /// for the tests that pin it. Matched on the name **without `.exe`**, or the word `exe` would match
 /// every program; never Nestwatch's own programs, nor Windows' own (`WINDOWS_PROGRAMS`). Nothing
 /// ships through this: [`match_groups`] adds the owner rule, and is the only way in.
 #[cfg(test)]
 fn program_matches(words: &[String], name: &str) -> bool {
-    program_stem(name, &BTreeSet::new()).is_some_and(|stem| stem_matches(words, &stem))
+    words
+        .iter()
+        .any(|w| program_meets(&Pattern::Contains(w.clone()), name, &BTreeSet::new()))
 }
 
 /// The part of a program's name a word is matched against — folded, without `.exe` — or `None` for
@@ -228,10 +326,6 @@ fn program_stem(name: &str, spared: &BTreeSet<String>) -> Option<String> {
     }
     let folded = fold(name.trim());
     Some(folded.strip_suffix(".exe").unwrap_or(&folded).to_string())
-}
-
-fn stem_matches(words: &[String], stem: &str) -> bool {
-    words.iter().any(|w| stem.contains(w.as_str()))
 }
 
 /// Build the helper's key for one foreground browser visit: `exe\ntitle\naddress`.
@@ -278,15 +372,15 @@ pub struct GroupMatch {
 /// `spared` holds the normalised file names of the check programs configured on the Integrations
 /// card. They run under the child's account too, and closing one mid-check would leave shut a gate
 /// that should have opened, so no word matches them — the same reasoning as `OWN_PROGRAMS`.
-pub fn match_groups<'a>(
-    groups: impl IntoIterator<Item = &'a [String]>,
+pub fn match_groups<G: AsRef<[Pattern]>>(
+    groups: impl IntoIterator<Item = G>,
     web: &BTreeMap<String, u64>,
     child: Option<&BTreeMap<u32, String>>,
     spared: &BTreeSet<String>,
 ) -> Vec<GroupMatch> {
-    let groups: Vec<&[String]> = groups.into_iter().collect();
+    let groups: Vec<G> = groups.into_iter().collect();
     // Nothing to match on most installs, which have no words: skip folding every visit and name.
-    if groups.iter().all(|words| words.is_empty()) {
+    if groups.iter().all(|words| words.as_ref().is_empty()) {
         return vec![GroupMatch::default(); groups.len()];
     }
     // The child's programs, once rather than once per group: their stems, with every program no
@@ -312,16 +406,17 @@ pub fn match_groups<'a>(
     groups
         .into_iter()
         .map(|words| {
+            let words = words.as_ref();
             let mut m = GroupMatch::default();
             for (exe, text, secs) in &visits {
-                if words.iter().any(|w| text.contains(w.as_str())) {
+                if words.iter().any(|w| w.meets_page(text)) {
                     m.page_secs = m.page_secs.saturating_add(*secs);
                     m.browsers.insert(exe.clone());
                 }
             }
             m.programs = programs
                 .iter()
-                .filter(|(_, stem)| stem_matches(words, stem))
+                .filter(|(_, stem)| words.iter().any(|w| w.meets(stem)))
                 .map(|(pid, _)| *pid)
                 .collect();
             m
@@ -339,14 +434,48 @@ pub fn preview(
     child: &BTreeMap<u32, String>,
     spared: &BTreeSet<String>,
 ) -> Vec<String> {
-    let usable = usable(words);
-    let matched = match_groups([usable.as_slice()], &BTreeMap::new(), Some(child), spared);
+    let usable: Vec<Pattern> = usable(words).into_iter().map(Pattern::Contains).collect();
+    preview_patterns(&usable, child, spared)
+}
+
+/// [`preview`] for patterns already read, which is how a blocklist entry or per-app limit reaches
+/// it: what the dashboard shows under the name before anything is closed.
+pub fn preview_patterns(
+    patterns: &[Pattern],
+    child: &BTreeMap<u32, String>,
+    spared: &BTreeSet<String>,
+) -> Vec<String> {
+    let matched = match_groups([patterns], &BTreeMap::new(), Some(child), spared);
     let names: BTreeSet<&String> = matched
         .iter()
         .flat_map(|m| &m.programs)
         .filter_map(|pid| child.get(pid))
         .collect();
     names.into_iter().cloned().collect()
+}
+
+/// [`preview`] for blocklist entries and per-app limits as typed ([`app_name`]): the child's
+/// programs each would reach now, each name once, sorted. An exact name lists the child's running
+/// programs of that name, so a name that reaches nothing — `Roblox` while `RobloxPlayerBeta.exe`
+/// runs — shows as nothing, which is the mistake this line exists to show.
+pub fn preview_names(
+    names: &[String],
+    child: &BTreeMap<u32, String>,
+    spared: &BTreeSet<String>,
+) -> Vec<String> {
+    let mut reached = BTreeSet::new();
+    let mut patterns = Vec::new();
+    for raw in names {
+        match app_name(raw) {
+            Ok(Some(AppName::Exact(key))) => {
+                reached.extend(child.values().filter(|n| norm(n) == key).cloned());
+            }
+            Ok(Some(AppName::Pattern(p))) => patterns.push(p),
+            _ => {}
+        }
+    }
+    reached.extend(preview_patterns(&patterns, child, spared));
+    reached.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -367,6 +496,9 @@ mod tests {
             "Roblox",
             " ROBLOX ",
             "%%roblox%%",
+            "*roblox*",
+            "*roblox",
+            "roblox*",
         ] {
             assert_eq!(normalise(raw), Ok(Some("roblox".into())), "{raw:?}");
         }
@@ -397,7 +529,14 @@ mod tests {
 
     #[test]
     fn a_space_control_character_or_inner_percent_is_refused() {
-        for raw in ["rob lox", "rob\tlox", "rob%lox", "\u{7}roblox", "rob\nlox"] {
+        for raw in [
+            "rob lox",
+            "rob\tlox",
+            "rob%lox",
+            "rob*lox",
+            "\u{7}roblox",
+            "rob\nlox",
+        ] {
             assert_eq!(normalise(raw), Err(WordProblem::Unsupported), "{raw:?}");
         }
     }
@@ -618,8 +757,9 @@ mod tests {
         );
     }
 
-    fn one(words: &[String]) -> [&[String]; 1] {
-        [words]
+    /// One group's words, each as the "containing" pattern a group's word is.
+    fn one(words: &[String]) -> [Vec<Pattern>; 1] {
+        [words.iter().cloned().map(Pattern::Contains).collect()]
     }
 
     fn web(entries: &[(&str, u64)]) -> BTreeMap<String, u64> {
@@ -765,8 +905,8 @@ mod tests {
     /// this function never sees — each get their own entry.
     #[test]
     fn each_group_is_matched_against_its_own_words_in_order() {
-        let games = words(&["roblox"]);
-        let video = words(&["youtube"]);
+        let [games] = one(&words(&["roblox"]));
+        let [video] = one(&words(&["youtube"]));
         let visits = web(&[
             ("msedge.exe\nRoblox\n", 10),
             ("msedge.exe\nCats - YouTube\nyoutube.com/watch", 20),
@@ -779,5 +919,142 @@ mod tests {
         );
         let secs: Vec<u64> = got.iter().map(|m| m.page_secs).collect();
         assert_eq!(secs, [10, 20, 10]);
+    }
+
+    // ---- Names in the blocklist and the per-app limits ----
+
+    fn pattern(raw: &str) -> Pattern {
+        match app_name(raw) {
+            Ok(Some(AppName::Pattern(p))) => p,
+            other => panic!("{raw:?} is not a pattern: {other:?}"),
+        }
+    }
+
+    /// A plain name is one program, capitals aside, with or without `.exe`, and nothing else: it is
+    /// what a name always meant here, and `Roblox` is not `RobloxPlayerBeta`.
+    #[test]
+    fn a_name_without_a_star_is_one_program_exactly() {
+        for raw in ["Roblox", "roblox.exe", " ROBLOX.EXE "] {
+            assert_eq!(
+                app_name(raw),
+                Ok(Some(AppName::Exact("roblox.exe".into()))),
+                "{raw:?}"
+            );
+        }
+        assert_eq!(
+            app_name("RobloxPlayerBeta.exe"),
+            Ok(Some(AppName::Exact("robloxplayerbeta.exe".into())))
+        );
+        assert_eq!(
+            app_name("My Game.exe"),
+            Ok(Some(AppName::Exact("my game.exe".into()))),
+            "a file name may hold a space"
+        );
+        for raw in ["", "   "] {
+            assert_eq!(app_name(raw), Ok(None), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn a_star_at_an_end_opens_that_end() {
+        assert_eq!(pattern("*Roblox*"), Pattern::Contains("roblox".into()));
+        assert_eq!(pattern("roblox*"), Pattern::Prefix("roblox".into()));
+        assert_eq!(pattern("*roblox"), Pattern::Suffix("roblox".into()));
+        assert_eq!(pattern("**roblox**"), Pattern::Contains("roblox".into()));
+        assert_eq!(
+            pattern("*roblox.exe"),
+            Pattern::Suffix("roblox".into()),
+            "matched on the name without .exe, as a word is"
+        );
+    }
+
+    /// Both sides of the length bound, and every way to put a star where it means nothing.
+    #[test]
+    fn a_pattern_keeps_a_words_rules() {
+        for raw in ["*", "**", "*ro*", "ro*"] {
+            assert_eq!(app_name(raw), Err(WordProblem::TooShort), "{raw:?}");
+        }
+        assert_eq!(pattern("*rob*"), Pattern::Contains("rob".into()));
+        for raw in ["*rob*lox*", "rob*lox", "*rob lox*", "*rob%lox*"] {
+            assert_eq!(app_name(raw), Err(WordProblem::Unsupported), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn a_pattern_is_kept_under_the_way_it_is_written() {
+        assert_eq!(pattern("*Roblox*").key(), "*roblox*");
+        assert_eq!(pattern("ROBLOX*").key(), "roblox*");
+        assert_eq!(pattern("*roblox").key(), "*roblox");
+    }
+
+    #[test]
+    fn a_pattern_meets_a_programs_name_where_its_stars_say() {
+        let none = BTreeSet::new();
+        let meets = |raw: &str, name: &str| program_meets(&pattern(raw), name, &none);
+        for name in [
+            "RobloxPlayerBeta.exe",
+            "YellowRoblox.exe",
+            "myrobloxgame.exe",
+        ] {
+            assert!(meets("*roblox*", name), "{name}");
+        }
+        assert!(meets("roblox*", "RobloxPlayerBeta.exe"));
+        assert!(!meets("roblox*", "YellowRoblox.exe"));
+        assert!(meets("*roblox", "YellowRoblox.exe"));
+        assert!(!meets("*roblox", "RobloxPlayerBeta.exe"));
+        assert!(!meets("*roblox*", "Minecraft.exe"));
+        assert!(
+            !meets("*host*", "svchost.exe"),
+            "Windows' own programs stay out of a pattern's reach"
+        );
+        assert!(
+            !program_meets(
+                &pattern("*study*"),
+                "studygo-probe.exe",
+                &BTreeSet::from(["studygo-probe.exe".to_string()])
+            ),
+            "and so does a check program"
+        );
+    }
+
+    /// The start and end are the title's or the address's own, which is where a parent would look.
+    #[test]
+    fn a_pattern_meets_a_pages_title_or_address_at_their_own_ends() {
+        let visits = web(&[
+            ("msedge.exe\nHome - Roblox\nexample.com/home", 1),
+            ("chrome.exe\nRoblox Games\nnow.gg/apps", 2),
+            ("firefox.exe\nNews\nroblox.com/news", 4),
+            ("brave.exe\nMy roblox notes\ndocs.example.com", 8),
+        ]);
+        let secs = |raw: &str| {
+            only(match_groups(
+                [[pattern(raw)]],
+                &visits,
+                None,
+                &BTreeSet::new(),
+            ))
+            .page_secs
+        };
+        assert_eq!(secs("*roblox*"), 15);
+        assert_eq!(secs("roblox*"), 2 + 4);
+        assert_eq!(secs("*roblox"), 1);
+    }
+
+    #[test]
+    fn the_preview_of_a_pattern_lists_what_it_would_reach() {
+        let snapshot = child(&[
+            (10, "RobloxPlayerBeta.exe"),
+            (11, "YellowRoblox.exe"),
+            (12, "svchost.exe"),
+        ]);
+        let none = BTreeSet::new();
+        assert_eq!(
+            preview_patterns(&[pattern("roblox*")], &snapshot, &none),
+            ["RobloxPlayerBeta.exe"]
+        );
+        assert_eq!(
+            preview_patterns(&[pattern("*roblox*")], &snapshot, &none),
+            ["RobloxPlayerBeta.exe", "YellowRoblox.exe"]
+        );
     }
 }

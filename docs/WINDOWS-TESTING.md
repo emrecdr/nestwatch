@@ -12,7 +12,7 @@ Run through it once on his PC after installing.
 
 ## Short on time? Do these nine first
 
-The full list is 239 items, which is why it keeps not happening. These nine are the ones whose
+The full list is 244 items, which is why it keeps not happening. These nine are the ones whose
 answers change what you'd do next — about fifteen minutes, and worth more than the rest combined.
 Each links to its full entry below.
 
@@ -808,11 +808,11 @@ download page and the behaviour below has never executed on the platform it was 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 61 items across §H1–§H11, where it held 59 at `v0.10.0`, 53
-before that release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`. The one thing
-that improved at `v0.8.0` is that its headline feature arrived *with* its checklist item (§H8)
-instead of being added to the list later or not at all, which is the failure `O87` records against
-0.6.0 and 0.7.0.
+accumulated rather than turned over: 66 items across §H1–§H12, where it held 61 before §H12, 59 at
+`v0.10.0`, 53 before that release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`.
+The one thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist
+item (§H8) instead of being added to the list later or not at all, which is the failure `O87`
+records against 0.6.0 and 0.7.0.
 
 **Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's. They arrived in the commit
 after the fix they cover rather than with it, which is the failure `O87` records, caught 24 minutes
@@ -1157,6 +1157,31 @@ standard Windows account can connect from any of those addresses at all. These t
       are on or paused, *Refused today* on your phone has a row reading *5 · wrong passwords
       refused on the sign-in page — nobody was let in*. The sixth attempt is not in it: a
       locked-out device is turned away before any password is checked.
+
+### H12. Names with a `*`, and a limit set after the play (never run on Windows)
+
+A limit or blocklist entry without a `*` names one program; with one at an end it reaches every
+match, programs and pages alike, and a limit set mid-day starts from what was already played.
+Everything below was built and tested off Windows, so none of it is known to work on the PC. Have
+him play Roblox for at least ten minutes first.
+
+- [ ] **A plain name reaches only that program.** With Roblox running, add a per-app limit named
+      `Roblox` and click into another field. **Expect** the line under it to read *Reaches nothing
+      running now*. Change it to `*roblox*`: **expect** *Reaches now: RobloxPlayerBeta.exe*. A blank
+      line means the owner lookup failed; check the service log for *cannot tell which processes are
+      the child's*.
+- [ ] **A limit set after the play is already used up.** Give `*roblox*` a limit under the minutes
+      he has played and press Save. **Expect** a question first: *Saving closes \*roblox\* (N of M
+      min) now*. Confirm: **expect** Roblox to close within thirty seconds, and the per-app row to
+      read more used than the limit. That proves the day's running count is kept on Windows and a
+      new limit starts from it.
+- [ ] **A page counts and closes.** With the limit spent, open roblox.com in Edge and leave it in
+      front. **Expect** Edge to close within thirty seconds.
+- [ ] **The blocklist follows the same rule.** Remove the limit. Add `Roblox` to Blocked apps:
+      **expect** Roblox to keep running. Change it to `*roblox*`: **expect** Roblox to close at
+      once, and Edge too while it shows a Roblox page.
+- [ ] **The count runs with no rules set.** Remove every rule, have him play for two minutes, then
+      add `*roblox*` with a 1-minute limit. **Expect** the question on Save and Roblox closed.
 
 ## Troubleshooting
 

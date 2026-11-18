@@ -203,7 +203,9 @@ fn usage_today() {
     let usage = Usage {
         day: Some(day),
         total_secs: 3_300,
-        per_app_secs: BTreeMap::from([("minecraft".into(), 2_400)]),
+        // Where the enforcer counts a limit named `minecraft`: a name without a `*` is one program,
+        // `minecraft.exe` (`words::app_name`).
+        per_app_secs: BTreeMap::from([("minecraft.exe".into(), 2_400)]),
         per_group_secs: BTreeMap::from([("Roblox".into(), 1_500)]),
         per_group_web_secs: BTreeMap::from([("Roblox".into(), 600)]),
         foreground_secs: BTreeMap::from([("minecraft".into(), 2_400), ("chrome".into(), 900)]),
@@ -223,6 +225,7 @@ fn usage_today() {
         // A measured day. The mark never reaches the client; it decides only what the day's
         // rollover writes.
         unmeasured: false,
+        running_secs: Default::default(),
     };
     golden(
         "usage-today",
@@ -257,6 +260,7 @@ fn usage_today() {
         // Nothing refused, which is what almost every real day looks like.
         refused: Refused::default(),
         unmeasured: false,
+        running_secs: Default::default(),
     };
     golden(
         "usage-today-unmeasured",

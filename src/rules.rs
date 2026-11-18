@@ -260,14 +260,13 @@ impl Rules {
         self.has_any_budget() || !Targets::from_rules(self).is_empty()
     }
 
-    /// Whether any group that can enforce has a usable word — the condition under which the tick
-    /// asks [`crate::control::SystemControl::child_processes`] who owns each process. Through `Targets`,
-    /// so it cannot disagree with what `decide` matches.
+    /// Whether any group that can enforce has a usable word, or a blocklist entry or per-app limit
+    /// is written with a `*` — the rules that reach programs by the owner snapshot
+    /// [`crate::control::SystemControl::child_processes`] takes. Through `Targets`, so it cannot
+    /// disagree with what `decide` matches. (The loop also takes that snapshot whenever somebody is
+    /// at the machine, for [`Usage::running_secs`].)
     pub fn has_words(&self) -> bool {
-        Targets::from_rules(self)
-            .groups
-            .iter()
-            .any(|g| !g.words.is_empty())
+        Targets::from_rules(self).has_patterns()
     }
 
     /// What this tick should do about these rules.
@@ -344,6 +343,11 @@ impl Rules {
         // `words::usable`, for a config that skipped this.
         for group in &self.app_groups {
             crate::words::check(&group.words)?;
+        }
+        // And patterns in the two lists that take one (`words::app_name`): `*` or `*ro*` would reach
+        // nearly everything the child runs, so they are refused here rather than dropped quietly.
+        for name in self.blocklist.iter().chain(self.app_limits.keys()) {
+            crate::words::app_name(name).map_err(|problem| problem.message(name.trim()))?;
         }
         Ok(())
     }
@@ -440,7 +444,8 @@ pub struct Usage {
     pub day: Option<NaiveDate>,
     /// Seconds of use accrued today.
     pub total_secs: u64,
-    /// Per-app seconds today (only for apps that have a limit), keyed by normalized name.
+    /// Per-app seconds today, only for apps that have a limit: keyed by the program's normalised
+    /// file name, or for a limit written with a `*` by the pattern's key (`*roblox*`).
     pub per_app_secs: BTreeMap<String, u64>,
     /// Per-group seconds today (only for groups with a limit), keyed by group name.
     #[serde(default)]
@@ -491,19 +496,53 @@ pub struct Usage {
     /// any day that was measured reads exactly as it did before this existed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unmeasured: bool,
+    /// Seconds each of the child's programs ran today, while somebody was at the machine, keyed by
+    /// normalised file name — every program, not only the limited ones.
+    ///
+    /// What a limit or group starts from when it first appears in the day: the parent who sees
+    /// 200 minutes of Roblox and then sets a 45-minute limit means 45 minutes a day, not 45 more,
+    /// and before this a new limit counted from nothing. Measured by the service from the owner
+    /// snapshot, the same Windows call that tells a word whose programs are whose, so unlike the
+    /// watcher's maps above it is not the child's to choose: a program's name is, but renaming a
+    /// program escapes every name-based rule anyway. Bounded like `foreground_secs`, because the
+    /// child can start programs with any name.
+    ///
+    /// `#[serde(default)]`, so a tally from before this existed still parses; that day's limits
+    /// then start from nothing, as they always did.
+    #[serde(default)]
+    pub running_secs: BTreeMap<String, u64>,
 }
 
 /// Rule-derived, normalized enforcement targets for one tick — built once by `decide` and shared
 /// by accrual and the kill checks so the two can't disagree on what's tracked.
 #[derive(Default)]
 pub(crate) struct Targets {
-    /// Process names killed on sight, normalized (blank rows dropped).
+    /// Programs killed on sight by exact file name, read by [`crate::words::app_name`]: normalised,
+    /// with `.exe` added where it was left off (blank and refused rows dropped).
     blocked: BTreeSet<String>,
-    /// Per-app limits (minutes), keyed by normalized process name (zero-limit and blank-named
-    /// apps dropped).
+    /// Blocklist entries written with a `*`, each closing every program of the child's and every
+    /// page it meets.
+    blocked_patterns: Vec<crate::words::Pattern>,
+    /// What `blocked_patterns` matched this tick, set by `decide` as a group's `matched` is.
+    blocked_matched: crate::words::GroupMatch,
+    /// Per-app limits (minutes) by exact file name, keyed as `blocked` is (zero-limit, blank and
+    /// refused names dropped). Two names for one program keep the stricter limit.
     app_limits: BTreeMap<String, u32>,
+    /// Per-app limits written with a `*`, one per pattern, the stricter limit kept likewise.
+    pattern_limits: Vec<PatternLimit>,
     /// App groups with a shared pool. Only groups that pass [`AppGroup::has_pool`] are included.
     groups: Vec<GroupTarget>,
+}
+
+/// A per-app limit written with a `*`: a pool like a group's, for every program of the child's and
+/// every page its pattern meets, counted in `per_app_secs` under the pattern's key.
+pub(crate) struct PatternLimit {
+    key: String,
+    /// The one pattern, as a slice because that is what [`crate::words::match_groups`] takes.
+    pattern: Vec<crate::words::Pattern>,
+    limit_mins: u32,
+    /// What the pattern matched this tick, set by `decide` before anything reads it.
+    matched: crate::words::GroupMatch,
 }
 
 /// One app group as the tick matches it.
@@ -511,8 +550,9 @@ pub(crate) struct GroupTarget {
     name: String,
     /// Listed apps, normalized (blank rows dropped). Matched machine-wide, as they always were.
     members: BTreeSet<String>,
-    /// [`crate::words::usable`] words: blank and refused ones already dropped.
-    words: Vec<String>,
+    /// [`crate::words::usable`] words, each meaning "containing": blank and refused ones already
+    /// dropped.
+    words: Vec<crate::words::Pattern>,
     limit_mins: u32,
     /// What `words` matched this tick — set by `decide` before anything reads it, and nothing
     /// matched until then. Kept on the group itself so the two cannot fall out of step.
@@ -535,13 +575,42 @@ fn matchable(names: impl IntoIterator<Item = impl AsRef<str>>) -> BTreeSet<Strin
 
 impl Targets {
     fn from_rules(rules: &Rules) -> Self {
-        let blocked = matchable(&rules.blocklist);
-        let app_limits = rules
-            .app_limits
-            .iter()
-            .filter(|(k, v)| **v > 0 && !k.trim().is_empty())
-            .map(|(k, &v)| (norm(k), v))
-            .collect();
+        use crate::words::{AppName, app_name};
+        let mut blocked = BTreeSet::new();
+        let mut blocked_patterns = Vec::new();
+        for raw in &rules.blocklist {
+            match app_name(raw) {
+                Ok(Some(AppName::Exact(key))) => {
+                    blocked.insert(key);
+                }
+                // Kept as written: a pattern twice in the list matches what it matches once.
+                Ok(Some(AppName::Pattern(p))) => blocked_patterns.push(p),
+                _ => {}
+            }
+        }
+        let mut app_limits = BTreeMap::new();
+        let mut pattern_limits: Vec<PatternLimit> = Vec::new();
+        for (raw, &mins) in rules.app_limits.iter().filter(|(_, m)| **m > 0) {
+            match app_name(raw) {
+                Ok(Some(AppName::Exact(key))) => {
+                    let limit = app_limits.entry(key).or_insert(mins);
+                    *limit = (*limit).min(mins);
+                }
+                Ok(Some(AppName::Pattern(p))) => {
+                    let key = p.key();
+                    match pattern_limits.iter_mut().find(|l| l.key == key) {
+                        Some(l) => l.limit_mins = l.limit_mins.min(mins),
+                        None => pattern_limits.push(PatternLimit {
+                            key,
+                            pattern: vec![p],
+                            limit_mins: mins,
+                            matched: Default::default(),
+                        }),
+                    }
+                }
+                _ => {}
+            }
+        }
         let groups = rules
             .app_groups
             .iter()
@@ -549,14 +618,20 @@ impl Targets {
             .map(|g| GroupTarget {
                 name: g.name.clone(),
                 members: matchable(&g.apps),
-                words: crate::words::usable(&g.words),
+                words: crate::words::usable(&g.words)
+                    .into_iter()
+                    .map(crate::words::Pattern::Contains)
+                    .collect(),
                 limit_mins: g.limit_mins,
                 matched: Default::default(),
             })
             .collect();
         Self {
             blocked,
+            blocked_patterns,
+            blocked_matched: Default::default(),
             app_limits,
+            pattern_limits,
             groups,
         }
     }
@@ -564,7 +639,18 @@ impl Targets {
     /// Whether anything here could match a running process. The single definition of "is this
     /// household configured", so [`Rules::has_targets`] cannot drift from what `decide` acts on.
     fn is_empty(&self) -> bool {
-        self.blocked.is_empty() && self.app_limits.is_empty() && self.groups.is_empty()
+        self.blocked.is_empty()
+            && self.blocked_patterns.is_empty()
+            && self.app_limits.is_empty()
+            && self.pattern_limits.is_empty()
+            && self.groups.is_empty()
+    }
+
+    /// Whether anything here matches by a word or a pattern, which needs the owner snapshot.
+    fn has_patterns(&self) -> bool {
+        !self.blocked_patterns.is_empty()
+            || !self.pattern_limits.is_empty()
+            || self.groups.iter().any(|g| !g.words.is_empty())
     }
 }
 
@@ -605,6 +691,20 @@ impl Usage {
                 *slot = slot.saturating_add(delta_secs);
             }
         }
+        // A limit written with a `*` is charged as a group is: the interval when one of the child's
+        // programs it meets is running, otherwise the seconds a page it meets was in front, never
+        // more than the interval.
+        for limit in &targets.pattern_limits {
+            let secs = if limit.matched.programs.is_empty() {
+                limit.matched.page_secs.min(delta_secs)
+            } else {
+                delta_secs
+            };
+            if secs > 0 {
+                let slot = self.per_app_secs.entry(limit.key.clone()).or_insert(0);
+                *slot = slot.saturating_add(secs);
+            }
+        }
         for group in &targets.groups {
             if running.iter().any(|r| group.members.contains(r))
                 || !group.matched.programs.is_empty()
@@ -643,6 +743,120 @@ impl Usage {
     /// ([`Usage::load_for_today`]) and when it accrues across midnight (`accrue`), and testable
     /// without a data directory — the stamp is what the today card shows as its date, and nothing
     /// else checked it.
+    /// Add `delta_secs` to [`Usage::running_secs`] for each of the child's programs in the owner
+    /// snapshot `child`, once per name however many copies run. Nothing when nobody is at the
+    /// machine (`delta_secs` is 0) or the snapshot is unknown.
+    pub(crate) fn count_running(&mut self, delta_secs: u64, child: Option<&BTreeMap<u32, String>>) {
+        let Some(child) = child.filter(|_| delta_secs > 0) else {
+            return;
+        };
+        let names: BTreeMap<String, u64> = child
+            .values()
+            .map(|name| norm(name))
+            .filter(|key| !key.is_empty())
+            .map(|key| (key, delta_secs))
+            .collect();
+        crate::foreground::accrue_capped(
+            &mut self.running_secs,
+            names,
+            crate::foreground::MAX_APPS,
+        );
+    }
+
+    /// Seconds of today's running count spent in programs `reaches` accepts, summed, and never more
+    /// than the day's screen time: two of them running together are one stretch of use, and the
+    /// sum cannot tell, so the day's total is the most it can honestly claim.
+    fn ran(&self, reaches: impl Fn(&str) -> bool) -> u64 {
+        self.running_secs
+            .iter()
+            .filter(|(name, _)| reaches(name))
+            .fold(0u64, |sum, (_, secs)| sum.saturating_add(*secs))
+            .min(self.total_secs)
+    }
+
+    /// What the per-app limit on `name` has used today: its own count when it has one, otherwise
+    /// what the programs it names ran before it existed. See [`Usage::running_secs`].
+    fn app_limit_secs(&self, name: &crate::words::AppName, spared: &BTreeSet<String>) -> u64 {
+        use crate::words::AppName;
+        match name {
+            AppName::Exact(key) => self
+                .per_app_secs
+                .get(key)
+                .copied()
+                .unwrap_or_else(|| self.ran(|n| n == key)),
+            AppName::Pattern(p) => self
+                .per_app_secs
+                .get(&p.key())
+                .copied()
+                .unwrap_or_else(|| self.ran(|n| crate::words::program_meets(p, n, spared))),
+        }
+    }
+
+    /// What a group's shared pool has used today, by the same rule as [`Usage::app_limit_secs`].
+    fn group_secs(&self, group: &GroupTarget, spared: &BTreeSet<String>) -> u64 {
+        self.per_group_secs
+            .get(&group.name)
+            .copied()
+            .unwrap_or_else(|| {
+                self.ran(|n| {
+                    group.members.contains(n)
+                        || group
+                            .words
+                            .iter()
+                            .any(|p| crate::words::program_meets(p, n, spared))
+                })
+            })
+    }
+
+    /// Start each limit and group that has no count yet today from the day's running time of the
+    /// programs it reaches, so a limit set after the play is a limit on the day and not on what is
+    /// left of it. Only on a day already under way; a pool that has a count keeps it, and one that
+    /// starts from nothing gets no entry until something charges it.
+    ///
+    /// Before [`Usage::accrue`] charges this tick and before [`Usage::count_running`] adds it to
+    /// the running count, so the tick is counted once. Pages are not counted back: the day's page
+    /// times come from the watcher, which runs as the child, and a limit is never started from a
+    /// figure the child could have made up — `foreground_time_cannot_trigger_a_per_app_limit`.
+    pub(crate) fn seed_pools(
+        &mut self,
+        today: NaiveDate,
+        targets: &Targets,
+        spared: &BTreeSet<String>,
+    ) {
+        use crate::words::AppName;
+        if self.day != Some(today) {
+            return;
+        }
+        let exact = targets.app_limits.keys().map(|k| {
+            (
+                k.clone(),
+                self.app_limit_secs(&AppName::Exact(k.clone()), spared),
+            )
+        });
+        let patterns = targets.pattern_limits.iter().map(|l| {
+            (
+                l.key.clone(),
+                self.app_limit_secs(&AppName::Pattern(l.pattern[0].clone()), spared),
+            )
+        });
+        let apps: Vec<(String, u64)> = exact.chain(patterns).collect();
+        let groups: Vec<(String, u64)> = targets
+            .groups
+            .iter()
+            .map(|g| (g.name.clone(), self.group_secs(g, spared)))
+            .collect();
+        for (map, seeds) in [
+            (&mut self.per_app_secs, apps),
+            (&mut self.per_group_secs, groups),
+        ] {
+            for (key, secs) in seeds {
+                if secs > 0 {
+                    map.entry(key).or_insert(secs);
+                }
+            }
+        }
+    }
+
     fn read_on(self, today: NaiveDate) -> Self {
         if self.day == Some(today) {
             self
@@ -725,10 +939,17 @@ pub fn today_summary(
         // answers this.
         .app_limits
         .iter()
-        .filter(|(name, v)| **v > 0 && !name.trim().is_empty())
-        .map(|(name, &lim)| {
-            let used = usage.per_app_secs.get(&norm(name)).copied().unwrap_or(0) / 60;
-            serde_json::json!({ "name": name, "used_mins": used, "limit_mins": lim })
+        .filter(|(_, v)| **v > 0)
+        .filter_map(|(name, &lim)| {
+            // Keyed as `Targets` keys it, so a limit written as `*roblox*` reads the count kept
+            // under that pattern; a name `Targets` drops is no row, as a zero limit is none.
+            let key = match crate::words::app_name(name) {
+                Ok(Some(crate::words::AppName::Exact(key))) => key,
+                Ok(Some(crate::words::AppName::Pattern(p))) => p.key(),
+                _ => return None,
+            };
+            let used = usage.per_app_secs.get(&key).copied().unwrap_or(0) / 60;
+            Some(serde_json::json!({ "name": name, "used_mins": used, "limit_mins": lim }))
         })
         .collect();
     let groups: Vec<serde_json::Value> = rules
@@ -1246,16 +1467,30 @@ impl RulesEnforcer {
         }
         // What each group's words matched this tick: programs under the child's account, and the
         // pages the helper reported. Before `accrue`, which charges for both.
-        let matches = crate::words::match_groups(
-            targets.groups.iter().map(|g| g.words.as_slice()),
+        // Patterns in the per-app limits and the blocklist are matched by the same rule, in the
+        // same call, after the groups.
+        let mut matches = crate::words::match_groups(
+            targets
+                .groups
+                .iter()
+                .map(|g| g.words.as_slice())
+                .chain(targets.pattern_limits.iter().map(|l| l.pattern.as_slice()))
+                .chain(std::iter::once(targets.blocked_patterns.as_slice())),
             &t.web,
             t.child_processes.as_ref(),
             &t.check_programs,
-        );
-        for (group, matched) in targets.groups.iter_mut().zip(matches) {
-            group.matched = matched;
+        )
+        .into_iter();
+        for group in &mut targets.groups {
+            group.matched = matches.next().unwrap_or_default();
         }
+        for limit in &mut targets.pattern_limits {
+            limit.matched = matches.next().unwrap_or_default();
+        }
+        targets.blocked_matched = matches.next().unwrap_or_default();
+        self.usage.seed_pools(t.today, &targets, &t.check_programs);
         self.usage.accrue(t.today, delta, &running, &targets);
+        self.usage.count_running(delta, t.child_processes.as_ref());
 
         // Groups whose shared pool is spent, in configuration order. Their members are killed on
         // sight below.
@@ -1291,9 +1526,23 @@ impl RulesEnforcer {
         // processes. Filtered in `Targets` rather than at validation because a hand-edited
         // `config.json` reaches `decide` without passing `validate` at all.
         let blocked = &targets.blocked;
+        // A pool written with a `*` reaches, like a group's word, the child's own programs it
+        // meets and the child's own browsers that showed a page it meets, both by the owner
+        // snapshot so that a reused process ID cannot be closed under another program's name.
+        let reaches = |m: &crate::words::GroupMatch, pid: u32, name: &str| {
+            (m.programs.contains(&pid) || m.browsers.contains(name)) && childs(pid, name)
+        };
+        let spent_patterns: Vec<&PatternLimit> = targets
+            .pattern_limits
+            .iter()
+            .filter(|l| {
+                self.usage.per_app_secs.get(&l.key).copied().unwrap_or(0)
+                    >= l.limit_mins as u64 * 60
+            })
+            .collect();
         for p in procs {
             let n = norm(&p.name);
-            if blocked.contains(&n) {
+            if blocked.contains(&n) || reaches(&targets.blocked_matched, p.pid, &n) {
                 actions.push(RuleAction::Kill(p.pid));
                 announce_once(
                     &mut self.announced,
@@ -1314,6 +1563,22 @@ impl RulesEnforcer {
                     &n,
                     p,
                     StopReason::AppLimit { limit_mins: lim },
+                );
+                continue;
+            }
+            if let Some(limit) = spent_patterns
+                .iter()
+                .find(|l| reaches(&l.matched, p.pid, &n))
+            {
+                actions.push(RuleAction::Kill(p.pid));
+                announce_once(
+                    &mut self.announced,
+                    &mut actions,
+                    &n,
+                    p,
+                    StopReason::AppLimit {
+                        limit_mins: limit.limit_mins,
+                    },
                 );
                 continue;
             }
@@ -1471,6 +1736,85 @@ pub fn budgets_ahead(
             (m, budget)
         })
         .collect()
+}
+
+/// A per-app limit or group that saving would leave already used up today; see [`spent_on_save`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpentOnSave {
+    /// The limit as the parent typed it, or the group's name.
+    pub name: String,
+    pub used_mins: u64,
+    pub limit_mins: u32,
+}
+
+/// The per-app limits and groups in `candidate` that would be used up the moment it is saved and
+/// were not under `now`. The enforcer closes what they reach at its next check, with no warning
+/// first, so the dashboard names them and asks before saving.
+///
+/// "Used" is what the enforcer would count: the pool's own count today, or for a pool it has not
+/// counted yet, the day's running time of the programs it reaches ([`Usage::running_secs`]) — the
+/// same `Usage::app_limit_secs` and `Usage::group_secs` that start a new pool. A limit already
+/// used up before the save is not named: its programs are already being closed.
+pub fn spent_on_save(
+    now: &Rules,
+    candidate: &Rules,
+    usage: &Usage,
+    spared: &BTreeSet<String>,
+) -> Vec<SpentOnSave> {
+    use crate::words::{AppName, app_name};
+    let read = |raw: &str| match app_name(raw) {
+        Ok(Some(name)) => {
+            let key = match &name {
+                AppName::Exact(key) => key.clone(),
+                AppName::Pattern(p) => p.key(),
+            };
+            Some((key, usage.app_limit_secs(&name, spared)))
+        }
+        _ => None,
+    };
+    let used_up = |used: u64, limit_mins: u32| used >= u64::from(limit_mins) * 60;
+    let apps_used_up = |rules: &Rules| -> BTreeSet<String> {
+        rules
+            .app_limits
+            .iter()
+            .filter(|(_, m)| **m > 0)
+            .filter_map(|(raw, &m)| read(raw).filter(|(_, used)| used_up(*used, m)))
+            .map(|(key, _)| key)
+            .collect()
+    };
+    let groups_used_up = |rules: &Rules| -> BTreeSet<String> {
+        Targets::from_rules(rules)
+            .groups
+            .iter()
+            .filter(|g| used_up(usage.group_secs(g, spared), g.limit_mins))
+            .map(|g| g.name.clone())
+            .collect()
+    };
+    let (apps_before, groups_before) = (apps_used_up(now), groups_used_up(now));
+    let mut spent = Vec::new();
+    for (raw, &limit_mins) in candidate.app_limits.iter().filter(|(_, m)| **m > 0) {
+        if let Some((key, used)) = read(raw)
+            && used_up(used, limit_mins)
+            && !apps_before.contains(&key)
+        {
+            spent.push(SpentOnSave {
+                name: raw.trim().to_string(),
+                used_mins: used / 60,
+                limit_mins,
+            });
+        }
+    }
+    for g in &Targets::from_rules(candidate).groups {
+        let used = usage.group_secs(g, spared);
+        if used_up(used, g.limit_mins) && !groups_before.contains(&g.name) {
+            spent.push(SpentOnSave {
+                name: g.name.clone(),
+                used_mins: used / 60,
+                limit_mins: g.limit_mins,
+            });
+        }
+    }
+    spent
 }
 
 /// The check programs configured on the Integrations card, normalised. They run under the child's
@@ -1915,10 +2259,12 @@ pub async fn run_rules_enforcer(
             .as_mut()
             .map(|s| std::mem::take(&mut s.web))
             .unwrap_or_default();
-        // Who owns each process, asked only when a group has words. A failure is `None`, which
-        // matches no program by a word and closes no browser for a page; it is logged once when it
-        // starts rather than every thirty seconds while it lasts.
-        let child_processes = if rules.has_words() {
+        // Who owns each process: asked when a rule matches by a word or a pattern, and whenever
+        // somebody is at the machine, for the day's running count a limit set later starts from
+        // (`Usage::running_secs`). One Windows call. A failure is `None`, which matches no program
+        // by a word and closes no browser for a page; it is logged once when it starts rather than
+        // every thirty seconds while it lasts.
+        let child_processes = if rules.has_words() || active {
             let control = control.clone();
             let answer = tokio::task::spawn_blocking(move || control.child_processes())
                 .await
@@ -1927,8 +2273,9 @@ pub async fn run_rules_enforcer(
             let (snapshot, failure) = owner_snapshot(answer, &mut owner_lookup_failing);
             if let Some(e) = failure {
                 tracing::warn!(
-                    "cannot tell which processes are the child's ({e}); app-group words will \
-                     match no program and close no browser until this clears"
+                    "cannot tell which processes are the child's ({e}); words and `*` patterns \
+                     will match no program and close no browser, and the day's running count \
+                     will not grow, until this clears"
                 );
             }
             snapshot
@@ -5674,6 +6021,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
             unmeasured: false,
+            running_secs: Default::default(),
         };
         usage.per_app_secs.insert("game.exe".into(), 20 * 60); // normalized key
         // +30 granted → effective budget 150, used 47 → remaining 103.
@@ -5712,6 +6060,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
             unmeasured: false,
+            running_secs: Default::default(),
         };
         let s = today_summary(
             &rules,
@@ -5742,6 +6091,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
             unmeasured: false,
+            running_secs: Default::default(),
         };
         let s = today_summary(
             &rules,
@@ -5773,6 +6123,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
             unmeasured: false,
+            running_secs: Default::default(),
         };
         let s = today_summary(
             &rules,
@@ -5807,6 +6158,7 @@ mod tests {
             page_secs: Default::default(),
             refused: Default::default(),
             unmeasured: false,
+            running_secs: Default::default(),
         };
 
         let fresh = today_summary(
@@ -6451,5 +6803,481 @@ mod tests {
         paused.routines[0].rules.enabled = false;
         let afternoon = budgets_ahead(&paused, at(15, 50), day(), Adjustments::default());
         assert_eq!(budgets(&afternoon[9..]), vec![0; 7]);
+    }
+
+    // ---- Names in the blocklist and the per-app limits (`words::app_name`) ----
+
+    fn limited(name: &str, mins: u32) -> Rules {
+        Rules {
+            app_limits: [(name.to_string(), mins)].into(),
+            ..Default::default()
+        }
+    }
+
+    fn blocking(names: &[&str]) -> Rules {
+        Rules {
+            blocklist: names.iter().map(|n| (*n).to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The pids an action list kills, in order.
+    fn kills(actions: &[RuleAction]) -> Vec<u32> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                RuleAction::Kill(pid) => Some(*pid),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// An enforcer on a day already under way: `total_mins` of screen time, and these programs
+    /// having run for these minutes before the rules in the test existed.
+    fn played(total_mins: u64, ran: &[(&str, u64)]) -> RulesEnforcer {
+        RulesEnforcer::new(Usage {
+            day: Some(day()),
+            total_secs: total_mins * 60,
+            running_secs: ran
+                .iter()
+                .map(|(n, m)| ((*n).to_string(), m * 60))
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    /// The case a parent reported: a limit on "Roblox" left `RobloxPlayerBeta.exe` running all
+    /// day. Without a `*` a name is one program, as it always was, so that is still true — and the
+    /// program it does name is counted and closed.
+    #[test]
+    fn a_limit_without_a_star_reaches_only_the_program_it_names() {
+        let procs = [proc(1, "RobloxPlayerBeta.exe"), proc(2, "roblox.exe")];
+        let mut e = RulesEnforcer::new(Usage::default());
+        let now = Instant::now();
+        e.decide(&limited("Roblox", 1), &procs, tk(now, 0));
+        let a = e.decide(&limited("Roblox", 1), &procs, tk(now, 0));
+        assert_eq!(kills(&a), [2]);
+        assert_eq!(e.usage.per_app_secs.get("roblox.exe"), Some(&60));
+        assert!(!e.usage.per_app_secs.contains_key("robloxplayerbeta.exe"));
+    }
+
+    /// `*roblox*` is every program of the child's with the word in its name, and every browser that
+    /// showed a page with it, counted as one pool and closed together when it is spent.
+    #[test]
+    fn a_limit_with_stars_reaches_every_matching_program_and_page() {
+        let procs = [
+            proc(1, "RobloxPlayerBeta.exe"),
+            proc(2, "YellowRoblox.exe"),
+            proc(3, "notepad.exe"),
+            proc(4, "msedge.exe"),
+        ];
+        let child = owned(&procs, &[1, 2, 3, 4]);
+        let mut e = RulesEnforcer::new(Usage::default());
+        let now = Instant::now();
+        let rules = limited("*Roblox*", 1);
+        let first = e.decide(
+            &rules,
+            &procs,
+            tk_web(now, &[(EDGE_ROBLOX, 10)], child.clone(), true),
+        );
+        assert!(kills(&first).is_empty(), "{first:?}");
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(now, &[(EDGE_ROBLOX, 10)], child, true),
+        );
+        assert_eq!(
+            kills(&a),
+            [1, 2, 4],
+            "every Roblox program and the browser showing it"
+        );
+        assert!(a.contains(&stopped(
+            "RobloxPlayerBeta.exe",
+            StopReason::AppLimit { limit_mins: 1 }
+        )));
+        assert_eq!(
+            e.usage.per_app_secs.get("*roblox*"),
+            Some(&60),
+            "one pool, once a tick"
+        );
+    }
+
+    /// With no matching program running, the page alone is charged, never more than the interval.
+    #[test]
+    fn a_page_alone_charges_a_limit_with_stars() {
+        let procs = [proc(4, "msedge.exe")];
+        let mut e = RulesEnforcer::new(Usage::default());
+        let rules = limited("roblox*", 60);
+        let tick = |secs| {
+            tk_web(
+                Instant::now(),
+                &[(EDGE_ROBLOX, secs)],
+                owned(&procs, &[4]),
+                true,
+            )
+        };
+        e.decide(&rules, &procs, tick(20));
+        assert_eq!(e.usage.per_app_secs.get("roblox*"), Some(&20));
+        e.decide(&rules, &procs, tick(90));
+        assert_eq!(
+            e.usage.per_app_secs.get("roblox*"),
+            Some(&50),
+            "capped at the 30s interval"
+        );
+    }
+
+    /// A pattern reaches only the child's own processes, as a group's word does.
+    #[test]
+    fn a_limit_with_stars_leaves_other_accounts_programs_alone() {
+        let procs = [proc(1, "RobloxPlayerBeta.exe")];
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.usage.day = Some(day());
+        e.usage.per_app_secs.insert("*roblox*".into(), 3600);
+        let a = e.decide(
+            &limited("*roblox*", 1),
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[]), true),
+        );
+        assert!(kills(&a).is_empty(), "{a:?}");
+    }
+
+    /// A blocklist entry with stars closes everything it meets at once; one without is exact, and
+    /// may leave off `.exe`.
+    #[test]
+    fn a_blocklist_entry_with_stars_closes_every_match_and_one_without_is_exact() {
+        let procs = [
+            proc(1, "RobloxPlayerBeta.exe"),
+            proc(2, "notepad.exe"),
+            proc(3, "msedge.exe"),
+            proc(4, "Minecraft.exe"),
+        ];
+        let child = owned(&procs, &[1, 2, 3, 4]);
+        let mut e = RulesEnforcer::new(Usage::default());
+        let a = e.decide(
+            &blocking(&["*roblox*", "Minecraft"]),
+            &procs,
+            tk_web(Instant::now(), &[(EDGE_ROBLOX, 5)], child, true),
+        );
+        assert_eq!(kills(&a), [1, 3, 4]);
+        assert!(a.contains(&stopped("msedge.exe", StopReason::Blocked)));
+        let b = e.decide(&blocking(&["Roblox"]), &procs, tk(Instant::now(), 0));
+        assert!(
+            kills(&b).is_empty(),
+            "\"Roblox\" is roblox.exe, which is not running: {b:?}"
+        );
+    }
+
+    /// The reported case end to end: 200 minutes of Roblox, then a 45-minute limit. The limit is on
+    /// the day, so it is already spent, and Roblox is closed at the next check.
+    #[test]
+    fn a_limit_set_after_the_play_starts_from_what_was_played() {
+        let procs = [proc(7, "RobloxPlayerBeta.exe")];
+        let child = owned(&procs, &[7]);
+        for name in ["*roblox*", "RobloxPlayerBeta.exe", "robloxplayerbeta"] {
+            let mut e = played(249, &[("robloxplayerbeta.exe", 200)]);
+            let a = e.decide(
+                &limited(name, 45),
+                &procs,
+                tk_web(Instant::now(), &[], child.clone(), true),
+            );
+            assert_eq!(kills(&a), [7], "{name}");
+            assert!(a.contains(&stopped(
+                "RobloxPlayerBeta.exe",
+                StopReason::AppLimit { limit_mins: 45 }
+            )));
+        }
+        // A limit above what was played closes nothing, and counts on from it.
+        let mut e = played(249, &[("robloxplayerbeta.exe", 200)]);
+        let a = e.decide(
+            &limited("*roblox*", 300),
+            &procs,
+            tk_web(Instant::now(), &[], child, true),
+        );
+        assert!(kills(&a).is_empty());
+        assert_eq!(e.usage.per_app_secs.get("*roblox*"), Some(&(200 * 60 + 30)));
+    }
+
+    /// Several matching programs can run at once, so their sum can exceed the time that passed; the
+    /// day's screen time is the most a pool can start from. Exactly at it is kept.
+    #[test]
+    fn a_pool_starts_from_no_more_than_the_days_screen_time() {
+        let idle = || tk_active(Instant::now(), 0, false);
+        let mut e = played(150, &[("game1.exe", 100), ("game2.exe", 100)]);
+        e.decide(&limited("game*", 600), &[], idle());
+        assert_eq!(e.usage.per_app_secs.get("game*"), Some(&(150 * 60)));
+        let mut e = played(150, &[("game1.exe", 100), ("game2.exe", 50)]);
+        e.decide(&limited("game*", 600), &[], idle());
+        assert_eq!(
+            e.usage.per_app_secs.get("game*"),
+            Some(&(150 * 60)),
+            "at the day's total"
+        );
+        let mut e = played(150, &[("game1.exe", 100), ("game2.exe", 49)]);
+        e.decide(&limited("game*", 600), &[], idle());
+        assert_eq!(e.usage.per_app_secs.get("game*"), Some(&(149 * 60)));
+    }
+
+    /// A pool already counting keeps its count; one that reaches nothing that ran gets no entry.
+    #[test]
+    fn a_pool_with_a_count_is_not_started_again() {
+        let idle = || tk_active(Instant::now(), 0, false);
+        let mut e = played(249, &[("robloxplayerbeta.exe", 200)]);
+        e.usage.per_app_secs.insert("*roblox*".into(), 10 * 60);
+        e.decide(&limited("*roblox*", 600), &[], idle());
+        assert_eq!(e.usage.per_app_secs.get("*roblox*"), Some(&(10 * 60)));
+        e.decide(&limited("*minecraft*", 600), &[], idle());
+        assert!(!e.usage.per_app_secs.contains_key("*minecraft*"));
+    }
+
+    /// Yesterday's running time is not today's: on a new day every pool starts from nothing.
+    #[test]
+    fn a_new_day_starts_no_pool_from_yesterday() {
+        let mut e = played(249, &[("robloxplayerbeta.exe", 200)]);
+        e.usage.day = day().pred_opt();
+        let procs = [proc(7, "RobloxPlayerBeta.exe")];
+        let a = e.decide(
+            &limited("*roblox*", 45),
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[7]), true),
+        );
+        assert!(kills(&a).is_empty(), "{a:?}");
+        assert_eq!(e.usage.per_app_secs.get("*roblox*"), Some(&30));
+        assert_eq!(e.usage.running_secs.get("robloxplayerbeta.exe"), Some(&30));
+    }
+
+    /// A group set up after the play starts from it too.
+    #[test]
+    fn a_group_set_up_after_the_play_starts_from_what_its_members_ran() {
+        let rules = Rules {
+            app_groups: vec![AppGroup {
+                name: "Games".into(),
+                apps: vec!["Minecraft.exe".into()],
+                words: vec!["roblox".into()],
+                limit_mins: 30,
+            }],
+            ..Default::default()
+        };
+        let mut e = played(
+            100,
+            &[
+                ("minecraft.exe", 20),
+                ("robloxplayerbeta.exe", 15),
+                ("notepad.exe", 50),
+            ],
+        );
+        e.decide(&rules, &[], tk_active(Instant::now(), 0, false));
+        assert_eq!(e.usage.per_group_secs.get("Games"), Some(&(35 * 60)));
+    }
+
+    /// The day's running count: the child's programs, once per name however many copies run, only
+    /// while somebody is at the machine, and nothing when the snapshot is unknown.
+    #[test]
+    fn the_running_count_holds_each_of_the_childs_programs_while_in_use() {
+        let child = Some(BTreeMap::from([
+            (1, "Game.exe".to_string()),
+            (2, "game.exe".to_string()),
+            (3, "Notes.exe".to_string()),
+        ]));
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &Rules::default(),
+            &[],
+            tk_web(Instant::now(), &[], child.clone(), false),
+        );
+        assert!(
+            e.usage.running_secs.is_empty(),
+            "an idle check adds no entry, not even a zero: {:?}",
+            e.usage.running_secs
+        );
+        e.decide(
+            &Rules::default(),
+            &[],
+            tk_web(Instant::now(), &[], child.clone(), true),
+        );
+        let counted = BTreeMap::from([("game.exe".to_string(), 30), ("notes.exe".to_string(), 30)]);
+        assert_eq!(e.usage.running_secs, counted);
+        e.decide(
+            &Rules::default(),
+            &[],
+            tk_web(Instant::now(), &[], child, false),
+        );
+        e.decide(
+            &Rules::default(),
+            &[],
+            tk_web(Instant::now(), &[], None, true),
+        );
+        assert_eq!(
+            e.usage.running_secs, counted,
+            "idle, or nobody known to be running"
+        );
+    }
+
+    /// Patterns need the owner snapshot; exact names do not.
+    #[test]
+    fn a_pattern_in_either_list_needs_process_owners() {
+        assert!(limited("*roblox*", 30).has_words());
+        assert!(blocking(&["roblox*"]).has_words());
+        assert!(!limited("Roblox", 30).has_words());
+        assert!(!blocking(&["Roblox"]).has_words());
+    }
+
+    /// A pattern that would reach nearly everything is refused at the door, naming itself; a plain
+    /// name and a good pattern are not.
+    #[test]
+    fn a_pattern_too_broad_or_malformed_is_refused_when_saved() {
+        for bad in [
+            blocking(&["*"]),
+            limited("*ro*", 30),
+            blocking(&["rob*lox"]),
+        ] {
+            let err = bad.validate().unwrap_err();
+            assert!(err.contains('*'), "{err}");
+        }
+        for good in [
+            limited("Roblox", 30),
+            limited("*roblox*", 30),
+            blocking(&["roblox*", "game.exe"]),
+        ] {
+            assert_eq!(good.validate(), Ok(()));
+        }
+    }
+
+    /// The today card reads a pattern's count under the pattern.
+    #[test]
+    fn the_today_card_reads_a_limit_with_stars_under_its_pattern() {
+        let mut usage = Usage {
+            day: Some(day()),
+            ..Default::default()
+        };
+        usage.per_app_secs.insert("*roblox*".into(), 50 * 60);
+        let s = today_summary(
+            &limited("*Roblox*", 45),
+            day(),
+            Adjustments::default(),
+            &usage,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(
+            s["per_app"],
+            serde_json::json!([{ "name": "*Roblox*", "used_mins": 50, "limit_mins": 45 }])
+        );
+    }
+
+    /// What the dashboard asks about before saving: a limit or group the save would leave already
+    /// used up, and not one that was used up before it.
+    #[test]
+    fn saving_names_the_limits_it_leaves_already_used_up() {
+        let usage = played(249, &[("robloxplayerbeta.exe", 200)]).usage;
+        let none = BTreeSet::new();
+        let roblox = |limit_mins| SpentOnSave {
+            name: "*roblox*".into(),
+            used_mins: 200,
+            limit_mins,
+        };
+        assert_eq!(
+            spent_on_save(&Rules::default(), &limited("*roblox*", 45), &usage, &none),
+            [roblox(45)]
+        );
+        assert_eq!(
+            spent_on_save(&Rules::default(), &limited("*roblox*", 200), &usage, &none),
+            [roblox(200)],
+            "exactly at the limit is used up"
+        );
+        assert!(
+            spent_on_save(&Rules::default(), &limited("*roblox*", 201), &usage, &none).is_empty()
+        );
+        assert!(
+            spent_on_save(
+                &limited("*roblox*", 30),
+                &limited("*roblox*", 45),
+                &usage,
+                &none
+            )
+            .is_empty(),
+            "already used up before the save"
+        );
+        assert!(spent_on_save(&Rules::default(), &limited("Roblox", 45), &usage, &none).is_empty());
+        // A limit of 0 is off: never used up, before the save or after it.
+        assert!(
+            spent_on_save(&Rules::default(), &limited("*roblox*", 0), &usage, &none).is_empty()
+        );
+        assert_eq!(
+            spent_on_save(
+                &limited("*roblox*", 0),
+                &limited("*roblox*", 45),
+                &usage,
+                &none
+            ),
+            [roblox(45)]
+        );
+        let group = Rules {
+            app_groups: vec![AppGroup {
+                name: "Games".into(),
+                apps: vec![],
+                words: vec!["roblox".into()],
+                limit_mins: 60,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            spent_on_save(&Rules::default(), &group, &usage, &none),
+            [SpentOnSave {
+                name: "Games".into(),
+                used_mins: 200,
+                limit_mins: 60
+            }]
+        );
+        assert!(
+            spent_on_save(&group, &group, &usage, &none).is_empty(),
+            "a group already used up before the save is not named"
+        );
+        let mut roomy = group.clone();
+        roomy.app_groups[0].limit_mins = 300;
+        assert!(
+            spent_on_save(&Rules::default(), &roomy, &usage, &none).is_empty(),
+            "a group with time left is not named"
+        );
+    }
+
+    /// Two spellings of one pattern are one pool, charged once a tick and held to the stricter
+    /// limit, and they take no other pattern's place.
+    #[test]
+    fn two_spellings_of_one_pattern_are_one_pool() {
+        let rules = Rules {
+            app_limits: [
+                ("*ROBLOX*".to_string(), 30),
+                ("*roblox*".to_string(), 45),
+                ("game*".to_string(), 60),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let procs = [proc(1, "RobloxPlayerBeta.exe"), proc(2, "GameMaker.exe")];
+        let mut e = RulesEnforcer::new(Usage::default());
+        e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[1, 2]), true),
+        );
+        assert_eq!(
+            e.usage.per_app_secs.get("*roblox*"),
+            Some(&30),
+            "charged once"
+        );
+        assert_eq!(e.usage.per_app_secs.get("game*"), Some(&30));
+        e.usage.per_app_secs.insert("*roblox*".into(), 30 * 60);
+        e.usage.per_app_secs.insert("game*".into(), 60 * 60);
+        let a = e.decide(
+            &rules,
+            &procs,
+            tk_web(Instant::now(), &[], owned(&procs, &[1, 2]), true),
+        );
+        assert_eq!(
+            kills(&a),
+            [1, 2],
+            "the stricter 30 minutes holds, and game* still counts"
+        );
     }
 }

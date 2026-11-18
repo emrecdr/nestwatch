@@ -27,8 +27,9 @@ not separate: `Roblox Studio` stays one entry, which the server refuses ("can't 
 rather than silently becoming `roblox` and a far broader `studio` that matches Visual Studio and
 OBS Studio.
 
-* `roblox` and `%roblox%` mean the same thing. `%` at either end is removed, since parents who know
-  SQL patterns will type it.
+* `roblox`, `%roblox%` and `*roblox*` mean the same thing. `%` or `*` at either end is removed,
+  since parents who know SQL or file patterns will type them: a group's words always mean
+  "containing".
 * Case is ignored. `Roblox`, `ROBLOX` and `roblox` match the same names and pages, and Turkish
   dotted and dotless `i` count as plain `i`, so `izle` matches `İZLE` and `oyunları` matches
   `OYUNLARI` (`words::fold`).
@@ -37,13 +38,47 @@ OBS Studio.
 * **Blank entries are dropped.** A blank word would match everything. This codebase was bitten
   exactly this way by blank app names, which became a kill-on-sight rule nobody wrote (see
   `Targets::from_rules`).
-* A word must be **3 to 64 characters** after the `%` is removed, with no spaces, control characters
-  or `%` inside it. What is stored is bounded too: at most 66 characters as typed, room for a `%` at
+* A word must be **3 to 64 characters** after the `%` or `*` is removed, with no spaces, control
+  characters, `%` or `*` inside it. What is stored is bounded too: at most 66 characters as typed, room for a `%` at
   each end. Anything else is refused with a message saying which rule it broke. Two
   characters would match far too much (`gg` is in `now.gg` and in every page that mentions eggs).
 * A group may have words and no apps. `Roblox, 60 minutes` with only the word `roblox` is the
   intended shape. Listed apps still work alongside words, and are still needed for a program whose
   name lacks the word: the Microsoft Store build of Roblox runs as `Windows10Universal.exe` (`O16`).
+
+
+### The blocklist and the per-app limits
+
+Added 2026-11-18, after a parent set a 45-minute limit on `Roblox` and the game kept running: names
+in those two lists matched one program exactly, `Roblox` is not `RobloxPlayerBeta.exe`, and nothing
+on the dashboard said so. Both lists now take the matching above, with the parent choosing how far a
+name reaches (`words::app_name`):
+
+* **No `*` is one program**, capitals aside, with or without `.exe`: `Roblox` is `roblox.exe` and
+  nothing else. That is what a name always meant here, so no saved setting changes meaning.
+* **A `*` at an end opens that end.** `*roblox*` is every name and page that contains the word,
+  `roblox*` the ones that start with it and `*roblox` the ones that end with it. For a page, the
+  start and the end are the title's or the address's own: `roblox*` meets `roblox.com/games`,
+  `*roblox` meets `Home - Roblox`.
+* A pattern keeps a word's rules: 3 to 64 characters besides the stars, and no space, `%` or `*`
+  inside, so `*`, `*ro*` and `rob*lox` are refused on save.
+* A pattern reaches what a word reaches and no further: the child's own programs by the owner
+  snapshot, never Nestwatch's, the listed Windows programs or a check program, and a browser only
+  while it shows a matching page. A blocklist pattern closes them on sight; a spent limit closes
+  them as a spent group does, and names the limit to the child.
+* Under each name the dashboard shows what it reaches now (`POST /api/rules/words-preview` with
+  `names`), which is how a parent sees that `Roblox` reaches nothing while `RobloxPlayerBeta.exe`
+  runs.
+
+**A limit counts the whole day.** The service keeps each of the child's programs' running time for
+the day (`Usage::running_secs`), from the same owner snapshot, taken on every check somebody is at
+the machine whether or not any rule needs it. A limit or group that first appears mid-day starts
+from what its programs already ran, never more than the day's screen time, so a 45-minute limit set
+after 200 minutes of Roblox is used up at once and Roblox is closed at the next check. Saving such a
+limit is named by `POST /api/rules/preview` (`closes_now`) and confirmed first. Page time is not
+counted back: it comes from the watcher, which runs as the child, and no limit starts from a figure
+the child could have made up. A tally written before this has no running count, so on the day of the
+upgrade a new limit still starts from nothing.
 
 ---
 

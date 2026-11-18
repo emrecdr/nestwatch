@@ -720,11 +720,12 @@ than a process name and less than a browsing history:
   [FOREGROUND-TRACKING.md](FOREGROUND-TRACKING.md), and it has not been checked on a real browser.
   Worth knowing either way before assuming Incognito is unobserved — and worth telling your child,
   since this project is overt monitoring, not surveillance.
-- **It is reported, and enforced only through words a parent puts on an app group.** No per-app
-  limit, daily budget, lock or shutdown is ever decided by a page title. The one exception is
-  narrow and deliberate: a page whose title contains one of a group's words **adds** time to that
-  group's pool, and once the pool is spent the child's own processes of the browser showing it are
-  closed. The watcher runs inside the child's session, so a forged report can only spend his own
+- **It is reported, and enforced only through words and `*` patterns a parent writes.** No daily
+  budget, lock or shutdown is ever decided by a page title. The one exception is narrow and
+  deliberate: a page whose title or address meets a group's word, or a `*` pattern in the blocklist
+  or a per-app limit, **adds** time to that pool or is closed on sight, and once the pool is spent
+  the child's own processes of the browser showing it are closed. No limit is ever *started* from
+  page time: a limit set mid-day starts from the service's own count of what programs ran. The watcher runs inside the child's session, so a forged report can only spend his own
   time and close a browser he could close himself. See
   [WORDS-IN-GROUPS.md](WORDS-IN-GROUPS.md).
 
