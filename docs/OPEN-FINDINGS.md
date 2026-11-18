@@ -74,7 +74,7 @@ ago every entry was last looked at *together*.
 
 ## Release state
 
-**`v0.11.1`, published 2026-10-23.** Everything below is open against a release that is on the
+**`v0.12.0`, published 2026-11-18.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -94,6 +94,14 @@ when it shipped are the same three that were green when `install` failed on real
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
 is the reason the section below exists and the reason the checklist is the only method here with a
 track record.
+
+**0.12.0 adds no Windows-only code, and drives 0.11.0's more often.** Measured 2026-11-18 with `git
+diff v0.11.1..HEAD`: of 3,384 lines added under `src/`, none is in a module that compiles only on
+Windows or in a `#[cfg(windows)]` item of a shared file. The owner snapshot 0.11.0 added
+(`session::console_user_processes`) is now taken on every enforcer tick while somebody is at the
+machine, not only when a group has words: it is how the service keeps each of the child's programs'
+running time for the day, which a limit or group set later starts from, and it decides what a `*` in
+the blocklist or a per-app limit may count or close. §H12 names what to run first.
 
 **0.11.1 changes no code under `src/`.** Measured 2026-10-23 with `git diff v0.11.0..HEAD`: the
 release moves `ctutils` from 0.4.2 to 0.4.5 for RUSTSEC-2026-0385, and `chacha20`, a test-only

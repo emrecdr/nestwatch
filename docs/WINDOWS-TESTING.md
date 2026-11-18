@@ -796,23 +796,28 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ---
 
-## H. New in 0.5.0 through 0.11.0, and since — none of it has run on Windows
+## H. New in 0.5.0 through 0.12.0, and since — none of it has run on Windows
 
-**Nine releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
+**Ten releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
 `v0.5.1` on 2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, `v0.10.0` on
-2026-10-04, `v0.11.0` on 2026-10-22 and `v0.11.1` on 2026-10-23, which changed a dependency and no
-code of its own, so added nothing here. That is a deliberate decision rather
+2026-10-04, `v0.11.0` on 2026-10-22, `v0.11.1` on 2026-10-23, which changed a dependency and no code
+of its own, so added nothing here, and `v0.12.0` on 2026-11-18. That is a deliberate decision rather
 than an oversight, and it is recorded in each release commit as well as here: the binary is on the
 download page and the behaviour below has never executed on the platform it was written for.
 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this
 repository's history has ever recorded a ticked box in this file, in any section. So H has
-accumulated rather than turned over: 66 items across §H1–§H12, where it held 61 before §H12, 59 at
+accumulated rather than turned over: 66 items across §H1–§H12, where it held 61 at `v0.11.0`, 59 at
 `v0.10.0`, 53 before that release's work began, 45 at `v0.9.0`, 38 at `v0.8.0` and 32 at `v0.7.0`.
 The one thing that improved at `v0.8.0` is that its headline feature arrived *with* its checklist
 item (§H8) instead of being added to the list later or not at all, which is the failure `O87`
 records against 0.6.0 and 0.7.0.
+
+**Five of the 66 are newer than `v0.11.1` and ship in `v0.12.0`**: §H12's, written in the commit
+that added what they cover — names with a `*` in the blocklist and the per-app limits, and a limit
+set after the play starting from it — which is the rule `O87` exists to enforce. Their first item is
+the one to run first: it shows whether the owner snapshot answers on the PC at all.
 
 **Two of the 61 are newer than `v0.10.0` and ship in `v0.11.0`**: §H11's. They arrived in the commit
 after the fix they cover rather than with it, which is the failure `O87` records, caught 24 minutes
@@ -1158,7 +1163,7 @@ standard Windows account can connect from any of those addresses at all. These t
       refused on the sign-in page — nobody was let in*. The sixth attempt is not in it: a
       locked-out device is turned away before any password is checked.
 
-### H12. Names with a `*`, and a limit set after the play (never run on Windows)
+### H12. Names with a `*`, and a limit set after the play (new in 0.12.0)
 
 A limit or blocklist entry without a `*` names one program; with one at an end it reaches every
 match, programs and pages alike, and a limit set mid-day starts from what was already played.

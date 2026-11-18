@@ -397,27 +397,31 @@ warns if the compiler and the pin disagree).
    verified on an actual machine**: see [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md).
    Every serious bug this project has had lived in this tier.
 
-**Where the current release stands.** `v0.11.1` (2026-10-23) is the newest published release. It
-changes no code of Nestwatch's own: it moves `ctutils`, the library `argon2` uses to compare
-password hashes in constant time, past a published advisory (RUSTSEC-2026-0385). Everything else is
-`v0.11.0`'s — an app group can take words, so one limit covers a game in its app and in the
-browser; lowering today's limit below what has been used asks first; wrong passwords show on
-*Refused today*; the PC counts as one device to the password lockout, whichever of its own
-addresses it uses; a setting that could not be saved is no longer kept; and more of the dashboard
-follows your language. The release before that, `v0.10.0`, gave the practice gate to the
-integration rather than to your daily limit; `v0.8.0` is the one that lets this PC ask an
-integration what your child has done — the second of the two exceptions named at the top of this
-file, under **Check from this PC** on the Integrations card, and nothing here changes it.
+**Where the current release stands.** `v0.12.0` (2026-11-18) is the newest published release. A name
+in the blocklist or a per-app limit can now reach every match: `*roblox*` covers every program with
+Roblox in its name and every browser page that has it, while a name without a `*` is still one
+program, and the line under each name shows what it reaches. A limit set after the play counts the
+play, and saving one that is already used up asks first. A scheduled routine that will start below
+what has been used is counted down to; pausing the rules past midnight no longer locks the PC the
+next morning; undoing a later bedtime keeps its warning; `doctor` no longer calls the clock anchored
+when it is not; and the screen-time report no longer pays for all of history. `v0.11.1` moved a
+password-hashing library past an advisory. `v0.11.0` gave app groups words, so one limit covers a
+game in its app and in the browser, asked before lowering today's limit below what has been used,
+showed wrong passwords on *Refused today*, and counted the PC as one device to the password lockout.
+`v0.10.0` gave the practice gate to the integration rather than to your daily limit; `v0.8.0` is the
+one that lets this PC ask an integration what your child has done — the second of the two exceptions
+named at the top of this file, under **Check from this PC** on the Integrations card, and nothing
+here changes it.
 
-**`v0.11.0` added Windows-only code to the running service, the first since `v0.8.0`, and
-`v0.11.1` adds none.** Measured with `git diff v0.10.0..v0.11.0` rather than asserted: of the 2,962
-lines added under `src/`, 132 sit in modules that compile only on Windows, and all of them serve
-words on app groups; `git diff v0.11.0..v0.11.1` touches nothing under `src/`. The largest
-part is the owner check: one `WTSEnumerateProcessesExW` snapshot, with each process's owner
-compared against the signed-in account, so that a word can only count or close what your child
-could close himself in Task Manager. The rest hands that check to the enforcer and tells it which
-browser has the matching page in front. That check is the safety half of the feature, and it has
-never run on a Windows PC; §D2b of the checklist is where to start.
+**`v0.12.0` adds no Windows-only code, and leans harder on what `v0.11.0` added.** Measured with
+`git diff v0.11.1..v0.12.0` rather than asserted: of the 3,384 lines added under `src/`, none sits
+in a module that compiles only on Windows or in a `#[cfg(windows)]` item of a shared file. What
+changed is how often `v0.11.0`'s owner check runs. That one `WTSEnumerateProcessesExW` snapshot,
+with each process's owner compared against the signed-in account, decides what a word or a `*` may
+count or close, so that it can only reach what your child could close himself in Task Manager; it is
+now taken on every check while somebody is at the PC, because it is also how the service keeps the
+day's running time that a limit set later starts from. It has never run on a Windows PC; §D2b and
+§H12 of the checklist are where to start.
 
 **Tiers 1 and 2 are green and tier 3 is unrun**, as it has been for every release from `v0.5.0` on:
 section H of the checklist carries 66 items across §H1–§H12, words on app groups brought seven more
