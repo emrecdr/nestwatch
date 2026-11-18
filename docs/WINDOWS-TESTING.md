@@ -798,12 +798,13 @@ check §0 first. Background: [REMOTE-UPDATE.md](REMOTE-UPDATE.md).
 
 ## H. New in 0.5.0 through 0.12.0, and since — none of it has run on Windows
 
-**Ten releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
+**Eleven releases have now shipped with every item in this section still unchecked** — `v0.5.0` and
 `v0.5.1` on 2026-08-31, `v0.6.0`, `v0.7.0`, `v0.8.0`, `v0.9.0` on 2026-09-11, `v0.10.0` on
 2026-10-04, `v0.11.0` on 2026-10-22, `v0.11.1` on 2026-10-23, which changed a dependency and no code
-of its own, so added nothing here, and `v0.12.0` on 2026-11-18. That is a deliberate decision rather
-than an oversight, and it is recorded in each release commit as well as here: the binary is on the
-download page and the behaviour below has never executed on the platform it was written for.
+of its own, so added nothing here, and `v0.12.0` and `v0.12.1` on 2026-11-18, the second adding
+nothing here either. That is a deliberate decision rather than an oversight, and it is recorded in
+each release commit as well as here: the binary is on the download page and the behaviour below has
+never executed on the platform it was written for.
 
 **The heading spans a range because nothing has left this section.** The rule below says to move
 verified items out at each release, and no item has ever been verified — no commit in this

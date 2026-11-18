@@ -74,7 +74,7 @@ ago every entry was last looked at *together*.
 
 ## Release state
 
-**`v0.12.0`, published 2026-11-18.** Everything below is open against a release that is on the
+**`v0.12.1`, published 2026-11-18.** Everything below is open against a release that is on the
 download page, not against unreleased work — which is what makes the list worth keeping honest
 rather than tidy.
 
@@ -94,6 +94,11 @@ when it shipped are the same three that were green when `install` failed on real
 when `remove_file` turned out not to be exclusive. That is not an argument for distrusting them; it
 is the reason the section below exists and the reason the checklist is the only method here with a
 track record.
+
+**0.12.1 adds no Windows-only code.** Measured with `git diff v0.12.0..HEAD`: under `src/` it
+changes the dashboard's style policy in `security.rs`, adds its guard in `web.rs`, and rewords
+comments; the rest is `tests/golden/limits.json` gaining `renew_warn_days` and documentation.
+Everything below about 0.12.0 holds for 0.12.1.
 
 **0.12.0 adds no Windows-only code, and drives 0.11.0's more often.** Measured 2026-11-18 with `git
 diff v0.11.1..HEAD`: of 3,384 lines added under `src/`, none is in a module that compiles only on
