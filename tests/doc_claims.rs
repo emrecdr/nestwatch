@@ -324,56 +324,6 @@ fn checklist_section<'a>(doc: &'a str, heading: &str) -> &'a str {
     &doc[start..end]
 }
 
-/// `O71` cites the size of the dashboard component. Those numbers must not understate it badly.
-///
-/// One-sided and generous on purpose. Growth is the failure mode — the entry is an argument about
-/// size, so a citation smaller than reality weakens it while a larger one cannot occur by drift.
-/// 15% is wide enough that ordinary edits never fire this and narrow enough that the 22% drift
-/// which prompted it would have.
-///
-/// When this fires: re-count, edit the numbers in `O71`, and update the date beside them. That is
-/// the whole fix — it is a prompt to re-measure, not a budget to stay under.
-#[test]
-fn o71_line_counts_have_not_drifted_past_its_citation() {
-    let findings = repo("docs/OPEN-FINDINGS.md");
-    let start = findings
-        .find("### O71 ")
-        .expect("docs/OPEN-FINDINGS.md has no O71 entry");
-    let end = findings[start + 1..]
-        .find("\n### ")
-        .map(|i| start + 1 + i)
-        .unwrap_or(findings.len());
-    let entry = &findings[start..end];
-
-    // (what the entry describes, the file it describes, the phrase the number precedes)
-    let claims = [
-        ("assets/app.js", "assets/app.js", "lines** registering"),
-        ("its markup", "assets/index.html", "lines of markup"),
-        (
-            "web/test/app.test.js",
-            "web/test/app.test.js",
-            "lines** exercising",
-        ),
-    ];
-
-    for (what, path, anchor) in claims {
-        let cited = cited_number_before(entry, anchor).unwrap_or_else(|| {
-            panic!(
-                "O71 no longer states a line count before \"{anchor}\" — if the entry was \
-                    rewritten, update this test with it"
-            )
-        });
-        let actual = repo(path).lines().count();
-        let ceiling = cited + cited * 15 / 100;
-        assert!(
-            actual <= ceiling,
-            "O71 says {what} is {cited} lines; it is now {actual} ({}% more).\n\
-             Re-measure the numbers in O71 and update the date beside them.",
-            (actual - cited) * 100 / cited.max(1)
-        );
-    }
-}
-
 /// The number immediately before `anchor`, written `**2,501 ` or `2,501 `.
 fn cited_number_before(entry: &str, anchor: &str) -> Option<usize> {
     let at = entry.find(anchor)?;

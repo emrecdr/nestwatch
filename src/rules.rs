@@ -3739,7 +3739,7 @@ mod tests {
     /// reads `session_start`/`session_stop` today — the dashboard prints them verbatim and derives
     /// nothing — so losing the stop again would produce no symptom at all until somebody builds the
     /// timeline, and then it would produce a wrong one: spans shaded from a mid-afternoon pause
-    /// through to bedtime, labelled as use. See `docs/OPEN-FINDINGS.md`, O36.
+    /// through to bedtime, labelled as use. See `docs/DECLINED-OPTIONS.md`, raised as O36.
     /// The foreground feed must be drained on **every** tick, not only on ticks that enforce.
     ///
     /// A source scan, for the reason `standing_down_closes_an_open_session` gives: the property is
@@ -6258,7 +6258,7 @@ mod tests {
         assert_eq!(on.tick_mode(), TickMode::Enforce);
     }
 
-    // --- Survivors of the first full mutation sweep (2026-10-05), `docs/OPEN-FINDINGS.md` O109.
+    // --- Survivors of the first full mutation sweep (2026-10-05), `docs/DECLINED-OPTIONS.md` O109.
     // Each test below names the mutants it was written to kill; each was watched surviving
     // without it and caught with it.
 

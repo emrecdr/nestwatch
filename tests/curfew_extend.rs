@@ -218,7 +218,7 @@ async fn an_extension_stacks_persists_and_survives_saving_the_curfew_form() {
     );
 
     // ---- Phase 6: an extension that has run out is not a base to add to ----------------------
-    // A survivor of the first full mutation sweep (`docs/OPEN-FINDINGS.md` O109): the guard that
+    // A survivor of the first full mutation sweep (`docs/DECLINED-OPTIONS.md` O109): the guard that
     // stacks a press onto the running extension only while that extension is still in the future
     // could be replaced with `true`, and every phase above still passed, because every extension
     // they stacked onto was still running. Last night's has not: stacked onto, it would put

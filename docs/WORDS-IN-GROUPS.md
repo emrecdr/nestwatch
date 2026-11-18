@@ -488,7 +488,7 @@ a minute, and a restored tab.
 * `FOREGROUND-TRACKING.md`: the visit map, the rule change under *Deliberately not done*, and,
   with the address read, the helper's resource budget with `UIAutomationCore.dll` loaded.
 * `README.md`: the feature, its limits, and the evasions.
-* `OPEN-FINDINGS.md`: `O20` updated with what Phase 0 measured.
+* `DECLINED-OPTIONS.md`: the row raised as `O20` re-raised with what Phase 0 measured.
 * `WINDOWS-TESTING.md`: the on-device items above.
 
 ---

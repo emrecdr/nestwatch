@@ -735,7 +735,7 @@ async fn extra_time_requires_auth_and_validates_range() {
 
 /// `GET /api/usage` answers with what the usage log holds, newest first.
 ///
-/// A survivor of the first full mutation sweep (`docs/OPEN-FINDINGS.md` O109): the handler could
+/// A survivor of the first full mutation sweep (`docs/DECLINED-OPTIONS.md` O109): the handler could
 /// return an empty list, or a list of one empty value, and every test passed, because every test
 /// ran with the log disabled and nothing read the endpoint back.
 #[tokio::test]

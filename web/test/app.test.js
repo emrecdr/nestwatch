@@ -1688,7 +1688,7 @@ test("a missing screentime object does not throw", () => {
 // The only view that answers *when* rather than *how much*. Its whole difficulty is pairing, and
 // pairing has exactly one dangerous failure: joining a start to a stop that belongs to a different
 // session. That draws a bar from an afternoon crash through to bedtime and calls it use — which is
-// the defect this feature was blocked on (OPEN-FINDINGS O36), reappearing one layer up.
+// the defect this feature was blocked on (DECLINED-OPTIONS, raised as O36), reappearing one layer up.
 
 /** Events as `/api/usage` delivers them: newest first, RFC 3339 with a local-time offset. */
 function ev(kind, hhmm, day = "2026-08-25") {

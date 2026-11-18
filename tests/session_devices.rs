@@ -143,7 +143,7 @@ async fn signed_in_devices_are_listed_revoked_and_eventually_expire() {
         // Three devices, three handles. The handle is all the card has to name a session by, so two
         // alike would make "sign out this one" sign out whichever the store lists first — and the
         // store is a `HashMap`, so the revocations below would still pass whenever its order happened
-        // to agree. A survivor of the weekly mutation run (`docs/OPEN-FINDINGS.md` O109).
+        // to agree. A survivor of the weekly mutation run (`docs/DECLINED-OPTIONS.md` O109).
         let mut handles: Vec<&str> = rows.iter().map(|r| r["handle"].as_str().unwrap()).collect();
         handles.sort_unstable();
         handles.dedup();

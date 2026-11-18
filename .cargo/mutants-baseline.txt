@@ -28,7 +28,7 @@
 #
 # Every line is debt, not an exemption: a test gap, a `#[cfg(windows)]` function inside a shared
 # file (nothing on Linux compiles it), or a mutant equivalent to the original. Killing one means
-# deleting its line here in the same commit. `docs/OPEN-FINDINGS.md` `O109` has the breakdown.
+# deleting its line here in the same commit. `docs/DECLINED-OPTIONS.md` `O109` has the breakdown.
 src/api.rs: replace > with >= in extend_curfew
 src/auth.rs: replace < with <= in LoginLimiter::check
 src/auth.rs: replace < with <= in prune

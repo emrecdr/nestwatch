@@ -578,7 +578,7 @@ fn window_ending_yesterday(today: NaiveDate, days: u32) -> impl Iterator<Item = 
     // `take` holds the window to the days asked for even if the end test above were ever wrong.
     // Turned into `>`, that test let a one-day window run on toward the last date chrono can
     // represent, millions of days, and the test suite hung instead of failing (the weekly mutation
-    // run, `docs/OPEN-FINDINGS.md` O109). Both callers clamp `days` to at least 1, so for every
+    // run, `docs/DECLINED-OPTIONS.md` O109). Both callers clamp `days` to at least 1, so for every
     // real input this changes nothing.
     std::iter::successors(start, move |cur| {
         cur.succ_opt().filter(|next| Some(*next) <= end)
@@ -1199,7 +1199,7 @@ mod tests {
     /// `history_rows` puts `screentime.jsonl` first, so the richer row is the incumbent and the
     /// plain legacy one arrives second.
     ///
-    /// A survivor of the weekly mutation run (`docs/OPEN-FINDINGS.md` O109): every merge test sent
+    /// A survivor of the weekly mutation run (`docs/DECLINED-OPTIONS.md` O109): every merge test sent
     /// the plainer row first, so a guard that let the later row always win passed all of them,
     /// while discarding the per-app detail on exactly the days an upgraded install has twice.
     #[test]
@@ -1358,7 +1358,7 @@ mod tests {
     /// lists rather than some of them.
     ///
     /// Asserted on `detail` itself, with a different count in each list so the total can only be
-    /// one number. A survivor of the weekly mutation run (`docs/OPEN-FINDINGS.md` O109): any of
+    /// one number. A survivor of the weekly mutation run (`docs/DECLINED-OPTIONS.md` O109): any of
     /// the three `+` could become `-`, and the last two `*`, and every merge test still passed,
     /// because none of them compared two rows of one generation whose difference was in the count.
     /// The counts fall from list to list, so a subtraction gives a wrong total rather than an

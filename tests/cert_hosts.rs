@@ -2,7 +2,7 @@
 //! binary: environment variables are process-wide, and a second test reading them meanwhile would
 //! race this one — the cause of the flaky password test fixed on 2026-10-23.
 //!
-//! No test set the variables before (`docs/OPEN-FINDINGS.md` O109), so a `hostname` that reported
+//! No test set the variables before (`docs/DECLINED-OPTIONS.md` O109), so a `hostname` that reported
 //! nothing, or a made-up name, or kept only empty ones, passed. The name matters: it is a SAN on
 //! the certificate and the stable half of the address `install` prints.
 

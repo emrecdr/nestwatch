@@ -2,7 +2,7 @@
 //!
 //! Its own test binary for the `NESTWATCH_DATA_DIR` override, as `enforcer_loop.rs` explains.
 //!
-//! Written for a survivor of the first full mutation sweep (`docs/OPEN-FINDINGS.md` O109):
+//! Written for a survivor of the first full mutation sweep (`docs/DECLINED-OPTIONS.md` O109):
 //! deleting the loop's `Ok(Ok(state)) => matches!(state, SessionState::Active)` arm sends every
 //! answer to the fallback for a *failed* query, which counts as active — so a locked screen was
 //! charged as use, and every test still passed. They passed because the loop tests only ever ran

@@ -1,5 +1,5 @@
 //! Edges of the parent's API that the first full mutation sweep found untested
-//! (`docs/OPEN-FINDINGS.md` O109): routines, and the note a grant carries when bedtime will cut it
+//! (`docs/DECLINED-OPTIONS.md` O109): routines, and the note a grant carries when bedtime will cut it
 //! short. (The idempotency key's length, the third, is tested beside its other bound in
 //! `earned_grant.rs`.)
 //!

@@ -4,7 +4,7 @@ The screen-time report counts an app while its **process runs**, machine-wide, a
 apps that already have a limit set. This document designs the missing half: **how long each app was
 actually in front of the child**, per day, for every app — not just the limited ones.
 
-It is the fix for [O6](OPEN-FINDINGS.md#o6--screen-time-figures-are-machine-wide-and-count-running-not-focused-time),
+It is the fix for `O6` (now in [DECLINED-OPTIONS.md](DECLINED-OPTIONS.md), raised as `O6`),
 and it retires half of the "foreground-app-aware limits — not yet" line in the README's
 *Not included*. The other half — making limits *enforce* on focused time — is deliberately still not
 built; see [Deliberately not done](#deliberately-not-done).
@@ -425,7 +425,7 @@ failed on real hardware, and again when the screen-time chart shipped rendering 
 
 The watcher is written and compiles clean for the Windows target under `clippy -D warnings`, which
 is worth exactly what it is worth: it proves the API calls exist with the signatures used, and
-nothing about whether the thing works. Per [O4/O6's standing rule](OPEN-FINDINGS.md), code in this
+nothing about whether the thing works. Per [O4's standing rule](OPEN-FINDINGS.md), code in this
 tier is not trusted until [WINDOWS-TESTING.md](WINDOWS-TESTING.md) has been walked through on the
 target PC.
 

@@ -2,7 +2,7 @@
 //!
 //! `Enforcer::tick` is unit-tested on every reading it can be handed, but the loop chooses which
 //! reading to hand it: nothing to count down to while curfew is off, how far off bedtime is
-//! otherwise. Nothing drove that choice (`docs/OPEN-FINDINGS.md` O109), so a loop that never
+//! otherwise. Nothing drove that choice (`docs/DECLINED-OPTIONS.md` O109), so a loop that never
 //! counted down while curfew was on passed, and so did one that kept counting while it was off —
 //! which announces "15 minutes" the moment a parent switches curfew on close to bedtime.
 //!

@@ -460,7 +460,7 @@ weighed and declined — so neither has to be rediscovered.
   <br>This is called out here rather than left to be discovered because the failure is quiet: the
   budget is not wrong, it is measuring something other than what you assumed, and it looks exactly
   like a child who used more than they say. Reporting has the same boundary — see
-  [`docs/OPEN-FINDINGS.md`](docs/OPEN-FINDINGS.md) `O6`.
+  [`docs/DECLINED-OPTIONS.md`](docs/DECLINED-OPTIONS.md), raised as `O6`.
 - **Web/content filtering** — not built, and not planned in the blocking sense. There is code to
   break browser time out by **page title** — what a tab was called — but see the warning below
   before relying on it. It records no addresses and builds no browsing history; getting the actual
