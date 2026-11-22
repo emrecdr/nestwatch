@@ -62,7 +62,7 @@ argon2 = "0.6"
 # be annotated the same way. Already in the graph via tower-sessions — no new crate.
 async-trait = "0.1"
 axum = "0.8.9"
-axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.9", default-features = false, features = ["tls-rustls-no-provider"] }
 # The SSE stream in `api::events`. Already in the graph via axum — `cargo tree -i futures-util`
 # — so this declaration adds no package, only the right to name `Stream` and `stream::unfold`
 # directly instead of hand-rolling a `Stream` impl for a broadcast receiver.
