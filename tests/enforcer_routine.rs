@@ -43,9 +43,17 @@ fn homework_in(mins: i64) -> Routine {
     }
 }
 
+/// How far ahead the routine first appears: past the 15-minute warning, so seeing it only primes
+/// the countdown.
+const FIRST_SIGHTING_MINS: i64 = 16;
+
 #[tokio::test]
 async fn a_routine_that_will_start_below_todays_use_is_counted_down_to() {
-    common::clear_of_midnight();
+    // The routine must start *today*: one past midnight begins after the day's use resets, so it
+    // has nothing to count down to, and the enforcer is right to stay quiet about it.
+    common::clear_of_midnight_by(
+        std::time::Duration::from_secs(FIRST_SIGHTING_MINS as u64 * 60) + common::DAY_LEFT_NEEDED,
+    );
     let tmp = ScratchDir::new("enforcer-routine");
     // SAFETY: single-threaded test entry, before any data-dir access; own test binary.
     unsafe { std::env::set_var("NESTWATCH_DATA_DIR", tmp.path()) };
@@ -58,7 +66,7 @@ async fn a_routine_that_will_start_below_todays_use_is_counted_down_to() {
         daily_budget_mins: 0,
         ..Default::default()
     };
-    cfg.routines = vec![homework_in(16)];
+    cfg.routines = vec![homework_in(FIRST_SIGHTING_MINS)];
     let config = Arc::new(RwLock::new(cfg));
 
     let fake = Arc::new(FakeControl::new());
