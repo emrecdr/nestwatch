@@ -17,6 +17,9 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Internal
 
+- **axum-server 0.9.** No new crates and the same TLS settings: nestwatch enables rustls itself,
+  `ring` provider and `tls12` included, so 0.9's change to its own `tls-rustls` feature does not
+  reach it. The stalled-connection and HTTP/1.1-only tests pass on both platforms.
 - **`cookie` 0.18.3, for RUSTSEC-2026-0594**, which turned the supply-chain check red on 2026-11-23.
   Nestwatch is not affected, three ways over: the flaw needs a process that forks, and Windows
   cannot; it is in private (encrypted) cookies, and the session cookie here holds only an id; and
