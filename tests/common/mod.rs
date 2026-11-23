@@ -385,7 +385,18 @@ pub fn wait_for_room(
 /// a Windows runner at 00:00:00 UTC (`earned_grants_latch_replay_and_validate`, 2026-10-19). Call
 /// this first, before the test reads the date.
 pub fn clear_of_midnight() {
-    while let Some(wait) = wait_for_room(nestwatch::clock::now(), DAY_LEFT_NEEDED) {
+    clear_of_midnight_by(DAY_LEFT_NEEDED);
+}
+
+/// [`clear_of_midnight`] for a test that needs more of the day than [`DAY_LEFT_NEEDED`]: one that
+/// schedules something minutes ahead and relies on it still falling today.
+///
+/// `a_routine_that_will_start_below_todays_use_is_counted_down_to` sets a routine 16 minutes out,
+/// and failed on three pull requests between 23:55 and 23:58 UTC (2026-11-22): the routine's start
+/// had passed midnight, so the enforcer rightly said nothing about a limit that only begins after
+/// the day's use resets. Two minutes of room did not cover a 16-minute lead.
+pub fn clear_of_midnight_by(needed: std::time::Duration) {
+    while let Some(wait) = wait_for_room(nestwatch::clock::now(), needed) {
         std::thread::sleep(wait);
     }
 }

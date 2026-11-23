@@ -64,6 +64,11 @@ updates:
       # non-breaking. The name has to cover both, because it lands in the branch and PR title.
       minor-may-be-breaking:
         update-types: [minor]
+    # 0.40 only, so 0.41 still opens a PR and gets read. Why 0.40 is declined:
+    # `DECLINED-OPTIONS.md`, the row raised as Dependabot #52.
+    ignore:
+      - dependency-name: "sysinfo"
+        versions: ["0.40.*"]
     commit-message:
       prefix: "deps"
 

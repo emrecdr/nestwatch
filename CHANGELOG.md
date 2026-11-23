@@ -17,6 +17,17 @@ retracts it. `0.6.0`'s integration note is the first and so far only case.
 
 ### Internal
 
+- **`cookie` 0.18.3, for RUSTSEC-2026-0594**, which turned the supply-chain check red on 2026-11-23.
+  Nestwatch is not affected, three ways over: the flaw needs a process that forks, and Windows
+  cannot; it is in private (encrypted) cookies, and the session cookie here holds only an id; and
+  the `private` feature that contains it is not even compiled in.
+- **A routine test no longer fails in the last minutes before midnight.** It schedules a routine 16
+  minutes ahead and waited for only two minutes of day, so from about 23:42 the routine fell
+  tomorrow and the enforcer, rightly, said nothing; it failed three Dependabot PRs that way on
+  2026-11-22. It now waits for the lead it needs, and was run at 23:47 local, by time zone, before
+  and after the change.
+- **sysinfo 0.40 is declined** (`DECLINED-OPTIONS.md`): it changes the Windows process listing every
+  limit depends on, which no test runs, and fixes nothing used here.
 - **The Windows checklist covers 0.6.0's and 0.7.0's features**, which shipped with no item: §H13
   has ten for scheduled routines starting and handing back on the trusted clock, an integration's
   once-a-day grant surviving a restart and a retry, its off switch and its limited reach, signing
